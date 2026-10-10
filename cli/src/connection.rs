@@ -2213,6 +2213,14 @@ pub fn choosebrowser_skip() -> bool {
     CHOOSEBROWSER_SKIP.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Whether AGENT_BROWSER_TIMING asks for replies without `timing`.
+pub(crate) fn timing_disabled(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
+}
+
 pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
     // Ownership guard (issue #89, ego-lite handoff model): a session handed off
     // to the user with `session handoff` is off-limits to the agent until
@@ -2246,6 +2254,11 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
         );
         if let Ok(m) = std::env::var("AGENT_BROWSER_CLICK_MODE") {
             obj.insert("_clickMode".to_string(), Value::String(m));
+        }
+        // `--no-timing` / AGENT_BROWSER_TIMING=0: a compact reply without the
+        // `timing` object. Default replies keep it (the --json contract).
+        if timing_disabled(std::env::var("AGENT_BROWSER_TIMING").ok().as_deref()) {
+            obj.insert("_timing".to_string(), Value::Bool(false));
         }
         if let Ok(h) = std::env::var("AGENT_BROWSER_HUMANIZE") {
             // Only forward a recognized level; warn once (like the --humanize flag
@@ -2542,6 +2555,17 @@ fn exchange_command(
 mod tests {
     use super::{client_read_budget, daemon_cdp_budget};
     use serde_json::json;
+
+    #[test]
+    fn only_an_explicit_off_value_drops_timing() {
+        for off in ["0", "false", "OFF", " no "] {
+            assert!(super::timing_disabled(Some(off)), "{off}");
+        }
+        for on in ["1", "true", "", "yes"] {
+            assert!(!super::timing_disabled(Some(on)), "{on}");
+        }
+        assert!(!super::timing_disabled(None));
+    }
 
     #[cfg(unix)]
     fn fake_keepalive_exchange(

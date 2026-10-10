@@ -27,7 +27,7 @@ recorded foreground intervals contribute to CDP occupancy. Spawned background
 tasks do not inherit this recorder; background CDP work is not included.
 `nonCdpMs` is the remaining wall duration, not a pure daemon processing cost.
 
-Ordinary CLI `--json` replies use a `success`/`data`/`timing` envelope. `batch --json` prints an array of `{command,success,result,error}` entries; `script --json` prints the bare program result (`ok`, `return`, `logs`, `error`, `advisories`, and other program fields). Batch and script CLI output have no top-level `timing`.
+Ordinary CLI `--json` replies use a `success`/`data`/`timing` envelope; `--no-timing` (or `AGENT_BROWSER_TIMING=0`) leaves `timing` out for a compact reply, and `timing.jsonl` is still written. `batch --json` prints an array of `{command,success,result,error}` entries; `script --json` prints the bare program result (`ok`, `return`, `logs`, `error`, `advisories`, and other program fields). Batch and script CLI output have no top-level `timing`.
 
 The daemon appends action, session, outcome and timing to
 `~/.chrome-use/timing.jsonl`, rotating at 20 MB. It omits URLs, selectors and

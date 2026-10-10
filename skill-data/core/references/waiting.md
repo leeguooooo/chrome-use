@@ -166,6 +166,44 @@ moved. e.g. `chrome-use click @e8 --observe` → see the dialog/toast/row that
 appeared in one ~20-80 token reply. Use `expect` when you want a hard pass/fail
 gate; use `--observe` when you want to *see* what happened.
 
+On a small page (post-action tree at most 4 KB and 60 lines) the observation
+carries the whole current tree as `observed.snapshot`, refs registered, plus
+`observed.changes`: only the `+`/`-` lines, no context. That tree is the fresh
+post-action read, so a `snapshot` straight after it adds nothing. Larger pages
+keep the unified `delta`. A partial or unavailable capture says so in
+`observed.status` either way; a snapshot beside `status: partial` is a real
+tree, but the observation as a whole is still incomplete.
+
+`observed.text` lists the visible text lines, across all frames, that
+appeared (`+`) or went away (`-`): the static text an interactive tree leaves
+out, such as an iframe's receipt, a log line, or a "Page 2 of 3" counter.
+Lines from a child frame start with `[frame <name>]`. A text change alone sets
+`changed: true`. At most 20 lines and 1 KB, 200 bytes a line; `textOmitted`
+counts the rest and `textTruncated: true` says so.
+
+The text is read from the rendered DOM, not from `innerText`: `<input>`,
+`<textarea>`, `<select>` and every editable element (the editable host, all
+of its content, any document in `designMode`) are skipped with their
+subtrees, including inside open shadow roots. When any password field in any
+frame (open shadow roots included) holds a value before or after the action,
+no text lines are returned at all and `textStatus` is `redacted`: a page can
+copy a password into any frame's text, so no line is treated as safe. The
+password values themselves never leave the page.
+
+Each frame is read in its own isolated world and checked against the frame
+tree, and the inventory is the frame tree read again after the reads. One
+capture reads at most 32 frames across all sessions within 2.5 s; a frame
+not read (over budget, or one that appeared during the read) is `partial`,
+and a frame whose read failed or whose document changed during the read is
+`unavailable`. Any such frame withholds every text line (it might hold a
+password), is listed in `textFrames` with its reason, and makes the
+observation incomplete: `textStatus` is `unavailable`, `status` is at best
+`partial`, an unchanged tree no longer reads as `changed: false`, and no
+`noProgress` hint is given. A frame the final inventory confirms is `gone`,
+and a frame whose document changed (`frameDocumentChanged`, e.g. a same-URL
+reload), count as changes. The small-page `changes` list is capped at 60 lines
+and 4 KB, 240 bytes a line (`changesOmitted`, `changesShortened`).
+
 `navigate`/`reload`/`back`/`forward` take `--observe` too, and return the
 post-navigation **snapshot** instead of a delta — across a page swap a diff
 shares no nodes with the old tree, so it would be 100% removals plus 100%

@@ -29,6 +29,25 @@ fn get_data(resp: &Value) -> &Value {
     resp.get("data").expect("Missing 'data' in response")
 }
 
+/// What an `--observe` reply says changed, whichever form it took: the
+/// unified `delta` of a large page, or the compact `changes` that ride with a
+/// small page's whole tree.
+fn observed_changes(observed: &Value) -> String {
+    if let Some(delta) = observed["delta"].as_str() {
+        return delta.to_string();
+    }
+    observed["changes"]
+        .as_array()
+        .map(|lines| {
+            lines
+                .iter()
+                .filter_map(|l| l.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
 async fn select_values(
     state: &mut DaemonState,
     id: &str,
@@ -10154,10 +10173,7 @@ document.getElementById('go').addEventListener('click', () => {
         "the wait must have covered the late render: {observed}"
     );
     assert!(
-        observed["delta"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Confirmed"),
+        observed_changes(&observed).contains("Confirmed"),
         "the observed delta must carry the late-rendered button: {observed}"
     );
     assert!(
@@ -10223,10 +10239,7 @@ document.getElementById('go').addEventListener('click', async () => {
     let observed = &get_data(&resp)["observed"];
     assert_eq!(observed["settle"]["quiet"], json!(true), "{observed}");
     assert!(
-        observed["delta"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("late payload"),
+        observed_changes(&observed).contains("late payload"),
         "the wait must outlast the request that renders the result: {observed}"
     );
 
@@ -11162,10 +11175,7 @@ document.getElementById('go').addEventListener('click', () => {
     assert_success(&resp);
     let data = get_data(&resp);
     assert!(
-        data["observed"]["delta"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Appeared"),
+        observed_changes(&data["observed"]).contains("Appeared"),
         "the delta must be the post-action one: {data}"
     );
     let saved = data["screenshot"]
@@ -11181,6 +11191,541 @@ document.getElementById('go').addEventListener('click', () => {
     let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     server.abort();
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// `--observe` visible text: static receipts the interactive tree leaves out
+// ---------------------------------------------------------------------------
+
+/// A submit inside an iframe whose only effect is a plain `<p>` receipt: the
+/// interactive tree does not move, so before `observed.text` the click read
+/// as "no change" and invited a replay. The receipt must be in the
+/// observation, and what was typed into the fields must not.
+#[tokio::test]
+#[ignore]
+async fn e2e_observe_reports_an_iframe_receipt_in_visible_text() {
+    use std::sync::atomic::Ordering;
+    let page = r##"<!doctype html><meta charset="utf-8"><title>Embedded notes</title>
+<main><h1>Embedded notes</h1><p>Complete the embedded note form.</p>
+<iframe title="Embedded form" srcdoc="<form><label>Note <input name='note'></label><button>Save note</button></form><p id='receipt'>No note</p><script>document.querySelector('form').onsubmit=e=>{e.preventDefault();document.querySelector('#receipt').textContent='Note saved: '+document.querySelector('input').value;}</script>"></iframe></main>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "3", "action": "snapshot", "interactive": true }),
+    )
+    .await;
+    assert_success(&resp);
+    let tree = get_data(&resp)["snapshot"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let ref_for = |marker: &str| -> String {
+        let line = tree
+            .lines()
+            .find(|l| l.contains(marker))
+            .unwrap_or_else(|| panic!("no `{marker}` in snapshot:\n{tree}"));
+        let start = line.find("ref=").expect("line has a ref") + 4;
+        let rest = &line[start..];
+        let end = rest
+            .find(|c: char| !c.is_alphanumeric())
+            .unwrap_or(rest.len());
+        format!("@{}", &rest[..end])
+    };
+    let note = ref_for("textbox \"Note\"");
+    let save = ref_for("button \"Save note\"");
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "4", "action": "fill", "selector": note, "value": "Synthetic benchmark note" }),
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "6", "action": "click", "selector": save, "observe": true }),
+    )
+    .await;
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    assert_eq!(observed["status"], json!("complete"), "{observed}");
+    assert_eq!(
+        observed["changed"],
+        json!(true),
+        "a receipt is a change: {observed}"
+    );
+    let text: Vec<&str> = observed["text"]
+        .as_array()
+        .unwrap_or_else(|| panic!("observed.text missing: {observed}"))
+        .iter()
+        .filter_map(|l| l.as_str())
+        .collect();
+    assert!(
+        text.iter()
+            .any(|l| l.starts_with("+ [frame ")
+                && l.ends_with("Note saved: Synthetic benchmark note")),
+        "the iframe receipt must be in observed.text: {text:?}"
+    );
+    assert!(
+        text.iter()
+            .any(|l| l.ends_with("No note") && l.starts_with("- ")),
+        "{text:?}"
+    );
+    // Every machine-JSON observation names its target.
+    assert!(observed["target"]["targetId"].is_string(), "{observed}");
+
+    // The after-read fails at the CDP level: the earlier receipt must not be
+    // reported as removed, and the unchanged tree must not read as "no
+    // change" — the observation is partial and says not to replay.
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "7", "action": "fill", "selector": note, "value": "Second synthetic note" }),
+    )
+    .await;
+    assert_success(&resp);
+    super::observation::FAIL_TEXT_READS.store(0b10, Ordering::SeqCst);
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "8", "action": "click", "selector": save, "observe": true }),
+    )
+    .await;
+    assert_eq!(
+        super::observation::FAIL_TEXT_READS.load(Ordering::SeqCst),
+        0,
+        "both reads must have run"
+    );
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    assert!(observed["target"]["targetId"].is_string(), "{observed}");
+    assert_eq!(observed["status"], json!("partial"), "{observed}");
+    assert_ne!(observed["changed"], json!(false), "{observed}");
+    assert!(observed.get("text").is_none(), "{observed}");
+    assert!(
+        !observed.to_string().contains("- [frame"),
+        "a failed read is not a removal: {observed}"
+    );
+    assert_eq!(observed["retryAction"], json!(false), "{observed}");
+    assert!(observed["textStatus"].is_string(), "{observed}");
+    assert!(observed["textFrames"].is_array(), "{observed}");
+
+    // Both reads fail: never complete.
+    super::observation::FAIL_TEXT_READS.store(0b11, Ordering::SeqCst);
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "9", "action": "click", "selector": save, "observe": true }),
+    )
+    .await;
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    assert_ne!(observed["status"], json!("complete"), "{observed}");
+    assert_eq!(observed["textStatus"], json!("unavailable"), "{observed}");
+    assert_ne!(observed["changed"], json!(false), "{observed}");
+
+    // Repeated identical clicks whose text evidence is missing never earn a
+    // "no progress" hint.
+    super::observation::FAIL_TEXT_READS.store(u32::MAX, Ordering::SeqCst);
+    for id in ["10", "11", "12", "13"] {
+        let resp = run_cmd(
+            &mut state,
+            json!({ "id": id, "action": "click", "selector": save, "observe": true }),
+        )
+        .await;
+        assert_success(&resp);
+        let observed = &get_data(&resp)["observed"];
+        assert!(observed.get("noProgress").is_none(), "{observed}");
+        assert_ne!(observed["status"], json!("complete"), "{observed}");
+    }
+    super::observation::FAIL_TEXT_READS.store(0, Ordering::SeqCst);
+    server.abort();
+}
+
+/// What a person typed never reaches `observed.text`: inline and nested
+/// contenteditable (with a non-editable island inside), a textarea's text,
+/// and an editable region inside an open shadow root. All values are
+/// synthetic. Password values have their own test.
+#[tokio::test]
+#[ignore]
+async fn e2e_observe_text_never_carries_typed_or_editable_content() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>Private fields</title>
+<main><h1>Private fields</h1>
+<p>Note: <span id="ce" contenteditable="true">SYNPRIV-INLINE</span> end</p>
+<div contenteditable="true"><p>Nested <b id="nested">SYNPRIV-NESTED</b> <span contenteditable="false">SYNPRIV-ISLAND</span></p></div>
+<label>Remarks <textarea>SYNPRIV-TEXTAREA</textarea></label>
+<label>Plain <input id="plain"></label>
+<div id="host"></div>
+<p id="status">Idle</p>
+<button id="go">Go</button>
+</main>
+<script>
+const shadow = document.getElementById('host').attachShadow({mode: 'open'});
+shadow.innerHTML = '<p>Shadow <span id="sce" contenteditable="true">SYNPRIV-SHADOW</span> tail</p>';
+document.getElementById('go').onclick = () => {
+  document.getElementById('ce').textContent = 'SYNPRIV-INLINE-2';
+  document.getElementById('nested').textContent = 'SYNPRIV-NESTED-2';
+  shadow.getElementById('sce').textContent = 'SYNPRIV-SHADOW-2';
+  document.getElementById('status').textContent = 'Done: ' + document.getElementById('plain').value.length + ' chars';
+};
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "4", "action": "fill", "selector": "#plain", "value": "SYNPRIV-TYPED" }),
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "7", "action": "click", "selector": "#go", "observe": true }),
+    )
+    .await;
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    assert_eq!(observed["status"], json!("complete"), "{observed}");
+    let text: Vec<&str> = observed["text"]
+        .as_array()
+        .unwrap_or_else(|| panic!("observed.text missing: {observed}"))
+        .iter()
+        .filter_map(|l| l.as_str())
+        .collect();
+    // The reader ran and saw the page's own change.
+    assert!(text.contains(&"+ Done: 13 chars"), "{text:?}");
+    assert!(text.contains(&"- Idle"), "{text:?}");
+    let joined = text.join("\n");
+    assert!(
+        !joined.contains("SYNPRIV"),
+        "typed, editable or password content reached observed.text: {text:?}"
+    );
+    // Nor in the per-frame text notes.
+    let notes = observed
+        .get("textFrames")
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+    assert!(!notes.contains("SYNPRIV"), "{notes}");
+    server.abort();
+}
+
+/// Read the ref of the first snapshot line containing `marker`.
+fn ref_in(tree: &str, marker: &str) -> String {
+    let line = tree
+        .lines()
+        .find(|l| l.contains(marker))
+        .unwrap_or_else(|| panic!("no `{marker}` in snapshot:\n{tree}"));
+    let start = line.find("ref=").expect("line has a ref") + 4;
+    let rest = &line[start..];
+    let end = rest
+        .find(|c: char| !c.is_alphanumeric())
+        .unwrap_or(rest.len());
+    format!("@{}", &rest[..end])
+}
+
+async fn interactive_tree(state: &mut DaemonState, id: &str) -> String {
+    let resp = run_cmd(
+        state,
+        json!({ "id": id, "action": "snapshot", "interactive": true }),
+    )
+    .await;
+    assert_success(&resp);
+    get_data(&resp)["snapshot"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// A known password value never reaches `observed.text`, wherever the page
+/// copies it: a parent password into a child frame, a child password into
+/// the parent, a field cleared by the action whose old value is on show, and
+/// a password field inside an open shadow root. All values are synthetic.
+#[tokio::test]
+#[ignore]
+async fn e2e_observe_text_withholds_every_known_password_value() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>Passwords</title>
+<main><h1>Passwords</h1>
+<label>Top PIN <input id="pw" type="password"></label>
+<p id="topRefl">top idle</p>
+<div id="host"></div>
+<button id="a">Parent to child</button>
+<button id="b">Child to parent</button>
+<button id="c">Clear and show</button>
+<button id="d">Shadow show</button>
+<button id="e" onclick="document.getElementById('ctl').textContent='control done'">Control</button>
+<p id="ctl">control idle</p>
+<iframe title="Child" srcdoc="<label>Child PIN <input id='cpw' type='password'></label><p id='crefl'>child idle</p>"></iframe>
+</main>
+<script>
+const shadow = document.getElementById('host').attachShadow({mode: 'open'});
+shadow.innerHTML = '<label>Shadow PIN <input id="spw" type="password"></label>';
+const child = () => frames[0].document;
+const pw = () => document.getElementById('pw');
+document.getElementById('a').onclick = () => {
+  child().getElementById('crefl').textContent = 'Got ' + pw().value; };
+document.getElementById('b').onclick = () => {
+  document.getElementById('topRefl').textContent = 'Got ' + child().getElementById('cpw').value; };
+document.getElementById('c').onclick = () => {
+  document.getElementById('topRefl').textContent = 'Was ' + pw().value; pw().value = ''; };
+document.getElementById('d').onclick = () => {
+  document.getElementById('topRefl').textContent = 'Shadow ' + shadow.getElementById('spw').value; };
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let tree = interactive_tree(&mut state, "3").await;
+    let top_pin = ref_in(&tree, "textbox \"Top PIN\"");
+    let child_pin = ref_in(&tree, "textbox \"Child PIN\"");
+    let shadow_pin = ref_in(&tree, "textbox \"Shadow PIN\"");
+
+    let mut n = 10;
+    let mut step = |action: Value| {
+        n += 1;
+        let mut action = action;
+        action["id"] = json!(n.to_string());
+        action
+    };
+    let scenarios: [(&str, Vec<(String, &str)>, &str); 4] = [
+        (
+            "parent password into a child <p>",
+            vec![(top_pin.clone(), "SYNPW-PARENT-1")],
+            "#a",
+        ),
+        (
+            "child password into the parent",
+            vec![(top_pin.clone(), ""), (child_pin.clone(), "SYNPW-CHILD-2")],
+            "#b",
+        ),
+        (
+            "field cleared after, old value shown",
+            vec![(child_pin.clone(), ""), (top_pin.clone(), "SYNPW-CLEAR-3")],
+            "#c",
+        ),
+        (
+            "shadow-DOM password",
+            vec![(shadow_pin.clone(), "SYNPW-SHADOW-4")],
+            "#d",
+        ),
+    ];
+    for (name, fills, button) in scenarios {
+        for (sel, value) in fills {
+            let resp = run_cmd(
+                &mut state,
+                step(json!({ "action": "fill", "selector": sel, "value": value })),
+            )
+            .await;
+            assert_success(&resp);
+        }
+        let resp = run_cmd(
+            &mut state,
+            step(json!({ "action": "click", "selector": button, "observe": true })),
+        )
+        .await;
+        assert_success(&resp);
+        let observed = &get_data(&resp)["observed"];
+        let text = observed
+            .get("text")
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        let notes = observed
+            .get("textFrames")
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        assert!(!text.contains("SYNPW"), "{name}: {text}");
+        assert!(!notes.contains("SYNPW"), "{name}: {notes}");
+        assert!(observed.get("text").is_none(), "{name}: {observed}");
+        assert_eq!(
+            observed["textStatus"],
+            json!("redacted"),
+            "{name}: {observed}"
+        );
+        assert_ne!(observed["status"], json!("complete"), "{name}: {observed}");
+    }
+
+    // Control: with every password field empty the same page returns text.
+    let resp = run_cmd(
+        &mut state,
+        step(json!({ "action": "fill", "selector": shadow_pin, "value": "" })),
+    )
+    .await;
+    assert_success(&resp);
+    let resp = run_cmd(
+        &mut state,
+        step(json!({ "action": "click", "selector": "#e", "observe": true })),
+    )
+    .await;
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    assert_eq!(observed["status"], json!("complete"), "{observed}");
+    assert_eq!(
+        observed["text"],
+        json!(["- control idle", "+ control done"]),
+        "{observed}"
+    );
+    server.abort();
+}
+
+/// One capture is bounded in frames (across every session) and in time:
+/// more than 32 frames plus out-of-process frames, then reads that hang.
+/// Frames not read are `partial`, never `gone` or unchanged.
+#[tokio::test]
+#[ignore]
+async fn e2e_observe_text_capture_is_bounded_in_frames_and_time() {
+    use std::sync::atomic::Ordering;
+    let (oopif_port, oopif_server) =
+        spawn_html_server("<!doctype html><p>out of process</p>".to_string()).await;
+    let inline: String = (0..40)
+        .map(|i| format!("<iframe srcdoc=\"<p>inline frame {i}</p>\"></iframe>"))
+        .collect();
+    let oopifs: String = (0..3)
+        .map(|i| format!("<iframe src=\"http://localhost:{oopif_port}/o{i}\"></iframe>"))
+        .collect();
+    let page = format!(
+        r##"<!doctype html><meta charset="utf-8"><title>Many frames</title>
+<main><h1>Many frames</h1><button id="go" onclick="this.textContent='Went'">Go</button>
+{inline}{oopifs}</main>"##
+    );
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    wait_for_evaluation(
+        &mut state,
+        "document.readyState === 'complete' && document.querySelectorAll('iframe').length === 43",
+        "frames should load",
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    eprintln!(
+        "out-of-process frame sessions: {}",
+        state.iframe_sessions.len()
+    );
+
+    let started = std::time::Instant::now();
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "4", "action": "click", "selector": "#go", "observe": true }),
+    )
+    .await;
+    let elapsed = started.elapsed();
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    let notes = observed["textFrames"].to_string();
+    assert_ne!(observed["status"], json!("complete"), "{observed}");
+    assert!(notes.contains("over the frame budget"), "{notes}");
+    assert!(notes.contains("\"partial\""), "{notes}");
+    assert!(!notes.contains("\"gone\""), "{notes}");
+    assert!(observed.get("text").is_none(), "{observed}");
+    assert!(
+        elapsed < std::time::Duration::from_secs(15),
+        "a 43-frame observation took {elapsed:?}"
+    );
+
+    // Every read hangs: each capture stops at its budget.
+    for (mask, bound) in [(0b10u32, 9u64), (0b11, 12)] {
+        super::observation::HANG_TEXT_READS.store(mask, Ordering::SeqCst);
+        let started = std::time::Instant::now();
+        let resp = run_cmd(
+            &mut state,
+            json!({ "id": format!("hang-{mask}"), "action": "click", "selector": "#go",
+                    "observe": true }),
+        )
+        .await;
+        let elapsed = started.elapsed();
+        super::observation::HANG_TEXT_READS.store(0, Ordering::SeqCst);
+        assert_success(&resp);
+        let observed = &get_data(&resp)["observed"];
+        assert_ne!(observed["status"], json!("complete"), "{observed}");
+        assert_ne!(observed["changed"], json!(false), "{observed}");
+        assert!(
+            observed["textFrames"].to_string().contains("budget"),
+            "{observed}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(bound),
+            "hanging reads (mask {mask:#b}) took {elapsed:?}"
+        );
+    }
+    server.abort();
+    oopif_server.abort();
+}
+
+/// A frame that appears between the frame reads and the final frame tree is
+/// in the inventory, unread: the observation is not complete and nothing is
+/// reported gone.
+#[tokio::test]
+#[ignore]
+async fn e2e_observe_text_frame_appearing_mid_read_is_not_complete() {
+    use std::sync::atomic::Ordering;
+    let page = r##"<!doctype html><meta charset="utf-8"><title>Late frame</title>
+<main><h1>Late frame</h1><button id="go">Go</button><p>steady</p></main>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    super::observation::INJECT_TEXT_FRAME.store(0b10, Ordering::SeqCst);
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "4", "action": "click", "selector": "#go", "observe": true }),
+    )
+    .await;
+    super::observation::INJECT_TEXT_FRAME.store(0, Ordering::SeqCst);
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    let notes = observed["textFrames"].to_string();
+    assert_ne!(observed["status"], json!("complete"), "{observed}");
+    assert!(notes.contains("appeared during the read"), "{notes}");
+    assert!(!notes.contains("\"gone\""), "{notes}");
+    assert_ne!(observed["changed"], json!(false), "{observed}");
+    server.abort();
+}
+
+/// A same-URL reload with the same text is a new document: a change, never
+/// "no change", and the click is not sent again.
+#[tokio::test]
+#[ignore]
+async fn e2e_observe_same_url_reload_is_a_change() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>Reload</title>
+<main><h1>Report</h1><p>Report ready</p><button id="go" onclick="location.reload()">Reload</button></main>
+<script>sessionStorage.loads = String(Number(sessionStorage.loads || 0) + 1);</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "4", "action": "click", "selector": "#go", "observe": true,
+                "settleMs": 3000 }),
+    )
+    .await;
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    assert_ne!(observed["changed"], json!(false), "{observed}");
+    assert!(observed.get("noProgress").is_none(), "{observed}");
+    if observed["status"] == json!("complete") {
+        assert_eq!(
+            observed["frameDocumentChanged"],
+            json!(["top"]),
+            "{observed}"
+        );
+        assert_eq!(observed["changed"], json!(true), "{observed}");
+    }
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "5", "action": "evaluate", "script": "sessionStorage.loads" }),
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        json!("2"),
+        "one reload, no resend: {resp}"
+    );
+    server.abort();
 }
 
 // ---------------------------------------------------------------------------
@@ -12186,7 +12731,7 @@ document.getElementById('open').addEventListener('click', () => {{
         if observe {
             let observed = &data["observed"];
             assert_eq!(observed["target"]["targetId"], opener_target, "{observed}");
-            let delta = observed["delta"].as_str().unwrap_or_default();
+            let delta = observed_changes(&observed);
             assert!(delta.contains("Opened"), "the opener's change: {observed}");
             assert!(!delta.contains("Popup ready"), "{observed}");
         }
@@ -12315,7 +12860,7 @@ document.getElementById('open').addEventListener('click', () => {{
     assert!(data.get("followed").is_none(), "{resp}");
     let observed = &data["observed"];
     assert_eq!(observed["settle"]["quiet"], json!(true), "{observed}");
-    let delta = observed["delta"].as_str().unwrap_or_default();
+    let delta = observed_changes(&observed);
     assert!(delta.contains("Opened"), "opener's own change: {observed}");
     assert!(!delta.contains("Popup ready"), "{observed}");
 
@@ -12342,10 +12887,7 @@ document.getElementById('open').addEventListener('click', () => {{
         "3s is ample for an 800ms popup: {observed}"
     );
     assert!(
-        observed["delta"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Popup ready"),
+        observed_changes(&observed).contains("Popup ready"),
         "a popup reported quiet must have finished mutating: {observed}"
     );
     assert!(

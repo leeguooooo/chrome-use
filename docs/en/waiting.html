@@ -277,6 +277,45 @@
         least 80% of each changed. Refs in that tree are live; use them directly.
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ A small page comes back whole</div>
+        When the post-action tree is at most 4 KB and 60 lines, <code>observed.snapshot</code> is that whole current
+        tree, the same capture, refs registered, and <code>observed.changes</code> lists only the <code>+</code>/<code>-</code>
+        lines, with no context. A <code>snapshot</code> straight after it adds nothing. Larger pages keep the unified
+        <code>delta</code>. An incomplete capture still says partial or unavailable in <code>observed.status</code>.
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Static text changes are in observed.text</div>
+        The interactive tree leaves plain static text out, so an iframe's receipt, an action log line or a
+        "Page 2 of 3" counter used to be invisible and the click read as no change. <code>observed.text</code> lists the
+        visible text lines, frame by frame, that appeared (<code>+</code>) or went away (<code>-</code>); a child frame's lines
+        start with <code>[frame name]</code>. A text change alone sets <code>changed: true</code>. At most 20 lines, 1 KB and
+        200 bytes a line; <code>textOmitted</code> counts the rest and <code>textTruncated: true</code> says so.
+        The text is read from the rendered DOM, not <code>innerText</code>: <code>&lt;input&gt;</code>, <code>&lt;textarea&gt;</code>,
+        <code>&lt;select&gt;</code> and every editable element (the editable host, all its content, a document in
+        <code>designMode</code>) are skipped with their subtrees, inside open shadow roots too. When any password field in any
+        frame (open shadow roots included) holds a value before or after the action, no text lines are returned and
+        <code>textStatus</code> is <code>redacted</code>: a page can copy a password into any frame's text. The values never leave the page.
+        Each frame is read in its own isolated world and checked against the frame tree; the tree read again afterwards is the
+        inventory. One capture reads at most 32 frames across all sessions within 2.5 s. A frame not read (over budget, or one
+        that appeared during the read) is <code>partial</code>; one whose read failed or whose document changed during the read is
+        <code>unavailable</code>. Any such frame withholds every text line, is listed in <code>textFrames</code> with its reason, and
+        makes the observation incomplete: <code>textStatus</code> is <code>unavailable</code>, <code>status</code> is at best
+        <code>partial</code>, an unchanged tree no longer reads as <code>changed: false</code>, and no <code>noProgress</code> hint is
+        given. A frame the final inventory confirms is <code>gone</code>, and a frame whose document changed
+        (<code>frameDocumentChanged</code>, such as a same-URL reload), count as changes. The small-page <code>changes</code> list is capped at 60 lines, 4 KB and
+        240 bytes a line (<code>changesOmitted</code>, <code>changesShortened</code>).
+      </div>
+        The interactive tree leaves plain static text out, so an iframe's receipt, an action log line or a
+        "Page 2 of 3" counter used to be invisible and the click read as no change. <code>observed.text</code> lists the
+        visible text lines, frame by frame, that appeared (<code>+</code>) or went away (<code>-</code>); a child frame's lines
+        start with <code>[frame name]</code>. A text change alone sets <code>changed: true</code>. At most 20 lines and 1 KB;
+        <code>textOmitted</code> counts the rest. What was typed into inputs and textareas, editable-region content and any
+        line holding a password value never appear. <code>textStatus: "unavailable"</code> means the text could not be read,
+        so a text-only change is unknown, not absent.
+      </div>
+
       <div class="du-callout tip">
         <div class="du-callout-title">✅ expect or --observe?</div>
         For a <strong>hard pass/fail gate</strong> (with exit codes, <code>&amp;&amp;</code>, batches) use
