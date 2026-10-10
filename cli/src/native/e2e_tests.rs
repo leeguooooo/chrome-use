@@ -3995,10 +3995,13 @@ async fn e2e_hover_applies_css_hover_and_refuses_covered_target() {
 }
 
 /// Issue #500 review: a pointer already resting on a thin target. The second
-/// hover must not move off the target to provoke an event: a 1px-tall strip
-/// has one hit point, so the reply is "unverified, already resting there";
-/// a 1px-wide but tall strip has a second hit point inside it, and the
-/// reported point and the pointer move there.
+/// hover must not move off the target to provoke an event. A 1x1 dot has one
+/// hit point: the pointer stays on it (no mouseout from the dot), and the
+/// reply reports that point and whatever the page confirmed (Chrome does
+/// deliver a trusted event for a move to the same point; if it did not, the
+/// reply would say the result is unknown, never claim it). A 1px-wide but
+/// tall strip has a second hit point inside it, and the reported point and
+/// the pointer move there.
 #[tokio::test]
 #[ignore]
 async fn e2e_hover_thin_target_with_the_pointer_already_resting_on_it() {
@@ -4014,7 +4017,8 @@ async fn e2e_hover_thin_target_with_the_pointer_already_resting_on_it() {
         "<div class='dot' style='position:absolute;left:40px;top:40px;width:1px;height:1px;background:red'></div>",
         "<div class='bar' style='position:absolute;left:80px;top:40px;width:1px;height:40px;background:blue'></div>",
         "<script>window.seen=[];for(const c of ['dot','bar'])document.querySelector('.'+c)",
-        ".addEventListener('mouseover',e=>seen.push(c+':'+e.isTrusted))</script>",
+        ".addEventListener('mouseover',e=>seen.push(c+':'+e.isTrusted));",
+        "window.outs=0;document.querySelector('.dot').addEventListener('mouseout',()=>outs++)</script>",
         "</body></html>"
     );
     let resp = execute_command(
@@ -4040,15 +4044,20 @@ async fn e2e_hover_thin_target_with_the_pointer_already_resting_on_it() {
     )
     .await;
     assert_success(&resp);
-    assert_eq!(get_data(&resp)["verified"], false, "{resp}");
-    assert!(
-        get_data(&resp)["warning"]
-            .as_str()
-            .unwrap_or("")
-            .contains("already resting"),
-        "{resp}"
-    );
+    let verified = get_data(&resp)["verified"].as_bool().unwrap_or(false);
+    let warning = get_data(&resp)["warning"].as_str().unwrap_or("");
+    assert!(verified || warning.contains("already resting"), "{resp}");
     assert_eq!(get_data(&resp)["point"], first, "{resp}");
+    let resp = execute_command(
+        &json!({ "id": "4b", "action": "evaluate", "script": "window.outs" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(
+        get_data(&resp)["result"],
+        0,
+        "the pointer left the dot: {resp}"
+    );
     assert_eq!(
         (state.mouse_state.x.round(), state.mouse_state.y.round()),
         (
