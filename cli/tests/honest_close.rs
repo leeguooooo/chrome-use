@@ -212,7 +212,14 @@ impl Fake {
             // gone AND the exact tab id given is gone; an API error is unknown.
             "ABExt.tabPresence" if b.relay => {
                 if b.old_extension {
-                    return Err("'ABExt.tabPresence' wasn't found".to_string());
+                    // What 0.5.32 really answers: an unknown method falls
+                    // through to its debugger path, which reads like a lost
+                    // tab (seen live; the command layer must not take it as
+                    // one).
+                    let target = params["targetId"].as_str().unwrap_or("");
+                    return Err(format!(
+                        "no attached tab for targetId {target} (ABExt.tabPresence)"
+                    ));
                 }
                 let target = params["targetId"].as_str().unwrap_or("").to_string();
                 let asked = params["tabId"].as_i64();
@@ -690,12 +697,35 @@ fn an_extension_without_tab_presence_is_unverified() {
         "{error}"
     );
     assert!(error.contains("update it to 0.5.33 or newer"), "{error}");
+    // Not mistaken for a lost tab: no stale-session retry closed them again.
+    assert!(!error.contains("is gone"), "{error}");
+    assert_eq!(
+        fake.close_requests().len(),
+        2,
+        "{:?}",
+        fake.close_requests()
+    );
     assert!(d.alive());
     let kept = record(&d);
     assert!(kept.contains(&t1) && kept.contains(&t2), "{kept}");
-    // The tab close of one tab keeps it too.
-    let r = d.send(json!({"id": "c", "action": "tab_close", "tabId": "t1"}));
+}
+
+/// The same with `tab close` of one of several tabs.
+#[test]
+fn tab_close_with_an_extension_without_tab_presence_keeps_the_tab() {
+    let (fake, url) = Fake::start(true);
+    let mut d = Daemon::start("hc-oldext-tab", &url, true);
+    let (_, t2) = two_relay_tabs(&fake, &d);
+    fake.0.lock().unwrap().old_extension = true;
+    let r = d.send(json!({"id": "c", "action": "tab_close", "tabId": "t2"}));
     assert_eq!(r["success"], false, "{r}");
+    let error = r["error"].as_str().unwrap_or_default();
+    assert!(error.contains("tab t2 was not closed"), "{error}");
+    assert!(error.contains("0.5.33"), "{error}");
+    assert_eq!(fake.close_requests(), vec![t2.clone()]);
+    assert!(d.alive());
+    assert!(record(&d).contains(&t2));
+    assert!(d.tabs().iter().any(|(_, t)| *t == t2));
 }
 
 /// #496 review: the same target under a new Chrome tab id (a replacement),

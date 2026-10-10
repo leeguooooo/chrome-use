@@ -216,11 +216,14 @@ pub(crate) fn presence_from_tab_presence(
 ) -> (TabPresence, Option<i64>) {
     let v = match result {
         Ok(v) => v,
-        Err(e) => {
+        // The error text is not carried into the reason: it is not evidence,
+        // and an older extension's answer to an unknown method can read like
+        // a lost tab, which the command layer would treat as one.
+        Err(_) => {
             return (
-                TabPresence::Unsupported(format!(
-                    "the extension did not answer ABExt.tabPresence: {e}"
-                )),
+                TabPresence::Unsupported(
+                    "the extension did not answer ABExt.tabPresence".to_string(),
+                ),
                 None,
             )
         }
@@ -245,12 +248,11 @@ pub(crate) fn presence_from_tab_presence(
         Some("absent") => (TabPresence::Absent, tab),
         Some("present") => (TabPresence::Present, tab),
         _ => (
-            TabPresence::Unverified(
+            TabPresence::Unverified(close_reason(
                 v.get("error")
                     .and_then(Value::as_str)
-                    .unwrap_or("the extension could not tell")
-                    .to_string(),
-            ),
+                    .unwrap_or("the extension could not tell"),
+            )),
             tab,
         ),
     }
@@ -266,7 +268,21 @@ pub(crate) fn presence_from_targets(
             TabPresence::Present
         }
         Ok(_) => TabPresence::Absent,
-        Err(e) => TabPresence::Unverified(format!("Chrome's target list could not be read: {e}")),
+        Err(e) => TabPresence::Unverified(close_reason(&format!(
+            "Chrome's target list could not be read: {e}"
+        ))),
+    }
+}
+
+/// A reason a close could not be confirmed, as it goes into the error. Text
+/// that reads like a lost tab or a refused debugger is replaced: the command
+/// layer would take the whole `close` error for that and retry or reword it,
+/// when the close itself is what failed.
+fn close_reason(text: &str) -> String {
+    if is_stale_target_error(text) || is_debugger_access_denied(text) {
+        "the browser reported an error reading the tab back".to_string()
+    } else {
+        text.to_string()
     }
 }
 
@@ -7428,6 +7444,21 @@ mod honest_close_tests {
                 TabPresence::Unsupported(_)
             ));
         }
+        // ab-connect 0.5.32's answer to the unknown method reads like a lost
+        // tab; none of it reaches the close error, which the command layer
+        // would otherwise retry and reword as a lost tab.
+        let old = Err("no attached tab for targetId T (ABExt.tabPresence)".to_string());
+        let TabPresence::Unsupported(reason) = presence_from_tab_presence(&old, "T").0 else {
+            panic!("not unsupported");
+        };
+        assert!(!super::is_stale_target_error(&reason), "{reason}");
+        let unknown = json!({"tabPresenceVersion": 1, "targetId": "T", "presence": "unknown",
+                             "error": "no attached tab for T"});
+        let TabPresence::Unverified(reason) = presence_from_tab_presence(&Ok(unknown), "T").0
+        else {
+            panic!("not unverified");
+        };
+        assert!(!super::is_stale_target_error(&reason), "{reason}");
     }
 
     #[test]
