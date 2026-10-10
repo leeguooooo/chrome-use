@@ -235,7 +235,10 @@ impl DocumentIdentity {
         }
         for f in wanted {
             match (self.frames.get(f), now.frames.get(f)) {
-                (Some(a), Some(b)) if a == b => {}
+                (Some(a), Some(b)) if !a.is_empty() && a == b => {}
+                (Some(a), Some(b)) if a.is_empty() || b.is_empty() => {
+                    return Err(format!("frame {f} has no document id to compare"))
+                }
                 (Some(_), Some(_)) => {
                     return Err(if f == self.main_frame {
                         "the page navigated to a new document since that snapshot".to_string()
@@ -1160,6 +1163,12 @@ async fn confirmed_backend_node_id(
     backend_node_id: i64,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<i64, String> {
+    // A ref kept from before a failed post-action capture is held to its
+    // exact node: confirmed, or refused. No re-anchoring, healing or
+    // fingerprint relocation, and AGENT_BROWSER_VERIFY_REF=0 does not apply.
+    if ref_map.kept().is_some() {
+        return confirm_kept_node(client, effective_session_id, ref_map, ref_id, entry).await;
+    }
     if std::env::var("AGENT_BROWSER_VERIFY_REF").as_deref() == Ok("0") {
         return Ok(backend_node_id);
     }
@@ -1832,21 +1841,63 @@ fn stale_ref_error(
     )
 }
 
-/// Frame id → loaderId for every frame in a `Page.getFrameTree` answer.
-fn collect_frame_loaders(tree: &Value, out: &mut HashMap<String, String>) {
-    let frame = &tree["frame"];
-    if let (Some(id), Some(loader)) = (frame["id"].as_str(), frame["loaderId"].as_str()) {
-        out.insert(id.to_string(), loader.to_string());
+/// One frame of a `Page.getFrameTree` answer: its id and loaderId, both
+/// required and non-empty. Anything else is a bad or partial reply.
+fn frame_and_loader(node: &Value) -> Result<(String, String), String> {
+    let frame = node
+        .get("frame")
+        .filter(|f| f.is_object())
+        .ok_or("a frame tree node has no frame")?;
+    let id = frame
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or("a frame in the tree has no id")?;
+    let loader = frame
+        .get("loaderId")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| format!("frame {id} has no loaderId"))?;
+    Ok((id.to_string(), loader.to_string()))
+}
+
+/// Frame id → loaderId for every frame of a `Page.getFrameTree` answer
+/// (`frameTree`), and the top frame's id. Any frame without a valid id and
+/// loader — the top one or a child — makes the whole reply unusable.
+fn parse_frame_tree(tree: &Value) -> Result<(String, HashMap<String, String>), String> {
+    fn walk(node: &Value, out: &mut HashMap<String, String>) -> Result<(), String> {
+        let (id, loader) = frame_and_loader(node)?;
+        out.insert(id, loader);
+        match node.get("childFrames") {
+            None | Some(Value::Null) => Ok(()),
+            Some(Value::Array(children)) => children.iter().try_for_each(|c| walk(c, out)),
+            Some(_) => Err("childFrames is not a list".to_string()),
+        }
     }
-    for child in tree["childFrames"].as_array().into_iter().flatten() {
-        collect_frame_loaders(child, out);
+    let (main, _) = frame_and_loader(tree)?;
+    let mut frames = HashMap::new();
+    walk(tree, &mut frames)?;
+    Ok((main, frames))
+}
+
+/// The loader of `frame` from its own out-of-process session's frame tree.
+/// The reply's top frame must be `frame` itself: a reply about another frame
+/// (a stale or reused session) is refused, never filed under `frame`.
+fn oopif_loader(reply: &Value, frame: &str) -> Result<String, String> {
+    let (id, loader) = frame_and_loader(&reply["frameTree"])?;
+    if id != frame {
+        return Err(format!(
+            "the session for frame {frame} answered for frame {id}"
+        ));
     }
+    Ok(loader)
 }
 
 /// Read which document the page (and each of `frames` that runs in its own
 /// out-of-process session) holds right now. One `Page.getFrameTree`, plus one
 /// per such frame. Fails when the page cannot be read — under a
-/// `debugger_access_denied` block, for one — and then nothing can be confirmed.
+/// `debugger_access_denied` block, for one — or when a reply is malformed or
+/// about another frame; then nothing can be confirmed.
 pub async fn read_document_identity(
     client: &CdpClient,
     session_id: &str,
@@ -1862,27 +1913,85 @@ pub async fn read_document_identity(
         .unwrap_or_else(|_| Err("reading the frame tree timed out".to_string()))
     }
     let main = frame_tree(client, session_id).await?;
-    let tree = &main["frameTree"];
-    let main_frame = tree["frame"]["id"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .ok_or("the frame tree has no top frame")?
-        .to_string();
+    let (main_frame, frames_now) = parse_frame_tree(&main["frameTree"])?;
     let mut identity = DocumentIdentity {
-        frames: HashMap::new(),
+        frames: frames_now,
         main_frame,
     };
-    collect_frame_loaders(tree, &mut identity.frames);
     for frame in frames {
         let Some(sid) = iframe_sessions.get(frame) else {
             continue;
         };
         let oopif = frame_tree(client, sid).await?;
-        if let Some(loader) = oopif["frameTree"]["frame"]["loaderId"].as_str() {
-            identity.frames.insert(frame.clone(), loader.to_string());
-        }
+        let loader = oopif_loader(&oopif, frame)?;
+        identity.frames.insert(frame.clone(), loader);
     }
     Ok(identity)
+}
+
+/// Why a DOM-walk ref kept from before a failed capture is refused.
+const DOM_SOURCED_KEPT: &str = "it came from a DOM-walk snapshot, whose node cannot be \
+     confirmed as the same element, so kept DOM refs are never used";
+
+/// The refusal for a kept ref (see [`RefMap::kept`]) that could not be held
+/// to the exact element it named.
+pub(crate) fn kept_ref_refusal(
+    ref_map: &RefMap,
+    ref_id: &str,
+    entry: &RefEntry,
+    why: &str,
+) -> String {
+    let cause = ref_map
+        .kept()
+        .map(|k| k.cause.as_str())
+        .unwrap_or("post-action capture failed");
+    format!(
+        "Ref {ref_id} [{} \"{}\"] is from the snapshot taken before the last action, whose \
+         post-action capture failed ({cause}). chrome-use could not confirm it still names that \
+         element in the same document: {why}. Nothing was acted on. Do not repeat the earlier \
+         action; run `snapshot -i` and use its refs.",
+        entry.role, entry.name
+    )
+}
+
+/// [`confirmed_backend_node_id`] for a kept ref: the cached node must still
+/// carry the snapshot's role and name. Every other outcome is a refusal.
+async fn confirm_kept_node(
+    client: &CdpClient,
+    effective_session_id: &str,
+    ref_map: &RefMap,
+    ref_id: &str,
+    entry: &RefEntry,
+) -> Result<i64, String> {
+    if entry.dom_sourced {
+        return Err(kept_ref_refusal(ref_map, ref_id, entry, DOM_SOURCED_KEPT));
+    }
+    let Some(backend_node_id) = entry.backend_node_id else {
+        return Err(kept_ref_refusal(
+            ref_map,
+            ref_id,
+            entry,
+            "the ref has no node id to check",
+        ));
+    };
+    match verify_ref_identity(
+        client,
+        effective_session_id,
+        backend_node_id,
+        ref_id,
+        &entry.role,
+        &entry.name,
+    )
+    .await
+    {
+        RefCheck::Confirmed => Ok(backend_node_id),
+        RefCheck::Suspect(_) => Err(kept_ref_refusal(
+            ref_map,
+            ref_id,
+            entry,
+            "its node is gone, could not be checked, or no longer has that role and name",
+        )),
+    }
 }
 
 /// A ref the map kept from before a failed post-action capture
@@ -1907,15 +2016,14 @@ pub async fn verify_kept_ref(
     let Some(entry) = ref_map.get(ref_id) else {
         return Ok(());
     };
-    let refuse = |why: &str| {
-        format!(
-            "Ref {ref_id} [{} \"{}\"] is from the snapshot taken before the last action, whose \
-             post-action capture failed ({}). chrome-use could not confirm it still names that \
-             element in the same document: {why}. Nothing was acted on. Do not repeat the \
-             earlier action; run `snapshot -i` and use its refs.",
-            entry.role, entry.name, kept.cause
-        )
-    };
+    // Checked before anything is read: a DOM-walk ref has no accessibility
+    // identity to confirm, and a node DOM.describeNode still describes may be
+    // detached or another element. The resolver refuses them too
+    // (`confirm_kept_node`).
+    if entry.dom_sourced {
+        return Err(kept_ref_refusal(ref_map, ref_id, entry, DOM_SOURCED_KEPT));
+    }
+    let refuse = |why: &str| kept_ref_refusal(ref_map, ref_id, entry, why);
     let frames: Vec<String> = entry.frame_id.iter().cloned().collect();
     let now = read_document_identity(client, session_id, iframe_sessions, &frames)
         .await
@@ -1927,12 +2035,6 @@ pub async fn verify_kept_ref(
         return Err(refuse("the ref has no node id to check"));
     };
     let effective = resolve_frame_session(entry.frame_id.as_deref(), session_id, iframe_sessions);
-    if entry.dom_sourced {
-        return verify_dom_sourced_ref(client, effective, backend_node_id, ref_id, entry)
-            .await
-            .map(|_| ())
-            .map_err(|_| refuse("its node is no longer in the document"));
-    }
     match verify_ref_identity(
         client,
         effective,
@@ -2039,6 +2141,15 @@ pub async fn resolve_element_center(
             // backend_node_id is stale; re-query the accessibility tree below
         }
 
+        // A kept ref whose cached node is gone is refused, never re-queried.
+        if ref_map.kept().is_some() {
+            return Err(kept_ref_refusal(
+                ref_map,
+                &ref_id,
+                entry,
+                "its node could not be resolved on the page",
+            ));
+        }
         // Fallback: re-query the accessibility tree to find a fresh node by role/name.
         // If that fails, try adaptive fingerprint relocation before giving up.
         let fresh_id =
@@ -2123,6 +2234,15 @@ pub async fn resolve_element_object_id(
             // backend_node_id is stale; re-query the accessibility tree below
         }
 
+        // A kept ref whose cached node is gone is refused, never re-queried.
+        if ref_map.kept().is_some() {
+            return Err(kept_ref_refusal(
+                ref_map,
+                &ref_id,
+                entry,
+                "its node could not be resolved on the page",
+            ));
+        }
         // Fallback: re-query the accessibility tree to find a fresh node by role/name.
         // If that fails, try adaptive fingerprint relocation before giving up.
         let fresh_id =
@@ -4536,12 +4656,71 @@ mod tests {
         let tree = json!({"frame": {"id": "T1", "loaderId": "L1"}, "childFrames": [
             {"frame": {"id": "F2", "loaderId": "L2"}, "childFrames": [
                 {"frame": {"id": "F3", "loaderId": "L3"}}]}]});
-        let mut out = HashMap::new();
-        collect_frame_loaders(&tree, &mut out);
-        assert_eq!(out.len(), 3);
-        assert_eq!(out["F3"], "L3");
+        let (main, frames) = parse_frame_tree(&tree).unwrap();
+        assert_eq!(main, "T1");
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames["F3"], "L3");
         let m = form_map();
         assert_eq!(m.ref_frames(), vec!["F2".to_string()]);
+    }
+
+    #[test]
+    fn a_bad_or_partial_frame_tree_is_refused() {
+        for (bad, why) in [
+            (
+                json!({"frame": {"id": "T1", "loaderId": ""}}),
+                "empty top loader",
+            ),
+            (json!({"frame": {"id": "T1"}}), "no top loader"),
+            (
+                json!({"frame": {"id": "", "loaderId": "L1"}}),
+                "empty top id",
+            ),
+            (json!({}), "no frame"),
+            (json!(null), "null tree"),
+            (json!({"frame": null}), "null frame"),
+            (
+                json!({"frame": {"id": "T1", "loaderId": "L1"},
+                       "childFrames": [{"frame": {"id": "F2", "loaderId": ""}}]}),
+                "empty child loader",
+            ),
+            (
+                json!({"frame": {"id": "T1", "loaderId": "L1"},
+                       "childFrames": [{"frame": {"loaderId": "L2"}}]}),
+                "child without id",
+            ),
+            (
+                json!({"frame": {"id": "T1", "loaderId": "L1"}, "childFrames": [{}]}),
+                "child without frame",
+            ),
+            (
+                json!({"frame": {"id": "T1", "loaderId": "L1"}, "childFrames": {"x": 1}}),
+                "childFrames not a list",
+            ),
+        ] {
+            assert!(parse_frame_tree(&bad).is_err(), "{why}: {bad}");
+        }
+    }
+
+    #[test]
+    fn an_oopif_reply_must_be_about_the_frame_that_was_asked() {
+        let reply = |id: &str, loader: &str| json!({"frameTree": {"frame": {"id": id, "loaderId": loader}}});
+        assert_eq!(oopif_loader(&reply("F2", "L2"), "F2").unwrap(), "L2");
+        // A stale or reused session answering for another frame.
+        let e = oopif_loader(&reply("F9", "L9"), "F2").unwrap_err();
+        assert!(e.contains("answered for frame F9"), "{e}");
+        assert!(oopif_loader(&reply("F2", ""), "F2").is_err());
+        assert!(oopif_loader(&json!({}), "F2").is_err());
+        assert!(oopif_loader(&json!({"frameTree": {"frame": null}}), "F2").is_err());
+    }
+
+    #[test]
+    fn empty_loaders_never_compare_equal() {
+        let before = identity("", &[("F2", "")]);
+        assert!(before.check_same(&before.clone(), None).is_err());
+        assert!(identity("L1", &[("F2", "")])
+            .check_same(&identity("L1", &[("F2", "")]), Some("F2"))
+            .is_err());
     }
 
     #[test]

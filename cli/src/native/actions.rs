@@ -558,6 +558,12 @@ pub struct DaemonState {
     /// are kept only against this identity (see `RefMap::kept`); with none
     /// (a navigation, or the read failed) they are dropped.
     pre_action_document: Option<super::element::DocumentIdentity>,
+    /// Set from the moment an observed action is sent until its observation
+    /// has decided what happens to the refs. Still set when the next command
+    /// starts means that command was cancelled in between (its future was
+    /// dropped): the refs are marked unverified then, as after a failed
+    /// capture, since the action may have changed the page.
+    unfinished_observation: Option<super::element::DocumentIdentity>,
     /// What a failed post-action capture did this command, for the reply.
     capture_outcome: Option<CaptureOutcome>,
     /// Frame id → the `Referrer-Policy` its document's response header set
@@ -709,6 +715,7 @@ impl DaemonState {
             defer_click_tab_check: false,
             deferred_click_tab_check: None,
             pre_action_document: None,
+            unfinished_observation: None,
             capture_outcome: None,
             document_referrer_policies: HashMap::new(),
             stale_popup_guard: None,
@@ -1856,6 +1863,7 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
 
 async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    mark_refs_after_unfinished_observation(state);
 
     // Apply per-invocation overrides the client forwarded (the daemon's own env
     // is frozen at spawn). CLICK_MODE is read fresh from the process env by
@@ -2323,6 +2331,13 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let mut stale_attempts = 0u32;
     state.defer_click_tab_check = observe && action == "click";
     state.deferred_click_tab_check = None;
+    // From here the action may take effect: until the observation settles
+    // the refs' fate, a cancelled command must leave them unverified.
+    state.unfinished_observation = if observe {
+        state.pre_action_document.clone()
+    } else {
+        None
+    };
     let result = loop {
         let attempt_result = match action {
             "launch" => handle_launch(cmd, state).await,
@@ -2649,6 +2664,10 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     // `--observe`: after a successful mutating action, settle briefly, re-snapshot,
     // and attach ONLY the delta vs the baseline (added/removed lines, url change,
     // requests fired). Collapses act→wait→snapshot→diff into one reply.
+    if !ok {
+        // The action failed: refs are left as they were, as before.
+        state.unfinished_observation = None;
+    }
     let observe_baseline = match observe_baseline {
         Some((_, _, _, Some(arm))) if !ok => {
             super::settle::release_arm(state, &arm).await;
@@ -11310,6 +11329,8 @@ fn mark_refs_before_capture(
     state: &mut DaemonState,
 ) -> (Option<super::element::DocumentIdentity>, Option<String>) {
     let pre = state.pre_action_document.take();
+    // The mark below takes over from the unfinished-observation one.
+    state.unfinished_observation = None;
     let target_before = state
         .browser
         .as_ref()
@@ -11321,6 +11342,21 @@ fn mark_refs_before_capture(
             .keep_after_failed_capture(identity, "the post-action capture did not finish");
     }
     (pre, target_before)
+}
+
+/// A previous command sent an observed action and was cancelled before its
+/// observation finished (see `DaemonState::unfinished_observation`): mark
+/// the refs unverified now, before anything can use them.
+fn mark_refs_after_unfinished_observation(state: &mut DaemonState) {
+    if let Some(identity) = state.unfinished_observation.take() {
+        if state.ref_map.has_snapshot() {
+            state.ref_map.keep_after_failed_capture(
+                identity,
+                "the previous command was cancelled after its action was sent, before its \
+                 observation finished",
+            );
+        }
+    }
 }
 
 /// Whether the refs survive a failed post-action capture, and against which
@@ -11669,6 +11705,207 @@ mod capture_failure_tests {
         );
         assert!(w.contains("ran once"), "{w}");
         assert!(!w.to_lowercase().contains("password"), "{w}");
+    }
+}
+
+/// Cancellation of an observed command through the public entry
+/// ([`execute_command`]), against an in-process fake page.
+///
+/// This is future cancellation (the command's future is dropped while its
+/// observation is still settling), NOT a client disconnect: the daemon does
+/// not cancel a command when its socket client goes away (`with_keepalive`
+/// keeps awaiting it, so side effects are never cut short). The future is
+/// dropped only when the daemon itself stops awaiting it.
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use std::sync::Mutex;
+    use tokio::sync::Notify;
+    use tokio_tungstenite::tungstenite::Message;
+
+    #[derive(Default)]
+    struct Page {
+        typed: Vec<String>,
+        /// Never answer the settle wait (the observation stays pending).
+        hang_settle: bool,
+        /// The Name field (56) is gone; a node with the same role and name
+        /// (66) took its place, which role/name re-anchoring would pick.
+        swapped: bool,
+    }
+
+    type Shared = Arc<(Mutex<Page>, Notify)>;
+
+    fn ax(bid: i64, role: &str, name: &str) -> Value {
+        json!({"nodeId": bid.to_string(), "ignored": false,
+               "role": {"type": "role", "value": role},
+               "name": {"type": "computedString", "value": name},
+               "backendDOMNodeId": bid, "parentId": "1", "childIds": []})
+    }
+
+    /// `None`: leave the request unanswered.
+    fn reply(shared: &Shared, req: &Value) -> Option<Result<Value, String>> {
+        let mut p = shared.0.lock().unwrap();
+        let params = &req["params"];
+        let nodes = |swapped: bool| {
+            let mut list = vec![(55, "textbox", "Email"), (56, "textbox", "Name")];
+            if swapped {
+                list[1] = (66, "textbox", "Name");
+            }
+            list
+        };
+        Some(Ok(match req["method"].as_str().unwrap_or("") {
+            "Page.getFrameTree" => {
+                json!({"frameTree": {"frame": {"id": "T1", "loaderId": "L1"}}})
+            }
+            "Accessibility.getFullAXTree" => {
+                let list = nodes(p.swapped);
+                let mut out = vec![json!({"nodeId": "1", "ignored": false,
+                    "role": {"type": "role", "value": "RootWebArea"},
+                    "name": {"type": "computedString", "value": "Form"},
+                    "backendDOMNodeId": 1,
+                    "childIds": list.iter().map(|n| n.0.to_string()).collect::<Vec<_>>()})];
+                out.extend(list.iter().map(|(b, r, n)| ax(*b, r, n)));
+                json!({"nodes": out})
+            }
+            "Accessibility.getPartialAXTree" => {
+                let bid = params["backendNodeId"].as_i64().unwrap_or(0);
+                match nodes(p.swapped).into_iter().find(|n| n.0 == bid) {
+                    Some((b, r, n)) => json!({"nodes": [ax(b, r, n)]}),
+                    None => return Some(Err("No node with given id found".into())),
+                }
+            }
+            "DOM.resolveNode" => {
+                let bid = params["backendNodeId"].as_i64().unwrap_or(0);
+                json!({"object": {"type": "object", "objectId": format!("obj-{bid}")}})
+            }
+            "Input.insertText" => {
+                p.typed
+                    .push(params["text"].as_str().unwrap_or("").to_string());
+                json!({})
+            }
+            "Runtime.evaluate" => {
+                let e = params["expression"].as_str().unwrap_or("");
+                if e.trim() == "location.href" {
+                    json!({"result": {"type": "string", "value": "https://form.test/"}})
+                } else if params["returnByValue"] == json!(false) {
+                    // The settle arm.
+                    json!({"result": {"type": "object", "objectId": "arm-1"}})
+                } else {
+                    json!({"result": {"type": "undefined"}})
+                }
+            }
+            "Runtime.callFunctionOn" => {
+                let f = params["functionDeclaration"].as_str().unwrap_or("");
+                if params["objectId"] == json!("arm-1") && params["awaitPromise"] == json!(true) {
+                    if p.hang_settle {
+                        shared.1.notify_one();
+                        return None;
+                    }
+                    json!({"result": {"type": "object", "value": {"quiet": true}}})
+                } else if f.contains("input-trusted") {
+                    json!({"result": {"type": "string", "value": "input-trusted"}})
+                } else {
+                    let value = p.typed.last().cloned().unwrap_or_default();
+                    json!({"result": {"type": "object", "value": {"ok": true, "value": value}}})
+                }
+            }
+            _ => json!({}),
+        }))
+    }
+
+    async fn start() -> (Shared, String) {
+        let shared: Shared = Arc::new((Mutex::new(Page::default()), Notify::new()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let page = shared.clone();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(msg)) = ws.next().await {
+                let Message::Text(text) = msg else { continue };
+                let req: Value = serde_json::from_str(&text).unwrap();
+                let mut out = match reply(&page, &req) {
+                    None => continue,
+                    Some(Ok(result)) => json!({"id": req["id"], "result": result}),
+                    Some(Err(message)) => {
+                        json!({"id": req["id"], "error": {"code": -32000, "message": message}})
+                    }
+                };
+                if let Some(sid) = req.get("sessionId") {
+                    out["sessionId"] = sid.clone();
+                }
+                if ws
+                    .send(Message::Text(out.to_string().into()))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        (shared, format!("ws://127.0.0.1:{port}"))
+    }
+
+    fn ref_for(snapshot: &str, name: &str) -> String {
+        let line = snapshot
+            .lines()
+            .find(|l| l.contains(&format!("\"{name}\"")))
+            .unwrap_or_else(|| panic!("no {name} in {snapshot}"));
+        let at = line.find("ref=").expect("a ref") + 4;
+        line[at..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect()
+    }
+
+    /// The fill is sent; its observation is still settling when the command's
+    /// future is dropped. The next command names an old ref whose node was
+    /// replaced by one with the same role and name: it must be checked as a
+    /// kept ref and refused, not re-anchored onto the substitute.
+    #[tokio::test]
+    async fn a_command_cancelled_while_its_observation_settles_leaves_refs_unverified() {
+        let (page, url) = start().await;
+        let mut state = DaemonState::new();
+        state.browser = Some(BrowserManager::connect_cdp_direct(&url).await.unwrap());
+        let r = execute_command(
+            &json!({"id": "s", "action": "snapshot", "interactive": true}),
+            &mut state,
+        )
+        .await;
+        assert_eq!(r["success"], true, "{r}");
+        let snap = r["data"]["snapshot"].as_str().unwrap().to_string();
+        let email = ref_for(&snap, "Email");
+        let name = ref_for(&snap, "Name");
+
+        page.0.lock().unwrap().hang_settle = true;
+        {
+            let cmd = json!({"id": "f", "action": "fill", "selector": format!("@{email}"),
+                             "value": "me@example.test", "observe": true});
+            let fill = execute_command(&cmd, &mut state);
+            tokio::select! {
+                r = fill => panic!("the observation should still be settling: {r}"),
+                _ = page.1.notified() => {}
+            }
+            // Leaving the block drops the command's future: it is cancelled.
+        }
+        assert_eq!(page.0.lock().unwrap().typed, vec!["me@example.test"]);
+
+        {
+            let mut p = page.0.lock().unwrap();
+            p.hang_settle = false;
+            p.swapped = true;
+        }
+        let cmd = json!({"id": "n", "action": "fill", "selector": format!("@{name}"),
+                         "value": "Ada"});
+        let r = execute_command(&cmd, &mut state).await;
+        assert_eq!(r["success"], false, "{r}");
+        let e = r["error"].as_str().unwrap_or("");
+        assert!(e.contains("Nothing was acted on"), "{e}");
+        assert!(e.contains("cancelled"), "{e}");
+        // The earlier fill was not sent again, and nothing went to the substitute.
+        assert_eq!(page.0.lock().unwrap().typed, vec!["me@example.test"]);
+        assert!(state.ref_map.kept().is_some());
     }
 }
 
@@ -13412,7 +13649,8 @@ async fn resolve_download_href(
     // already stale. Re-resolve refs by accessible name, or selectors directly.
     let expression = if let Some(ref_id) = super::element::parse_ref(selector_or_ref) {
         let entry = ref_map.get(&ref_id)?;
-        if !entry.role.eq_ignore_ascii_case("link") {
+        // This finds a link by its name, which a kept ref must never do.
+        if ref_map.kept().is_some() || !entry.role.eq_ignore_ascii_case("link") {
             return None;
         }
         format!(
