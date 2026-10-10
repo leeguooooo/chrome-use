@@ -90,6 +90,10 @@ impl Env {
             .env("AGENT_BROWSER_SOCKET_DIR", self.sock.path())
             .env_remove("AGENT_BROWSER_CDP")
             .env_remove("AGENT_BROWSER_AUTO_CONNECT")
+            // `read <url>` is a plain HTTP fetch: no browser connection, and
+            // never the extension-install page opened on the host's screen.
+            .env("AGENT_BROWSER_NO_AUTO_CONNECT", "1")
+            .env("AGENT_BROWSER_NO_AUTO_OPEN", "1")
             .env_remove("AGENT_BROWSER_PROVIDER")
             .env("NO_COLOR", "1");
         c
