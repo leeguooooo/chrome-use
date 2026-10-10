@@ -230,6 +230,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | 按文本、按快照 ref、或按视口坐标点击 |
 | `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` 整体替换，`type` 追加，都用可信输入事件；页面没反应时（比如保存按钮一直禁用）给出 ⚠ 警告 |
 | `chrome-use extract --schema '{"rows":".item","fields":{"title":"a","url":{"sel":"a","get":"@href"}}}'` | 一次调用取出结构化的行；单写 `"@href"` 读这一行元素自己的属性。看不懂的写法直接报错，某个字段每行都空时用 ⚠ 警告点名，不会静默返回 null |
+| `chrome-use hover @e3` | 把真实鼠标移到元素上（可信输入）；确认有可信指针事件落到元素上才输出 ✓，元素被遮挡时直接拒绝 |
 | `chrome-use network request <id>` | 从请求所属页面或跨源帧读取响应正文；正文不可用时返回 `responseBodyError` |
 | `chrome-use screenshot ./page.png` | 保存视觉证据；图片验证码和 canvas 目标用截图，普通控件用 ref |
 | `chrome-use solve-slider 1` · `skills get core/captcha` | 尝试易盾拼图（未通过时非零退出）；加载点选与结果核验流程 |

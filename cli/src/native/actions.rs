@@ -9442,22 +9442,58 @@ fn parse_key_chord(input: &str) -> (String, Option<i32>) {
 }
 
 async fn handle_hover(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
-    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
-    let session_id = mgr.active_session_id()?.to_string();
     let selector = cmd
         .get("selector")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'selector' parameter")?;
 
-    interaction::hover(
+    hover_synced(state, selector).await
+}
+
+/// The one path every hover entry point takes (`hover`, `find … hover`):
+/// hover, then move the daemon's mouse state to wherever the real pointer
+/// ended up, also when the hover failed after moving it, so a later
+/// coordinate-less `mouse down`/`up` presses where the pointer is.
+async fn hover_synced(state: &mut DaemonState, selector: &str) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+    let resting = Some((state.mouse_state.x, state.mouse_state.y));
+    let mut moved_to = None;
+    let outcome = interaction::hover_reporting(
         &mgr.client,
         &session_id,
         &state.ref_map,
         selector,
         &state.iframe_sessions,
+        resting,
+        &mut moved_to,
     )
-    .await?;
-    Ok(json!({ "hovered": selector }))
+    .await;
+    if let Some((x, y)) = moved_to {
+        state.mouse_state.x = x;
+        state.mouse_state.y = y;
+    }
+    Ok(hover_json(selector, &outcome?))
+}
+
+/// The reply for a hover: what was hovered, how, and whether the page
+/// confirmed it (#500).
+fn hover_json(selector: &str, outcome: &interaction::HoverOutcome) -> Value {
+    let mut out = json!({
+        "hovered": selector,
+        "dispatch": outcome.dispatch,
+        "verified": outcome.verified,
+    });
+    if let Some((x, y)) = outcome.point {
+        out["point"] = json!({ "x": x.round(), "y": y.round() });
+    }
+    if let Some(a) = &outcome.received_by {
+        out["receivedBy"] = json!(a);
+    }
+    if let Some(w) = &outcome.warning {
+        out["warning"] = json!(w);
+    }
+    out
 }
 
 async fn handle_scroll(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -17423,17 +17459,7 @@ async fn execute_subaction(
             .await?;
             Ok(json!({ "checked": selector }))
         }
-        "hover" => {
-            interaction::hover(
-                &mgr.client,
-                &session_id,
-                &state.ref_map,
-                selector,
-                &state.iframe_sessions,
-            )
-            .await?;
-            Ok(json!({ "hovered": selector }))
-        }
+        "hover" => hover_synced(state, selector).await,
         "text" => {
             let text = super::element::get_element_text(
                 &mgr.client,

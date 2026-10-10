@@ -818,23 +818,16 @@ pub async fn dblclick(
 }
 
 /// DOM-dispatch a hover (pointer/mouse enter+move) on the element in its own
-/// session — reaches OOPIF elements and never drifts to the foreground tab over
-/// the relay, unlike a coordinate `mouseMoved` (issues #31/#36).
+/// session. Only for a target no real pointer can be placed on (inside a
+/// cross-origin frame whose position the page cannot see): the events are
+/// `isTrusted: false`, so JS `mouseover`/`mouseenter` handlers run but CSS
+/// `:hover` is never applied. The caller reports that, it never reads as a
+/// verified hover (#500).
 async fn dom_hover(
     client: &CdpClient,
-    session_id: &str,
-    ref_map: &RefMap,
-    selector_or_ref: &str,
-    iframe_sessions: &HashMap<String, String>,
+    object_id: &str,
+    effective_session_id: &str,
 ) -> Result<(), String> {
-    let (object_id, effective_session_id) = resolve_element_object_id(
-        client,
-        session_id,
-        ref_map,
-        selector_or_ref,
-        iframe_sessions,
-    )
-    .await?;
     client
         .send_command_typed::<_, Value>(
             "Runtime.callFunctionOn",
@@ -850,37 +843,426 @@ async fn dom_hover(
                     this.dispatchEvent(new MouseEvent('mousemove', base));
                 }"#
                 .to_string(),
-                object_id: Some(object_id),
+                object_id: Some(object_id.to_string()),
                 arguments: None,
                 return_by_value: Some(true),
                 await_promise: Some(false),
             },
-            Some(&effective_session_id),
+            Some(effective_session_id),
         )
         .await?;
     Ok(())
 }
 
-pub async fn hover(
-    client: &CdpClient,
+/// What a `hover` did, and whether the page agrees it happened (#500).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HoverOutcome {
+    /// `pointer` (a trusted `Input.dispatchMouseEvent` move at the element's
+    /// hit point) or `dom` (synthetic events, `isTrusted: false`).
+    pub dispatch: &'static str,
+    /// Where the pointer was put, in top-level viewport CSS pixels.
+    pub point: Option<(f64, f64)>,
+    /// True only when a trusted pointer/mouse event from the move landed on
+    /// the target or a descendant (or, for a `pointer-events: none` target,
+    /// on the ancestor under the pointer).
+    pub verified: bool,
+    /// Set whenever the hover is not verified, or landed on an ancestor.
+    pub warning: Option<String>,
+    /// For a `pointer-events: none` target: the ancestor that received the
+    /// trusted event instead of the target itself.
+    pub received_by: Option<String>,
+}
+
+/// Scroll the target into view and find a viewport point where a real
+/// pointer would land on it (#500).
+///
+/// The centre is tried first, then a grid inside each of the element's
+/// visible boxes, because a sticky header or a cookie banner commonly
+/// covers part of an element and not all of it. Each candidate is
+/// hit-tested with `elementFromPoint` in the element's own tree scope (a
+/// shadow root has its own), so a point counts only when the pointer there
+/// would be over the element or one of its descendants.
+///
+/// Points are returned top-level (`gx`, `gy`, for `Input.dispatchMouseEvent`),
+/// composed through every same-origin `frameElement`, and a point counts only
+/// when each frame element is itself topmost in its parent there (a parent
+/// overlay covering an iframe is a cover like any other). A frame the page
+/// cannot see out of (cross-origin) reports `error: "cross-origin-frame"`; a
+/// scaled, rotated or zoomed frame reports `error: "transformed-frame"`
+/// rather than a guessed point. Up to two points at least 1px apart come
+/// back, so a pointer already resting on one can still produce an event.
+///
+/// A target with `pointer-events: none` can never be under the pointer: the
+/// hit goes to whatever is beneath it, usually its own container, which is
+/// also where a page that styles `.card:hover .caption` expects the hover.
+/// That case returns the point with `ancestor` set, so the caller can verify
+/// the ancestor instead and say so.
+const HOVER_HIT_POINT_JS: &str = r#"function() {
+  const el = this;
+  const doc = el.ownerDocument;
+  const win = doc && doc.defaultView;
+  if (!win) return { error: 'detached' };
+  if (!el.isConnected) return { error: 'detached' };
+  try {
+    if (typeof el.scrollIntoViewIfNeeded === 'function') el.scrollIntoViewIfNeeded(true);
+    else el.scrollIntoView({ block: 'center', inline: 'center' });
+  } catch (e) {}
+  const describe = (n) => {
+    if (!n || !n.tagName) return 'nothing';
+    let d = '<' + n.tagName.toLowerCase();
+    if (n.id) d += ' id="' + n.id + '"';
+    const cls = typeof n.className === 'string' ? n.className.trim().split(/\s+/).slice(0, 2).join(' ') : '';
+    if (cls) d += ' class="' + cls + '"';
+    d += '>';
+    const t = (n.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+    return t ? d + ' "' + t + '"' : d;
+  };
+  const scopeOf = (n, d) => {
+    const root = n.getRootNode ? n.getRootNode() : d;
+    return root && typeof root.elementFromPoint === 'function' ? root : d;
+  };
+  const rects = Array.from(el.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+  if (!rects.length) return { error: 'no-box' };
+  // True when `n` or any ancestor in its document (across shadow roots) has
+  // a transform, an individual rotate/scale/translate, or a zoom.
+  const transformedChain = (n) => {
+    for (let x = n; x; x = x.parentElement || (x.getRootNode && x.getRootNode().host) || null) {
+      let cs = null;
+      try { cs = x.ownerDocument.defaultView.getComputedStyle(x); } catch (e) { return true; }
+      if (!cs) continue;
+      if (cs.transform && cs.transform !== 'none') return true;
+      for (const k of ['rotate', 'scale', 'translate']) {
+        if (cs[k] && cs[k] !== 'none') return true;
+      }
+      if (cs.zoom && cs.zoom !== '1' && cs.zoom !== 'normal') return true;
+    }
+    return false;
+  };
+  // The chain of frame elements from this document up to the top one. Each
+  // must be same-origin (readable) and untransformed: a scaled, rotated or
+  // zoomed frame cannot be mapped to a top-level point without guessing, so
+  // it is refused before anything is sent.
+  const chain = [];
+  try {
+    let w = win;
+    while (w !== w.top) {
+      const fe = w.frameElement;
+      if (!fe) return { error: 'cross-origin-frame' };
+      const fr = fe.getBoundingClientRect();
+      // Any transform, rotate, scale, translate or zoom on the frame element
+      // or an ancestor in its document changes the mapping in ways a
+      // bounding rect cannot show (a 180deg rotation keeps width and
+      // height), so it is refused rather than mapped.
+      if (transformedChain(fe)
+          || Math.abs(fr.width - fe.offsetWidth) > 0.5 || Math.abs(fr.height - fe.offsetHeight) > 0.5
+          || Math.abs(w.innerWidth - fe.clientWidth) > 0.5 || Math.abs(w.innerHeight - fe.clientHeight) > 0.5) {
+        return { error: 'transformed-frame', frame: describe(fe) };
+      }
+      chain.push(fe);
+      w = w.parent;
+    }
+  } catch (e) { return { error: 'cross-origin-frame' }; }
+  // Map a point of this document to the top level, hit-testing every frame
+  // element on the way: the point must hit the frame element itself in its
+  // parent, or a parent overlay would take the real pointer first.
+  const lift = (x, y) => {
+    for (const fe of chain) {
+      const fr = fe.getBoundingClientRect();
+      x += fr.left + fe.clientLeft;
+      y += fr.top + fe.clientTop;
+      const hit = scopeOf(fe, fe.ownerDocument).elementFromPoint(x, y);
+      if (hit !== fe) return { cover: describe(hit) };
+    }
+    return { gx: x, gy: y };
+  };
+  const scope = scopeOf(el, doc);
+  const vw = win.innerWidth, vh = win.innerHeight;
+  const grid = [[0.5, 0.5], [0.3, 0.3], [0.7, 0.3], [0.3, 0.7], [0.7, 0.7],
+                [0.5, 0.2], [0.5, 0.8], [0.2, 0.5], [0.8, 0.5]];
+  let pe = 'auto';
+  try { pe = win.getComputedStyle(el).pointerEvents; } catch (e) {}
+  // Up to two hit points at least 1px apart, so a pointer already resting on
+  // the first one can be moved to the second without leaving the target.
+  const points = [];
+  const apart = (x, y) => points.every((p) => Math.abs(p.x - x) >= 1 || Math.abs(p.y - y) >= 1);
+  let firstMiss = null;
+  let ancestorHit = null;
+  const consider = (x, y, ok) => {
+    if (!ok) return;
+    const top = lift(x, y);
+    if (top.cover) { if (!firstMiss) firstMiss = { cover: top.cover }; return; }
+    if (apart(x, y)) points.push({ x, y, gx: top.gx, gy: top.gy });
+  };
+  for (const r of rects) {
+    const l = Math.max(r.left, 0), t = Math.max(r.top, 0);
+    const rr = Math.min(r.right, vw), b = Math.min(r.bottom, vh);
+    if (rr - l < 1 || b - t < 1) continue;
+    for (const [fx, fy] of grid) {
+      if (points.length >= 2) break;
+      const x = l + (rr - l) * fx, y = t + (b - t) * fy;
+      const hit = scope.elementFromPoint(x, y);
+      if (hit && (hit === el || el.contains(hit))) { consider(x, y, true); continue; }
+      // pointer-events:none: the hit goes to what is beneath; accept only
+      // the target's own (non-root) ancestor, the same one at every point.
+      if (pe === 'none' && hit && hit !== doc.documentElement && hit !== doc.body && hit.contains(el)
+          && (!ancestorHit || ancestorHit === hit)) {
+        ancestorHit = hit;
+        consider(x, y, true);
+        continue;
+      }
+      if (!firstMiss) firstMiss = { cover: hit ? describe(hit) : null };
+    }
+  }
+  if (points.length) {
+    const out = { points: points.map((p) => ({ gx: p.gx, gy: p.gy })) };
+    if (ancestorHit) out.ancestor = describe(ancestorHit);
+    return out;
+  }
+  if (!firstMiss) return { error: 'offscreen' };
+  return { error: 'covered', cover: firstMiss.cover || 'nothing at that point' };
+}"#;
+
+/// Installed on the target before the move: records the trusted pointer
+/// events that reach the page, so the reply can say whether the real
+/// pointer landed on the element (#500).
+///
+/// Why not read `:hover` back: measured on Chrome for Testing (headless and
+/// headed), after a real `Input.dispatchMouseEvent` move the `:hover` rule
+/// applies (`.b:hover` turns the box red) and trusted `pointerover` /
+/// `mouseover` / `mousemove` reach the element, yet `el.matches(':hover')`
+/// and `querySelectorAll(':hover')` evaluated over CDP still answer false /
+/// empty. A check built on them would refuse every hover that worked. What
+/// is checked instead is narrower and directly observable: a trusted
+/// pointer/mouse event from the move landed on the element. A synthetic
+/// event can never satisfy it. It does not inspect any CSS effect.
+///
+/// The recorder is held by a CDP remote-object handle, not stored on the
+/// page. [`RecorderGuard`] stops and releases it on every exit; the 10s
+/// timer only bounds the listener if even that cleanup cannot reach the page.
+const HOVER_RECORDER_JS: &str = r#"function() {
+  const el = this;
+  const doc = el.ownerDocument;
+  const rec = { events: [], stop: null };
+  const types = ['pointerover', 'pointermove', 'mouseover', 'mousemove'];
+  const describe = (n) => (n && n.tagName)
+    ? '<' + n.tagName.toLowerCase() + (n.id ? ' id="' + n.id + '"' : '') + '>'
+    : 'nothing';
+  const on = (e) => {
+    if (!e.isTrusted) return;
+    const path = e.composedPath ? e.composedPath() : [];
+    const t = path.length ? path[0] : e.target;
+    if (!t || t.nodeType !== 1) return;
+    rec.events.push({
+      inside: t === el || el.contains(t),
+      ancestor: t !== doc.documentElement && t !== doc.body && t.contains(el),
+      under: describe(t),
+    });
+  };
+  for (const ty of types) doc.addEventListener(ty, on, true);
+  let timer = 0;
+  rec.stop = () => {
+    for (const ty of types) doc.removeEventListener(ty, on, true);
+    clearTimeout(timer);
+  };
+  timer = setTimeout(rec.stop, 10000);
+  return rec;
+}"#;
+
+/// Read a recorder (`this`): did a trusted pointer event land on the target
+/// (or, for a `pointer-events: none` target, on the ancestor under the
+/// pointer)? `stop` ends the recording.
+const HOVER_RECORD_READ_JS: &str = r#"function(ancestorMode, stop) {
+  const evs = this.events;
+  if (stop) this.stop();
+  const hovered = evs.some((e) => e.inside) || (ancestorMode && evs.some((e) => e.ancestor));
+  const under = evs.length ? evs[evs.length - 1].under : 'no trusted mouse event reached the page';
+  return { hovered, under };
+}"#;
+
+/// How long to keep reading the recorder after each move. The move's own
+/// reply normally arrives after the page handled it; the retries cover a
+/// page that is busy.
+const HOVER_VERIFY_ATTEMPTS: u32 = 4;
+const HOVER_VERIFY_INTERVAL_MS: u64 = 50;
+
+/// What the verification probe found.
+#[derive(Debug, Clone, PartialEq)]
+enum HoverCheck {
+    Hovered,
+    NotHovered {
+        under: String,
+    },
+    /// The probe itself failed: nothing is known either way.
+    Unknown(String),
+}
+
+fn parse_hover_check(reply: Result<Value, String>) -> HoverCheck {
+    let value = match reply {
+        Ok(v) => v,
+        Err(e) => return HoverCheck::Unknown(e),
+    };
+    if let Some(ex) = value.get("exceptionDetails") {
+        return HoverCheck::Unknown(
+            ex.get("text")
+                .and_then(Value::as_str)
+                .unwrap_or("the probe threw")
+                .to_string(),
+        );
+    }
+    let v = value.get("result").and_then(|r| r.get("value"));
+    match v.and_then(|v| v.get("hovered")).and_then(Value::as_bool) {
+        Some(true) => HoverCheck::Hovered,
+        Some(false) => HoverCheck::NotHovered {
+            under: v
+                .and_then(|v| v.get("under"))
+                .and_then(Value::as_str)
+                .unwrap_or("nothing")
+                .to_string(),
+        },
+        None => HoverCheck::Unknown("the probe returned no answer".to_string()),
+    }
+}
+
+/// The message for a hover the hit test refused before anything was
+/// dispatched. `None` for a reply that carries a point.
+fn hover_refusal(selector_or_ref: &str, reply: &Value) -> Option<String> {
+    let error = reply.get("error").and_then(Value::as_str)?;
+    Some(match error {
+        "no-box" => format!(
+            "hover failed: {selector_or_ref} has no visible box (display:none, zero size, or \
+             not rendered), so there is no point to put the pointer on. If it appears only \
+             after another hover, hover its trigger first"
+        ),
+        "offscreen" => format!(
+            "hover failed: {selector_or_ref} is still outside the viewport after scrolling it \
+             into view (a clipped scroll container or a transform), so a pointer cannot reach it"
+        ),
+        "covered" => format!(
+            "hover refused: {selector_or_ref} is covered by {} at every point tried, so the \
+             pointer would hover that instead. Dismiss the overlay (a cookie banner, a modal \
+             backdrop, a sticky header) and hover again",
+            reply
+                .get("cover")
+                .and_then(Value::as_str)
+                .unwrap_or("another element")
+        ),
+        "detached" => format!(
+            "hover failed: {selector_or_ref} is no longer in the page. Take a fresh snapshot"
+        ),
+        "transformed-frame" => format!(
+            "hover refused: {selector_or_ref} is inside a frame that is scaled, rotated or \
+             zoomed ({}), so chrome-use cannot map it to a screen point without guessing; \
+             nothing was sent",
+            reply
+                .get("frame")
+                .and_then(Value::as_str)
+                .unwrap_or("an iframe")
+        ),
+        other => format!("hover failed: {selector_or_ref}: {other}"),
+    })
+}
+
+/// Stops and releases a hover event recorder however `hover_reporting` ends:
+/// normally (`finish`), on an early `?` return, or when the command future is
+/// dropped (cancelled). Drop cannot await, so it hands the two CDP calls to a
+/// detached task on the current runtime.
+struct RecorderGuard {
+    client: std::sync::Arc<CdpClient>,
+    session: String,
+    object_id: Option<String>,
+}
+
+impl RecorderGuard {
+    async fn release(client: &CdpClient, session: &str, object_id: &str) {
+        let _ = client
+            .send_command(
+                "Runtime.callFunctionOn",
+                Some(json!({
+                    "objectId": object_id,
+                    "functionDeclaration": "function() { try { this.stop(); } catch (e) {} }",
+                })),
+                Some(session),
+            )
+            .await;
+        let _ = client
+            .send_command(
+                "Runtime.releaseObject",
+                Some(json!({ "objectId": object_id })),
+                Some(session),
+            )
+            .await;
+    }
+
+    /// Stop and release, then disarm. The id stays in the guard until both
+    /// calls have completed: if this future is dropped while they are
+    /// pending (the command was cancelled mid-cleanup), Drop still finds the
+    /// id and runs the backstop release. A second stop/release of the same
+    /// object is harmless; a missing one leaks the RemoteObject.
+    async fn finish(mut self) {
+        if let Some(id) = self.object_id.clone() {
+            Self::release(&self.client, &self.session, &id).await;
+        }
+        self.object_id = None;
+    }
+}
+
+impl Drop for RecorderGuard {
+    fn drop(&mut self) {
+        let Some(id) = self.object_id.take() else {
+            return;
+        };
+        let (client, session) = (self.client.clone(), self.session.clone());
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(async move { RecorderGuard::release(&client, &session, &id).await });
+        }
+    }
+}
+
+/// The order to try the hit points in. A pointer already resting on the
+/// first point would get no event from a move to the same place, so a
+/// second hit point, when there is one, goes first then.
+fn order_hover_points(points: &[(f64, f64)], resting: Option<(f64, f64)>) -> Vec<(f64, f64)> {
+    let at = |p: (f64, f64), q: (f64, f64)| (p.0 - q.0).abs() < 0.5 && (p.1 - q.1).abs() < 0.5;
+    let mut out: Vec<(f64, f64)> = points.to_vec();
+    if let (Some(r), true) = (resting, out.len() > 1) {
+        if at(out[0], r) {
+            out.swap(0, 1);
+        }
+    }
+    out
+}
+
+/// Hover an element the way a user does, and report only what the page
+/// confirms (#500).
+///
+/// The old relay path dispatched synthetic `mouseover`/`mouseenter` events
+/// and returned success. Those events are `isTrusted: false`, and Chrome
+/// never applies CSS `:hover` for them, so a caption styled
+/// `.figure:hover .figcaption { display: block }` stayed hidden while the
+/// command printed `✓ Done`.
+///
+/// Steps: scroll into view, find hit points where the pointer is over the
+/// element through every frame level (refusing when something covers it or a
+/// frame is transformed), move the real pointer there, then confirm a
+/// trusted pointer event from the move landed on the element (see
+/// [`HOVER_RECORDER_JS`]; this is the guarantee, not any CSS effect). A move
+/// the page does not confirm is an error. A target no real pointer can reach
+/// (inside a cross-origin frame) gets synthetic events and a warning that
+/// the effect is unknown.
+///
+/// `resting` is where the daemon last put the pointer; `moved_to` is set to
+/// every point actually dispatched, so the caller's mouse state follows the
+/// real pointer even when this returns an error.
+pub async fn hover_reporting(
+    client: &std::sync::Arc<CdpClient>,
     session_id: &str,
     ref_map: &RefMap,
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
-) -> Result<(), String> {
-    // Coordinate `mouseMoved` drifts to the foreground tab over the relay and
-    // can't reach an OOPIF — DOM-dispatch the hover there (issues #31/#36).
-    if prefer_dom_dispatch(ref_map, selector_or_ref) {
-        return dom_hover(
-            client,
-            session_id,
-            ref_map,
-            selector_or_ref,
-            iframe_sessions,
-        )
-        .await;
-    }
-    let (x, y, _w, _h, effective_session_id) = resolve_element_center(
+    resting: Option<(f64, f64)>,
+    moved_to: &mut Option<(f64, f64)>,
+) -> Result<HoverOutcome, String> {
+    let (object_id, effective_session_id) = resolve_element_object_id(
         client,
         session_id,
         ref_map,
@@ -888,25 +1270,199 @@ pub async fn hover(
         iframe_sessions,
     )
     .await?;
-    restore_rendering_if_hidden(client, &effective_session_id).await;
-    client
+    let reply = client
         .send_command_typed::<_, Value>(
-            "Input.dispatchMouseEvent",
-            &DispatchMouseEventParams {
-                event_type: "mouseMoved".to_string(),
-                x,
-                y,
-                button: None,
-                buttons: None,
-                click_count: None,
-                delta_x: None,
-                delta_y: None,
-                modifiers: None,
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: HOVER_HIT_POINT_JS.to_string(),
+                object_id: Some(object_id.clone()),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
             },
             Some(&effective_session_id),
         )
         .await?;
-    Ok(())
+    let point = reply
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .cloned()
+        .unwrap_or(Value::Null);
+
+    if point.get("error").and_then(Value::as_str) == Some("cross-origin-frame") {
+        dom_hover(client, &object_id, &effective_session_id).await?;
+        return Ok(HoverOutcome {
+            dispatch: "dom",
+            point: None,
+            verified: false,
+            received_by: None,
+            warning: Some(format!(
+                "hover unverified: {selector_or_ref} is inside a cross-origin frame, where \
+                 chrome-use cannot place a real pointer, so it sent synthetic \
+                 mouseover/mouseenter events (isTrusted=false). Whether the page reacted to them \
+                 is unknown, and CSS :hover is never applied by them. Check the effect with \
+                 `snapshot` before relying on it"
+            )),
+        });
+    }
+    if let Some(refusal) = hover_refusal(selector_or_ref, &point) {
+        return Err(refusal);
+    }
+    let points: Vec<(f64, f64)> = point
+        .get("points")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| Some((p.get("gx")?.as_f64()?, p.get("gy")?.as_f64()?)))
+                .collect()
+        })
+        .unwrap_or_default();
+    if points.is_empty() {
+        return Err(format!(
+            "hover failed: could not compute a point on {selector_or_ref} (the page returned \
+             {point})"
+        ));
+    }
+    let ancestor = point
+        .get("ancestor")
+        .and_then(Value::as_str)
+        .map(String::from);
+
+    let recorder = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({
+                "objectId": object_id,
+                "functionDeclaration": HOVER_RECORDER_JS,
+                "returnByValue": false,
+            })),
+            Some(&effective_session_id),
+        )
+        .await
+        .ok()
+        .and_then(|r| r.get("result")?.get("objectId")?.as_str().map(String::from));
+    // From here on every exit, including `?` and cancellation, stops and
+    // releases the recorder.
+    let guard = RecorderGuard {
+        client: client.clone(),
+        session: effective_session_id.clone(),
+        object_id: recorder.clone(),
+    };
+
+    restore_rendering_if_hidden(client, session_id).await;
+    let order = order_hover_points(&points, resting);
+    let mut check =
+        HoverCheck::Unknown("the event recorder could not be installed on the element".to_string());
+    let mut last = order[0];
+    for &(mx, my) in &order {
+        // Top-level coordinates go to the page session: Chrome hit-tests
+        // them through every frame, the same as a user's pointer. Same
+        // parameters as `mouse move`.
+        client
+            .send_command_typed::<_, Value>(
+                "Input.dispatchMouseEvent",
+                &DispatchMouseEventParams {
+                    event_type: "mouseMoved".to_string(),
+                    x: mx,
+                    y: my,
+                    button: Some("none".to_string()),
+                    buttons: Some(0),
+                    click_count: None,
+                    delta_x: None,
+                    delta_y: None,
+                    modifiers: None,
+                },
+                Some(session_id),
+            )
+            .await?;
+        last = (mx, my);
+        *moved_to = Some(last);
+        let Some(rec) = recorder.as_deref() else {
+            break;
+        };
+        for attempt in 0..HOVER_VERIFY_ATTEMPTS {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(HOVER_VERIFY_INTERVAL_MS))
+                    .await;
+            }
+            check = parse_hover_check(
+                client
+                    .send_command(
+                        "Runtime.callFunctionOn",
+                        Some(json!({
+                            "objectId": rec,
+                            "functionDeclaration": HOVER_RECORD_READ_JS,
+                            "arguments": [{ "value": ancestor.is_some() }, { "value": false }],
+                            "returnByValue": true,
+                        })),
+                        Some(&effective_session_id),
+                    )
+                    .await,
+            );
+            if check == HoverCheck::Hovered || matches!(check, HoverCheck::Unknown(_)) {
+                break;
+            }
+        }
+        if check == HoverCheck::Hovered || matches!(check, HoverCheck::Unknown(_)) {
+            break;
+        }
+    }
+    guard.finish().await;
+    // A pointer that was already resting on the only hit point gets no new
+    // event from a move to the same place: that proves nothing either way.
+    let resting_on_only_point = order.len() == 1
+        && resting.is_some_and(|r| (r.0 - last.0).abs() < 0.5 && (r.1 - last.1).abs() < 0.5);
+    if resting_on_only_point && matches!(check, HoverCheck::NotHovered { .. }) {
+        check = HoverCheck::Unknown(
+            "the pointer was already resting on the only point inside the target, so the move \
+             produced no new event to confirm"
+                .to_string(),
+        );
+    }
+    hover_outcome(selector_or_ref, last, ancestor.as_deref(), check)
+}
+
+/// Turn the verification result into the reply: confirmed is success,
+/// contradicted is an error, unknown is success with a warning that says so.
+fn hover_outcome(
+    selector_or_ref: &str,
+    (gx, gy): (f64, f64),
+    ancestor: Option<&str>,
+    check: HoverCheck,
+) -> Result<HoverOutcome, String> {
+    let point = Some((gx, gy));
+    match check {
+        HoverCheck::Hovered => Ok(HoverOutcome {
+            dispatch: "pointer",
+            point,
+            verified: true,
+            warning: ancestor.map(|a| {
+                format!(
+                    "{selector_or_ref} has pointer-events:none, so no pointer event can land on \
+                     it; the trusted event landed on its ancestor {a} instead"
+                )
+            }),
+            received_by: ancestor.map(String::from),
+        }),
+        HoverCheck::NotHovered { under } => Err(format!(
+            "hover did not take effect: a real mouse move was dispatched at ({gx:.0}, {gy:.0}), \
+             but no trusted pointer event reached {} (last one went to: {under}). The page may \
+             have moved or re-rendered the element, or this tab is not receiving input. Take a \
+             fresh snapshot and hover again; `mouse move <x> <y>` places the pointer by hand",
+            ancestor.unwrap_or(selector_or_ref)
+        )),
+        HoverCheck::Unknown(why) => Ok(HoverOutcome {
+            dispatch: "pointer",
+            point,
+            verified: false,
+            warning: Some(format!(
+                "hover unverified: a real mouse move was dispatched at ({gx:.0}, {gy:.0}), but \
+                 whether a trusted event landed on the element is unknown ({why}). Check the \
+                 effect with `snapshot` before relying on it"
+            )),
+            received_by: None,
+        }),
+    }
 }
 
 /// DOM-dispatch an HTML5 drag-and-drop from `source` to `target` in their shared
@@ -5775,5 +6331,268 @@ mod stale_fill_tests {
                 assert!(err.contains("get value #email"), "{read:?}: {err}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod hover_tests {
+    //! Issue #500: a hover is reported done only when the page confirms it.
+    use super::{hover_outcome, hover_refusal, order_hover_points, parse_hover_check, HoverCheck};
+
+    /// A fake CDP endpoint that records every method (with its objectId) and
+    /// can hold the reply to the first `Runtime.callFunctionOn` forever.
+    async fn recorder_cleanup_fake(
+        hold_first_call: bool,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use futures_util::{SinkExt, StreamExt};
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log = seen.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+                return;
+            };
+            let mut held = !hold_first_call;
+            while let Some(Ok(msg)) = ws.next().await {
+                let Ok(text) = msg.into_text() else { continue };
+                let Ok(req) = serde_json::from_str::<serde_json::Value>(&text) else {
+                    continue;
+                };
+                let method = req["method"].as_str().unwrap_or("").to_string();
+                let obj = req["params"]["objectId"].as_str().unwrap_or("").to_string();
+                log.lock().unwrap().push(format!("{method} {obj}"));
+                if method == "Runtime.callFunctionOn" && !held {
+                    // Never answered: the cleanup await is pending here.
+                    held = true;
+                    continue;
+                }
+                let mut reply = serde_json::json!({ "id": req["id"], "result": {} });
+                if let Some(sid) = req.get("sessionId") {
+                    reply["sessionId"] = sid.clone();
+                }
+                let msg = tokio_tungstenite::tungstenite::Message::Text(reply.to_string());
+                if ws.send(msg).await.is_err() {
+                    return;
+                }
+            }
+        });
+        (format!("ws://127.0.0.1:{port}/devtools/browser/fake"), seen)
+    }
+
+    async fn released(seen: &std::sync::Mutex<Vec<String>>, id: &str) -> bool {
+        for _ in 0..100 {
+            if seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|l| l == &format!("Runtime.releaseObject {id}"))
+            {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        false
+    }
+
+    /// #509 review: cancelled *during* the cleanup await (the stop call is
+    /// pending when the command future is dropped), the RemoteObject must
+    /// still be released by the guard's Drop backstop. With the id taken
+    /// before the await, Drop found nothing and the object leaked.
+    #[tokio::test]
+    async fn a_cancelled_cleanup_still_releases_the_recorder() {
+        let (url, seen) = recorder_cleanup_fake(true).await;
+        let client = std::sync::Arc::new(super::CdpClient::connect(&url).await.unwrap());
+        let guard = super::RecorderGuard {
+            client: client.clone(),
+            session: "S1".to_string(),
+            object_id: Some("rec-1".to_string()),
+        };
+        let cancelled =
+            tokio::time::timeout(std::time::Duration::from_millis(200), guard.finish()).await;
+        assert!(
+            cancelled.is_err(),
+            "the held stop call should keep finish pending"
+        );
+        assert!(
+            released(&seen, "rec-1").await,
+            "no backstop release after cancelling mid-cleanup: {:?}",
+            seen.lock().unwrap()
+        );
+    }
+
+    /// The counterpart: cancelled before cleanup started (while the move was
+    /// pending), the guard is simply dropped and Drop releases.
+    #[tokio::test]
+    async fn a_guard_dropped_before_cleanup_releases_the_recorder() {
+        let (url, seen) = recorder_cleanup_fake(false).await;
+        let client = std::sync::Arc::new(super::CdpClient::connect(&url).await.unwrap());
+        let guard = super::RecorderGuard {
+            client: client.clone(),
+            session: "S1".to_string(),
+            object_id: Some("rec-2".to_string()),
+        };
+        drop(guard);
+        assert!(released(&seen, "rec-2").await, "{:?}", seen.lock().unwrap());
+    }
+
+    /// A normal finish releases exactly once and leaves nothing for Drop.
+    #[tokio::test]
+    async fn a_finished_cleanup_releases_once() {
+        let (url, seen) = recorder_cleanup_fake(false).await;
+        let client = std::sync::Arc::new(super::CdpClient::connect(&url).await.unwrap());
+        let guard = super::RecorderGuard {
+            client: client.clone(),
+            session: "S1".to_string(),
+            object_id: Some("rec-3".to_string()),
+        };
+        guard.finish().await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let n = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| *l == "Runtime.releaseObject rec-3")
+            .count();
+        assert_eq!(n, 1, "{:?}", seen.lock().unwrap());
+    }
+
+    /// A pointer resting on the first hit point gets no event from a move
+    /// there, so the second hit point (inside the target) goes first. With a
+    /// single point nothing else is tried: the pointer never leaves the
+    /// target to provoke an event.
+    #[test]
+    fn resting_pointer_moves_to_the_other_hit_point_first() {
+        let pts = [(10.0, 10.0), (10.0, 30.0)];
+        assert_eq!(
+            order_hover_points(&pts, Some((10.2, 9.9))),
+            vec![(10.0, 30.0), (10.0, 10.0)]
+        );
+        assert_eq!(order_hover_points(&pts, Some((50.0, 50.0))), pts.to_vec());
+        assert_eq!(order_hover_points(&pts, None), pts.to_vec());
+        assert_eq!(
+            order_hover_points(&pts[..1], Some((10.0, 10.0))),
+            vec![(10.0, 10.0)]
+        );
+    }
+
+    #[test]
+    fn ancestor_delivery_is_reported_as_the_ancestor_not_the_target() {
+        let out = hover_outcome(
+            "#f2 img",
+            (1.0, 2.0),
+            Some("<div id=\"f2\">"),
+            HoverCheck::Hovered,
+        )
+        .unwrap();
+        assert_eq!(out.received_by.as_deref(), Some("<div id=\"f2\">"));
+        let plain = hover_outcome("#a", (1.0, 2.0), None, HoverCheck::Hovered).unwrap();
+        assert!(plain.received_by.is_none());
+    }
+
+    #[test]
+    fn transformed_frame_is_refused_before_anything_is_sent() {
+        let msg = hover_refusal(
+            "@e3",
+            &serde_json::json!({ "error": "transformed-frame", "frame": "<iframe>" }),
+        )
+        .unwrap();
+        assert!(msg.starts_with("hover refused"), "{msg}");
+        assert!(msg.contains("nothing was sent"), "{msg}");
+    }
+    use serde_json::json;
+
+    #[test]
+    fn hover_probe_reply_is_read_three_ways() {
+        let ok = json!({ "result": { "value": { "hovered": true, "under": "<img>" } } });
+        assert_eq!(parse_hover_check(Ok(ok)), HoverCheck::Hovered);
+        let no =
+            json!({ "result": { "value": { "hovered": false, "under": "<div id=\"cover\">" } } });
+        assert_eq!(
+            parse_hover_check(Ok(no)),
+            HoverCheck::NotHovered {
+                under: "<div id=\"cover\">".to_string()
+            }
+        );
+        // A probe that threw or never answered proves nothing either way.
+        let threw = json!({ "exceptionDetails": { "text": "Uncaught" } });
+        assert!(matches!(
+            parse_hover_check(Ok(threw)),
+            HoverCheck::Unknown(_)
+        ));
+        assert!(matches!(
+            parse_hover_check(Err("Session closed".into())),
+            HoverCheck::Unknown(_)
+        ));
+        assert!(matches!(
+            parse_hover_check(Ok(json!({ "result": {} }))),
+            HoverCheck::Unknown(_)
+        ));
+    }
+
+    /// The false success of #500: the move went out, no trusted event landed
+    /// on the target. That has to be an error, never a `✓ Done`.
+    #[test]
+    fn contradicted_hover_is_an_error_naming_what_is_under_the_pointer() {
+        let err = hover_outcome(
+            ".figure img",
+            (60.0, 120.0),
+            None,
+            HoverCheck::NotHovered {
+                under: "<div id=\"cover\">".to_string(),
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("did not take effect"), "{err}");
+        assert!(err.contains(".figure img"), "{err}");
+        assert!(err.contains("<div id=\"cover\">"), "{err}");
+    }
+
+    #[test]
+    fn confirmed_hover_is_verified_without_a_warning() {
+        let out = hover_outcome("#a", (1.0, 2.0), None, HoverCheck::Hovered).unwrap();
+        assert!(out.verified);
+        assert_eq!(out.dispatch, "pointer");
+        assert_eq!(out.point, Some((1.0, 2.0)));
+        assert!(out.warning.is_none());
+    }
+
+    #[test]
+    fn unreadable_probe_is_success_marked_unverified() {
+        let out = hover_outcome("#a", (1.0, 2.0), None, HoverCheck::Unknown("x".into())).unwrap();
+        assert!(!out.verified);
+        assert!(out.warning.unwrap().contains("unverified"));
+    }
+
+    #[test]
+    fn pointer_events_none_target_says_the_ancestor_was_hovered() {
+        let out = hover_outcome(
+            "#f2 img",
+            (1.0, 2.0),
+            Some("<div class=\"figure\">"),
+            HoverCheck::Hovered,
+        )
+        .unwrap();
+        assert!(out.verified);
+        let w = out.warning.unwrap();
+        assert!(w.contains("pointer-events:none"), "{w}");
+        assert!(w.contains("<div class=\"figure\">"), "{w}");
+    }
+
+    #[test]
+    fn hit_test_refusals_name_the_reason() {
+        let covered = hover_refusal(
+            "#f1",
+            &json!({ "error": "covered", "cover": "<div id=\"cover\">" }),
+        )
+        .unwrap();
+        assert!(covered.starts_with("hover refused"), "{covered}");
+        assert!(covered.contains("<div id=\"cover\">"), "{covered}");
+        let hidden = hover_refusal("#f1", &json!({ "error": "no-box" })).unwrap();
+        assert!(hidden.contains("no visible box"), "{hidden}");
+        assert!(hover_refusal("#f1", &json!({ "x": 1, "y": 2, "gx": 1, "gy": 2 })).is_none());
     }
 }

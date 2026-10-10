@@ -642,6 +642,53 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             return;
         }
 
+        // `hover` says whether the page confirmed it (#500): a bare `✓ Done`
+        // is what hid a hover that never applied `:hover`.
+        // Keyed on the reply, not the action name, so `find … hover` gets the
+        // same receipt as `hover`.
+        if action == Some("hover")
+            || (data.get("hovered").is_some() && data.get("dispatch").is_some())
+        {
+            if let Some(target) = data.get("hovered").and_then(|v| v.as_str()) {
+                // `find … hover` resolves through an internal marker
+                // attribute; name it for what it is instead of printing it.
+                let target = if target.contains("data-chrome-use-located") {
+                    "the found element"
+                } else {
+                    target
+                };
+                let warning = data.get("warning").and_then(|v| v.as_str());
+                if data.get("verified").and_then(|v| v.as_bool()) == Some(true) {
+                    let indicator = if warning.is_some() {
+                        color::warning_indicator()
+                    } else {
+                        color::success_indicator()
+                    };
+                    // Name the level that actually received the event: the
+                    // target, or the ancestor a pointer-events:none target
+                    // lets it fall through to. Never a CSS effect.
+                    match data.get("receivedBy").and_then(|v| v.as_str()) {
+                        Some(a) => println!(
+                            "{indicator} Hovered {target}: a trusted pointer event landed on its \
+                             ancestor {a}"
+                        ),
+                        None => println!(
+                            "{indicator} Hovered {target} (a trusted pointer event landed on it)"
+                        ),
+                    }
+                } else {
+                    println!(
+                        "{} Hover sent to {target}, not confirmed",
+                        color::warning_indicator()
+                    );
+                }
+                if let Some(w) = warning {
+                    eprintln!("{} {}", color::warning_indicator(), w);
+                }
+                return;
+            }
+        }
+
         // `read` prints only the extracted document content (markdown / text /
         // outline), optionally wrapped in content boundaries. Action-gated + early
         // so the generic `✓ <url>` renderer doesn't swallow the body.
@@ -2746,8 +2793,32 @@ chrome-use hover - Hover over an element
 
 Usage: chrome-use hover <selector>
 
-Moves the mouse to hover over the specified element. Useful for
-triggering hover states or dropdown menus.
+Moves the real mouse pointer onto the element, the way a user does (trusted
+input, not synthetic DOM events). Useful for triggering hover states or
+dropdown menus.
+
+The element is scrolled into view, then hit-tested: the pointer goes to a
+point where the element itself is on top. After the move chrome-use checks
+whether a trusted pointer event landed on the element and reports only that
+(it does not inspect CSS styles):
+  ✓ Hovered <sel> (a trusted pointer event landed on it)
+  error "hover refused"                 something covers the element (a
+                                        banner, a backdrop); nothing is sent
+  error "did not take effect"           the move was sent but no trusted event
+                                        reached the element (it moved or
+                                        re-rendered)
+  ⚠ ... not confirmed                   the check could not run, or the target
+                                        is in a cross-origin frame, where only
+                                        synthetic events (isTrusted=false) can
+                                        reach it and CSS :hover never applies
+A target with pointer-events:none never receives a pointer event; the event
+lands on the ancestor beneath it, and the reply names that ancestor
+(`receivedBy`). An element in a cross-origin frame, or in a scaled, rotated
+or zoomed frame, cannot be mapped to a screen point: the first gets
+synthetic events (reported unverified), the second is refused. The check
+is about event delivery only; it does not inspect CSS styles. --json
+carries `verified`, `dispatch` (pointer | dom), `point` (where the pointer
+is now) and `receivedBy`.
 
 Global Options:
   --json               Output as JSON
