@@ -6281,19 +6281,23 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     // other command reconnects, and never report closed for tabs that were not
     // (#485). On failure the session is left as it was, so `close` can be
     // retried.
+    let mut report = super::browser::CloseReport::default();
     if let Some(mgr) = state.browser.as_mut() {
         if mgr.is_cdp_connection() && !mgr.is_connection_alive().await {
             let dead = mgr.ws_url().to_string();
             let held = mgr.created_target_ids();
-            close_tabs_after_lost_connection(&state.session_id, &dead, &held)
-                .await
-                .map_err(|error| {
-                    format!(
-                        "close incomplete: this session's browser connection was dead, and \
+            let known_tabs = mgr.known_chrome_tabs();
+            let closed =
+                close_tabs_after_lost_connection(&state.session_id, &dead, &held, &known_tabs)
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "close incomplete: this session's browser connection was dead, and \
                          closing its tabs over a new one failed: {error}. Nothing was reported \
                          closed; retry `close` once the browser is reachable."
-                    )
-                })?;
+                        )
+                    })?;
+            report = report.with_closed_ids(closed, "reconnect");
             // Its tabs are closed; there is nothing left to do over it.
             state.browser = None;
         }
@@ -6303,9 +6307,10 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     if state.browser.is_none() {
         if let Some(session) = super::browser::DAEMON_SESSION.get() {
             if crate::connection::has_created_targets(session) {
-                super::browser::close_persisted_session_tabs(session).await.map_err(|error| {
+                let closed = super::browser::close_persisted_session_tabs(session).await.map_err(|error| {
                     format!("close incomplete: {error}. Reconnect with the original browser options and retry; saved tab ownership was retained.")
                 })?;
+                report = report.with_closed_ids(closed, "saved-record");
             }
         }
     }
@@ -6325,8 +6330,24 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
             }
         }
     }
+    // Read back what was closed before calling it closed. A tab still open,
+    // or one whose absence cannot be confirmed, fails the close: the session
+    // (and with it the daemon, the connection and the ownership record) is
+    // kept, so a retry has everything this attempt had (#485 shape).
     if let Some(ref mut mgr) = state.browser {
-        mgr.close().await?;
+        let closed_here = mgr.close_verified().await?;
+        if !closed_here.is_complete() {
+            let mut merged = report.clone();
+            merged.tabs_closed.extend(closed_here.tabs_closed.clone());
+            merged.still_open = closed_here.still_open.clone();
+            merged.unverified = closed_here.unverified.clone();
+            return Err(merged.incomplete_error());
+        }
+        let earlier = std::mem::replace(&mut report, closed_here);
+        report.tabs_closed.splice(0..0, earlier.tabs_closed);
+        if report.verified_by.is_none() {
+            report.verified_by = earlier.verified_by;
+        }
     }
     state.browser = None;
     state.launch_hash = None;
@@ -6374,7 +6395,7 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     })?;
     state.carried_tabs_unknown = None;
     state.carried_tabs_cleanup = None;
-    Ok(json!({ "closed": true }))
+    Ok(report.to_json())
 }
 
 /// Close the session's tabs after the connection that held them died (#485).
@@ -6396,7 +6417,8 @@ async fn close_tabs_after_lost_connection(
     session: &str,
     dead: &str,
     held: &HashSet<String>,
-) -> Result<(), String> {
+    known_tabs: &HashMap<String, i64>,
+) -> Result<Vec<String>, String> {
     use crate::connect::ProfileEndpointError;
     let pin = crate::connection::session_relay_profile(session)?;
     let profile = pin.or_else(|| crate::connect::relay_profile_id_for_endpoint(dead));
@@ -6445,8 +6467,9 @@ async fn close_tabs_after_lost_connection(
                 continue;
             }
         }
-        match super::browser::close_owned_tabs_at(session, &endpoint, dead, held).await {
-            Ok(_) => return Ok(()),
+        match super::browser::close_owned_tabs_at(session, &endpoint, dead, held, known_tabs).await
+        {
+            Ok(closed) => return Ok(closed),
             Err(e)
                 if e.starts_with("CDP WebSocket connect failed")
                     && std::time::Instant::now() < deadline =>
@@ -13291,13 +13314,37 @@ fn tab_inspect_error_message(
 
 async fn handle_tab_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
-    let tab_id = match cmd.get("tabId").and_then(|v| v.as_str()) {
-        Some(s) => {
+    // Only an absent (or null) `tabId` means "the active tab". Any other
+    // non-string (1, true, an object) is refused, never read as omitted: that
+    // would close the active tab, or end the session on its last tab.
+    let tab_id = match cmd.get("tabId") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => {
             let tab_ref = super::browser::TabRef::parse(s)?;
             Some(mgr.resolve_tab_ref(&tab_ref)?)
         }
-        None => None,
+        Some(other) => {
+            return Err(format!(
+                "tab close: tabId must be a tab id or label string such as \"t2\", not {other}; \
+                 nothing was closed. Run `chrome-use tab list` for the session's tabs"
+            ))
+        }
     };
+    // The session's only tab, created by it: closing it is ending the
+    // session. Run the session close path (verified, ownership kept on
+    // failure) rather than refusing and costing the agent another round.
+    if mgr.tab_close_ends_session(tab_id)? {
+        let page = mgr.tab_ref_and_label(tab_id);
+        let mut res = handle_close(&json!({ "action": "close" }), state).await?;
+        if let Some(obj) = res.as_object_mut() {
+            if let Some((tab, label)) = page {
+                obj.insert("tabId".to_string(), json!(tab));
+                obj.insert("label".to_string(), json!(label));
+            }
+            obj.insert("sessionClosed".to_string(), json!(true));
+        }
+        return Ok(res);
+    }
     let closed_target = match tab_id {
         Some(id) => mgr.target_id_for_tab(id).map(ToString::to_string),
         None => mgr.active_target_id().ok().map(ToString::to_string),

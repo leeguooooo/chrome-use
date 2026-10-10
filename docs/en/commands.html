@@ -467,6 +467,24 @@
 <span class="du-prompt">$</span> chrome-use window new                       <span class="du-cmt"># new window</span></code></pre>
       </div>
       <p>
+        <code>tab close</code> on the session's only tab, when the session created it, ends the session the way
+        <code>close</code> does (<code>sessionClosed: true</code>), so no separate <code>close</code> is needed. A tab
+        the session did not create (adopted, or the user's) is never closed; the refusal says to leave it open and
+        run <code>close</code>.
+      </p>
+      <p>
+        <code>close</code> reads every tab it closed back before reporting it: over the relay from the extension's
+        <code>ABExt.tabPresence</code> (ab-connect 0.5.33+: Chrome's target registry for that exact target, then the exact
+        tab id; any API error counts as unconfirmed), or from Chrome's target list on a direct CDP connection. An older
+        extension cannot confirm a tab is gone, so its tabs stay <code>unverified</code>. The whole close has one 15 s
+        budget; a tab not confirmed by then stays <code>unverified</code> and keeps its ownership. Closing one of several
+        tabs (<code>tab close t2</code>) is read back too: a tab not confirmed gone fails and keeps its close right. It returns
+        <code>tabsClosed</code> (the tabs confirmed gone) and <code>verifiedAbsent: true</code>. If a tab the session
+        created is still open, or cannot be confirmed gone (<code>unverified</code>), it fails with
+        <code>close incomplete</code> and names those tabs; the session, its daemon and its tab ownership are kept, so
+        retry <code>close</code>.
+      </p>
+      <p>
         Native duplication requires real Chrome connected through the chrome-use extension. It restores the
         previously visible foreground tab, while the duplicate becomes chrome-use's internal active tab. There is
         no same-URL fallback for launched Chrome, raw CDP, Lightpanda, or cloud providers. Chrome decides whether

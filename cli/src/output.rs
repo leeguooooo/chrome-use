@@ -1767,15 +1767,34 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
         }
         // Closed (browser or tab)
         if data.get("closed").is_some() {
+            // `close` (and a `tab close` that ended the session) reads the
+            // tabs back before reporting them closed.
+            let verified = match (
+                data.get("tabsClosed").and_then(|v| v.as_array()),
+                data.get("verifiedAbsent").and_then(|v| v.as_bool()),
+            ) {
+                (Some(tabs), Some(true)) if !tabs.is_empty() => {
+                    format!(" ({} tab(s) closed, verified absent)", tabs.len())
+                }
+                _ => String::new(),
+            };
+            let session_closed = data.get("sessionClosed").and_then(|v| v.as_bool()) == Some(true);
             let label = match action {
                 Some("tab_close") => {
-                    if let Some(closed_id) = data.get("tabId").and_then(|v| v.as_str()) {
-                        println!("{} Tab [{}] closed", color::success_indicator(), closed_id);
-                        return;
+                    let tab = data
+                        .get("tabId")
+                        .and_then(|v| v.as_str())
+                        .map(|id| format!("Tab [{id}] closed"))
+                        .unwrap_or_else(|| "Tab closed".to_string());
+                    if session_closed {
+                        format!(
+                            "{tab}: it was the session's last tab, so the session ended{verified}"
+                        )
+                    } else {
+                        tab
                     }
-                    "Tab closed"
                 }
-                _ => "Browser closed",
+                _ => format!("Browser closed{verified}"),
             };
             println!("{} {}", color::success_indicator(), label);
             return;
@@ -3724,7 +3743,12 @@ chrome-use close - Close the browser
 
 Usage: chrome-use close [options]
 
-Closes the browser instance for the current session.
+Closes the browser instance for the current session. On your own Chrome it
+closes only the tabs this session created, then reads each one back (over the
+relay through ab-connect 0.5.33+, otherwise Chrome's target list) and reports
+`tabsClosed` and `verifiedAbsent: true`. If a tab is still open, or cannot be
+confirmed gone within the 15 s budget, it fails with `close incomplete`, names
+the tabs, and keeps the session and its tab ownership: retry `close`.
 
 Aliases: quit, exit
 
@@ -4182,6 +4206,14 @@ gets them once it is attached, so from its next document on.
 External and extension-connected Chrome tab rows are marked `created`,
 `adopted`, or `foreign`. Foreign tabs must be explicitly adopted before they
 can be selected. Adopted and foreign tabs cannot be closed by the session.
+
+`tab close` reads the tab back before reporting it closed (`verifiedAbsent`).
+A tab still open, or not confirmed gone, fails and stays one of the session's
+tabs, with its close right: retry, or run `close`. On the session's last tab,
+`tab close` ends the session like `close` (`sessionClosed: true`). With no
+<ref>, it closes the active tab only when that resolves; if the tab the session
+was driving is gone it refuses. Confirming over the relay needs ab-connect
+0.5.33 or newer.
 
 Tab options:
   --activate, --front  Raise new/select/adopt targets before renderer initialization
@@ -5783,7 +5815,8 @@ Tabs:
                              refused while another session's tab is in front of
                              that window (it would be hidden) unless --force
   tab inspect <ref>          Browser metadata without page JS (ab-connect 0.5.16+ on relay)
-  tab close [ref]            Close a tab (external: session-created only)
+  tab close [ref]            Close a tab, verified gone (external: session-created
+                             only); the last tab ends the session
   open <url> --reuse-tab     Reuse an existing tab on that URL instead of spawning
                              a duplicate (matches origin+path; preserves state)
   open <url> --prefer-spa    Route in-page when already on the target's origin

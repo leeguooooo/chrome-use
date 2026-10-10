@@ -44,9 +44,470 @@ const UNIT_TEST_LAUNCH_REFUSAL: Option<&str> = None;
 /// and the caller's SIGKILL is no longer what decides whether cleanup ran.
 pub const OWNED_TAB_CLEANUP_BUDGET: Duration = Duration::from_secs(5);
 
+/// The contract version of `ABExt.tabPresence` this CLI understands. A relay
+/// reply without `tabPresenceVersion` (ab-connect 0.5.32 and older) never
+/// proves a tab gone.
+const TAB_PRESENCE_VERSION: u64 = 1;
+
+/// First ab-connect build that answers `ABExt.tabPresence`.
+pub const TAB_PRESENCE_MIN_EXTENSION_VERSION: &str = "0.5.33";
+
+/// One deadline for the whole close-and-verify sequence: identity lookups,
+/// the closes, and every read-back. Each call gets only what is left of it, so
+/// sixteen hanging tabs cost this, not sixteen timeouts in a row; whatever is
+/// not confirmed by then stays unverified and keeps its ownership. Well under
+/// the CLI's 45 s read budget.
+pub const CLOSE_TOTAL_BUDGET: Duration = Duration::from_secs(15);
+
+/// How long a tab Chrome acknowledged closing but still reports is re-read.
+/// `Target.closeTarget` answers before Chrome has removed the tab, so one read
+/// straight after it is not the verdict. Capped by [`CLOSE_TOTAL_BUDGET`].
+pub const CLOSE_VERIFY_BUDGET: Duration = Duration::from_secs(3);
+
+/// The most a single lookup or read-back may take, within the deadline.
+const CLOSE_VERIFY_CALL_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How many lookups or read-backs run at once.
+const CLOSE_VERIFY_CONCURRENCY: usize = 8;
+
+/// Whether a tab `close` asked Chrome to remove is gone, by an authoritative
+/// source: over the relay, the extension's structured `ABExt.tabPresence`
+/// (Chrome's target registry for the exact target, then the exact tab id); on
+/// a direct CDP connection, Chrome's own target list. The relay's
+/// `Target.getTargets` is its cached, group-scoped list and proves nothing,
+/// and neither does an empty `{success: true}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TabPresence {
+    Absent,
+    Present,
+    /// No authoritative answer; the tab may still be open.
+    Unverified(String),
+    /// The extension cannot answer at all (older than
+    /// [`TAB_PRESENCE_MIN_EXTENSION_VERSION`]); also unverified.
+    Unsupported(String),
+}
+
+/// What `close` did to the tabs the session created, as read back afterwards.
+#[derive(Debug, Clone, Default)]
+pub struct CloseReport {
+    /// A browser this session launched was shut down (and its process reaped).
+    pub browser_closed: bool,
+    /// The tabs confirmed gone.
+    pub tabs_closed: Vec<Value>,
+    /// Tabs confirmed still open.
+    pub still_open: Vec<Value>,
+    /// Tabs whose absence could not be confirmed.
+    pub unverified: Vec<Value>,
+    /// Which source confirmed it: `extension-tabs`, `cdp-targets`,
+    /// `browser-exit`; `None` when there was nothing to close.
+    pub verified_by: Option<&'static str>,
+}
+
+impl CloseReport {
+    /// Every tab the session created is confirmed gone.
+    pub fn is_complete(&self) -> bool {
+        self.still_open.is_empty() && self.unverified.is_empty()
+    }
+
+    /// Fold in tabs closed earlier over another connection (#485).
+    pub fn with_closed_ids(mut self, ids: Vec<String>, verified_by: &'static str) -> Self {
+        if !ids.is_empty() && self.verified_by.is_none() {
+            self.verified_by = Some(verified_by);
+        }
+        self.tabs_closed
+            .extend(ids.into_iter().map(|id| json!({ "targetId": id })));
+        self
+    }
+
+    pub fn to_json(&self) -> Value {
+        let mut out = json!({
+            "closed": true,
+            "tabsClosed": self.tabs_closed,
+            "verifiedAbsent": self.is_complete(),
+        });
+        if let Some(by) = self.verified_by {
+            out["verifiedBy"] = json!(by);
+        }
+        if self.browser_closed {
+            out["browserClosed"] = json!(true);
+        }
+        out
+    }
+
+    /// The error a `close` that left tabs behind returns. Names each tab and
+    /// the next step; the session and its ownership record are kept, so the
+    /// retry has everything the first attempt had.
+    pub fn incomplete_error(&self) -> String {
+        let total = self.tabs_closed.len() + self.still_open.len() + self.unverified.len();
+        let mut parts = Vec::new();
+        if !self.still_open.is_empty() {
+            parts.push(format!(
+                "{} of the {total} tab(s) this session created are still open: {}",
+                self.still_open.len(),
+                describe_tabs(&self.still_open)
+            ));
+        }
+        if !self.unverified.is_empty() {
+            parts.push(format!(
+                "{} of the {total} tab(s) could not be confirmed closed (unverified): {}",
+                self.unverified.len(),
+                describe_tabs(&self.unverified)
+            ));
+            let old_extension = self
+                .unverified
+                .iter()
+                .any(|t| t.get("extensionUpdate").and_then(Value::as_bool) == Some(true));
+            if old_extension {
+                parts.push(format!(
+                    "the ab-connect extension cannot confirm a tab is gone; update it to {} or \
+                     newer",
+                    TAB_PRESENCE_MIN_EXTENSION_VERSION
+                ));
+            }
+        }
+        format!(
+            "close incomplete: {}. {} closed and verified absent. The session and its tab \
+             ownership were kept: retry `chrome-use close`; run `chrome-use tab list` to see \
+             the tabs, or `chrome-use tab <id>` then `chrome-use keep` to leave one to the user.",
+            parts.join("; "),
+            self.tabs_closed.len()
+        )
+    }
+}
+
+fn describe_tabs(tabs: &[Value]) -> String {
+    tabs.iter()
+        .map(|t| {
+            let mut s = t
+                .get("tabId")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| "(untracked tab)".to_string());
+            if let Some(label) = t.get("label").and_then(Value::as_str) {
+                s.push_str(&format!(" \"{label}\""));
+            }
+            let target = t.get("targetId").and_then(Value::as_str).unwrap_or("");
+            s.push_str(&format!(" (targetId {target}"));
+            if let Some(url) = t
+                .get("url")
+                .and_then(Value::as_str)
+                .filter(|u| !u.is_empty())
+            {
+                s.push_str(&format!(", {url}"));
+            }
+            if let Some(reason) = t.get("reason").and_then(Value::as_str) {
+                s.push_str(&format!(", {reason}"));
+            }
+            s.push(')');
+            s
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Read `ABExt.tabPresence`'s structured answer for `target_id`. Only a reply
+/// carrying the contract version, naming the same target, says anything:
+/// `absent` and `present` are taken as given, with the tab id the target is in
+/// now (it changes when Chrome replaces a tab). An error, a reply without the
+/// version (an older extension), or one about another target is unverified.
+pub(crate) fn presence_from_tab_presence(
+    result: &Result<Value, String>,
+    target_id: &str,
+    asked_tab: Option<i64>,
+) -> (TabPresence, Option<i64>) {
+    let v = match result {
+        Ok(v) => v,
+        // The error text is not carried into the reason: it is not evidence,
+        // and an older extension's answer to an unknown method can read like
+        // a lost tab, which the command layer would treat as one.
+        Err(_) => {
+            return (
+                TabPresence::Unsupported(
+                    "the extension did not answer ABExt.tabPresence".to_string(),
+                ),
+                None,
+            )
+        }
+    };
+    match v.get("tabPresenceVersion").and_then(Value::as_u64) {
+        Some(TAB_PRESENCE_VERSION) => {}
+        None => {
+            return (
+                TabPresence::Unsupported(
+                    "the extension does not report tab presence (no tabPresenceVersion)"
+                        .to_string(),
+                ),
+                None,
+            )
+        }
+        // A contract this CLI does not know: its answers are not evidence.
+        Some(other) => {
+            return (
+                TabPresence::Unverified(format!(
+                    "the extension answered tab presence version {other}, which this CLI does \
+                     not know"
+                )),
+                None,
+            )
+        }
+    }
+    if v.get("targetId").and_then(Value::as_str) != Some(target_id) {
+        return (
+            TabPresence::Unverified("the extension answered for another target".to_string()),
+            None,
+        );
+    }
+    let tab = v.get("tabId").and_then(Value::as_i64).filter(|id| *id >= 0);
+    match v.get("presence").and_then(Value::as_str) {
+        // Absence is about one exact tab: the one asked about, named back
+        // with a valid id. Anything less is not proof the tab is gone.
+        Some("absent") => match (tab, asked_tab) {
+            (Some(tab), Some(asked)) if tab == asked => (TabPresence::Absent, Some(tab)),
+            _ => (
+                TabPresence::Unverified(
+                    "the extension reported the tab absent without the exact tab id asked about"
+                        .to_string(),
+                ),
+                asked_tab,
+            ),
+        },
+        Some("present") => (TabPresence::Present, tab),
+        _ => (
+            TabPresence::Unverified(close_reason(
+                v.get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("the extension could not tell"),
+            )),
+            tab,
+        ),
+    }
+}
+
+/// On a direct CDP connection Chrome's own target list is the record.
+pub(crate) fn presence_from_targets(
+    result: &Result<GetTargetsResult, String>,
+    target_id: &str,
+) -> TabPresence {
+    match result {
+        Ok(list) if list.target_infos.iter().any(|t| t.target_id == target_id) => {
+            TabPresence::Present
+        }
+        Ok(_) => TabPresence::Absent,
+        Err(e) => TabPresence::Unverified(close_reason(&format!(
+            "Chrome's target list could not be read: {e}"
+        ))),
+    }
+}
+
+/// A reason a close could not be confirmed, as it goes into the error. Text
+/// that reads like a lost tab or a refused debugger is replaced: the command
+/// layer would take the whole `close` error for that and retry or reword it,
+/// when the close itself is what failed.
+fn close_reason(text: &str) -> String {
+    if is_stale_target_error(text) || is_debugger_access_denied(text) {
+        "the browser reported an error reading the tab back".to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+/// Run `call` with at most [`CLOSE_VERIFY_CALL_TIMEOUT`], and never past
+/// `deadline`. `None` when it did not answer in time.
+async fn within_deadline<T>(
+    deadline: tokio::time::Instant,
+    call: impl Future<Output = Result<T, String>>,
+) -> Option<Result<T, String>> {
+    let cap = std::cmp::min(
+        deadline,
+        tokio::time::Instant::now() + CLOSE_VERIFY_CALL_TIMEOUT,
+    );
+    tokio::time::timeout_at(cap, call).await.ok()
+}
+
+const NO_ANSWER_IN_BUDGET: &str = "no answer within the close budget";
+
+/// One `ABExt.tabPresence` read for `target_id`, with the tab id it was last
+/// known in (or none).
+async fn read_tab_presence(
+    client: &Arc<CdpClient>,
+    target_id: &str,
+    tab_id: Option<i64>,
+    deadline: tokio::time::Instant,
+) -> (TabPresence, Option<i64>) {
+    match within_deadline(
+        deadline,
+        client.send_command_typed::<_, Value>(
+            "ABExt.tabPresence",
+            &json!({ "targetId": target_id, "tabId": tab_id }),
+            None,
+        ),
+    )
+    .await
+    {
+        Some(read) => presence_from_tab_presence(&read, target_id, tab_id),
+        None => (
+            TabPresence::Unverified(NO_ANSWER_IN_BUDGET.to_string()),
+            tab_id,
+        ),
+    }
+}
+
+/// Close `targets` (deletion rights the caller has already established), then
+/// read each one back from an authoritative source, all under one deadline
+/// `budget` from now. `chrome_tabs` maps targets to the Chrome tab ids they
+/// were last seen in; over the relay each target's current tab is looked up
+/// before closing, since a replaced tab moves its target to a new id. Returns
+/// each target's presence; one not confirmed by the deadline is unverified.
+async fn close_and_verify_targets(
+    client: &Arc<CdpClient>,
+    targets: &HashSet<String>,
+    mut chrome_tabs: HashMap<String, i64>,
+    on_relay: bool,
+    budget: Duration,
+) -> HashMap<String, TabPresence> {
+    let deadline = tokio::time::Instant::now() + budget;
+    let ordered: Vec<String> = targets.iter().cloned().collect();
+    if on_relay {
+        let lookups: Vec<(String, (TabPresence, Option<i64>))> =
+            futures_util::stream::iter(ordered.iter().cloned())
+                .map(|target| {
+                    let known = chrome_tabs.get(&target).copied();
+                    async move {
+                        let read = read_tab_presence(client, &target, known, deadline).await;
+                        (target, read)
+                    }
+                })
+                .buffer_unordered(CLOSE_VERIFY_CONCURRENCY)
+                .collect()
+                .await;
+        for (target, (presence, tab)) in lookups {
+            if let (TabPresence::Present, Some(tab)) = (presence, tab) {
+                chrome_tabs.insert(target, tab);
+            }
+        }
+    }
+    // The acknowledgement decides nothing: the read-back below does, in both
+    // directions (an acknowledged tab that is still there, or a refused close
+    // of a tab that was already gone).
+    let mut unacked = targets.clone();
+    let close_cap = std::cmp::min(
+        deadline,
+        tokio::time::Instant::now() + OWNED_TAB_CLEANUP_BUDGET,
+    );
+    close_created_targets(client, &mut unacked, close_cap).await;
+
+    let mut verdicts: HashMap<String, TabPresence> = HashMap::new();
+    let reread_until = std::cmp::min(deadline, tokio::time::Instant::now() + CLOSE_VERIFY_BUDGET);
+    loop {
+        let pending: Vec<String> = ordered
+            .iter()
+            .filter(|t| !matches!(verdicts.get(*t), Some(TabPresence::Absent)))
+            .cloned()
+            .collect();
+        if on_relay {
+            let reads: Vec<(String, (TabPresence, Option<i64>))> =
+                futures_util::stream::iter(pending)
+                    .map(|target| {
+                        let known = chrome_tabs.get(&target).copied();
+                        async move {
+                            let read = read_tab_presence(client, &target, known, deadline).await;
+                            (target, read)
+                        }
+                    })
+                    .buffer_unordered(CLOSE_VERIFY_CONCURRENCY)
+                    .collect()
+                    .await;
+            for (target, (presence, tab)) in reads {
+                // Follow the target to its current tab (a replacement).
+                if let Some(tab) = tab {
+                    chrome_tabs.insert(target.clone(), tab);
+                }
+                verdicts.insert(target, presence);
+            }
+        } else {
+            let read = within_deadline(
+                deadline,
+                client.send_command_typed::<_, GetTargetsResult>(
+                    "Target.getTargets",
+                    &json!({}),
+                    None,
+                ),
+            )
+            .await
+            .unwrap_or_else(|| Err(NO_ANSWER_IN_BUDGET.to_string()));
+            for target in pending {
+                let presence = presence_from_targets(&read, &target);
+                verdicts.insert(target, presence);
+            }
+        }
+        // Only a tab still reported open is worth reading again; an
+        // unverifiable one stays unverifiable.
+        let waiting = verdicts.values().any(|v| *v == TabPresence::Present);
+        let now = tokio::time::Instant::now();
+        if !waiting || now + Duration::from_millis(200) >= reread_until {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    for target in ordered {
+        verdicts.entry(target).or_insert_with(|| {
+            TabPresence::Unverified("not read back within the close budget".to_string())
+        });
+    }
+    verdicts
+}
+
+/// Close the targets of a persisted ownership record over `client` and keep in
+/// the record only those not confirmed gone. Returns the closed ones' ids, or
+/// an error naming how many were left (still open or unverified).
+async fn close_recorded_targets(
+    session: &str,
+    endpoint: &str,
+    client: &Arc<CdpClient>,
+    targets: &mut HashSet<String>,
+    known_tabs: &HashMap<String, i64>,
+) -> Result<Vec<String>, String> {
+    let on_relay = crate::connect::is_relay_url(endpoint);
+    let chrome_tabs: HashMap<String, i64> = known_tabs
+        .iter()
+        .filter(|(t, _)| targets.contains(*t))
+        .map(|(t, id)| (t.clone(), *id))
+        .collect();
+    let verdicts =
+        close_and_verify_targets(client, targets, chrome_tabs, on_relay, CLOSE_TOTAL_BUDGET).await;
+    let total = targets.len();
+    let mut closed = Vec::new();
+    let mut open = 0usize;
+    let mut unverified = 0usize;
+    for (target, verdict) in &verdicts {
+        match verdict {
+            TabPresence::Absent => {
+                targets.remove(target);
+                closed.push(target.clone());
+            }
+            TabPresence::Present => open += 1,
+            TabPresence::Unverified(_) | TabPresence::Unsupported(_) => unverified += 1,
+        }
+    }
+    crate::connection::write_created_targets(session, endpoint, targets)?;
+    if !targets.is_empty() {
+        return Err(format!(
+            "{} of the {total} tab(s) this session opened are not confirmed closed ({open} still \
+             open, {unverified} unverified); their ownership was kept",
+            targets.len()
+        ));
+    }
+    closed.sort();
+    Ok(closed)
+}
+
 /// Close only persisted, endpoint-matched deletion rights without discovering,
 /// attaching to, or creating any other tabs. Used after an idle daemon exit.
-pub async fn close_persisted_session_tabs_at(session: &str, endpoint: &str) -> Result<(), String> {
+/// Returns the ids of the tabs confirmed closed.
+pub async fn close_persisted_session_tabs_at(
+    session: &str,
+    endpoint: &str,
+) -> Result<Vec<String>, String> {
     let mut targets = crate::connection::read_created_targets(session, endpoint);
     if targets.is_empty() {
         return Err(
@@ -54,20 +515,12 @@ pub async fn close_persisted_session_tabs_at(session: &str, endpoint: &str) -> R
         );
     }
     let client = Arc::new(CdpClient::connect(endpoint).await?);
-    close_created_targets(&client, &mut targets).await;
-    crate::connection::write_created_targets(session, endpoint, &targets)?;
-    if !targets.is_empty() {
-        return Err(format!(
-            "{} created tab(s) could not be closed; ownership was preserved",
-            targets.len()
-        ));
-    }
-    Ok(())
+    close_recorded_targets(session, endpoint, &client, &mut targets, &HashMap::new()).await
 }
 
 /// Rediscover the original external browser rather than storing its possibly
 /// credential-bearing CDP URL. A mismatch fails closed and keeps deletion rights.
-pub async fn close_persisted_session_tabs(session: &str) -> Result<(), String> {
+pub async fn close_persisted_session_tabs(session: &str) -> Result<Vec<String>, String> {
     let endpoint = auto_connect_cdp().await?;
     close_persisted_session_tabs_at(session, &endpoint).await
 }
@@ -78,14 +531,15 @@ pub async fn close_persisted_session_tabs(session: &str) -> Result<(), String> {
 /// daemon's close), plus those the dead manager `held` that the record lacks,
 /// but only when `endpoint` is the browser they were opened in: it is the dead
 /// connection's own endpoint, or the record re-associated to it. Anything that
-/// cannot be confirmed closes nothing. Returns how many were closed; `Err` when
-/// any of them was not, with their ownership kept.
+/// cannot be confirmed closes nothing. Returns the ids of the tabs confirmed
+/// closed; `Err` when any of them was not, with their ownership kept.
 pub async fn close_owned_tabs_at(
     session: &str,
     endpoint: &str,
     dead_endpoint: &str,
     held: &HashSet<String>,
-) -> Result<usize, String> {
+    known_tabs: &HashMap<String, i64>,
+) -> Result<Vec<String>, String> {
     let mut targets = crate::connection::read_created_targets(session, endpoint);
     if targets.is_empty() && crate::connection::has_created_targets(session) {
         return Err(format!(
@@ -106,23 +560,17 @@ pub async fn close_owned_tabs_at(
         targets.extend(unrecorded);
     }
     if targets.is_empty() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
     let client = Arc::new(CdpClient::connect(endpoint).await?);
-    let total = targets.len();
-    close_created_targets(&client, &mut targets).await;
-    crate::connection::write_created_targets(session, endpoint, &targets)?;
-    if !targets.is_empty() {
-        return Err(format!(
-            "{} of the {total} tab(s) this session opened could not be closed; their ownership \
-             was kept",
-            targets.len()
-        ));
-    }
-    Ok(total)
+    close_recorded_targets(session, endpoint, &client, &mut targets, known_tabs).await
 }
 
-async fn close_created_targets(client: &Arc<CdpClient>, targets: &mut HashSet<String>) {
+async fn close_created_targets(
+    client: &Arc<CdpClient>,
+    targets: &mut HashSet<String>,
+    until: tokio::time::Instant,
+) {
     // Each future owns its id while completed closes mutate the same set.
     #[allow(clippy::redundant_iter_cloned)]
     let mut closes: FuturesUnordered<_> = targets
@@ -144,7 +592,7 @@ async fn close_created_targets(client: &Arc<CdpClient>, targets: &mut HashSet<St
             }
         })
         .collect();
-    let _ = tokio::time::timeout(OWNED_TAB_CLEANUP_BUDGET, async {
+    let _ = tokio::time::timeout_at(until, async {
         while let Some((target_id, result)) = closes.next().await {
             if target_was_closed(&result) {
                 targets.remove(&target_id);
@@ -610,6 +1058,23 @@ fn refuse_unowned_tab_message(tab_id: u32, target_id: &str) -> String {
          (run `chrome-use tab adopt {}` to drive it)",
         format_tab_id(tab_id),
         target_id
+    )
+}
+
+/// Refusal text for closing a tab this session did not create. Names what to
+/// do instead: leave the tab open (it is the user's, or adopted), and end the
+/// session with `close`, which never closes it.
+fn refuse_unowned_tab_close_message(tab_id: u32, adopted: bool) -> String {
+    let whose = if adopted {
+        "it was adopted, not created, so it stays open for the user"
+    } else {
+        "it is not one of this session's tabs"
+    };
+    format!(
+        "Refusing to close tab {} because this session did not create it ({whose}). Leave it \
+         open; run `chrome-use close` to end the session (it closes only the tabs this session \
+         created), or `chrome-use tab list` to see which tabs are `created`",
+        format_tab_id(tab_id)
     )
 }
 
@@ -1590,6 +2055,10 @@ pub struct BrowserManager {
     /// NEVER auto-closed on `close()` — they belong to the user. Kept separate so
     /// the "made by us, safe to close" invariant of `created_targets` holds.
     adopted_targets: HashSet<String>,
+    /// Chrome tab ids (relay `cb-tab-<id>`) of created tabs that left `pages`
+    /// while still owned (the relay said their tab was gone). `close` reads
+    /// them back by exact tab id instead of reporting them unverified.
+    dropped_chrome_tabs: HashMap<String, i64>,
     /// The session's *intended* active tab, pinned by stable target_id rather
     /// than the fragile `active_page_index`. Set on every explicit open / tab new
     /// / tab switch. `active_session_id` resolves through this so a foreign tab
@@ -1827,6 +2296,7 @@ impl BrowserManager {
                 visited_origins: HashSet::new(),
                 created_targets: HashSet::new(),
                 adopted_targets: HashSet::new(),
+                dropped_chrome_tabs: HashMap::new(),
                 active_target_id: None,
                 relay_target_misses: HashMap::new(),
                 relay_scoped: false,
@@ -1937,6 +2407,7 @@ impl BrowserManager {
                 .map(|session| crate::connection::read_created_targets(session, &ws_url))
                 .unwrap_or_default(),
             adopted_targets: HashSet::new(),
+            dropped_chrome_tabs: HashMap::new(),
             active_target_id: None,
             relay_target_misses: HashMap::new(),
             relay_scoped: false,
@@ -2557,6 +3028,17 @@ impl BrowserManager {
         Ok(removed)
     }
 
+    /// A created tab is leaving `pages` while the session still owns it: keep
+    /// its relay Chrome tab id, so `close` can read it back by exact id.
+    fn remember_dropped_chrome_tab(&mut self, pos: usize) {
+        let page = &self.pages[pos];
+        if self.created_targets.contains(&page.target_id) {
+            if let Some(tab) = relay_chrome_tab_id(&page.session_id) {
+                self.dropped_chrome_tabs.insert(page.target_id.clone(), tab);
+            }
+        }
+    }
+
     /// Drop the page bound to `session_id` from the tracked list — used when the
     /// relay reports its tab is gone (issue #35) so the stale entry can't keep
     /// resolving as active. Keeps persisted created ownership so a later daemon
@@ -2566,6 +3048,7 @@ impl BrowserManager {
             return;
         };
         let target_id = self.pages[pos].target_id.clone();
+        self.remember_dropped_chrome_tab(pos);
         self.pages.remove(pos);
         self.adopted_targets.remove(&target_id);
         if self.active_target_id.as_deref() == Some(target_id.as_str()) {
@@ -3235,7 +3718,12 @@ impl BrowserManager {
             // stays inside the shutdown budget the caller allows us.
             if !self.created_targets.is_empty() {
                 let remaining_before_cleanup = self.created_targets.len();
-                close_created_targets(&self.client, &mut self.created_targets).await;
+                close_created_targets(
+                    &self.client,
+                    &mut self.created_targets,
+                    tokio::time::Instant::now() + OWNED_TAB_CLEANUP_BUDGET,
+                )
+                .await;
                 if self.created_targets.len() != remaining_before_cleanup {
                     if let Err(error) = self.persist_created_targets() {
                         eprintln!("{error}");
@@ -3253,6 +3741,158 @@ impl BrowserManager {
         }
 
         Ok(())
+    }
+
+    /// `close` for an explicit `chrome-use close` (and the last-tab
+    /// `tab close`): closes the tabs this session created, then reads each one
+    /// back from an authoritative source (see [`TabPresence`]) before calling
+    /// it closed. Only `created_targets` are closed: tabs this session opened
+    /// and agent pop-ups the extension confirmed; never adopted or user tabs.
+    ///
+    /// Tabs confirmed gone leave the ownership record and the tab list. Tabs
+    /// still open, or that cannot be confirmed gone, stay in both, so a retry
+    /// (or `session stop`) still has the right to close them. The caller turns
+    /// an incomplete report into `close incomplete` and keeps the session.
+    pub async fn close_verified(&mut self) -> Result<CloseReport, String> {
+        if self.browser_process.is_some() {
+            self.close().await?;
+            return Ok(CloseReport {
+                browser_closed: true,
+                verified_by: Some("browser-exit"),
+                ..Default::default()
+            });
+        }
+        if self.created_targets.is_empty() {
+            return Ok(CloseReport::default());
+        }
+        let targets = self.created_targets.clone();
+        let verdicts = self.close_and_verify(&targets).await;
+
+        let mut report = CloseReport {
+            verified_by: Some(self.verification_source()),
+            ..Default::default()
+        };
+        let mut ordered: Vec<&String> = targets.iter().collect();
+        ordered.sort_by_key(|t| {
+            self.pages
+                .iter()
+                .find(|p| &p.target_id == *t)
+                .map(|p| p.tab_id)
+                .unwrap_or(u32::MAX)
+        });
+        let mut gone = Vec::new();
+        for target in ordered {
+            let mut tab = self.tab_descriptor(target);
+            match verdicts.get(target) {
+                Some(TabPresence::Absent) => {
+                    gone.push(target.clone());
+                    report.tabs_closed.push(tab);
+                }
+                Some(TabPresence::Present) => report.still_open.push(tab),
+                Some(TabPresence::Unverified(reason)) => {
+                    tab["reason"] = json!(reason);
+                    report.unverified.push(tab);
+                }
+                Some(TabPresence::Unsupported(reason)) => {
+                    tab["reason"] = json!(reason);
+                    tab["extensionUpdate"] = json!(true);
+                    report.unverified.push(tab);
+                }
+                None => {
+                    tab["reason"] = json!("not read back");
+                    report.unverified.push(tab);
+                }
+            }
+        }
+        self.forget_closed_targets(&gone);
+        Ok(report)
+    }
+
+    /// Which source `close_and_verify` reads tabs back from.
+    fn verification_source(&self) -> &'static str {
+        if self.on_relay() {
+            "extension-tabs"
+        } else {
+            "cdp-targets"
+        }
+    }
+
+    /// Close `targets` (the caller has checked they are this session's to
+    /// close) and read each back, under [`CLOSE_TOTAL_BUDGET`]. Seeds the
+    /// read-back with every Chrome tab id the session knows for them.
+    async fn close_and_verify(&self, targets: &HashSet<String>) -> HashMap<String, TabPresence> {
+        let chrome_tabs: HashMap<String, i64> = self
+            .known_chrome_tabs()
+            .into_iter()
+            .filter(|(t, _)| targets.contains(t))
+            .collect();
+        close_and_verify_targets(
+            &self.client,
+            targets,
+            chrome_tabs,
+            self.on_relay(),
+            CLOSE_TOTAL_BUDGET,
+        )
+        .await
+    }
+
+    /// The relay Chrome tab id (`cb-tab-<id>`) each created tab was last seen
+    /// in: its page, or the id kept when the page left the list. `close` hands
+    /// these to the read-back, which needs the exact tab id to confirm a tab
+    /// whose target Chrome no longer lists is gone, including over a new
+    /// connection after this one died (#485).
+    pub fn known_chrome_tabs(&self) -> HashMap<String, i64> {
+        let mut tabs: HashMap<String, i64> = self
+            .dropped_chrome_tabs
+            .iter()
+            .filter(|(t, _)| self.created_targets.contains(*t))
+            .map(|(t, id)| (t.clone(), *id))
+            .collect();
+        for page in &self.pages {
+            if self.created_targets.contains(&page.target_id) {
+                if let Some(id) = relay_chrome_tab_id(&page.session_id) {
+                    tabs.insert(page.target_id.clone(), id);
+                }
+            }
+        }
+        tabs
+    }
+
+    /// `{tabId, label, targetId, url}` of a target, as far as the session
+    /// knows it.
+    fn tab_descriptor(&self, target: &str) -> Value {
+        match self.pages.iter().find(|p| p.target_id == target) {
+            Some(p) => json!({
+                "tabId": format_tab_id(p.tab_id),
+                "label": p.label,
+                "targetId": p.target_id,
+                "url": p.url,
+            }),
+            None => json!({ "targetId": target }),
+        }
+    }
+
+    /// Drop tabs confirmed closed from the ownership record and the tab list.
+    fn forget_closed_targets(&mut self, gone: &[String]) {
+        if gone.is_empty() {
+            return;
+        }
+        for target in gone {
+            self.created_targets.remove(target);
+            self.dropped_chrome_tabs.remove(target);
+            if let Some(pos) = self.pages.iter().position(|p| &p.target_id == target) {
+                self.pages.remove(pos);
+                self.update_active_page_after_removal(pos);
+                if self.active_target_id.as_deref() == Some(target.as_str()) {
+                    self.active_target_id = None;
+                }
+            }
+        }
+        if let Err(error) = self.persist_created_targets() {
+            // The record still names closed tabs: a later close re-reads
+            // them and finds them gone, so this only costs a round trip.
+            eprintln!("{error}");
+        }
     }
 
     pub fn has_pages(&self) -> bool {
@@ -5234,60 +5874,140 @@ impl BrowserManager {
         }))
     }
 
-    pub async fn tab_close(&mut self, index: Option<usize>) -> Result<Value, String> {
-        let target_index = index.unwrap_or(self.active_page_index);
+    /// Whether closing this tab ends the session: it is the session's only
+    /// tab, and the session may close it (it created it). `tab close` then
+    /// runs the session close path (`close`), which closes it with every other
+    /// tab the session created and verifies they are gone, instead of
+    /// refusing and costing the agent another round. Errors are the same
+    /// refusals `tab close` gives (out of range, not this session's tab).
+    pub fn tab_close_ends_session(&self, tab_id: Option<u32>) -> Result<bool, String> {
+        let target_index = self.tab_close_index(tab_id)?;
+        self.check_tab_close_allowed(&self.pages[target_index])?;
+        Ok(self.pages.len() <= 1)
+    }
 
-        if target_index >= self.pages.len() {
-            return Err(format!("Tab index {} out of range", target_index));
+    /// The page `tab close` acts on: the one `tab_id` names, or else the
+    /// session's active tab, resolved strictly. A pin to a tab that is gone
+    /// refuses (`BOUND_TAB_GONE`) instead of falling back to whatever page
+    /// `active_page_index` points at, which could be another tab entirely.
+    fn tab_close_index(&self, tab_id: Option<u32>) -> Result<usize, String> {
+        match tab_id {
+            Some(id) => self
+                .pages
+                .iter()
+                .position(|p| p.tab_id == id)
+                .ok_or_else(|| {
+                    format!(
+                        "Tab {} not found; run `chrome-use tab list` for the session's tabs",
+                        format_tab_id(id)
+                    )
+                }),
+            None => {
+                let index = strict_session_index(
+                    &self.pages,
+                    self.active_target_id.as_deref(),
+                    self.active_page_index,
+                    self.browser_process.is_none(),
+                    &self.owned_targets(),
+                )?;
+                if index >= self.pages.len() {
+                    return Err(
+                        "No active tab to close; run `chrome-use tab list` and name one"
+                            .to_string(),
+                    );
+                }
+                Ok(index)
+            }
         }
+    }
 
-        if self.pages.len() <= 1 {
-            return Err("Cannot close the last tab".to_string());
-        }
+    /// `t<N>` and label of the tab `tab close` would act on (see
+    /// [`Self::tab_close_index`]).
+    pub fn tab_ref_and_label(&self, tab_id: Option<u32>) -> Option<(String, Option<String>)> {
+        let page = &self.pages[self.tab_close_index(tab_id).ok()?];
+        Some((format_tab_id(page.tab_id), page.label.clone()))
+    }
 
-        let target = &self.pages[target_index];
-        if !tab_close_is_allowed(
+    /// The ownership check for `tab close`, with the refusal naming the next
+    /// step.
+    fn check_tab_close_allowed(&self, target: &PageInfo) -> Result<(), String> {
+        if tab_close_is_allowed(
             self.browser_process.is_none(),
             &target.target_id,
             &self.created_targets,
         ) {
-            return Err(format!(
-                "Refusing to close tab {} because this session did not create it",
-                format_tab_id(target.tab_id)
-            ));
+            return Ok(());
+        }
+        Err(refuse_unowned_tab_close_message(
+            target.tab_id,
+            self.adopted_targets.contains(&target.target_id),
+        ))
+    }
+
+    /// Close one tab of several. Like `close`, the tab is read back before it
+    /// is reported closed; a tab still open, or one that cannot be confirmed
+    /// gone, stays in the tab list and keeps its close right, and the error
+    /// names it and the next step.
+    pub async fn tab_close(&mut self, tab_id: Option<u32>) -> Result<Value, String> {
+        let target_index = self.tab_close_index(tab_id)?;
+        self.check_tab_close_allowed(&self.pages[target_index])?;
+
+        if self.pages.len() <= 1 {
+            // `tab close` routes this case to the session close path
+            // (`tab_close_ends_session`); only a direct caller lands here.
+            return Err(
+                "Cannot close the session's last tab on its own; run `chrome-use close` to end \
+                 the session, which closes it and verifies it is gone"
+                    .to_string(),
+            );
         }
 
         let page = &self.pages[target_index];
         let closed_tab_id = page.tab_id;
+        let closed_ref = format_tab_id(closed_tab_id);
         let closed_label = page.label.clone();
         let target_id = page.target_id.clone();
-        let close_result = self
-            .client
-            .send_command_typed::<_, CloseTargetResult>(
-                "Target.closeTarget",
-                &CloseTargetParams {
-                    target_id: target_id.clone(),
-                },
-                None,
+        let verdicts = self
+            .close_and_verify(&HashSet::from([target_id.clone()]))
+            .await;
+        let kept = |what: String| {
+            format!(
+                "tab {closed_ref} was not closed: {what} (targetId {target_id}). It is still one \
+                 of this session's tabs and keeps its close right. Run `chrome-use tab list` to \
+                 check it, then retry `chrome-use tab close {closed_ref}`, or `chrome-use close` \
+                 to end the session and close it with the rest"
             )
-            .await?;
-        if !close_result.success {
-            return Err(format!(
-                "Chrome did not close tab {}",
-                format_tab_id(closed_tab_id)
-            ));
+        };
+        match verdicts.get(&target_id) {
+            Some(TabPresence::Absent) => {}
+            Some(TabPresence::Present) => {
+                return Err(kept("Chrome still reports it open".to_string()));
+            }
+            Some(TabPresence::Unsupported(reason)) => {
+                return Err(kept(format!(
+                    "it could not be confirmed gone ({reason}); update the ab-connect extension \
+                     to {TAB_PRESENCE_MIN_EXTENSION_VERSION} or newer"
+                )));
+            }
+            Some(TabPresence::Unverified(reason)) => {
+                return Err(kept(format!("it could not be confirmed gone ({reason})")));
+            }
+            None => return Err(kept("it was not read back".to_string())),
         }
         self.pages.remove(target_index);
         self.update_active_page_after_removal(target_index);
+        self.dropped_chrome_tabs.remove(&target_id);
         self.forget_created_target(&target_id)?;
 
         let session_id = self.pages[self.active_page_index].session_id.clone();
         self.enable_domains(&session_id).await?;
 
         Ok(json!({
-            "tabId": format_tab_id(closed_tab_id),
+            "tabId": closed_ref,
             "label": closed_label,
             "closed": true,
+            "verifiedAbsent": true,
+            "verifiedBy": self.verification_source(),
         }))
     }
 
@@ -6277,16 +6997,7 @@ impl BrowserManager {
     }
 
     pub async fn tab_close_by_id(&mut self, tab_id: Option<u32>) -> Result<Value, String> {
-        let index = match tab_id {
-            Some(id) => Some(
-                self.pages
-                    .iter()
-                    .position(|p| p.tab_id == id)
-                    .ok_or_else(|| format!("Tab ID {} not found", id))?,
-            ),
-            None => None,
-        };
-        self.tab_close(index).await
+        self.tab_close(tab_id).await
     }
 
     /// The session's tab refs, for carrying across a reconnect (#473). Refs
@@ -6407,6 +7118,7 @@ impl BrowserManager {
         if let Some(pos) = self.pages.iter().position(|p| p.target_id == target_id) {
             let previous_pin = self.active_target_id.clone();
             let on_relay = self.agent_group().is_some();
+            self.remember_dropped_chrome_tab(pos);
             self.pages.remove(pos);
             self.update_active_page_after_removal(pos);
             self.active_target_id = active_target_after_removal(
@@ -6602,6 +7314,7 @@ async fn initialize_lightpanda_manager(
             visited_origins: HashSet::new(),
             created_targets: HashSet::new(),
             adopted_targets: HashSet::new(),
+            dropped_chrome_tabs: HashMap::new(),
             active_target_id: None,
             relay_target_misses: HashMap::new(),
             relay_scoped: false,
@@ -6706,6 +7419,210 @@ async fn resolve_cdp_url(input: &str) -> Result<String, String> {
         "Invalid CDP target: {}. Use ws://, http://, or a port number.",
         input
     ))
+}
+
+#[cfg(test)]
+mod honest_close_tests {
+    use super::{
+        presence_from_tab_presence, presence_from_targets, refuse_unowned_tab_close_message,
+        tab_close_is_allowed, CloseReport, GetTargetsResult, TabPresence, TargetInfo,
+    };
+    use serde_json::json;
+    use std::collections::HashSet;
+
+    fn target(id: &str) -> TargetInfo {
+        serde_json::from_value(json!({"targetId": id, "type": "page", "attached": true})).unwrap()
+    }
+
+    #[test]
+    fn the_structured_tab_presence_contract_decides_and_nothing_else() {
+        let reply = |v: serde_json::Value| Ok(v);
+        let v1 = |presence: &str| json!({"tabPresenceVersion": 1, "targetId": "T", "tabId": 5, "presence": presence});
+        assert_eq!(
+            presence_from_tab_presence(&reply(v1("absent")), "T", Some(5)),
+            (TabPresence::Absent, Some(5))
+        );
+        assert_eq!(
+            presence_from_tab_presence(&reply(v1("present")), "T", Some(5)),
+            (TabPresence::Present, Some(5))
+        );
+        // The target moved to a new Chrome tab (a replacement): present, and
+        // the new tab id is followed.
+        let moved = json!({"tabPresenceVersion": 1, "targetId": "T", "tabId": 9,
+                           "presence": "present"});
+        assert_eq!(
+            presence_from_tab_presence(&reply(moved), "T", Some(5)),
+            (TabPresence::Present, Some(9))
+        );
+        assert!(matches!(
+            presence_from_tab_presence(&reply(v1("unknown")), "T", Some(5)).0,
+            TabPresence::Unverified(_)
+        ));
+        // Another target's answer says nothing about this one.
+        assert!(matches!(
+            presence_from_tab_presence(&reply(v1("absent")), "OTHER", Some(5)).0,
+            TabPresence::Unverified(_)
+        ));
+        // No contract version (ab-connect 0.5.32 and older answer other
+        // methods, never this one): never absent, whatever it says.
+        let unversioned = json!({"targetId": "T", "tabId": 5, "presence": "absent"});
+        assert!(matches!(
+            presence_from_tab_presence(&reply(unversioned), "T", Some(5)).0,
+            TabPresence::Unsupported(_)
+        ));
+        // Only the V1 contract this CLI knows: not 0, not a future 2.
+        for version in [0, 2, 99] {
+            let other = json!({"tabPresenceVersion": version, "targetId": "T", "tabId": 5,
+                               "presence": "absent"});
+            assert!(matches!(
+                presence_from_tab_presence(&reply(other), "T", Some(5)).0,
+                TabPresence::Unverified(_)
+            ));
+        }
+        // Absent needs the exact tab id asked about, named back and valid.
+        for tab in [json!(null), json!(-1), json!("5"), json!(6), json!(5.5)] {
+            let malformed = json!({"tabPresenceVersion": 1, "targetId": "T", "tabId": tab,
+                                   "presence": "absent"});
+            assert!(
+                matches!(
+                    presence_from_tab_presence(&reply(malformed.clone()), "T", Some(5)).0,
+                    TabPresence::Unverified(_)
+                ),
+                "{malformed}"
+            );
+        }
+        let no_tab = json!({"tabPresenceVersion": 1, "targetId": "T", "presence": "absent"});
+        assert!(matches!(
+            presence_from_tab_presence(&reply(no_tab), "T", Some(5)).0,
+            TabPresence::Unverified(_)
+        ));
+        // Nothing asked, nothing proven.
+        assert!(matches!(
+            presence_from_tab_presence(&reply(v1("absent")), "T", None).0,
+            TabPresence::Unverified(_)
+        ));
+        // Errors are never parsed: not even one that reads like a missing tab.
+        for e in [
+            "CDP error (ABExt.inspectTab): inspectTab: Chrome tab 5 no longer exists",
+            "No tab with id: 5.",
+            "timed out within the close budget",
+        ] {
+            assert!(matches!(
+                presence_from_tab_presence(&Err(e.to_string()), "T", Some(5)).0,
+                TabPresence::Unsupported(_)
+            ));
+        }
+        // ab-connect 0.5.32's answer to the unknown method reads like a lost
+        // tab; none of it reaches the close error, which the command layer
+        // would otherwise retry and reword as a lost tab.
+        let old = Err("no attached tab for targetId T (ABExt.tabPresence)".to_string());
+        let TabPresence::Unsupported(reason) = presence_from_tab_presence(&old, "T", Some(5)).0
+        else {
+            panic!("not unsupported");
+        };
+        assert!(!super::is_stale_target_error(&reason), "{reason}");
+        let unknown = json!({"tabPresenceVersion": 1, "targetId": "T", "presence": "unknown",
+                             "error": "no attached tab for T"});
+        let TabPresence::Unverified(reason) =
+            presence_from_tab_presence(&Ok(unknown), "T", Some(5)).0
+        else {
+            panic!("not unverified");
+        };
+        assert!(!super::is_stale_target_error(&reason), "{reason}");
+    }
+
+    #[test]
+    fn chrome_target_list_decides_on_a_direct_connection() {
+        let list = Ok(GetTargetsResult {
+            target_infos: vec![target("A"), target("B")],
+        });
+        assert_eq!(presence_from_targets(&list, "A"), TabPresence::Present);
+        assert_eq!(presence_from_targets(&list, "C"), TabPresence::Absent);
+        assert!(matches!(
+            presence_from_targets(&Err("closed".into()), "A"),
+            TabPresence::Unverified(_)
+        ));
+    }
+
+    #[test]
+    fn a_complete_report_says_which_tabs_closed_and_that_they_are_verified() {
+        let report = CloseReport {
+            tabs_closed: vec![json!({"tabId": "t1", "targetId": "A"})],
+            verified_by: Some("extension-tabs"),
+            ..Default::default()
+        };
+        assert!(report.is_complete());
+        let out = report.to_json();
+        assert_eq!(out["closed"], true);
+        assert_eq!(out["verifiedAbsent"], true);
+        assert_eq!(out["verifiedBy"], "extension-tabs");
+        assert_eq!(out["tabsClosed"][0]["targetId"], "A");
+        // Nothing to close is still a verified (empty) close.
+        let empty = CloseReport::default().to_json();
+        assert_eq!(empty["verifiedAbsent"], true);
+        assert_eq!(empty["tabsClosed"], json!([]));
+    }
+
+    #[test]
+    fn an_incomplete_report_names_each_tab_and_the_next_step() {
+        let report = CloseReport {
+            tabs_closed: vec![json!({"tabId": "t1", "targetId": "A"})],
+            still_open: vec![json!({"tabId": "t2", "label": "docs", "targetId": "B",
+                                    "url": "https://example.com/"})],
+            unverified: vec![json!({"targetId": "C", "reason": "no tab id"})],
+            verified_by: Some("extension-tabs"),
+            ..Default::default()
+        };
+        assert!(!report.is_complete());
+        assert_eq!(report.to_json()["verifiedAbsent"], false);
+        let e = report.incomplete_error();
+        assert!(e.starts_with("close incomplete:"), "{e}");
+        assert!(
+            e.contains("1 of the 3 tab(s) this session created are still open"),
+            "{e}"
+        );
+        assert!(
+            e.contains("t2 \"docs\" (targetId B, https://example.com/)"),
+            "{e}"
+        );
+        assert!(e.contains("unverified"), "{e}");
+        assert!(e.contains("targetId C"), "{e}");
+        assert!(e.contains("no tab id"), "{e}");
+        assert!(e.contains("retry `chrome-use close`"), "{e}");
+        assert!(e.contains("ownership were kept"), "{e}");
+        assert!(!e.contains("update it"), "{e}");
+
+        let old = CloseReport {
+            unverified: vec![json!({"targetId": "C", "reason": "no tabPresenceVersion",
+                                    "extensionUpdate": true})],
+            ..Default::default()
+        };
+        let e = old.incomplete_error();
+        assert!(e.contains("update it to 0.5.33 or newer"), "{e}");
+    }
+
+    #[test]
+    fn earlier_closes_over_another_connection_are_reported() {
+        let report = CloseReport::default().with_closed_ids(vec!["A".into()], "reconnect");
+        assert_eq!(report.to_json()["tabsClosed"], json!([{"targetId": "A"}]));
+        assert_eq!(report.to_json()["verifiedBy"], "reconnect");
+        let none = CloseReport::default().with_closed_ids(Vec::new(), "reconnect");
+        assert!(none.verified_by.is_none());
+    }
+
+    #[test]
+    fn close_rights_stay_with_created_tabs_and_refusals_name_the_next_step() {
+        let created: HashSet<String> = ["MINE".to_string()].into();
+        assert!(tab_close_is_allowed(true, "MINE", &created));
+        assert!(!tab_close_is_allowed(true, "ADOPTED", &created));
+        assert!(!tab_close_is_allowed(true, "USER", &created));
+        let adopted = refuse_unowned_tab_close_message(2, true);
+        assert!(adopted.contains("tab t2"), "{adopted}");
+        assert!(adopted.contains("adopted"), "{adopted}");
+        assert!(adopted.contains("`chrome-use close`"), "{adopted}");
+        let foreign = refuse_unowned_tab_close_message(3, false);
+        assert!(foreign.contains("`chrome-use tab list`"), "{foreign}");
+    }
 }
 
 #[cfg(test)]

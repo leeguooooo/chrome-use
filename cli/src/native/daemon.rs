@@ -706,6 +706,17 @@ async fn handle_connection<S>(
                 {
                     is_close = true;
                 }
+                // `tab close` on the session's only tab ran the session close
+                // path; once it succeeded the session has ended like `close`.
+                if cmd.get("action").and_then(|v| v.as_str()) == Some("tab_close")
+                    && response.get("success").and_then(|v| v.as_bool()) == Some(true)
+                    && response
+                        .pointer("/data/sessionClosed")
+                        .and_then(|v| v.as_bool())
+                        == Some(true)
+                {
+                    is_close = true;
+                }
                 // A `close` that did not complete (`close incomplete`: tabs
                 // still open, their ownership kept) leaves the daemon running.
                 // It still holds the session's tabs and how to reach them, and

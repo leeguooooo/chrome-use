@@ -117,6 +117,11 @@ Use one session name per task and reuse it. After "session unresponsive",
 make the one move it names. Do not close, navigate, or reconfigure tabs or
 sessions you did not create or adopt. `close` only your own session when done;
 `close --all` would close other agents' sessions, so it refuses; never force it.
+`close` reads every tab back and reports `tabsClosed` and `verifiedAbsent: true`;
+`close incomplete` means a tab is still open or unconfirmed, and the session is
+kept: read the error and retry `close`, do not trust a chained `; close` exit
+code. `tab close` on your session's last tab ends the session
+(`sessionClosed: true`), so no separate `close` is needed.
 Your tab need not be in front: a click on a background tab still lands and its
 result arrives later, so `wait --text` for it instead of `tab select --activate`.
 The user is working in the same Chrome. Never use `--activate`, `--front` or
