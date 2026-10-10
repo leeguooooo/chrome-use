@@ -87,6 +87,7 @@
         <code>no change</code>，而不是给你一棵一样的树。围绕这个循环的行为规则见
         <code>chrome-use skills get core/behaviour</code>。
       </p>
+      <p>只有动作后的捕获失败时，<code>observed.refs</code> 说明会话里的 ref 怎么处理。<code>kept-unverified</code>：保留上一次快照的 ref，但之后的命令使用其中某个 ref 前，chrome-use 会实时确认标签页、frame、文档和元素都没变；确认不了就在动作前拒绝，绝不按角色或名称重新定位。DOM 遍历快照（<code>snapshot --dom</code>）得到的 ref 在这种状态下一律拒绝。<code>dropped</code>：页面可能已换成别的文档。两种情况都用 <code>snapshot -i</code> 取当前 ref，不要重放动作。</p>
 
       <p>
         浏览器在多条命令之间保持运行，所以这些命令感觉像同一个会话。完事后用 <code>chrome-use close</code>

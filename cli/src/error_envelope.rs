@@ -13,6 +13,15 @@ pub struct ErrorMetadata {
 pub fn classify_error(message: &str) -> ErrorMetadata {
     let lower = message.to_ascii_lowercase();
 
+    // First: a kept-ref refusal quotes its cause, which may itself read as a
+    // denial, a timeout or a lost connection. It is none of those to act on:
+    // nothing was done, and only a fresh `snapshot -i` helps.
+    if lower.contains("kept_ref_unverified:") {
+        return ErrorMetadata {
+            code: "kept_ref_unverified",
+            retryable: false,
+        };
+    }
     if lower.contains("action_outcome_unknown:") {
         return ErrorMetadata {
             code: "action_outcome_unknown",
@@ -132,6 +141,22 @@ pub fn enrich_error_value(value: &mut Value) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_kept_ref_refusal_is_never_retryable_whatever_its_cause_says() {
+        for cause in [
+            "the page could not be read (CDP error (Page.getFrameTree): Request timed out)",
+            "the page could not be read (WebSocket connection closed)",
+            "the page could not be read (debugger_access_denied: blocked)",
+            "its node is gone (target detached)",
+        ] {
+            let m = classify_error(&format!(
+                "kept_ref_unverified: Ref e5 [textbox \"Name\"] ...: {cause}. Nothing was acted on."
+            ));
+            assert_eq!(m.code, "kept_ref_unverified", "{cause}");
+            assert!(!m.retryable, "{cause}");
+        }
+    }
+
     use super::*;
 
     #[test]

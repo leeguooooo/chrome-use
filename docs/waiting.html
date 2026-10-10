@@ -62,6 +62,7 @@
 
       <!-- ============ WAIT ============ -->
       <p>观察质量由 <code>observed.status</code> 的 complete、partial、unavailable 表示，动作 success 值不因观察失败而改写。证据不足时 <code>changed</code> 为 null，不会伪造空页面或 URL。基线失败但后置树可用时返回后置树。不完整观察会附错误和 <code>retryAction:false</code>，应检查当前状态，不要为了补观察重放动作。</p>
+      <p>只有动作后的捕获失败时，<code>observed.refs</code> 说明会话里的 ref 怎么处理。<code>kept-unverified</code>：保留上一次快照的 ref，但之后的命令使用其中某个 ref 前，chrome-use 会实时确认标签页、frame、文档和元素都没变；确认不了就在动作前拒绝，绝不按角色或名称重新定位。DOM 遍历快照（<code>snapshot --dom</code>）得到的 ref 在这种状态下一律拒绝。<code>dropped</code>：页面可能已换成别的文档。两种情况都用 <code>snapshot -i</code> 取当前 ref，不要重放动作。</p>
       <h2>选对等待条件 — wait</h2>
       <p>
         每次会改变页面的动作之后，都要挑一个<strong>具体</strong>的条件去等，

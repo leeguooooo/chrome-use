@@ -5238,7 +5238,9 @@ Per-step flags:
   line, and they apply to that step only: --observe, --no-settle,
   --settle-ms <ms>, --with-screenshot <path>, --if-present/--optional,
   --new-tab, --tab <t>, --tab-label <l>. With --json, an observed step's
-  "result" carries its "observed" payload.
+  "result" carries its "observed" payload. A step whose post-action capture
+  failed carries observed.refs (kept-unverified or dropped); a later step
+  using a kept ref is refused unless it is confirmed live, never re-anchored.
     chrome-use batch "fill @e1 Ada" "click @e2 --observe" "get text body"
   Flags that configure the whole session (--headed, --profile, --session, ...)
   cannot change mid-batch; a step carrying one is refused. Put them before
@@ -5714,6 +5716,9 @@ Navigation:
   Re-read the page before retrying a failed frame action.
   action_outcome_unknown means an interrupted action may have executed; it was
   not replayed (JSON retryable: false). Observe the page before acting again.
+  kept_ref_unverified (JSON retryable: false, whatever cause it quotes) means a
+  ref kept after a failed post-action capture could not be confirmed live:
+  nothing was acted on and nothing is retried. Run snapshot -i.
 
 Get Info:  chrome-use get <what> [selector]
   text, html, value, attr <name>, title, url, count, box, styles, cdp-url
@@ -6056,6 +6061,10 @@ Options:
                              reload, back, forward (fresh tree); also per batch step.
                              Observation status is separate from action success;
                              partial/unavailable results must not trigger action replay.
+                             If only the post-action capture failed, observed.refs
+                             says kept-unverified (old refs checked live for the same
+                             tab/frame/document/element before use, refused otherwise,
+                             never re-anchored) or dropped; run snapshot -i.
                              status=complete means the capture is complete, not that
                              the task is: wait for the page's own final signal.
                              Successful same-context connection reuse preserves the

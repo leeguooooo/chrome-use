@@ -195,6 +195,73 @@ pub struct RefMap {
     /// over. Replaces the generic "no snapshot has run" text until the next
     /// snapshot, which is the first moment refs exist again.
     restart_note: Option<String>,
+    /// Set when an observed action's post-action capture failed and this map
+    /// was kept: its refs come from the snapshot BEFORE that action, and what
+    /// the action changed is unknown. Such a ref is never acted on as it is:
+    /// [`verify_kept_ref`] must first confirm, live, that the tab, frame and
+    /// document are the ones it was minted in and that its node still is the
+    /// element it named. Cleared by the next successful snapshot.
+    kept: Option<KeptRefs>,
+    /// Why this map is empty after a failed post-action capture: the refs
+    /// were dropped because the document could not be shown to be the same.
+    capture_note: Option<String>,
+}
+
+/// Which document each frame of a page held, by CDP `loaderId`. A
+/// cross-document navigation gives a frame a new loader, and a replaced
+/// iframe is a new frame or a new loader, so two equal identities are the
+/// same documents. Same-document changes (`pushState`, a hash) keep it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DocumentIdentity {
+    /// Frame id → loaderId, for the top frame and every frame read.
+    pub frames: HashMap<String, String>,
+    /// The top frame's id (a page's top frame id is its target id).
+    pub main_frame: String,
+}
+
+impl DocumentIdentity {
+    /// Whether `now` shows the documents a ref minted in `frame` (None = the
+    /// top frame) was minted in. `Err` names what changed.
+    pub fn check_same(&self, now: &DocumentIdentity, frame: Option<&str>) -> Result<(), String> {
+        if self.main_frame.is_empty() || self.main_frame != now.main_frame {
+            return Err(format!(
+                "the page is another target now ({} -> {})",
+                self.main_frame, now.main_frame
+            ));
+        }
+        let mut wanted = vec![self.main_frame.as_str()];
+        if let Some(f) = frame {
+            wanted.push(f);
+        }
+        for f in wanted {
+            match (self.frames.get(f), now.frames.get(f)) {
+                (Some(a), Some(b)) if !a.is_empty() && a == b => {}
+                (Some(a), Some(b)) if a.is_empty() || b.is_empty() => {
+                    return Err(format!("frame {f} has no document id to compare"))
+                }
+                (Some(_), Some(_)) => {
+                    return Err(if f == self.main_frame {
+                        "the page navigated to a new document since that snapshot".to_string()
+                    } else {
+                        format!("frame {f} loaded a new document since that snapshot")
+                    })
+                }
+                (None, _) => return Err(format!("frame {f} was not recorded before the action")),
+                (_, None) => return Err(format!("frame {f} is gone (the frame was replaced)")),
+            }
+        }
+        Ok(())
+    }
+}
+
+/// See [`RefMap::kept`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeptRefs {
+    /// The documents the refs were last known to belong to (read right
+    /// before the action whose capture failed).
+    pub identity: DocumentIdentity,
+    /// Why the post-action capture failed, as the response reported it.
+    pub cause: String,
 }
 
 /// A ref map as it is written to disk for an upgrade restart: everything
@@ -263,6 +330,8 @@ impl RefMap {
             session_label: String::new(),
             retired: HashMap::new(),
             restart_note: None,
+            kept: None,
+            capture_note: None,
         }
     }
 
@@ -286,6 +355,9 @@ impl RefMap {
             format!(" `{}`", self.session_label)
         };
         if self.map.is_empty() {
+            if let Some(note) = &self.capture_note {
+                return format!("Unknown ref: {ref_id} — {note}");
+            }
             if let Some(note) = &self.restart_note {
                 return format!("Unknown ref: {ref_id} — {note}");
             }
@@ -313,6 +385,14 @@ impl RefMap {
              Refs are re-minted by each `snapshot`; run `snapshot -i` again and use a fresh ref.",
             self.map.len()
         );
+        if let Some(kept) = &self.kept {
+            msg.push_str(&format!(
+                "\nThese refs are from the snapshot before the last action: its post-action \
+                 capture failed ({}), so refs that action created were never minted. Run \
+                 `snapshot -i` for the current refs.",
+                kept.cause
+            ));
+        }
         // A ref an earlier snapshot minted is still remembered by its role +
         // name, so the refs closest to what it was can be named — never acted on.
         if let Some((role, name)) = self.retired_identity(ref_id) {
@@ -371,6 +451,8 @@ impl RefMap {
     /// tab switches call [`Self::clear`] instead, which hard-resets identities.
     pub fn begin_snapshot(&mut self) {
         self.restart_note = None;
+        self.kept = None;
+        self.capture_note = None;
         if self.retired.len() + self.map.len() > MAX_RETIRED_REFS {
             self.retired.clear();
         }
@@ -611,6 +693,50 @@ impl RefMap {
         self.next_ref = 1;
         self.stable_refs.clear();
         self.snapshot_generation = 0;
+        self.kept = None;
+        self.capture_note = None;
+    }
+
+    /// The post-action capture failed but the refs may still be good: keep
+    /// them, marked as unverified (see [`Self::kept`]). An already kept map
+    /// keeps the identity it was first kept with — its refs are no newer.
+    pub fn keep_after_failed_capture(&mut self, identity: DocumentIdentity, cause: &str) {
+        let identity = match self.kept.take() {
+            Some(k) => k.identity,
+            None => identity,
+        };
+        self.kept = Some(KeptRefs {
+            identity,
+            cause: cause.to_string(),
+        });
+    }
+
+    /// The post-action capture failed and the document cannot be shown to be
+    /// the one the refs belong to: drop them, and say why in "Unknown ref".
+    pub fn drop_after_failed_capture(&mut self, cause: &str, why: &str) {
+        self.clear();
+        self.capture_note = Some(format!(
+            "the last action ran, but its post-action capture failed ({cause}), and {why}, so \
+             the refs of the earlier snapshot were dropped rather than risk acting on another \
+             page. Do not repeat the action. Run `snapshot -i` and use its refs."
+        ));
+    }
+
+    /// Whether these refs are kept from before a failed capture (unverified).
+    pub fn kept(&self) -> Option<&KeptRefs> {
+        self.kept.as_ref()
+    }
+
+    /// Frames other than the top one that hold refs of this map.
+    pub fn ref_frames(&self) -> Vec<String> {
+        let mut frames: Vec<String> = self
+            .map
+            .values()
+            .filter_map(|e| e.frame_id.clone())
+            .collect();
+        frames.sort();
+        frames.dedup();
+        frames
     }
 
     pub fn next_ref_num(&self) -> usize {
@@ -629,7 +755,9 @@ impl RefMap {
     /// The map in the form an upgrade restart carries to the next daemon.
     /// `None` when no snapshot has run: there is nothing to carry.
     pub fn export(&self) -> Option<PersistedRefMap> {
-        if !self.has_snapshot() || self.map.is_empty() {
+        // Unverified refs are not carried: the next daemon would hold them
+        // without the mark that keeps them from being acted on unchecked.
+        if !self.has_snapshot() || self.map.is_empty() || self.kept.is_some() {
             return None;
         }
         let mut stable: Vec<PersistedStableRef> = self
@@ -1035,6 +1163,12 @@ async fn confirmed_backend_node_id(
     backend_node_id: i64,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<i64, String> {
+    // A ref kept from before a failed post-action capture is held to its
+    // exact node: confirmed, or refused. No re-anchoring, healing or
+    // fingerprint relocation, and AGENT_BROWSER_VERIFY_REF=0 does not apply.
+    if ref_map.kept().is_some() {
+        return confirm_kept_node(client, effective_session_id, ref_map, ref_id, entry).await;
+    }
     if std::env::var("AGENT_BROWSER_VERIFY_REF").as_deref() == Ok("0") {
         return Ok(backend_node_id);
     }
@@ -1707,6 +1841,221 @@ fn stale_ref_error(
     )
 }
 
+/// One frame of a `Page.getFrameTree` answer: its id and loaderId, both
+/// required and non-empty. Anything else is a bad or partial reply.
+fn frame_and_loader(node: &Value) -> Result<(String, String), String> {
+    let frame = node
+        .get("frame")
+        .filter(|f| f.is_object())
+        .ok_or("a frame tree node has no frame")?;
+    let id = frame
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or("a frame in the tree has no id")?;
+    let loader = frame
+        .get("loaderId")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| format!("frame {id} has no loaderId"))?;
+    Ok((id.to_string(), loader.to_string()))
+}
+
+/// Frame id → loaderId for every frame of a `Page.getFrameTree` answer
+/// (`frameTree`), and the top frame's id. Any frame without a valid id and
+/// loader — the top one or a child — makes the whole reply unusable.
+fn parse_frame_tree(tree: &Value) -> Result<(String, HashMap<String, String>), String> {
+    fn walk(node: &Value, out: &mut HashMap<String, String>) -> Result<(), String> {
+        let (id, loader) = frame_and_loader(node)?;
+        out.insert(id, loader);
+        match node.get("childFrames") {
+            None | Some(Value::Null) => Ok(()),
+            Some(Value::Array(children)) => children.iter().try_for_each(|c| walk(c, out)),
+            Some(_) => Err("childFrames is not a list".to_string()),
+        }
+    }
+    let (main, _) = frame_and_loader(tree)?;
+    let mut frames = HashMap::new();
+    walk(tree, &mut frames)?;
+    Ok((main, frames))
+}
+
+/// The loader of `frame` from its own out-of-process session's frame tree.
+/// The reply's top frame must be `frame` itself: a reply about another frame
+/// (a stale or reused session) is refused, never filed under `frame`.
+fn oopif_loader(reply: &Value, frame: &str) -> Result<String, String> {
+    let (id, loader) = frame_and_loader(&reply["frameTree"])?;
+    if id != frame {
+        return Err(format!(
+            "the session for frame {frame} answered for frame {id}"
+        ));
+    }
+    Ok(loader)
+}
+
+/// Read which document the page (and each of `frames` that runs in its own
+/// out-of-process session) holds right now. One `Page.getFrameTree`, plus one
+/// per such frame. Fails when the page cannot be read — under a
+/// `debugger_access_denied` block, for one — or when a reply is malformed or
+/// about another frame; then nothing can be confirmed.
+pub async fn read_document_identity(
+    client: &CdpClient,
+    session_id: &str,
+    iframe_sessions: &HashMap<String, String>,
+    frames: &[String],
+) -> Result<DocumentIdentity, String> {
+    async fn frame_tree(client: &CdpClient, sid: &str) -> Result<Value, String> {
+        tokio::time::timeout(
+            identity_probe_budget(),
+            client.send_command("Page.getFrameTree", None, Some(sid)),
+        )
+        .await
+        .unwrap_or_else(|_| Err("reading the frame tree timed out".to_string()))
+    }
+    let main = frame_tree(client, session_id).await?;
+    let (main_frame, frames_now) = parse_frame_tree(&main["frameTree"])?;
+    let mut identity = DocumentIdentity {
+        frames: frames_now,
+        main_frame,
+    };
+    for frame in frames {
+        let Some(sid) = iframe_sessions.get(frame) else {
+            continue;
+        };
+        let oopif = frame_tree(client, sid).await?;
+        let loader = oopif_loader(&oopif, frame)?;
+        identity.frames.insert(frame.clone(), loader);
+    }
+    Ok(identity)
+}
+
+/// The error code that starts every kept-ref refusal: a precondition that
+/// failed before any action, never a blocked command to recover and re-run.
+pub const KEPT_REF_UNVERIFIED: &str = "kept_ref_unverified:";
+
+/// Why a DOM-walk ref kept from before a failed capture is refused.
+const DOM_SOURCED_KEPT: &str = "it came from a DOM-walk snapshot, whose node cannot be \
+     confirmed as the same element, so kept DOM refs are never used";
+
+/// The refusal for a kept ref (see [`RefMap::kept`]) that could not be held
+/// to the exact element it named.
+pub(crate) fn kept_ref_refusal(
+    ref_map: &RefMap,
+    ref_id: &str,
+    entry: &RefEntry,
+    why: &str,
+) -> String {
+    let cause = ref_map
+        .kept()
+        .map(|k| k.cause.as_str())
+        .unwrap_or("post-action capture failed");
+    format!(
+        "{KEPT_REF_UNVERIFIED} Ref {ref_id} [{} \"{}\"] is from the snapshot taken before the last action, whose \
+         post-action capture failed ({cause}). chrome-use could not confirm it still names that \
+         element in the same document: {why}. Nothing was acted on. Do not repeat the earlier \
+         action; run `snapshot -i` and use its refs.",
+        entry.role, entry.name
+    )
+}
+
+/// [`confirmed_backend_node_id`] for a kept ref: the cached node must still
+/// carry the snapshot's role and name. Every other outcome is a refusal.
+async fn confirm_kept_node(
+    client: &CdpClient,
+    effective_session_id: &str,
+    ref_map: &RefMap,
+    ref_id: &str,
+    entry: &RefEntry,
+) -> Result<i64, String> {
+    if entry.dom_sourced {
+        return Err(kept_ref_refusal(ref_map, ref_id, entry, DOM_SOURCED_KEPT));
+    }
+    let Some(backend_node_id) = entry.backend_node_id else {
+        return Err(kept_ref_refusal(
+            ref_map,
+            ref_id,
+            entry,
+            "the ref has no node id to check",
+        ));
+    };
+    match verify_ref_identity(
+        client,
+        effective_session_id,
+        backend_node_id,
+        ref_id,
+        &entry.role,
+        &entry.name,
+    )
+    .await
+    {
+        RefCheck::Confirmed => Ok(backend_node_id),
+        RefCheck::Suspect(_) => Err(kept_ref_refusal(
+            ref_map,
+            ref_id,
+            entry,
+            "its node is gone, could not be checked, or no longer has that role and name",
+        )),
+    }
+}
+
+/// A ref the map kept from before a failed post-action capture
+/// ([`RefMap::kept`]) may be acted on only once this confirms, live, that the
+/// page is the same target, the ref's frame and the top frame hold the same
+/// documents, and its node still is the element the snapshot named. Anything
+/// unconfirmed is refused — never re-anchored by role or name, which in a
+/// new document would pick an element the agent never saw.
+///
+/// `Ok` for a map that is not kept and for a ref it does not hold (the
+/// resolver reports that one as usual).
+pub async fn verify_kept_ref(
+    client: &CdpClient,
+    session_id: &str,
+    iframe_sessions: &HashMap<String, String>,
+    ref_map: &RefMap,
+    ref_id: &str,
+) -> Result<(), String> {
+    let Some(kept) = ref_map.kept() else {
+        return Ok(());
+    };
+    let Some(entry) = ref_map.get(ref_id) else {
+        return Ok(());
+    };
+    // Checked before anything is read: a DOM-walk ref has no accessibility
+    // identity to confirm, and a node DOM.describeNode still describes may be
+    // detached or another element. The resolver refuses them too
+    // (`confirm_kept_node`).
+    if entry.dom_sourced {
+        return Err(kept_ref_refusal(ref_map, ref_id, entry, DOM_SOURCED_KEPT));
+    }
+    let refuse = |why: &str| kept_ref_refusal(ref_map, ref_id, entry, why);
+    let frames: Vec<String> = entry.frame_id.iter().cloned().collect();
+    let now = read_document_identity(client, session_id, iframe_sessions, &frames)
+        .await
+        .map_err(|e| refuse(&format!("the page could not be read ({e})")))?;
+    kept.identity
+        .check_same(&now, entry.frame_id.as_deref())
+        .map_err(|e| refuse(&e))?;
+    let Some(backend_node_id) = entry.backend_node_id else {
+        return Err(refuse("the ref has no node id to check"));
+    };
+    let effective = resolve_frame_session(entry.frame_id.as_deref(), session_id, iframe_sessions);
+    match verify_ref_identity(
+        client,
+        effective,
+        backend_node_id,
+        ref_id,
+        &entry.role,
+        &entry.name,
+    )
+    .await
+    {
+        RefCheck::Confirmed => Ok(()),
+        RefCheck::Suspect(_) => Err(refuse(
+            "its node is gone or no longer has that role and name",
+        )),
+    }
+}
+
 /// Resolve a `@ref` or CSS selector to a click point. Returns
 /// `(centre_x, centre_y, width, height, session_id)`. Width/height come from the
 /// element's box model and feed humanize's in-bounds landing jitter; the CSS
@@ -1796,6 +2145,15 @@ pub async fn resolve_element_center(
             // backend_node_id is stale; re-query the accessibility tree below
         }
 
+        // A kept ref whose cached node is gone is refused, never re-queried.
+        if ref_map.kept().is_some() {
+            return Err(kept_ref_refusal(
+                ref_map,
+                &ref_id,
+                entry,
+                "its node could not be resolved on the page",
+            ));
+        }
         // Fallback: re-query the accessibility tree to find a fresh node by role/name.
         // If that fails, try adaptive fingerprint relocation before giving up.
         let fresh_id =
@@ -1880,6 +2238,15 @@ pub async fn resolve_element_object_id(
             // backend_node_id is stale; re-query the accessibility tree below
         }
 
+        // A kept ref whose cached node is gone is refused, never re-queried.
+        if ref_map.kept().is_some() {
+            return Err(kept_ref_refusal(
+                ref_map,
+                &ref_id,
+                entry,
+                "its node could not be resolved on the page",
+            ));
+        }
         // Fallback: re-query the accessibility tree to find a fresh node by role/name.
         // If that fails, try adaptive fingerprint relocation before giving up.
         let fresh_id =
@@ -4166,6 +4533,198 @@ mod tests {
             map.snapshot_ref(Some(42), None, "button", "More actions"),
             after_rerender
         );
+    }
+
+    fn identity(main_loader: &str, frames: &[(&str, &str)]) -> DocumentIdentity {
+        let mut f: HashMap<String, String> = frames
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect();
+        f.insert("T1".into(), main_loader.into());
+        DocumentIdentity {
+            frames: f,
+            main_frame: "T1".into(),
+        }
+    }
+
+    fn form_map() -> RefMap {
+        let mut m = RefMap::new();
+        m.begin_snapshot();
+        m.add("e5".into(), Some(55), "textbox", "Email", None);
+        m.add_with_frame("e9".into(), Some(99), "button", "Pay", None, Some("F2"));
+        m
+    }
+
+    #[test]
+    fn a_kept_map_still_holds_its_refs_but_marks_them_unverified() {
+        let mut m = form_map();
+        m.keep_after_failed_capture(
+            identity("L1", &[("F2", "L2")]),
+            "post-action capture denied (debugger_access_denied)",
+        );
+        assert!(
+            m.get("e5").is_some(),
+            "the ref the next step names survives"
+        );
+        let kept = m.kept().expect("marked");
+        assert!(kept.cause.contains("debugger_access_denied"));
+        // A ref the map never held says why newer refs are missing.
+        let e = m.unknown_ref_error("e12");
+        assert!(e.contains("post-action capture failed"), "{e}");
+        // Not carried across an upgrade restart without the mark.
+        assert!(m.export().is_none());
+        // The next good snapshot makes the map ordinary again.
+        m.begin_snapshot();
+        assert!(m.kept().is_none());
+    }
+
+    #[test]
+    fn a_kept_map_keeps_the_identity_it_was_first_kept_with() {
+        let mut m = form_map();
+        m.keep_after_failed_capture(
+            identity("L1", &[]),
+            "the post-action capture did not finish",
+        );
+        m.keep_after_failed_capture(
+            identity("L7", &[]),
+            "post-action capture denied (debugger_access_denied)",
+        );
+        let kept = m.kept().unwrap();
+        assert_eq!(kept.identity.frames["T1"], "L1");
+        assert!(kept.cause.contains("denied"));
+    }
+
+    #[test]
+    fn dropped_refs_say_the_capture_failed_not_that_no_snapshot_ran() {
+        let mut m = form_map();
+        m.drop_after_failed_capture(
+            "post-action capture denied (debugger_access_denied)",
+            "the session is on another tab now",
+        );
+        assert!(m.get("e5").is_none());
+        assert!(!m.has_snapshot());
+        let e = m.unknown_ref_error("e5");
+        assert!(e.contains("post-action capture failed"), "{e}");
+        assert!(e.contains("Do not repeat the action"), "{e}");
+        assert!(e.contains("snapshot -i"), "{e}");
+        assert!(!e.contains("no `snapshot` has run"), "{e}");
+        // A later snapshot replaces the explanation.
+        m.begin_snapshot();
+        assert!(!m.unknown_ref_error("e5").contains("post-action capture"));
+    }
+
+    #[test]
+    fn a_navigation_clears_the_kept_mark_with_the_refs() {
+        let mut m = form_map();
+        m.keep_after_failed_capture(identity("L1", &[]), "x");
+        m.clear();
+        assert!(m.kept().is_none());
+        assert!(m.get("e5").is_none());
+    }
+
+    #[test]
+    fn document_identity_confirms_only_the_same_documents() {
+        let before = identity("L1", &[("F2", "L2")]);
+        // Same documents: confirmed, for top-frame and iframe refs.
+        assert!(before.check_same(&before.clone(), None).is_ok());
+        assert!(before.check_same(&before.clone(), Some("F2")).is_ok());
+        // The page navigated: a new loader on the top frame.
+        let e = before
+            .check_same(&identity("L3", &[("F2", "L2")]), None)
+            .unwrap_err();
+        assert!(e.contains("navigated"), "{e}");
+        // An iframe was replaced: a new loader, or the frame is gone.
+        let e = before
+            .check_same(&identity("L1", &[("F2", "L9")]), Some("F2"))
+            .unwrap_err();
+        assert!(e.contains("frame F2"), "{e}");
+        let e = before
+            .check_same(&identity("L1", &[]), Some("F2"))
+            .unwrap_err();
+        assert!(e.contains("gone"), "{e}");
+        // ...which does not affect a top-frame ref.
+        assert!(before.check_same(&identity("L1", &[]), None).is_ok());
+        // Another target altogether.
+        let mut other = before.clone();
+        other.main_frame = "T2".into();
+        other.frames.insert("T2".into(), "L1".into());
+        assert!(before.check_same(&other, None).is_err());
+        // An identity that was never read confirms nothing.
+        assert!(DocumentIdentity::default()
+            .check_same(&DocumentIdentity::default(), None)
+            .is_err());
+    }
+
+    #[test]
+    fn frame_loaders_are_read_from_the_whole_frame_tree() {
+        let tree = json!({"frame": {"id": "T1", "loaderId": "L1"}, "childFrames": [
+            {"frame": {"id": "F2", "loaderId": "L2"}, "childFrames": [
+                {"frame": {"id": "F3", "loaderId": "L3"}}]}]});
+        let (main, frames) = parse_frame_tree(&tree).unwrap();
+        assert_eq!(main, "T1");
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames["F3"], "L3");
+        let m = form_map();
+        assert_eq!(m.ref_frames(), vec!["F2".to_string()]);
+    }
+
+    #[test]
+    fn a_bad_or_partial_frame_tree_is_refused() {
+        for (bad, why) in [
+            (
+                json!({"frame": {"id": "T1", "loaderId": ""}}),
+                "empty top loader",
+            ),
+            (json!({"frame": {"id": "T1"}}), "no top loader"),
+            (
+                json!({"frame": {"id": "", "loaderId": "L1"}}),
+                "empty top id",
+            ),
+            (json!({}), "no frame"),
+            (json!(null), "null tree"),
+            (json!({"frame": null}), "null frame"),
+            (
+                json!({"frame": {"id": "T1", "loaderId": "L1"},
+                       "childFrames": [{"frame": {"id": "F2", "loaderId": ""}}]}),
+                "empty child loader",
+            ),
+            (
+                json!({"frame": {"id": "T1", "loaderId": "L1"},
+                       "childFrames": [{"frame": {"loaderId": "L2"}}]}),
+                "child without id",
+            ),
+            (
+                json!({"frame": {"id": "T1", "loaderId": "L1"}, "childFrames": [{}]}),
+                "child without frame",
+            ),
+            (
+                json!({"frame": {"id": "T1", "loaderId": "L1"}, "childFrames": {"x": 1}}),
+                "childFrames not a list",
+            ),
+        ] {
+            assert!(parse_frame_tree(&bad).is_err(), "{why}: {bad}");
+        }
+    }
+
+    #[test]
+    fn an_oopif_reply_must_be_about_the_frame_that_was_asked() {
+        let reply = |id: &str, loader: &str| json!({"frameTree": {"frame": {"id": id, "loaderId": loader}}});
+        assert_eq!(oopif_loader(&reply("F2", "L2"), "F2").unwrap(), "L2");
+        // A stale or reused session answering for another frame.
+        let e = oopif_loader(&reply("F9", "L9"), "F2").unwrap_err();
+        assert!(e.contains("answered for frame F9"), "{e}");
+        assert!(oopif_loader(&reply("F2", ""), "F2").is_err());
+        assert!(oopif_loader(&json!({}), "F2").is_err());
+        assert!(oopif_loader(&json!({"frameTree": {"frame": null}}), "F2").is_err());
+    }
+
+    #[test]
+    fn empty_loaders_never_compare_equal() {
+        let before = identity("", &[("F2", "")]);
+        assert!(before.check_same(&before.clone(), None).is_err());
+        assert!(identity("L1", &[("F2", "")])
+            .check_same(&identity("L1", &[("F2", "")]), Some("F2"))
+            .is_err());
     }
 
     #[test]

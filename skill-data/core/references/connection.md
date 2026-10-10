@@ -23,6 +23,9 @@ If a top-level action is interrupted after dispatch, the relay does not replay i
 unless the command is safe to repeat or Chrome explicitly rejected it before dispatch.
 `action_outcome_unknown` means the action may already have executed; JSON reports
 `retryable: false`. Observe the current page before choosing another action.
+`kept_ref_unverified` (JSON `retryable: false`, whatever cause it quotes) means a
+ref kept after a failed post-action capture could not be confirmed live: nothing
+was acted on and nothing is retried or recovered. Run `snapshot -i`.
 
 - **`--launch`** opens an isolated, empty test profile (no cookies/login/extensions,
   relay off) — use when a clean browser is fine. On macOS this path disables

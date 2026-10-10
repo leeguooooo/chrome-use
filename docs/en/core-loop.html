@@ -88,6 +88,7 @@
         moved instead of handing you the same tree again. The rules around this loop live in
         <code>chrome-use skills get core/behaviour</code>.
       </p>
+      <p>If only the post-action capture fails, <code>observed.refs</code> says what became of the session's refs. <code>kept-unverified</code>: the previous snapshot's refs are kept, but a later command may use one only after chrome-use confirms live that the tab, frame, document and element are unchanged; otherwise the command is refused before it acts, and a ref is never re-anchored by role or name. Refs from a DOM-walk snapshot (<code>snapshot --dom</code>) are always refused in this state. <code>dropped</code>: the page may be a different document now. Either way, run <code>snapshot -i</code> for current refs, and do not repeat the action.</p>
 
       <p>
         The browser stays running between commands, so these feel like one session. When you're done, wrap up with <code>chrome-use close</code>.
