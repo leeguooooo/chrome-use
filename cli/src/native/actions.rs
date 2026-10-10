@@ -16266,6 +16266,9 @@ async fn handle_upload(cmd: &Value, state: &DaemonState) -> Result<Value, String
     if let Some(warning) = outcome.warning {
         result["warning"] = json!(warning);
     }
+    if let Some(delivery) = outcome.delivery {
+        result["delivery"] = delivery;
+    }
     Ok(result)
 }
 

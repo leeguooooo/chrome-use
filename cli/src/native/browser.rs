@@ -1003,6 +1003,21 @@ fn mime_for_path(name: &str) -> &'static str {
     }
 }
 
+/// Read until `buf` is full or the reader ends; returns the bytes read. Every
+/// streamed upload chunk but the last is then exactly `buf.len()`.
+fn read_full(reader: &mut impl std::io::Read, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match reader.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(filled)
+}
+
 /// Target ids to prune after a `Target.getTargets` resync: tracked pages whose
 /// target is no longer in the live set — EXCEPT the explicitly-pinned active
 /// target, which is protected. The relay against a busy real Chrome occasionally
@@ -3228,6 +3243,9 @@ pub struct BrowserManager {
 pub struct UploadOutcome {
     pub attached_count: Option<u64>,
     pub warning: Option<String>,
+    /// How the bytes reached the page when they were streamed over the relay
+    /// (`None` when Chrome read the file itself via `DOM.setFileInputFiles`).
+    pub delivery: Option<Value>,
 }
 
 /// Whether console/error capture (and thus `Runtime.enable`) is opted into for this
@@ -8424,10 +8442,12 @@ impl BrowserManager {
             )
             .await;
 
+        let mut delivery = None;
         if let Err(e) = set_files {
             // Chrome's chrome.debugger API (the extension-relay transport) forbids
-            // DOM.setFileInputFiles for security, surfacing as an opaque
-            // `-32000 "Not allowed"`. Fall back to constructing the File entirely
+            // DOM.setFileInputFiles unless the extension has "Allow access to
+            // file URLs" (a Web Store install starts without it), surfacing as
+            // an opaque `-32000 "Not allowed"`. Fall back to constructing the File entirely
             // IN THE PAGE and assigning it to the input — the standard
             // Playwright/Cypress trick, which needs no privileged CDP and so works
             // over the relay (issue #13). We hand it the resolved INPUT (not the
@@ -8439,13 +8459,15 @@ impl BrowserManager {
                 // so it takes the `input.files = …` branch. The drop/paste dropzone
                 // branch stays gated OFF (and is nav-guarded even when enabled), so a
                 // stray `drop` can never navigate the page.
-                self.upload_files_via_page(
-                    input_object_id.clone(),
-                    files,
-                    &effective_session_id,
-                    false,
-                )
-                .await?;
+                delivery = Some(
+                    self.upload_files_via_page(
+                        input_object_id.clone(),
+                        files,
+                        &effective_session_id,
+                        false,
+                    )
+                    .await?,
+                );
             } else {
                 return Err(e);
             }
@@ -8467,6 +8489,7 @@ impl BrowserManager {
             Ok(attached) if attached > 0 => Ok(UploadOutcome {
                 attached_count: Some(attached),
                 warning: None,
+                delivery,
             }),
             Ok(_) => Ok(UploadOutcome {
                 attached_count: Some(0),
@@ -8474,12 +8497,14 @@ impl BrowserManager {
                     "upload events were delivered, but the file input is now empty; the page may have consumed or replaced it (common for React dropzones)"
                         .to_string(),
                 ),
+                delivery,
             }),
             Err(error) => Ok(UploadOutcome {
                 attached_count: None,
                 warning: Some(format!(
                     "upload events were delivered, but post-upload verification was unavailable: {error}"
                 )),
+                delivery,
             }),
         }
     }
@@ -8730,139 +8755,82 @@ impl BrowserManager {
         Ok(count as u64)
     }
 
-    /// Relay-safe file upload: read each file locally, hand its bytes to the page
-    /// as base64, and rebuild a `File` there — then either assign it to a file
-    /// `<input>` (Chrome allows `input.files = dataTransfer.files`) or, for a
+    /// Relay-safe file upload: stream each file's bytes into the page and
+    /// rebuild a `File` there — then either assign it to a file `<input>`
+    /// (Chrome allows `input.files = dataTransfer.files`) or, for a
     /// dropzone/composer, dispatch synthetic `paste`/`drop` events carrying the
-    /// `DataTransfer`. No `DOM.setFileInputFiles`, so chrome.debugger permits it.
+    /// `DataTransfer`. No `DOM.setFileInputFiles`, so chrome.debugger permits
+    /// it. See `super::upload` for why the stream looks the way it does (#506).
+    ///
+    /// Returns what was delivered, for the reply.
     async fn upload_files_via_page(
         &self,
         object_id: String,
         files: &[String],
         session_id: &str,
         allow_dropzone: bool,
-    ) -> Result<(), String> {
-        use base64::Engine;
-        // The relay tunnels every CDP message through Chrome native messaging,
-        // which caps a single message at ~1 MiB. A whole image's base64 blows
-        // past that ("CDP response channel closed"), so we STREAM the bytes into
-        // a page-side buffer in sub-limit chunks, then assemble the File from it.
-        const CHUNK: usize = 96 * 1024; // base64 chars per message; safe under 1 MiB
+    ) -> Result<Value, String> {
+        use super::upload::{self, QueueHolder, UploadQueue};
 
-        // Reset the staging buffer.
-        self.client
-            .send_command(
-                "Runtime.evaluate",
-                Some(json!({ "expression": "window.__cuUpload = [];", "returnByValue": true })),
-                Some(session_id),
-            )
-            .await
-            .map_err(|e| format!("relay upload (reset) failed: {}", e))?;
-
+        // Open every file first: a missing file fails before anything is
+        // queued or sent.
+        let mut sources = Vec::with_capacity(files.len());
         for path in files {
-            let bytes = std::fs::read(path).map_err(|e| format!("cannot read {}: {}", path, e))?;
+            let file =
+                std::fs::File::open(path).map_err(|e| format!("cannot read {}: {}", path, e))?;
+            let size = file
+                .metadata()
+                .map_err(|e| format!("cannot read {}: {}", path, e))?
+                .len();
             let name = std::path::Path::new(path)
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("upload.bin")
                 .to_string();
-            let mime = mime_for_path(&name);
-            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-
-            // Push the file's metadata with an empty buffer.
-            let init = format!(
-                "window.__cuUpload.push({{ name: {}, type: {}, b64: '' }});",
-                serde_json::to_string(&name).unwrap_or_default(),
-                serde_json::to_string(mime).unwrap_or_default(),
-            );
-            self.client
-                .send_command(
-                    "Runtime.evaluate",
-                    Some(json!({ "expression": init, "returnByValue": true })),
-                    Some(session_id),
-                )
-                .await
-                .map_err(|e| format!("relay upload (init) failed: {}", e))?;
-
-            // Stream the base64 in chunks. base64's alphabet (A–Za–z0–9+/=) needs
-            // no escaping inside a single-quoted JS string, so concatenation is safe.
-            let idx = "window.__cuUpload[window.__cuUpload.length-1].b64";
-            let mut start = 0;
-            while start < b64.len() {
-                let end = (start + CHUNK).min(b64.len());
-                let chunk = &b64[start..end];
-                let expr = format!("{idx} += '{chunk}';");
-                self.client
-                    .send_command(
-                        "Runtime.evaluate",
-                        Some(json!({ "expression": expr, "returnByValue": true })),
-                        Some(session_id),
-                    )
-                    .await
-                    .map_err(|e| format!("relay upload (chunk) failed: {}", e))?;
-                start = end;
-            }
+            sources.push((file, name, size));
         }
+        let total: u64 = sources.iter().map(|(_, _, size)| size).sum();
 
-        // Assemble the Files from the buffer and attach to the element, then clean up.
-        // Arg 0 (`allowDropzone`): when false, a NON-file-input target is a hard
-        // no-op (returns `noinput:0`) — we never dispatch `drop`/`paste`, because an
-        // uncancelled `drop` carrying a File makes Chrome navigate to open it
-        // (the about:blank side effect). When true, the drop is wrapped in a
-        // capture-phase `preventDefault` guard so the browser's default file
-        // navigation can NEVER fire, while the page's own drop handlers still run.
-        let func = r#"function(allowDropzone) {
-            const filesData = window.__cuUpload || [];
-            const dt = new DataTransfer();
-            for (const f of filesData) {
-                const bin = atob(f.b64);
-                const arr = new Uint8Array(bin.length);
-                for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-                dt.items.add(new File([arr], f.name, { type: f.type }));
-            }
-            try { delete window.__cuUpload; } catch (e) { window.__cuUpload = undefined; }
-            const el = this;
-            if (el && el.tagName === 'INPUT' && el.type === 'file') {
-                el.files = dt.files;
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-                return 'input:' + dt.files.length;
-            }
-            // Non-input target. Only a real dropzone/composer can take this, and
-            // only when explicitly opted in. Otherwise: do NOTHING and report it,
-            // so a stray drop can never navigate the page.
-            if (!allowDropzone) return 'noinput:0';
-            // Suppress the browser's default drop action (navigate-to-file) no
-            // matter what the page does, while still letting the page's own
-            // handlers see the event.
-            const guard = e => { e.preventDefault(); };
-            window.addEventListener('dragover', guard, true);
-            window.addEventListener('drop', guard, true);
-            try {
-                try { el.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: dt })); } catch (e) {}
-                try {
-                    const ev = new DragEvent('drop', { bubbles: true, cancelable: true });
-                    Object.defineProperty(ev, 'dataTransfer', { value: dt });
-                    el.dispatchEvent(ev);
-                } catch (e) {}
-            } finally {
-                window.removeEventListener('dragover', guard, true);
-                window.removeEventListener('drop', guard, true);
-            }
-            return 'event:' + dt.files.length;
-        }"#;
+        // One stream per browser at a time; the others wait their turn.
+        let lock_path = UploadQueue::lock_path(&UploadQueue::lock_dir(), &self.ws_url);
+        let holder = QueueHolder {
+            session: self.session_name(),
+            bytes: total,
+            started_ms: upload::now_ms(),
+        };
+        let (_queue, queued) =
+            UploadQueue::acquire(&lock_path, &holder, upload::QUEUE_MAX_WAIT).await?;
+
+        let key = upload::page_key();
+        let started = std::time::Instant::now();
+        let streamed = self
+            .stream_files_to_page(&key, sources, total, session_id, started)
+            .await;
+        if let Err(e) = streamed {
+            // Free the page's copy of whatever arrived.
+            let _ = self
+                .upload_eval(&upload::discard_script(&key), session_id)
+                .await;
+            return Err(e);
+        }
 
         let result: EvaluateResult = self
             .client
             .send_command_typed(
                 "Runtime.callFunctionOn",
                 &CallFunctionOnParams {
-                    function_declaration: func.to_string(),
+                    function_declaration: upload::ATTACH_FUNCTION.to_string(),
                     object_id: Some(object_id),
-                    arguments: Some(vec![CallArgument {
-                        value: Some(json!(allow_dropzone)),
-                        object_id: None,
-                    }]),
+                    arguments: Some(vec![
+                        CallArgument {
+                            value: Some(json!(key)),
+                            object_id: None,
+                        },
+                        CallArgument {
+                            value: Some(json!(allow_dropzone)),
+                            object_id: None,
+                        },
+                    ]),
                     return_by_value: Some(true),
                     await_promise: Some(false),
                 },
@@ -8892,7 +8860,110 @@ impl BrowserManager {
                 );
             }
         }
+        Ok(json!({
+            "via": "relay-stream",
+            "bytes": total,
+            "streamMs": started.elapsed().as_millis() as u64,
+            "queuedMs": queued.as_millis() as u64,
+        }))
+    }
+
+    /// Send every file's bytes to the page buffer `key`, chunk by chunk,
+    /// checking the page's running byte count after each one.
+    async fn stream_files_to_page(
+        &self,
+        key: &str,
+        sources: Vec<(std::fs::File, String, u64)>,
+        total: u64,
+        session_id: &str,
+        started: std::time::Instant,
+    ) -> Result<(), String> {
+        use super::upload;
+        use base64::Engine;
+        use std::io::Read;
+
+        let budget = upload::stream_budget(total);
+        self.upload_eval(&upload::begin_script(key), session_id)
+            .await
+            .map_err(|e| format!("relay upload (start) failed: {e}"))?;
+        let mut sent_total: u64 = 0;
+        let mut buf = vec![0u8; upload::CHUNK_BYTES];
+        for (mut file, name, size) in sources {
+            let mime = mime_for_path(&name);
+            self.upload_eval(&upload::file_script(key, &name, mime, size), session_id)
+                .await
+                .map_err(|e| format!("relay upload (start {name}) failed: {e}"))?;
+            let mut sent: u64 = 0;
+            loop {
+                let n = read_full(&mut file, &mut buf)
+                    .map_err(|e| format!("cannot read {name}: {e}"))?;
+                if n == 0 {
+                    break;
+                }
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
+                let got = self
+                    .upload_eval(&upload::chunk_script(key, &b64), session_id)
+                    .await
+                    .map_err(|e| {
+                        format!(
+                            "relay upload (chunk) failed after {} of {} of {name}: {e}",
+                            upload::mb(sent),
+                            upload::mb(size)
+                        )
+                    })?;
+                sent += n as u64;
+                sent_total += n as u64;
+                if got.as_u64() != Some(sent) {
+                    return Err(format!(
+                        "relay upload of {name} lost bytes: the page holds {got} bytes after \
+                         {sent} were sent"
+                    ));
+                }
+                if started.elapsed() > budget {
+                    return Err(format!(
+                        "relay upload too slow: {} of {} sent in {}s (the budget allows at \
+                         least {} KB/s). The browser or this machine is overloaded; retry \
+                         when it is quieter.",
+                        upload::mb(sent_total),
+                        upload::mb(total),
+                        started.elapsed().as_secs(),
+                        upload::MIN_BYTES_PER_SEC / 1024
+                    ));
+                }
+            }
+            if sent != size {
+                return Err(format!(
+                    "{name} changed while uploading: read {sent} bytes, expected {size}"
+                ));
+            }
+        }
         Ok(())
+    }
+
+    /// One `Runtime.evaluate` of an upload step. A thrown exception is an
+    /// error here: the old stream ignored it, so a page that navigated away
+    /// mid-upload "succeeded".
+    async fn upload_eval(&self, expression: &str, session_id: &str) -> Result<Value, String> {
+        let reply = self
+            .client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({ "expression": expression, "returnByValue": true })),
+                Some(session_id),
+            )
+            .await?;
+        if let Some(details) = reply.get("exceptionDetails") {
+            let text = details
+                .pointer("/exception/description")
+                .and_then(|v| v.as_str())
+                .or_else(|| details.get("text").and_then(|v| v.as_str()))
+                .unwrap_or("exception");
+            return Err(text.lines().next().unwrap_or(text).to_string());
+        }
+        Ok(reply
+            .pointer("/result/value")
+            .cloned()
+            .unwrap_or(Value::Null))
     }
 
     pub async fn add_script_to_evaluate(&self, source: &str) -> Result<String, String> {
@@ -12663,5 +12734,359 @@ mod all_tabs_tests {
         let left = out["leftOut"].as_str().unwrap();
         assert!(left.contains("50 tab(s) not listed"), "{left}");
         assert!(left.contains(&ALL_TABS_MAX_LIMIT.to_string()), "{left}");
+    }
+}
+
+/// #506: a file streamed over a fake relay that behaves like the page and the
+/// extension's transport — every command it receives must fit a native
+/// messaging message, every reply stays small, the bytes arrive exactly, and
+/// two sessions' streams to one browser never interleave.
+#[cfg(test)]
+mod relay_upload_tests {
+    use super::*;
+    use crate::native::upload;
+    use base64::Engine;
+    use futures_util::{SinkExt, StreamExt};
+    use sha2::Digest;
+    use tokio_tungstenite::tungstenite::Message;
+
+    /// The cap on one native-messaging message from the host to the
+    /// extension; every relayed command crosses it.
+    const NATIVE_MESSAGE_CAP: usize = 1024 * 1024;
+
+    #[derive(Default)]
+    struct Page {
+        /// Upload buffers: key -> files of (name, size, bytes).
+        buffers: HashMap<String, Vec<(String, u64, Vec<u8>)>>,
+        /// What was attached: (name, type-less sha256, size).
+        attached: Vec<(String, String, u64)>,
+        largest_command: usize,
+        largest_reply: usize,
+        chunks: usize,
+        /// Set when a chunk arrived for one upload while another was open.
+        interleaved: bool,
+        /// Drop every buffer after this many chunks (a navigation).
+        navigate_after_chunks: Option<usize>,
+        chunk_delay: Duration,
+    }
+    type Shared = Arc<std::sync::Mutex<Page>>;
+
+    fn key_of(expr: &str) -> Option<String> {
+        let start = expr.find("window[\"")? + "window[\"".len();
+        let end = expr[start..].find('"')? + start;
+        Some(expr[start..end].to_string())
+    }
+
+    fn eval_reply(page: &Shared, expr: &str) -> Value {
+        let mut p = page.lock().unwrap();
+        let key = key_of(expr).unwrap_or_default();
+        let missing = || {
+            json!({"result": {"type": "object", "subtype": "error"},
+                   "exceptionDetails": {"text": "Uncaught", "exception": {
+                       "description": "Error: the page lost the upload buffer (did it navigate or reload during the upload?)\n    at <anonymous>:1:1"}}})
+        };
+        if expr.contains("= { files: [] }") {
+            p.buffers.insert(key, Vec::new());
+            return json!({"result": {"type": "number", "value": 0}});
+        }
+        if expr.contains("delete window[") {
+            p.buffers.remove(&key);
+            return json!({"result": {"type": "number", "value": 0}});
+        }
+        if expr.contains("s.files.push(") {
+            let name_at = expr.find("name: ").unwrap() + "name: ".len();
+            let name: String = serde_json::Deserializer::from_str(&expr[name_at..])
+                .into_iter::<String>()
+                .next()
+                .unwrap()
+                .unwrap();
+            let size_at = expr.find("size: ").unwrap() + "size: ".len();
+            let size: u64 = expr[size_at..]
+                .split(|c: char| !c.is_ascii_digit())
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap();
+            let Some(files) = p.buffers.get_mut(&key) else {
+                return missing();
+            };
+            files.push((name, size, Vec::new()));
+            let n = files.len();
+            return json!({"result": {"type": "number", "value": n}});
+        }
+        if let Some(at) = expr.find("const b = '") {
+            p.chunks += 1;
+            if p.navigate_after_chunks == Some(p.chunks) {
+                p.buffers.clear();
+            }
+            if p.buffers.len() > 1 {
+                p.interleaved = true;
+            }
+            let b64 = &expr[at + "const b = '".len()..];
+            let b64 = &b64[..b64.find('\'').unwrap()];
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .unwrap();
+            let Some(file) = p.buffers.get_mut(&key).and_then(|f| f.last_mut()) else {
+                return missing();
+            };
+            file.2.extend_from_slice(&bytes);
+            let got = file.2.len();
+            return json!({"result": {"type": "number", "value": got}});
+        }
+        json!({"result": {"type": "undefined"}})
+    }
+
+    fn attach_reply(page: &Shared, params: &Value) -> Value {
+        let mut p = page.lock().unwrap();
+        let key = params["arguments"][0]["value"].as_str().unwrap_or("");
+        let Some(files) = p.buffers.remove(key) else {
+            return json!({"result": {"type": "object"},
+                          "exceptionDetails": {"text": "lost the upload buffer"}});
+        };
+        let n = files.len();
+        for (name, size, bytes) in files {
+            assert_eq!(bytes.len() as u64, size, "assembled size of {name}");
+            let sha = format!("{:x}", sha2::Sha256::digest(&bytes));
+            p.attached.push((name, sha, size));
+        }
+        json!({"result": {"type": "string", "value": format!("input:{n}")}})
+    }
+
+    async fn start(page: Shared) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let page = page.clone();
+                tokio::spawn(async move {
+                    let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+                        return;
+                    };
+                    while let Some(Ok(msg)) = ws.next().await {
+                        let Message::Text(text) = msg else { continue };
+                        let req: Value = serde_json::from_str(&text).unwrap();
+                        let delay = {
+                            let mut p = page.lock().unwrap();
+                            p.largest_command = p.largest_command.max(text.len());
+                            p.chunk_delay
+                        };
+                        let mut out = if text.len() > NATIVE_MESSAGE_CAP {
+                            json!({"id": req["id"], "error": {"code": -32000,
+                                "message": "message exceeds the native messaging cap"}})
+                        } else {
+                            let result = match req["method"].as_str().unwrap_or("") {
+                                "Runtime.evaluate" => {
+                                    let expr = req["params"]["expression"].as_str().unwrap_or("");
+                                    if expr.contains("const b = '") && !delay.is_zero() {
+                                        tokio::time::sleep(delay).await;
+                                    }
+                                    eval_reply(&page, expr)
+                                }
+                                "Runtime.callFunctionOn" => attach_reply(&page, &req["params"]),
+                                _ => json!({}),
+                            };
+                            json!({"id": req["id"], "result": result})
+                        };
+                        if let Some(sid) = req.get("sessionId") {
+                            out["sessionId"] = sid.clone();
+                        }
+                        let reply = out.to_string();
+                        {
+                            let mut p = page.lock().unwrap();
+                            p.largest_reply = p.largest_reply.max(reply.len());
+                        }
+                        if ws.send(Message::Text(reply.into())).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        url
+    }
+
+    async fn manager(url: &str) -> BrowserManager {
+        BrowserManager {
+            client: Arc::new(CdpClient::connect(url).await.unwrap()),
+            browser_process: None,
+            ws_url: url.to_string(),
+            pages: Vec::new(),
+            active_page_index: 0,
+            default_timeout_ms: 25_000,
+            download_path: None,
+            ignore_https_errors: false,
+            visited_origins: HashSet::new(),
+            created_targets: HashSet::new(),
+            adopted_targets: HashSet::new(),
+            forced_targets: HashMap::new(),
+            dropped_chrome_tabs: HashMap::new(),
+            active_target_id: None,
+            relay_target_misses: HashMap::new(),
+            relay_scoped: false,
+            next_tab_id: 1,
+            lost_tab_refs: Vec::new(),
+            capture_console: false,
+        }
+    }
+
+    fn file_of(dir: &std::path::Path, name: &str, len: usize) -> (String, String) {
+        let path = dir.join(name);
+        // Varied bytes, so a dropped, repeated or reordered chunk changes the hash.
+        let bytes: Vec<u8> = (0..len)
+            .map(|i| (i as u32).wrapping_mul(2_654_435_761).to_le_bytes()[(i % 4) as usize])
+            .collect();
+        std::fs::write(&path, &bytes).unwrap();
+        (
+            path.display().to_string(),
+            format!("{:x}", sha2::Sha256::digest(&bytes)),
+        )
+    }
+
+    fn scratch() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("cu-relay-upload-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn a_large_file_arrives_byte_exact_in_small_messages() {
+        let page: Shared = Default::default();
+        let url = start(page.clone()).await;
+        let mgr = manager(&url).await;
+        let dir = scratch();
+        // 12 MiB plus a ragged tail: 33 chunks, the last one short.
+        let len = 12 * 1024 * 1024 + 12_345;
+        let (path, sha) = file_of(&dir, "clip.mp4", len);
+        let delivery = mgr
+            .upload_files_via_page("OBJ".into(), std::slice::from_ref(&path), "S1", false)
+            .await
+            .unwrap();
+        let p = page.lock().unwrap();
+        assert_eq!(p.attached, vec![("clip.mp4".to_string(), sha, len as u64)]);
+        assert_eq!(p.chunks, len.div_ceil(upload::CHUNK_BYTES));
+        assert!(p.buffers.is_empty(), "the page buffer was not released");
+        assert!(
+            p.largest_command < NATIVE_MESSAGE_CAP - 64 * 1024,
+            "a command of {} bytes leaves too little room under the cap",
+            p.largest_command
+        );
+        // The regression: each reply used to echo everything sent so far.
+        assert!(
+            p.largest_reply < 512,
+            "largest reply {} bytes",
+            p.largest_reply
+        );
+        assert_eq!(delivery["via"], "relay-stream");
+        assert_eq!(delivery["bytes"], len as u64);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn several_files_and_an_empty_one_arrive_in_order() {
+        let page: Shared = Default::default();
+        let url = start(page.clone()).await;
+        let mgr = manager(&url).await;
+        let dir = scratch();
+        let (a, sha_a) = file_of(&dir, "a.png", upload::CHUNK_BYTES);
+        let (b, sha_b) = file_of(&dir, "b.txt", 0);
+        let (c, sha_c) = file_of(&dir, "c.pdf", upload::CHUNK_BYTES + 1);
+        mgr.upload_files_via_page("OBJ".into(), &[a, b, c], "S1", false)
+            .await
+            .unwrap();
+        let p = page.lock().unwrap();
+        assert_eq!(
+            p.attached,
+            vec![
+                ("a.png".to_string(), sha_a, upload::CHUNK_BYTES as u64),
+                ("b.txt".to_string(), sha_b, 0),
+                ("c.pdf".to_string(), sha_c, upload::CHUNK_BYTES as u64 + 1),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_page_that_navigates_mid_upload_fails_the_upload() {
+        let page: Shared = Default::default();
+        page.lock().unwrap().navigate_after_chunks = Some(3);
+        let url = start(page.clone()).await;
+        let mgr = manager(&url).await;
+        let dir = scratch();
+        let (path, _) = file_of(&dir, "clip.mp4", 6 * upload::CHUNK_BYTES);
+        let err = mgr
+            .upload_files_via_page("OBJ".into(), &[path], "S1", false)
+            .await
+            .unwrap_err();
+        assert!(err.contains("relay upload (chunk) failed after"), "{err}");
+        assert!(err.contains("navigate"), "{err}");
+        let p = page.lock().unwrap();
+        assert!(p.attached.is_empty());
+        assert_eq!(
+            p.chunks, 3,
+            "kept streaming into a page that lost the buffer"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_missing_file_fails_before_anything_is_sent() {
+        let page: Shared = Default::default();
+        let url = start(page.clone()).await;
+        let mgr = manager(&url).await;
+        let err = mgr
+            .upload_files_via_page(
+                "OBJ".into(),
+                &["/nonexistent/cu-506/clip.mp4".to_string()],
+                "S1",
+                false,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.starts_with("cannot read /nonexistent/cu-506/clip.mp4"),
+            "{err}"
+        );
+        assert_eq!(page.lock().unwrap().largest_command, 0);
+    }
+
+    /// Three sessions upload to one browser at once: each waits its turn, all
+    /// arrive intact, and no two streams ever run together.
+    #[tokio::test]
+    async fn concurrent_uploads_to_one_browser_take_turns() {
+        let page: Shared = Default::default();
+        page.lock().unwrap().chunk_delay = Duration::from_millis(5);
+        let url = start(page.clone()).await;
+        let dir = scratch();
+        let mut tasks = Vec::new();
+        let mut want = Vec::new();
+        for (i, chunks) in [6usize, 3, 9].into_iter().enumerate() {
+            let name = format!("clip{i}.mp4");
+            let len = chunks * upload::CHUNK_BYTES - 7;
+            let (path, sha) = file_of(&dir, &name, len);
+            want.push((name, sha, len as u64));
+            let url = url.clone();
+            tasks.push(tokio::spawn(async move {
+                // A separate connection per session, as separate daemons have.
+                let mgr = manager(&url).await;
+                mgr.upload_files_via_page("OBJ".into(), &[path], "S1", false)
+                    .await
+            }));
+        }
+        let mut queued = 0;
+        for t in tasks {
+            let delivery = t.await.unwrap().unwrap();
+            if delivery["queuedMs"].as_u64().unwrap() > 0 {
+                queued += 1;
+            }
+        }
+        assert!(queued >= 2, "uploads did not wait for each other");
+        let p = page.lock().unwrap();
+        assert!(!p.interleaved, "two uploads streamed at once");
+        let mut got = p.attached.clone();
+        got.sort();
+        want.sort();
+        assert_eq!(got, want);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
