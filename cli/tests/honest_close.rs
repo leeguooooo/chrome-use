@@ -1366,15 +1366,19 @@ fn held_rights_case(bound: bool) {
     let idle = [("AGENT_BROWSER_IDLE_TIMEOUT_MS", "1500")];
     let r = cli.run(&["tab", "list"], &idle);
     assert_eq!(r["success"], true, "{r}");
-    let r = cli.run(&["tab", "new"], &idle);
-    assert_eq!(r["success"], true, "{r}");
+    // The first `tab new` may take over the blank first tab; the second opens
+    // another.
+    for _ in 0..2 {
+        let r = cli.run(&["tab", "new"], &idle);
+        assert_eq!(r["success"], true, "{r}");
+    }
     let mut owned: Vec<String> = fake
         .open_targets()
         .into_iter()
         .filter(|t| t != "USER")
         .collect();
     owned.sort();
-    assert_eq!(owned.len(), 2, "{owned:?}");
+    assert!(owned.len() >= 2, "{owned:?}");
     if let Some(other) = &other {
         assert!(other.open_targets().is_empty(), "the session left P1");
     }
