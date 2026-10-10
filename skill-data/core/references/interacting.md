@@ -218,8 +218,9 @@ pierces these out-of-process iframes and lists their elements by `@ref`
 (including input values); `get text --all-frames` reads their text. Then just act
 on the refs: `click @e`, `type @e`, `hover @e`, `dblclick @e`, `drag @a @b` all
 work into the iframe. `hover` there can only send synthetic events
-(`isTrusted=false`): JS hover handlers run, CSS `:hover` does not, and the
-reply says the hover is unconfirmed. Over the extension relay these are dispatched through the
+(`isTrusted=false`): they are sent, whether the page reacts is unknown, CSS
+`:hover` never applies, and the reply says the hover is unconfirmed. A frame
+that is scaled, rotated or zoomed, or covered by a parent overlay, is refused. Over the extension relay these are dispatched through the
 DOM (in the element's own frame), so they hit the right element in the right tab
 — a coordinate click/scroll there can drift onto whatever tab is in the
 foreground, so prefer refs. For below-the-fold content in such a frame, scroll it

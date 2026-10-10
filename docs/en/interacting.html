@@ -83,11 +83,12 @@
         <div class="du-callout-title">ℹ️ hover reports only what the page confirms</div>
         <code>hover</code> scrolls the element into view, finds a point where the element itself is on top, moves
         the real pointer there, then checks that a trusted pointer event landed on the element (it does not inspect CSS styles). Only a confirmed hover prints
-        <code>✓ Hovered … (pointer confirmed on it)</code>. A target covered by a banner or backdrop is refused
+        <code>✓ Hovered … (a trusted pointer event landed on it)</code>. A target covered by a banner or backdrop is refused
         (<code>hover refused</code>) and nothing is sent; a move whose events miss the element is an error
         (<code>did not take effect</code>). Inside a cross-origin iframe no real pointer can be placed, so only
         synthetic events (<code>isTrusted=false</code>) go out, CSS <code>:hover</code> never applies, and the output
-        says the hover is unconfirmed.
+        says the hover is unconfirmed (whether the page reacted is unknown). A frame covered by a parent overlay, or one that is
+        scaled, rotated or zoomed, is refused before anything is sent.
       </div>
 
       <div class="du-callout tip">

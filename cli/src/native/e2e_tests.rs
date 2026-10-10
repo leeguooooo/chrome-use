@@ -3994,6 +3994,257 @@ async fn e2e_hover_applies_css_hover_and_refuses_covered_target() {
     assert_success(&resp);
 }
 
+/// Issue #500 review: a pointer already resting on a thin target. The second
+/// hover must not move off the target to provoke an event: a 1px-tall strip
+/// has one hit point, so the reply is "unverified, already resting there";
+/// a 1px-wide but tall strip has a second hit point inside it, and the
+/// reported point and the pointer move there.
+#[tokio::test]
+#[ignore]
+async fn e2e_hover_thin_target_with_the_pointer_already_resting_on_it() {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let html = concat!(
+        "data:text/html,<html><body style='margin:0'>",
+        "<div class='dot' style='position:absolute;left:40px;top:40px;width:1px;height:1px;background:red'></div>",
+        "<div class='bar' style='position:absolute;left:80px;top:40px;width:1px;height:40px;background:blue'></div>",
+        "<script>window.seen=[];for(const c of ['dot','bar'])document.querySelector('.'+c)",
+        ".addEventListener('mouseover',e=>seen.push(c+':'+e.isTrusted))</script>",
+        "</body></html>"
+    );
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": html }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    // 1x1: the first hover is confirmed; the second finds the pointer resting
+    // on the only point inside the target and does not move it away.
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "hover", "selector": ".dot" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["verified"], true, "{resp}");
+    let first = get_data(&resp)["point"].clone();
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "hover", "selector": ".dot" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["verified"], false, "{resp}");
+    assert!(
+        get_data(&resp)["warning"]
+            .as_str()
+            .unwrap_or("")
+            .contains("already resting"),
+        "{resp}"
+    );
+    assert_eq!(get_data(&resp)["point"], first, "{resp}");
+    assert_eq!(
+        (state.mouse_state.x.round(), state.mouse_state.y.round()),
+        (
+            first["x"].as_f64().unwrap().round(),
+            first["y"].as_f64().unwrap().round()
+        )
+    );
+
+    // 1x40: the second hover moves to the other point inside the strip, and
+    // both the reply and the mouse state say where the pointer is.
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "hover", "selector": ".bar" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(get_data(&resp)["verified"], true, "{resp}");
+    let a = get_data(&resp)["point"].clone();
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "hover", "selector": ".bar" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(get_data(&resp)["verified"], true, "{resp}");
+    let b = get_data(&resp)["point"].clone();
+    assert_ne!(a, b, "the second hover must use the other hit point");
+    let by = b["y"].as_f64().unwrap();
+    assert!(
+        (40.0..80.0).contains(&by) && b["x"].as_f64().unwrap().round() == 80.0,
+        "{b}"
+    );
+    assert_eq!(state.mouse_state.y.round(), by.round());
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// Issue #500 review: a same-origin iframe covered by a parent overlay must
+/// be refused before any pointer moves, and a scaled iframe must be refused
+/// rather than hovered at a guessed point.
+#[tokio::test]
+#[ignore]
+async fn e2e_hover_refuses_covered_or_scaled_iframes() {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let frame = |style: &str, overlay: bool| {
+        format!(
+            "data:text/html,<html><body style='margin:0'>\
+             <iframe style='border:0;width:300px;height:200px;{style}' \
+             srcdoc=\"<button style='width:200px;height:100px'>Inner target</button>\"></iframe>\
+             {}</body></html>",
+            if overlay {
+                "<div class='veil' style='position:fixed;left:0;top:0;width:100%;height:100%;\
+                 background:rgba(0,0,0,.2)'>veil</div>"
+            } else {
+                ""
+            }
+        )
+    };
+    async fn hover_inner(state: &mut DaemonState, url: String, id: &str) -> Value {
+        let resp = execute_command(
+            &json!({ "id": format!("{id}n"), "action": "navigate", "url": url }),
+            state,
+        )
+        .await;
+        assert_success(&resp);
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let resp = execute_command(
+            &json!({ "id": format!("{id}s"), "action": "snapshot", "interactive": true }),
+            state,
+        )
+        .await;
+        assert_success(&resp);
+        let snap = get_data(&resp)["snapshot"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let r = ref_for_label(&snap, "Inner target");
+        execute_command(
+            &json!({ "id": format!("{id}h"), "action": "hover", "selector": format!("@{r}") }),
+            state,
+        )
+        .await
+    }
+
+    // Plain same-origin iframe: hovered and confirmed through the frame.
+    let resp = hover_inner(&mut state, frame("", false), "a").await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["verified"], true, "{resp}");
+
+    // A parent overlay covers the iframe: refused before anything is sent.
+    let resp = hover_inner(&mut state, frame("", true), "b").await;
+    assert_eq!(resp["success"], false, "{resp}");
+    let err = resp["error"].as_str().unwrap_or("");
+    assert!(err.contains("hover refused"), "{resp}");
+    assert!(err.contains("veil"), "{resp}");
+
+    // A scaled iframe: refused instead of a guessed point.
+    let resp = hover_inner(&mut state, frame("transform:scale(0.5)", false), "c").await;
+    assert_eq!(resp["success"], false, "{resp}");
+    assert!(
+        resp["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("scaled, rotated or zoomed"),
+        "{resp}"
+    );
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// Issue #500 review: every entry point that hovers keeps the daemon's
+/// mouse state on the real final point. `find … hover` (parsed by the real
+/// CLI parser) followed by a coordinate-less `mousedown` must press where the
+/// pointer is: on the hovered button.
+#[tokio::test]
+#[ignore]
+async fn e2e_find_hover_then_mousedown_presses_where_the_pointer_is() {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let html = concat!(
+        "data:text/html,<html><body style='margin:0'>",
+        "<button class='hb' style='position:absolute;left:300px;top:200px;width:120px;height:40px'>",
+        "Hover target</button>",
+        "<script>window.downs=[];document.addEventListener('mousedown',e=>downs.push(",
+        "[e.target.className,e.isTrusted,Math.round(e.clientX),Math.round(e.clientY)]))</script>",
+        "</body></html>"
+    );
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": html }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let argv: Vec<String> = ["find", "text", "Hover target", "hover"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let flags = crate::flags::parse_flags(&argv);
+    let mut cmd = crate::commands::parse_command(&argv, &flags).expect("find … hover parses");
+    cmd["id"] = json!("3");
+    let resp = execute_command(&cmd, &mut state).await;
+    assert_success(&resp);
+    let point = get_data(&resp)["point"].clone();
+    assert!(point.is_object(), "{resp}");
+
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "mousedown", "button": "left" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "evaluate", "script": "JSON.stringify(window.downs)" }),
+        &mut state,
+    )
+    .await;
+    let downs: Value =
+        serde_json::from_str(get_data(&resp)["result"].as_str().unwrap_or("[]")).unwrap();
+    let d = &downs[0];
+    assert_eq!(
+        d[0], "hb",
+        "the press must land on the hovered button: {downs}"
+    );
+    assert_eq!(d[1], true, "{downs}");
+    assert_eq!(
+        d[2].as_f64(),
+        point["x"].as_f64().map(f64::round),
+        "{downs} vs {point}"
+    );
+    assert_eq!(
+        d[3].as_f64(),
+        point["y"].as_f64().map(f64::round),
+        "{downs} vs {point}"
+    );
+
+    let _ = execute_command(
+        &json!({ "id": "6", "action": "mouseup", "button": "left" }),
+        &mut state,
+    )
+    .await;
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
 /// Issue #358: in a dialog whose state is fed only by trusted input (LinkedIn's
 /// edit-intro pattern), `fill` showed the new text, printed success, and Save
 /// never enabled. Assert the page's own model sees fill, type --clear and the

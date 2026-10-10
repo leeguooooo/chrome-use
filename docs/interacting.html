@@ -82,10 +82,10 @@
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ hover 只报告页面确认过的结果</div>
         <code>hover</code> 先把元素滚进视口，找一个元素本身在最上层的点，把真实鼠标移过去，
-        再确认有可信（isTrusted）的指针事件落到元素上（不检查任何 CSS 样式）。确认了才输出 <code>✓ Hovered … (pointer confirmed on it)</code>；
+        再确认有可信（isTrusted）的指针事件落到元素上（不检查任何 CSS 样式）。确认了才输出 <code>✓ Hovered … (a trusted pointer event landed on it)</code>；
         元素被横幅、遮罩挡住时报 <code>hover refused</code>，什么都不发；移动发出去了但
         没有事件落到元素上时报 <code>did not take effect</code>。跨源 iframe 里放不了真实指针，
-        只能派发合成事件（<code>isTrusted=false</code>），CSS <code>:hover</code> 不会生效，输出会标成未确认。
+        只能派发合成事件（<code>isTrusted=false</code>），页面有没有反应未知，CSS <code>:hover</code> 不会生效，输出会标成未确认。iframe 被父页面的遮罩盖住，或 iframe 被缩放、旋转、zoom，都会在发送任何事件前直接拒绝。
       </div>
 
       <div class="du-callout tip">
