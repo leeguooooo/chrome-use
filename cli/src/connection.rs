@@ -2517,8 +2517,29 @@ fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
         cmd,
         session,
         read_to,
-        read_to.max(Duration::from_secs(180)),
+        client_overall_ceiling(cmd, read_to),
     )
+}
+
+/// The most a command may take overall while the daemon keeps sending
+/// keepalives. An `upload` streamed over the extension relay can wait its turn
+/// behind another upload and then take time in proportion to the file, so its
+/// ceiling scales with the files' size; a flat 180 s cut off a busy upload
+/// and reported a healthy daemon as stuck (#506).
+fn client_overall_ceiling(cmd: &Value, read_to: Duration) -> Duration {
+    let base = read_to.max(Duration::from_secs(180));
+    if cmd.get("action").and_then(|v| v.as_str()) != Some("upload") {
+        return base;
+    }
+    let files = cmd
+        .get("files")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str());
+    base.max(crate::native::upload::client_ceiling(
+        crate::native::upload::total_size(files),
+    ))
 }
 
 fn exchange_command(
@@ -2640,6 +2661,42 @@ fn await_reply(
 mod tests {
     use super::{client_read_budget, daemon_cdp_budget};
     use serde_json::json;
+
+    #[test]
+    fn an_upload_ceiling_scales_with_its_files_and_others_keep_180s() {
+        use std::time::Duration;
+        let read_to = Duration::from_secs(45);
+        let flat = super::client_overall_ceiling(&json!({ "action": "click" }), read_to);
+        assert_eq!(flat, Duration::from_secs(180));
+
+        let dir = std::env::temp_dir().join(format!("cu-ceiling-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let small = dir.join("small.bin");
+        let big = dir.join("big.bin");
+        std::fs::write(&small, vec![0u8; 1024]).unwrap();
+        // Sparse: the length is what counts, not what is on disk.
+        std::fs::File::create(&big)
+            .unwrap()
+            .set_len(200 * 1024 * 1024)
+            .unwrap();
+        let ceiling = |files: Vec<&std::path::Path>| {
+            let files: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
+            super::client_overall_ceiling(
+                &json!({ "action": "upload", "selector": "input", "files": files }),
+                read_to,
+            )
+        };
+        let small_ceiling = ceiling(vec![&small]);
+        let big_ceiling = ceiling(vec![&small, &big]);
+        // The queue wait alone already passes the old flat 180 s.
+        assert!(small_ceiling > flat);
+        assert_eq!(
+            big_ceiling,
+            crate::native::upload::client_ceiling(200 * 1024 * 1024 + 1024)
+        );
+        assert!(big_ceiling > small_ceiling);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn only_an_explicit_off_value_drops_timing() {

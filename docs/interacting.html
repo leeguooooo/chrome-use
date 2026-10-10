@@ -368,9 +368,12 @@
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 为什么中继模式也能上传</div>
-        <code>chrome.debugger</code> 禁止 <code>setFileInputFiles</code>，所以文件字节会被流式送进页面、
-        在页面里重建成一个 <code>File</code>（按 native-messaging 的 1 MiB 上限分块传输）。
-        因此文件 <code>&lt;input&gt;</code> 和 drop/paste 编辑器都能收到。
+        扩展没有「允许访问文件网址」时（从 Chrome 应用商店安装默认关闭），<code>chrome.debugger</code> 禁止
+        <code>setFileInputFiles</code>，所以文件字节会被流式送进页面、在页面里重建成一个 <code>File</code>，
+        每块都远小于 native-messaging 的 1 MiB 上限。每块的开销和文件大小无关（200 MB 的视频约 15 秒），
+        同一个浏览器的上传一次只跑一个：后来的会排队，回复里的 <code>delivery.queuedMs</code> 是等了多久。
+        因此文件 <code>&lt;input&gt;</code> 和 drop/paste 编辑器都能收到。给 chrome-use 扩展打开「允许访问文件网址」后，
+        Chrome 会直接读取文件。
       </div>
 
       <hr class="du-divider" />
