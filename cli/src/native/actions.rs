@@ -6314,36 +6314,6 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
             state.browser = None;
         }
     }
-    // First tabs whose delete right a failed connect could not save (#486)
-    // are held by this daemon only; close them over a new connection.
-    if state.browser.is_none() {
-        let groups = super::first_tab::take_unsaved();
-        for (i, (endpoint, held)) in groups.iter().enumerate() {
-            let result = close_tabs_after_lost_connection(
-                &state.session_id,
-                endpoint,
-                held,
-                &HashMap::new(),
-            )
-            .await;
-            match result {
-                Ok(closed) => report = report.with_closed_ids(closed, "reconnect"),
-                Err(error) => {
-                    // Keep this group and every one not tried yet.
-                    for (endpoint, held) in &groups[i..] {
-                        for target in held {
-                            super::first_tab::hold_unsaved(endpoint, target);
-                        }
-                    }
-                    return Err(format!(
-                        "close incomplete: {} tab(s) this session opened but could not record are \
-                     not confirmed closed: {error}. This daemon still holds them; retry `close`.",
-                        held.len()
-                    ));
-                }
-            }
-        }
-    }
     // A fresh daemon after idle has no manager, but still owns the external tabs
     // recorded by its predecessor. Explicit close must not silently ignore them.
     if state.browser.is_none() {
@@ -6392,6 +6362,38 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         }
     }
     state.browser = None;
+    // First tabs whose delete right a failed connect could not save (#486)
+    // are held by this daemon only. Close them over a new connection once the
+    // session's own manager is closed: a manager on a newer endpoint did not
+    // take them over, and the helper finds the profile's current endpoint.
+    {
+        let groups = super::first_tab::take_unsaved();
+        for (i, (endpoint, held)) in groups.iter().enumerate() {
+            let result = close_tabs_after_lost_connection(
+                &state.session_id,
+                endpoint,
+                held,
+                &HashMap::new(),
+            )
+            .await;
+            match result {
+                Ok(closed) => report = report.with_closed_ids(closed, "reconnect"),
+                Err(error) => {
+                    // Keep this group and every one not tried yet.
+                    for (endpoint, held) in &groups[i..] {
+                        for target in held {
+                            super::first_tab::hold_unsaved(endpoint, target);
+                        }
+                    }
+                    return Err(format!(
+                        "close incomplete: {} tab(s) this session opened but could not record are \
+                     not confirmed closed: {error}. This daemon still holds them; retry `close`.",
+                        held.len()
+                    ));
+                }
+            }
+        }
+    }
     state.launch_hash = None;
     state.screencasting = false;
     state.reset_input_state();
