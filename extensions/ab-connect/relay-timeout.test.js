@@ -1,7 +1,59 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { PAYLOAD_MAX_TIMEOUT_MS, RELAY_COMMAND_TIMEOUT_MS, getRelayTimeoutHistory, isRelayTimeoutError, relayCommandBudgetMs, relayInFlightCount, withRelayTimeout } from './relay-timeout.js'
+import { INPUT_COMMAND_TIMEOUT_MS, PAYLOAD_MAX_TIMEOUT_MS, RELAY_COMMAND_TIMEOUT_MS, getRelayTimeoutHistory, isRelayTimeoutError, relayCommandBudgetMs, relayInFlightCount, withRelayTimeout } from './relay-timeout.js'
+import { sendTabCommand } from './tab-command.js'
+
+for (const method of [
+  'Input.dispatchMouseEvent',
+  'Input.dispatchKeyEvent',
+  'Input.dispatchTouchEvent',
+  'Input.dispatchDragEvent',
+  'Input.emulateTouchFromMouseEvent',
+  'Input.synthesizeTapGesture',
+  'Input.synthesizeScrollGesture',
+  'Input.synthesizePinchGesture',
+]) {
+  test(`${method} gets a flat 25s input budget`, () => {
+    assert.equal(relayCommandBudgetMs(method), 25000)
+    assert.equal(relayCommandBudgetMs(method, { text: 'a'.repeat(50000) }), 25000)
+  })
+}
+
+test('the input budget leaves time for the relay error before the CLI timeout', () => {
+  assert.equal(INPUT_COMMAND_TIMEOUT_MS, 25000)
+  // cli/src/native/cdp/client.rs: command_timeout uses 30s for input dispatch.
+  assert.ok(INPUT_COMMAND_TIMEOUT_MS < 30000)
+})
+
+test('ordinary commands keep the flat 8s budget', () => {
+  for (const method of ['Runtime.evaluate', 'Page.enable', 'Input.setIgnoreInputEvents']) {
+    assert.equal(relayCommandBudgetMs(method, {}), 8000)
+  }
+})
+
+test('an input timeout is not payload-scaled or replayed', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let dispatches = 0
+  let recoveries = 0
+  const operation = sendTabCommand(7, 'Input.dispatchMouseEvent', { type: 'mousePressed' }, undefined, {
+    sendCommand() { dispatches++; return new Promise(() => {}) },
+    detachTab() { recoveries++ },
+    recoverSessionTab() { recoveries++; return 7 },
+  })
+  const rejected = assert.rejects(operation, (error) => {
+    assert.equal(isRelayTimeoutError(error), true)
+    assert.match(error.message, /relay timeout after 25000ms/)
+    assert.doesNotMatch(error.message, /scaled with the payload|insert was NOT cancelled/)
+    return true
+  })
+  // Let any awaited pre-dispatch step (e.g. tab recovery) register the timer first.
+  await new Promise((resolve) => setImmediate(resolve))
+  t.mock.timers.tick(25000)
+  await rejected
+  assert.equal(dispatches, 1)
+  assert.equal(recoveries, 0)
+})
 
 test('withRelayTimeout returns a completed debugger operation', async () => {
   assert.equal(await withRelayTimeout(Promise.resolve('ok'), 'Runtime.evaluate', 20), 'ok')
@@ -171,4 +223,21 @@ test('a scaled-budget timeout does not blame an unresponsive debugger', async ()
       return true
     },
   )
+})
+
+test('underlying operations remain counted after wrapper expiry until they settle', async () => {
+  const { relayUnresolvedOperations } = await import('./relay-timeout.js')
+  const before = relayUnresolvedOperations().count
+  let finish
+  const underlying = new Promise(resolve => { finish = resolve })
+  await assert.rejects(withRelayTimeout(underlying, 'pending operation', 5), error => {
+    assert.match(error.message, /\[diag in-flight=1 oldest-in-flight=\d+ms worker-age=\d+ms\]/)
+    return true
+  })
+  assert.equal(relayInFlightCount(), 0)
+  assert.equal(relayUnresolvedOperations().count, before + 1)
+  assert.ok(relayUnresolvedOperations(Date.now() + 100).oldestAgeMs >= 100)
+  finish()
+  await Promise.resolve()
+  assert.equal(relayUnresolvedOperations().count, before)
 })

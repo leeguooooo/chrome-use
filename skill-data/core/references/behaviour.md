@@ -16,6 +16,8 @@ into a crawl.
 - Use one session name per task. After "session unresponsive", make the one
   move it names and keep that name; a new name per error leaves daemons behind.
 
+- The CLI accepts daemon keepalives every 10 seconds while a command runs. The stall budget is unchanged; the total wait is at least 180 seconds (longer when the command budget requires it). A "daemon still busy" error leaves the command running: wait before checking the session again, and do not replay a side-effecting command.
+
 ## One round trip per step
 
 An action and the read that checks it belong in the same command:

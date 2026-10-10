@@ -2425,7 +2425,7 @@ fn daemon_cdp_budget(cmd: &Value) -> Duration {
         .min(Duration::from_secs(360))
 }
 
-/// How long the socket read waits for the daemon's answer.
+/// How long each socket read waits for a reply or keepalive.
 ///
 /// The invariant that matters: **this budget must exceed the daemon's budget for
 /// the same command.** Otherwise the read fires first, we abandon the connection
@@ -2454,67 +2454,173 @@ fn client_read_budget(cmd: &Value) -> Duration {
 }
 
 fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
-    let mut stream = connect(session)?;
-
-    // A long-running command (notably `script`, which runs a whole op-list in one
-    // round-trip) carries its own `timeout_ms`; give the socket read that budget
-    // plus margin so we don't cut off a legitimately long script.
-    //
-    // For a plain command (`get`/`eval`/…) the daemon caps each CDP call at 30s
-    // and then returns a proper error response ("CDP command timed out: …"). Our
-    // read budget MUST exceed that daemon budget, otherwise the socket read fires
-    // at the same 30s, we abandon the connection before the daemon's error line
-    // arrives, and the actionable diagnostic is lost — the exact swallow behind
-    // issue #117. 45s = daemon's 30s CDP budget + 15s margin.
     let read_to = client_read_budget(cmd);
-    stream.set_read_timeout(Some(read_to)).ok();
+    exchange_command(
+        connect(session)?,
+        cmd,
+        session,
+        read_to,
+        read_to.max(Duration::from_secs(180)),
+    )
+}
+
+fn exchange_command(
+    mut stream: Connection,
+    cmd: &Value,
+    session: &str,
+    read_to: Duration,
+    overall: Duration,
+) -> Result<Response, String> {
     stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
-
-    let mut json_str = serde_json::to_string(cmd).map_err(|e| e.to_string())?;
+    let mut cmd = cmd.clone();
+    cmd["_keepalive"] = Value::Bool(true);
+    let mut json_str = serde_json::to_string(&cmd).map_err(|e| e.to_string())?;
     json_str.push('\n');
-
     stream
         .write_all(json_str.as_bytes())
         .map_err(|e| format!("Failed to send: {}", e))?;
 
+    // Under load, commands that succeeded at 51s were killed at 45s: one
+    // command can make several sequential CDP calls. Blank keepalives renew
+    // the stall budget, not the overall ceiling. Older daemons just reply once.
+    let started = std::time::Instant::now();
+    let mut heard_keepalive = false;
+    let busy = || {
+        format!(
+            "daemon still busy with the previous command for session '{session}'. \
+             Wait before checking the session again; do not replay a side-effecting command."
+        )
+    };
     let mut reader = BufReader::new(stream);
-    let mut response_line = String::new();
-    reader.read_line(&mut response_line).map_err(|e| {
-        // A read that runs the full budget without a byte means the daemon never
-        // answered — its browser connection is stale/hung (issue #117). Surface a
-        // clear, actionable error that is NOT classified transient, so we fail
-        // loudly and non-zero instead of silently retrying the 45s read 5× (and
-        // leaving the caller with "daemon may be busy or unresponsive").
-        if matches!(
-            e.kind(),
-            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-        ) {
-            format!(
-                "session unresponsive: no response within {}s — the browser connection is \
-                 likely stale. Reconnect with `connect`, or close and reopen the session.",
-                read_to.as_secs()
-            )
-        } else {
-            format!("Failed to read: {}", e)
+    loop {
+        let remaining = overall.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return Err(busy());
         }
-    })?;
-
-    if response_line.trim().is_empty() {
-        kill_stale_daemon(session);
-        return Err(format!(
-            "daemon disconnected unexpectedly for session '{session}'. \
-             The unreachable daemon was stopped and its stale state was cleared. \
-             Rerun the command to start a fresh daemon."
-        ));
+        let ceiling_limited = remaining < read_to;
+        reader
+            .get_ref()
+            .set_read_timeout(Some(read_to.min(remaining)))
+            .ok();
+        let mut response_line = String::new();
+        let bytes = reader.read_line(&mut response_line).map_err(|e| {
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ) {
+                if ceiling_limited && heard_keepalive {
+                    busy()
+                } else {
+                    format!(
+                        "session unresponsive: no response within {}s — the browser connection is \
+                         likely stale. Reconnect with `connect`, or close and reopen the session.",
+                        read_to.as_secs()
+                    )
+                }
+            } else {
+                format!("Failed to read: {}", e)
+            }
+        })?;
+        if bytes == 0 {
+            kill_stale_daemon(session);
+            return Err(format!(
+                "daemon disconnected unexpectedly for session '{session}'. \
+                 The unreachable daemon was stopped and its stale state was cleared. \
+                 Rerun the command to start a fresh daemon."
+            ));
+        }
+        if response_line.trim().is_empty() {
+            heard_keepalive = true;
+            continue;
+        }
+        return serde_json::from_str(&response_line)
+            .map_err(|e| format!("Invalid response: {}", e));
     }
-
-    serde_json::from_str(&response_line).map_err(|e| format!("Invalid response: {}", e))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{client_read_budget, daemon_cdp_budget};
     use serde_json::json;
+
+    #[cfg(unix)]
+    fn fake_keepalive_exchange(
+        heartbeat: bool,
+        reply: bool,
+        overall_ms: u64,
+    ) -> Result<super::Response, String> {
+        use std::io::{BufRead, BufReader, Write};
+        use std::time::Duration;
+        let (client, mut daemon) = std::os::unix::net::UnixStream::pair().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut line = String::new();
+            BufReader::new(daemon.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let cmd: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(cmd["_keepalive"], true);
+            for _ in 0..12 {
+                std::thread::sleep(Duration::from_millis(20));
+                if heartbeat && daemon.write_all(b"\n").is_err() {
+                    return;
+                }
+            }
+            if reply {
+                let _ = daemon.write_all(b"{\"success\":true,\"data\":{\"done\":true}}\n");
+            }
+        });
+        let result = super::exchange_command(
+            super::Connection::Unix(client),
+            &json!({"action": "launch"}),
+            "keepalive-test",
+            Duration::from_millis(120),
+            Duration::from_millis(overall_ms),
+        );
+        server.join().unwrap();
+        result
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keepalives_allow_a_reply_after_the_stall_budget() {
+        let reply = fake_keepalive_exchange(true, true, 1000).unwrap_or_else(|e| panic!("{e}"));
+        assert!(reply.success);
+        assert_eq!(reply.data.unwrap()["done"], true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn silence_keeps_the_session_unresponsive_error() {
+        let error = fake_keepalive_exchange(false, false, 1000).err().unwrap();
+        assert!(super::is_session_unresponsive_error(&error), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keepalives_cannot_extend_the_overall_ceiling() {
+        let error = fake_keepalive_exchange(true, false, 180).err().unwrap();
+        assert!(error.contains("still busy"), "{error}");
+        assert!(!super::is_session_unresponsive_error(&error));
+        assert!(!super::is_transient_error(&error));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn older_daemon_can_reply_without_keepalives() {
+        use std::io::Write;
+        use std::time::Duration;
+        let (client, mut daemon) = std::os::unix::net::UnixStream::pair().unwrap();
+        daemon.write_all(b"{\"success\":true}\n").unwrap();
+        let reply = super::exchange_command(
+            super::Connection::Unix(client),
+            &json!({"action": "url"}),
+            "keepalive-test",
+            Duration::from_millis(120),
+            Duration::from_secs(1),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert!(reply.success);
+    }
 
     #[test]
     fn a_kept_reason_round_trips_and_an_empty_map_removes_the_file() {

@@ -2021,45 +2021,9 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                     .unwrap_or("its browser was gone");
                 replaced_browser = Some(why.to_string());
                 // The tab refs the agent holds (`t1`, `t2`, labels), so the new
-                // connection can bind them to the same Chrome tabs (#473). Kept
-                // in the daemon state, not here: if this reconnect fails, the
-                // next command's must still bind them. An older snapshot that
-                // was never restored is the one the agent's refs came from.
-                if state.carried_tabs_unknown.is_some() {
-                    // Which tab an id names is unknown, so this manager's
-                    // numbering is not the agent's: it must never overwrite
-                    // or replace the record that says so. Only an explicit
-                    // end of the session releases it.
-                } else if let Some(e) = state.carried_tabs_cleanup.take() {
-                    // The consumed record is still on disk. Carrying this
-                    // manager forward would need a new record over it, so
-                    // hold instead, as for a record that cannot be read.
-                    state.carried_tabs_unknown = Some(format!(
-                        "{e}, and the browser was lost again before it was removed"
-                    ));
-                } else if state.carried_tabs.is_none() {
-                    let carried = state
-                        .browser
-                        .as_ref()
-                        .map(|mgr| (why.to_string(), mgr.tab_ref_snapshot()));
-                    // On disk too: a reconnect can wait long enough for the
-                    // client to stop this daemon, and the next one must bind
-                    // the same refs rather than number the tabs afresh. The
-                    // old state is torn down only once that record is safe.
-                    if let Some(carried) = carried {
-                        if let Err(e) = write_carried_tabs(&state.session_id, &carried) {
-                            return error_response(
-                                &id,
-                                &format!(
-                                    "This session's browser is gone ({why}) and the tab ids it \
-                                     holds could not be recorded before reconnecting: {e}. \
-                                     Nothing was changed; the command can run once that file \
-                                     can be written."
-                                ),
-                            );
-                        }
-                        state.carried_tabs = Some(carried);
-                    }
+                // connection can bind them to the same Chrome tabs (#473).
+                if let Err(e) = carry_tabs_before_teardown(state, why) {
+                    return error_response(&id, &e);
                 }
                 if let Some(ref mut mgr) = state.browser {
                     let _ = mgr.close().await;
@@ -3180,20 +3144,48 @@ async fn retry_relay_connect_after_wait(mut last_err: String) -> Result<BrowserM
 /// ambiguous — corrupt, unreadable or duplicated sidecars — is refused at
 /// once: reconnecting to some other profile is never the fallback.
 async fn bound_relay_endpoint(profile_id: &str) -> Result<String, String> {
-    use crate::connect::ProfileEndpointError;
-    let budget = std::time::Duration::from_secs(
+    bound_relay_endpoint_by(profile_id, std::time::Instant::now() + bound_relay_budget()).await
+}
+
+/// How long a bound profile's relay is waited for while its host restarts.
+fn bound_relay_budget() -> Duration {
+    relay_wait_budget(20)
+}
+
+/// How long a reconnect waits for a restarted relay host to publish its new
+/// endpoint (#484). The extension respawns a killed host from its keepalive
+/// alarm (clamped to about 30 s; 19-24 s on the build host), so the
+/// profile-lookup budget above is too short. Both stay under the client's 45 s
+/// read budget for one command: a `launch` does nothing after connecting, so
+/// it may wait 40 s; a command that reconnects first still has to run, so it
+/// waits 35 s.
+fn relay_restart_budget(launch: bool) -> Duration {
+    relay_wait_budget(if launch { 40 } else { 35 })
+}
+
+/// `AGENT_BROWSER_RELAY_REVIVE_SECS`, capped at (and defaulting to) `max`.
+fn relay_wait_budget(max: u64) -> Duration {
+    Duration::from_secs(
         env::var("AGENT_BROWSER_RELAY_REVIVE_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(20)
-            .min(20),
-    );
-    let deadline = std::time::Instant::now() + budget;
+            .unwrap_or(max)
+            .min(max),
+    )
+}
+
+/// [`bound_relay_endpoint`], waiting for a profile that is not connected until
+/// `deadline`.
+async fn bound_relay_endpoint_by(
+    profile_id: &str,
+    deadline: std::time::Instant,
+) -> Result<String, String> {
+    use crate::connect::ProfileEndpointError;
     loop {
         match crate::connect::relay_endpoint_for_profile(profile_id) {
             Ok(ws) => return Ok(ws),
             Err(ProfileEndpointError::NotConnected(_)) if std::time::Instant::now() < deadline => {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                tokio::time::sleep(Duration::from_millis(500)).await;
             }
             Err(e) => {
                 return Err(format!(
@@ -3202,6 +3194,56 @@ async fn bound_relay_endpoint(profile_id: &str) -> Result<String, String> {
             }
         }
     }
+}
+
+/// Connect to the relay of the Chrome profile this session is bound to, where
+/// it is now (#472, #484).
+///
+/// A relay host that was killed cannot remove its endpoint record, so right
+/// after a restart the profile's record can still name the dead host's
+/// address until the new host writes its own. A connect that address refuses
+/// is not the answer: the record is read again until it names a different
+/// address, for as long as a restarted host takes to come back
+/// ([`relay_restart_budget`]).
+/// Only the bound profile's own endpoint is ever tried, and anything
+/// ambiguous is refused as in [`bound_relay_endpoint`].
+async fn connect_bound_relay(profile_id: &str, launch: bool) -> Result<BrowserManager, String> {
+    let deadline = std::time::Instant::now() + relay_restart_budget(launch);
+    // The address that refused the last connect, and why.
+    let mut refused: Option<(String, String)> = None;
+    loop {
+        let ws = bound_relay_endpoint_by(profile_id, deadline).await?;
+        if let Some((dead, err)) = refused.as_ref() {
+            if same_ws_endpoint(dead, &ws) {
+                if std::time::Instant::now() >= deadline {
+                    return Err(format!(
+                        "Chrome profile {profile_id}'s relay at {dead} is not accepting connections \
+                         and no new relay endpoint appeared for it: {err}"
+                    ));
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+        }
+        match BrowserManager::connect_cdp(&ws).await {
+            Ok(mgr) => return Ok(mgr),
+            Err(e) if is_ws_connect_failure(&e) && std::time::Instant::now() < deadline => {
+                refused = Some((ws, e));
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// The WebSocket to the endpoint could not be opened at all (nothing listens
+/// there any more), as opposed to a connection that opened and then failed.
+fn is_ws_connect_failure(error: &str) -> bool {
+    error.starts_with("CDP WebSocket connect failed")
+}
+
+fn same_ws_endpoint(a: &str, b: &str) -> bool {
+    a.trim().trim_end_matches('/') == b.trim().trim_end_matches('/')
 }
 
 async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
@@ -3235,12 +3277,20 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
     // as it is NOW, not to the one in AGENT_BROWSER_CDP, which died with the
     // host that served it (#472). The binding record is the session's, written
     // by the CLI whenever it binds or rebinds; an unreadable one is refused.
-    let bound_endpoint = match crate::connection::session_relay_profile(&state.session_id)? {
-        Some(id) => Some(bound_relay_endpoint(&id).await?),
+    // A refused connect to an address the profile's record still names is
+    // waited out until the new host has written its own (#484).
+    let bound = match crate::connection::session_relay_profile(&state.session_id)? {
+        Some(id) => Some(connect_bound_relay(&id, false).await?),
         None => None,
     };
-    if let Some(cdp) = bound_endpoint.or_else(|| env::var("AGENT_BROWSER_CDP").ok()) {
-        let mgr = BrowserManager::connect_cdp(&cdp).await?;
+    let connected = match bound {
+        Some(mgr) => Some(mgr),
+        None => match env::var("AGENT_BROWSER_CDP") {
+            Ok(cdp) => Some(BrowserManager::connect_cdp(&cdp).await?),
+            Err(_) => None,
+        },
+    };
+    if let Some(mgr) = connected {
         state.reset_input_state();
         state.browser = Some(mgr);
         state.subscribe_to_browser_events();
@@ -3979,6 +4029,99 @@ fn explicit_endpoint_matches(
     true
 }
 
+/// The relay profile this session is bound to, when `cdp_url` is that
+/// profile's endpoint (#484): the pin itself chose it (`from_pin`), it is the
+/// endpoint the session already holds (the CLI checked it against the binding
+/// when it was bound), or the relay records name the pinned profile as its
+/// owner. `Ok(None)` for anything else, which keeps the explicit-endpoint
+/// rules. An unreadable binding is an unknown one: refused.
+fn bound_profile_for_endpoint(
+    state: &DaemonState,
+    cdp_url: Option<&str>,
+    from_pin: bool,
+) -> Result<Option<String>, String> {
+    let Some(requested) = cdp_url else {
+        return Ok(None);
+    };
+    let Some(pin) = crate::connection::session_relay_profile(&state.session_id)? else {
+        return Ok(None);
+    };
+    if from_pin {
+        return Ok(Some(pin));
+    }
+    if state
+        .browser
+        .as_ref()
+        .is_some_and(|mgr| same_ws_endpoint(mgr.ws_url(), requested))
+    {
+        return Ok(Some(pin));
+    }
+    Ok(
+        match crate::connect::relay_profile_for_endpoint(requested) {
+            Ok(Some(owner)) if owner == pin => Some(pin),
+            _ => None,
+        },
+    )
+}
+
+/// Reconnect a session to the Chrome profile it is bound to, replacing the
+/// connection it holds (#484): the dead one of a restarted relay host, or one
+/// on the profile's previous endpoint. The same carry-over as a reconnect
+/// found by any other command (#473): the tab refs are recorded before the
+/// old connection is let go, and the next command binds them to the same
+/// Chrome tabs, refusing ids whose tab is not found.
+///
+/// The new connection is made first. If it fails, nothing changed; the next
+/// command finds the connection dead and reconnects with the same carry-over.
+/// The old manager is dropped, never `close()`d: on a live connection that
+/// would close this session's tabs, which are the tabs being carried.
+async fn reconnect_bound_profile(
+    state: &mut DaemonState,
+    profile: &str,
+    storage_state: &Option<String>,
+) -> Result<Value, String> {
+    let alive = match state.browser.as_mut() {
+        Some(mgr) => !mgr.has_process_exited() && mgr.is_connection_alive().await,
+        None => false,
+    };
+    let why = if alive {
+        "its Chrome profile's relay moved to a new endpoint"
+    } else {
+        "its browser connection was dead"
+    };
+    let mgr = connect_bound_relay(profile, true).await.map_err(|e| {
+        let kept = if alive {
+            "This session still holds its current tabs and refs; nothing was closed."
+        } else {
+            "Its tab ids and refs are kept; the next command reconnects again."
+        };
+        format!("could not reconnect to Chrome profile {profile} ({why}): {e}. {kept}")
+    })?;
+    if let Err(e) = carry_tabs_before_teardown(state, why) {
+        // Dropped, not closed: its tabs are this session's.
+        drop(mgr);
+        return Err(e);
+    }
+    state.browser = None;
+    state.session_setup = SessionSetup::default();
+    state.launch_hash = None;
+    state.screencasting = false;
+    state.pending_dialog = None;
+    state.reset_input_state();
+    state.browser = Some(mgr);
+    state.subscribe_to_browser_events();
+    state.start_fetch_handler();
+    state.start_dialog_handler();
+    state.update_stream_client().await;
+    // The connection is installed, so its setup is applied before anything
+    // that can fail (as in `auto_launch`).
+    apply_launch_init_scripts(state, SessionSetup::default()).await;
+    // No rollback on failure: rolling back closes the browser's created tabs,
+    // and these are the session's own tabs, not a fresh launch's.
+    load_storage_state(state, storage_state).await?;
+    Ok(json!({ "launched": true, "reconnected": true }))
+}
+
 async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let headless = cmd
         .get("headless")
@@ -4108,6 +4251,19 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         true
     };
 
+    // The endpoint asked for is where the Chrome profile this session is bound
+    // to is (or was, if its relay host just restarted): reconnecting to that
+    // profile is the same reconnect any other command makes when it finds the
+    // connection dead, so it keeps the tab ids and refs the same way (#484).
+    let bound_profile = if needs_relaunch {
+        bound_profile_for_endpoint(state, cdp_url, pinned_cdp.is_some())?
+    } else {
+        None
+    };
+    if let (Some(profile), true) = (bound_profile.as_deref(), state.browser.is_some()) {
+        return reconnect_bound_profile(state, profile, &storage_state_owned).await;
+    }
+
     // An explicit endpoint (`--browser`, `connect <port|url>`, `--cdp`) replaces
     // a connection we already hold. Establish the replacement BEFORE giving up
     // the old one: closing first meant a typo'd profile name left the session
@@ -4156,7 +4312,12 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         load_storage_state(state, &storage_state_owned).await?;
         return Ok(json!({ "launched": true, "reused": true }));
     }
-    state.ref_map.clear();
+    // Refs carried from a dead connection of the bound profile (an earlier
+    // reconnect failed and tore it down) are bound by the next command, which
+    // decides whether they still hold (#484). Anything else starts over.
+    if bound_profile.is_none() || state.carried_tabs.is_none() {
+        state.ref_map.clear();
+    }
 
     let has_cdp = cdp_url.is_some() || cdp_port.is_some();
     super::browser::validate_launch_options(
@@ -4170,9 +4331,12 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
 
     if let Some(url) = cdp_url {
         state.reset_input_state();
-        state.browser = Some(match replacement.take() {
-            Some(mgr) => mgr,
-            None => BrowserManager::connect_cdp(url).await?,
+        state.browser = Some(match (replacement.take(), bound_profile.as_deref()) {
+            (Some(mgr), _) => mgr,
+            // A fresh daemon of a bound session: the profile's endpoint as it
+            // is now, waiting out one its restarted host has not replaced yet.
+            (None, Some(profile)) => connect_bound_relay(profile, true).await?,
+            (None, None) => BrowserManager::connect_cdp(url).await?,
         });
         state.subscribe_to_browser_events();
         state.start_fetch_handler();
@@ -13820,6 +13984,55 @@ enum CarriedRecord {
     Found((String, super::browser::TabRefSnapshot)),
     /// It exists but cannot be read or is not a valid record: why.
     Unreadable(String),
+}
+
+/// Keep the tab refs of the connection about to be replaced, so the next one
+/// binds them to the same Chrome tabs (#473). Call it before the old manager
+/// is torn down. Kept in the daemon state, not by the caller: if the reconnect
+/// fails, the next command's must still bind them. An older snapshot that was
+/// never restored is the one the agent's refs came from, so it is kept.
+///
+/// `Err` (the record could not be written) means nothing was changed and the
+/// old state must not be torn down.
+fn carry_tabs_before_teardown(state: &mut DaemonState, why: &str) -> Result<(), String> {
+    if state.carried_tabs_unknown.is_some() {
+        // Which tab an id names is unknown, so this manager's numbering is
+        // not the agent's: it must never overwrite or replace the record that
+        // says so. Only an explicit end of the session releases it.
+        return Ok(());
+    }
+    if let Some(e) = state.carried_tabs_cleanup.take() {
+        // The consumed record is still on disk. Carrying this manager forward
+        // would need a new record over it, so hold instead, as for a record
+        // that cannot be read.
+        state.carried_tabs_unknown = Some(format!(
+            "{e}, and the browser was lost again before it was removed"
+        ));
+        return Ok(());
+    }
+    if state.carried_tabs.is_some() {
+        return Ok(());
+    }
+    let Some(carried) = state
+        .browser
+        .as_ref()
+        .map(|mgr| (why.to_string(), mgr.tab_ref_snapshot()))
+    else {
+        return Ok(());
+    };
+    // On disk too: a reconnect can wait long enough for the client to stop
+    // this daemon, and the next one must bind the same refs rather than
+    // number the tabs afresh. The old state is torn down only once that
+    // record is safe.
+    write_carried_tabs(&state.session_id, &carried).map_err(|e| {
+        format!(
+            "This session's browser is gone ({why}) and the tab ids it holds could not be \
+             recorded before reconnecting: {e}. Nothing was changed; the command can run once \
+             that file can be written."
+        )
+    })?;
+    state.carried_tabs = Some(carried);
+    Ok(())
 }
 
 /// Record the tab refs of a connection that died, for the daemon that binds

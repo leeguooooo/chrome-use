@@ -39,6 +39,17 @@ pub(super) fn check(checks: &mut Vec<Check>) {
     // from the extension manifest) is what we expect to be running.
     let expected_ext = env!("AB_CONNECT_VERSION");
     match connect::relay_ext_version_driving() {
+        Some(ext)
+            if connect::classify_ext_version(&ext, expected_ext, None)
+                == connect::ExtVersionVerdict::AheadOfBundled =>
+        {
+            checks.push(Check::new(
+                "versions.extension",
+                category,
+                Status::Warn,
+                connect::newer_extension_hint(&ext, expected_ext),
+            ));
+        }
         // Behind the bundled build is only a WARNING when a newer build is
         // actually published — the bundled version routinely runs ahead of the
         // Web Store, and telling people to hit Update for a build that isn't
@@ -77,7 +88,7 @@ pub(super) fn check(checks: &mut Vec<Check>) {
                     Status::Pass,
                     format!(
                         "extension {ext} — ahead of the published {store}, behind the bundled \
-                         {expected_ext} (intermediate unpacked build)"
+                         {expected_ext}"
                     ),
                 )),
                 // The guard above already excludes Current / AheadOfBundled.

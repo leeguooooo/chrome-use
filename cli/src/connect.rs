@@ -133,6 +133,20 @@ pub fn run_connect(args: &[String], json: bool) {
     let expected_extension_version = env!("AB_CONNECT_VERSION");
     let driving_profile = driving_profile();
     let profiles = chrome_profiles();
+    let (health, connected_profiles) = relay_health_and_profiles();
+    let mut health_warnings = duplicate_extension_warnings(&connected_profiles);
+    if health.debugger_warns() {
+        health_warnings.push(health.debugger.clone());
+    }
+    let driving_install_type = driving_profile
+        .as_ref()
+        .and_then(|(id, _)| {
+            connected_profiles
+                .iter()
+                .find(|p| p.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+        })
+        .and_then(|p| p.get("installType"))
+        .and_then(|v| v.as_str());
     let policy = managed_policy_state();
     let (_, old_ids) = approved_config_profiles();
     // Only ask the Web Store when the numbers already disagree — the happy path
@@ -171,6 +185,9 @@ pub fn run_connect(args: &[String], json: bool) {
                     "drivingProfileId": driving_profile.as_ref().map(|(id, _)| id.clone()),
                     "drivingProfileEmail": driving_profile.as_ref().and_then(|(_, e)| e.clone()),
                     "profiles": profiles,
+                    "connectedProfiles": connected_profiles,
+                    "relayHealth": health,
+                    "warnings": health_warnings,
                     "policy": {
                         "state": policy.as_str(),
                         "staleEntry": match &policy { PolicyState::Stale(e) => Some(e.clone()), _ => None },
@@ -198,20 +215,30 @@ pub fn run_connect(args: &[String], json: bool) {
         match &live_extension_version {
             Some(ver) => println!(
                 "{}",
-                ext_version_line(
+                ext_version_line_for_install(
                     ver,
                     expected_extension_version,
-                    store_extension_version.as_deref()
+                    store_extension_version.as_deref(),
+                    driving_install_type
                 )
             ),
             None => {
                 println!("  live extension version: unknown (relay has not reported hello yet)")
             }
         }
-        if relay_url.is_some() {
-            println!("✓ extension relay (__nm-host): up");
+        if health.transport_responsive {
+            println!("✓ extension relay (__nm-host): transport responsive");
         } else {
             println!("  extension relay (__nm-host): not currently connected");
+        }
+        if !health.debugger_warns() {
+            println!("  {}", health.debugger);
+        }
+        for warning in &health_warnings {
+            println!("WARN {warning}");
+        }
+        if let Some(notice) = health.host_notice() {
+            println!("INFO {notice}");
         }
         // Which Chrome profile is the relay bound to (issue #60). With many
         // profiles, this disambiguates a "logged out" result (wrong profile vs.
@@ -1686,12 +1713,12 @@ pub enum ExtVersionVerdict {
     /// Live IS the newest published build; the bundled one isn't out yet.
     NewestPublished { store: String },
     /// Live is newer than anything published, yet still behind the bundled
-    /// build — an intermediate unpacked build. Saying "you're on the published
+    /// build. Saying "you're on the published
     /// build" here would be false, so it gets its own verdict.
     AheadOfStore { store: String },
     /// Behind the bundled build, and the Store version is unknown (offline).
     BehindBundledStoreUnknown,
-    /// Live is newer than the bundled build (unpacked dev build).
+    /// Live is newer than the bundled build; install source is independent.
     AheadOfBundled,
 }
 
@@ -1723,10 +1750,7 @@ pub fn classify_ext_version(live: &str, bundled: &str, store: Option<&str>) -> E
 pub fn ext_version_line(live: &str, bundled: &str, store: Option<&str>) -> String {
     match classify_ext_version(live, bundled, store) {
         ExtVersionVerdict::Current => format!("✓ live extension version: {live}"),
-        ExtVersionVerdict::AheadOfBundled => format!(
-            "✓ live extension version: {live} (newer than the {bundled} this CLI bundles — \
-             unpacked dev build)"
-        ),
+        ExtVersionVerdict::AheadOfBundled => format!("  ! {}", newer_extension_hint(live, bundled)),
         ExtVersionVerdict::BehindStore { store } => format!(
             "  ! live extension version: {live} — OUTDATED, the Web Store serves {store}.\n\
              \x20   Update it at chrome://extensions (turn on Developer mode → Update), or \
@@ -1743,7 +1767,7 @@ pub fn ext_version_line(live: &str, bundled: &str, store: Option<&str>) -> Strin
         ExtVersionVerdict::AheadOfStore { store } => format!(
             "✓ live extension version: {live} — ahead of everything published on the Web Store \
              ({store}),\n\
-             \x20   behind the {bundled} this CLI bundles: an intermediate unpacked build."
+             \x20   behind the {bundled} this CLI bundles."
         ),
         ExtVersionVerdict::BehindBundledStoreUnknown => format!(
             "  live extension version: {live} (this CLI bundles {bundled}; couldn't reach the \
@@ -1753,6 +1777,25 @@ pub fn ext_version_line(live: &str, bundled: &str, store: Option<&str>) -> Strin
              \x20   → Developer mode → Update."
         ),
     }
+}
+
+/// Shared skew advice for doctor and both status commands. A newer Store
+/// release does not imply a development install.
+pub fn newer_extension_hint(live: &str, bundled: &str) -> String {
+    format!("extension {live} is newer than this CLI expects ({bundled}): run `chrome-use upgrade`")
+}
+
+pub fn ext_version_line_for_install(
+    live: &str,
+    bundled: &str,
+    store: Option<&str>,
+    install_type: Option<&str>,
+) -> String {
+    let mut line = ext_version_line(live, bundled, store);
+    if install_type == Some("development") {
+        line.push_str(" (unpacked dev build)");
+    }
+    line
 }
 
 /// Ask the Chrome Web Store's update service which version it currently serves
@@ -2662,36 +2705,149 @@ pub fn relay_url() -> Option<String> {
         .map(|(_, _, ws)| ws)
 }
 
-/// Probe the extension through its native relay, without a session daemon or
-/// renderer command. Sidecar files survive abrupt host exits, so their existence
-/// is not liveness. The read-only inspectTab request omits a target, so supported extensions
-/// answer with a known validation error without inspecting or changing any tab.
-/// Very old extensions without inspectTab cannot confirm health with this probe.
-/// Connecting still invokes the relay's existing owned-target reannouncement.
-pub fn relay_is_responsive() -> bool {
-    let Some(url) = relay_url() else { return false };
+/// Connect without asking the native host to reattach agent tabs.
+async fn diagnostic_socket(
+    url: &str,
+) -> Option<(
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    tokio_tungstenite::tungstenite::handshake::client::Response,
+)> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut request = url.into_client_request().ok()?;
+    request
+        .headers_mut()
+        .insert("x-chrome-use-diagnostic", "1".parse().ok()?);
+    tokio_tungstenite::connect_async(request).await.ok()
+}
+
+/// A compact passive health snapshot. Never serialize the full ABExt.state reply.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayHealth {
+    pub transport_responsive: bool,
+    pub host_diagnostic: bool,
+    pub debugger: String,
+    pub extension_health: Option<serde_json::Value>,
+}
+
+impl Default for RelayHealth {
+    fn default() -> Self {
+        Self {
+            transport_responsive: false,
+            host_diagnostic: false,
+            debugger: "debugger: unknown (relay transport did not answer)".into(),
+            extension_health: None,
+        }
+    }
+}
+
+impl RelayHealth {
+    pub fn debugger_warns(&self) -> bool {
+        self.extension_health
+            .as_ref()
+            .and_then(|v| v.get("timedOut"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0)
+            > 0
+    }
+
+    pub fn debugger_answered(&self) -> bool {
+        self.extension_health
+            .as_ref()
+            .and_then(|v| v.get("answered"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0)
+            > 0
+    }
+
+    pub fn host_notice(&self) -> Option<&'static str> {
+        (self.transport_responsive && !self.host_diagnostic).then_some(
+            "the running native host predates diagnostic connections, so this check triggered its usual attachAll as earlier versions did; reload the chrome-use extension at chrome://extensions after upgrading to start the new host"
+        )
+    }
+}
+
+/// Format only observations reported by the current extension worker.
+fn debugger_summary(health: Option<&serde_json::Value>) -> String {
+    let Some(health) = health else {
+        return "debugger: no health data (extension predates health reporting)".into();
+    };
+    let number = |key| health.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+    let worker_age = number("workerAgeMs");
+    let window = health
+        .get("windowMs")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(600_000);
+    // Only a full reporting window supports the last-ten-minutes wording.
+    let period = if worker_age >= window {
+        "in the last 10 min".to_string()
+    } else {
+        let age = if worker_age < 120_000 {
+            format!("{}s", worker_age / 1000)
+        } else {
+            format!("{} min", worker_age / 60_000)
+        };
+        format!("since the extension worker started {age} ago")
+    };
+    let answered = number("answered");
+    let timed_out = number("timedOut");
+    if timed_out > 0 {
+        let method = health
+            .pointer("/lastTimeout/method")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let age = health
+            .pointer("/lastTimeout/ageMs")
+            .and_then(|v| v.as_u64())
+            .map(|ms| format!("{:.1}s", ms as f64 / 1000.0))
+            .unwrap_or_else(|| "unknown time".into());
+        format!("debugger: {timed_out} of {} commands timed out {period} (last: {method}, {age} ago); if commands keep failing, reload the chrome-use extension at chrome://extensions or restart Chrome", answered.saturating_add(timed_out))
+    } else if answered == 0 {
+        format!("debugger: not exercised {period}")
+    } else {
+        format!("debugger: {answered} commands answered, none timed out {period}")
+    }
+}
+
+/// One diagnostic connection and a shared ten-second budget, including fallback.
+pub fn relay_health() -> RelayHealth {
+    let Some(url) = relay_url() else {
+        return RelayHealth::default();
+    };
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     else {
-        return false;
+        return RelayHealth::default();
     };
-    runtime.block_on(probe_relay(&url, std::time::Duration::from_secs(10)))
+    runtime.block_on(probe_relay_health(&url, std::time::Duration::from_secs(10)))
 }
 
-async fn probe_relay(url: &str, budget: std::time::Duration) -> bool {
+/// Profile TCP checks run beside the state read, not after its ten-second budget.
+pub fn relay_health_and_profiles() -> (RelayHealth, Vec<serde_json::Value>) {
+    std::thread::scope(|scope| {
+        let profiles = scope.spawn(connected_relay_profiles);
+        let health = relay_health();
+        (
+            health,
+            profiles.join().expect("profile liveness worker panicked"),
+        )
+    })
+}
+
+async fn probe_relay_health(url: &str, budget: std::time::Duration) -> RelayHealth {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
-    tokio::time::timeout(budget, async {
-        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.ok()?;
+    let mut health = RelayHealth::default();
+    let _ = tokio::time::timeout(budget, async {
+        let (mut ws, response) = diagnostic_socket(url).await?;
+        health.host_diagnostic = response.headers().contains_key("x-chrome-use-diagnostic");
         ws.send(Message::Text(
-            serde_json::json!({
-                "id": 1, "method": "ABExt.inspectTab", "params": {}
-            })
-            .to_string(),
+            serde_json::json!({"id":1,"method":"ABExt.state","params":{}}).to_string(),
         ))
         .await
         .ok()?;
+        let mut expected_id = 1;
         while let Some(Ok(message)) = ws.next().await {
             let Message::Text(text) = message else {
                 continue;
@@ -2699,21 +2855,130 @@ async fn probe_relay(url: &str, budget: std::time::Duration) -> bool {
             let Ok(reply) = serde_json::from_str::<serde_json::Value>(&text) else {
                 continue;
             };
-            if reply.get("id").and_then(|id| id.as_u64()) == Some(1) {
-                // This exact validation error is generated in the extension, not
-                // synthesized by the relay. It also works on pre-call extensions.
-                let ok = reply.pointer("/error/message").and_then(|v| v.as_str())
-                    == Some("inspectTab: no tab matches the requested session or target");
-                // Drop rather than await the close handshake: health has a fixed budget.
-                return Some(ok);
+            if reply.get("id").and_then(|v| v.as_u64()) != Some(expected_id) {
+                continue;
+            }
+            if expected_id == 1 {
+                if let Some(state) = reply.get("result") {
+                    health.transport_responsive = true;
+                    health.extension_health =
+                        state.get("relayHealth").filter(|v| v.is_object()).cloned();
+                    health.debugger = debugger_summary(health.extension_health.as_ref());
+                    return Some(());
+                }
+                if reply.get("error").is_none() {
+                    continue;
+                }
+                expected_id = 2;
+                ws.send(Message::Text(
+                    serde_json::json!({"id":2,"method":"ABExt.inspectTab","params":{}}).to_string(),
+                ))
+                .await
+                .ok()?;
+            } else {
+                // Base's exact extension-generated validation error, not a host reply.
+                health.transport_responsive =
+                    reply.pointer("/error/message").and_then(|v| v.as_str())
+                        == Some("inspectTab: no tab matches the requested session or target");
+                if health.transport_responsive {
+                    health.debugger = debugger_summary(None);
+                }
+                return Some(());
             }
         }
         None
     })
+    .await;
+    health
+}
+
+/// TCP liveness deliberately performs no WebSocket handshake or CDP request.
+async fn relay_tcp_live(url: &str) -> bool {
+    let Ok(uri) = url.parse::<tokio_tungstenite::tungstenite::http::Uri>() else {
+        return false;
+    };
+    let Some(host) = uri.host() else { return false };
+    let port = uri
+        .port_u16()
+        .unwrap_or(if uri.scheme_str() == Some("wss") {
+            443
+        } else {
+            80
+        });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tokio::net::TcpStream::connect((host.trim_matches(['[', ']']), port)),
+    )
     .await
-    .ok()
-    .flatten()
-    .unwrap_or(false)
+    .is_ok_and(|result| result.is_ok())
+}
+
+/// Sidecar identities plus TCP liveness are evidence of possible duplication,
+/// not proof that two extensions belong to a single Chrome profile.
+pub fn connected_relay_profiles() -> Vec<serde_json::Value> {
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return vec![];
+    };
+    runtime.block_on(async {
+        let probes = list_relay_profiles()
+            .into_iter()
+            .map(|(id, _, url)| async move {
+                let identity = std::fs::read_to_string(relay_ext_profile_path_for(&id))
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+                (identity, relay_tcp_live(&url).await)
+            });
+        live_profile_identities(futures_util::future::join_all(probes).await)
+    })
+}
+
+fn live_profile_identities(
+    profiles: impl IntoIterator<Item = (Option<serde_json::Value>, bool)>,
+) -> Vec<serde_json::Value> {
+    profiles
+        .into_iter()
+        .filter_map(|(identity, live)| if live { identity } else { None })
+        .collect()
+}
+
+pub fn duplicate_extension_warnings(profiles: &[serde_json::Value]) -> Vec<String> {
+    let mut groups = std::collections::BTreeMap::<
+        (String, String),
+        std::collections::BTreeMap<String, String>,
+    >::new();
+    for p in profiles {
+        let field = |key| {
+            p.get(key)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+        };
+        let (Some(email), Some(browser), Some(extension), Some(profile)) = (
+            field("email"),
+            field("browser"),
+            field("extensionId"),
+            field("id"),
+        ) else {
+            continue;
+        };
+        groups
+            .entry((email.to_lowercase(), browser.to_string()))
+            .or_default()
+            .entry(extension.to_string())
+            .or_insert_with(|| {
+                format!(
+                    "{profile} ({}, extension {extension})",
+                    field("installType").unwrap_or("unknown")
+                )
+            });
+    }
+    groups.into_iter().filter(|(_, ids)| ids.len() > 1).map(|((email, browser), ids)| {
+        let installs = ids.into_values().collect::<Vec<_>>().join(" and ");
+        format!("possible duplicate chrome-use extensions: profiles {installs} report the same account {email} in {browser}; if both are installed in the same Chrome profile, disable one at chrome://extensions")
+    }).collect()
 }
 
 /// Append a one-line record of how a CDP connection was established, to
@@ -3621,6 +3886,7 @@ async fn nm_host_main() {
     // per-profile sidecars on disconnect (issue #60).
     let mut bound_profile_id: Option<String> = None;
     let mut bound_profile_email: Option<String> = None;
+    let mut bound_identity = serde_json::json!({});
     loop {
         let mut len_buf = [0u8; 4];
         if stdin.read_exact(&mut len_buf).await.is_err() {
@@ -3654,6 +3920,11 @@ async fn nm_host_main() {
             // reported one. Stored as JSON so `email` can be added when present.
             if let Some(id) = v.get("profileId").and_then(|x| x.as_str()) {
                 let email = v.get("profileEmail").and_then(|x| x.as_str());
+                bound_identity = serde_json::json!({
+                    "extensionId": v.get("extensionId"),
+                    "installType": v.get("installType"),
+                    "browser": v.get("browser"),
+                });
                 let rec = serde_json::json!({ "id": id, "email": email }).to_string();
                 let _ = std::fs::write(relay_ext_profile_path(), &rec);
                 // Stable per-profile endpoint so `--browser <id>` can pin to THIS
@@ -3675,6 +3946,9 @@ async fn nm_host_main() {
                 let per = serde_json::json!({
                     "id": id,
                     "email": email,
+                    "extensionId": bound_identity.get("extensionId"),
+                    "installType": bound_identity.get("installType"),
+                    "browser": bound_identity.get("browser"),
                     "focusedAt": now_millis(),
                 })
                 .to_string();
@@ -3692,6 +3966,9 @@ async fn nm_host_main() {
                 let per = serde_json::json!({
                     "id": id,
                     "email": bound_profile_email,
+                    "extensionId": bound_identity.get("extensionId"),
+                    "installType": bound_identity.get("installType"),
+                    "browser": bound_identity.get("browser"),
                     "focusedAt": now_millis(),
                 })
                 .to_string();
@@ -3782,9 +4059,19 @@ async fn handle_cdp_client(
     use tokio_tungstenite::tungstenite::Message;
 
     let want_path = format!("/{guid}");
+    let mut diagnostic = false;
     let cb = |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
-              resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
+              mut resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
         if req.uri().path() == want_path {
+            diagnostic = req
+                .headers()
+                .get("x-chrome-use-diagnostic")
+                .is_some_and(|v| v == "1");
+            // Echo only when this host actually suppresses attachAll.
+            if diagnostic {
+                resp.headers_mut()
+                    .insert("x-chrome-use-diagnostic", "1".parse().unwrap());
+            }
             Ok(resp)
         } else {
             let mut reject = tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(
@@ -3801,7 +4088,9 @@ async fn handle_cdp_client(
     nm_log("[nm-host] cdp client connected");
     // Ask the extension to (re)attach + announce every tab so this client
     // discovers the user's existing tabs instead of racing an empty list.
-    let _ = to_ext.send(br#"{"method":"attachAll"}"#.to_vec()).await;
+    if !diagnostic {
+        let _ = to_ext.send(br#"{"method":"attachAll"}"#.to_vec()).await;
+    }
     let (mut tx, mut rx) = ws.split();
     loop {
         tokio::select! {
@@ -3869,54 +4158,278 @@ mod tests {
         );
     }
 
+    #[test]
+    fn relay_version_skew_wording_uses_install_metadata() {
+        let newer = ext_version_line_for_install("0.5.31", "0.5.30", None, Some("normal"));
+        assert!(newer.contains("newer than this CLI expects (0.5.30)"));
+        assert!(newer.contains("chrome-use upgrade"));
+        assert!(!newer.contains("unpacked"));
+        assert!(
+            ext_version_line_for_install("0.5.31", "0.5.30", None, Some("development"))
+                .contains("unpacked dev build")
+        );
+        assert!(ext_version_line("0.5.29", "0.5.30", Some("0.5.30")).contains("OUTDATED"));
+        assert_eq!(
+            ext_version_line("0.5.30", "0.5.30", None),
+            "✓ live extension version: 0.5.30"
+        );
+    }
+
+    #[test]
+    fn debugger_summary_covers_passive_states_and_json_is_compact() {
+        assert_eq!(
+            debugger_summary(None),
+            "debugger: no health data (extension predates health reporting)"
+        );
+        assert_eq!(
+            debugger_summary(Some(
+                &json!({"workerAgeMs":30000,"answered":0,"timedOut":0})
+            )),
+            "debugger: not exercised since the extension worker started 30s ago"
+        );
+        assert_eq!(
+            debugger_summary(Some(
+                &json!({"workerAgeMs":900000,"answered":3,"timedOut":0})
+            )),
+            "debugger: 3 commands answered, none timed out in the last 10 min"
+        );
+        assert_eq!(debugger_summary(Some(&json!({"workerAgeMs":60000,"answered":3,"timedOut":2,"lastTimeout":{"method":"Page.enable","ageMs":1200}}))), "debugger: 2 of 5 commands timed out since the extension worker started 60s ago (last: Page.enable, 1.2s ago); if commands keep failing, reload the chrome-use extension at chrome://extensions or restart Chrome");
+        assert_eq!(
+            RelayHealth::default().debugger,
+            "debugger: unknown (relay transport did not answer)"
+        );
+        for (age, period) in [
+            (0, "since the extension worker started 0s ago"),
+            (45_999, "since the extension worker started 45s ago"),
+            (119_999, "since the extension worker started 119s ago"),
+            (120_000, "since the extension worker started 2 min ago"),
+            (180_999, "since the extension worker started 3 min ago"),
+            (599_999, "since the extension worker started 9 min ago"),
+            (600_000, "in the last 10 min"),
+            (900_000, "in the last 10 min"),
+        ] {
+            for (answered, timed_out, prefix) in [
+                (0, 0, "debugger: not exercised"),
+                (3, 0, "debugger: 3 commands answered, none timed out"),
+                (3, 2, "debugger: 2 of 5 commands timed out"),
+            ] {
+                let summary = debugger_summary(Some(
+                    &json!({"workerAgeMs":age,"windowMs":600000,"answered":answered,"timedOut":timed_out}),
+                ));
+                let expected = format!("{prefix} {period}");
+                if timed_out > 0 {
+                    assert!(
+                        summary.starts_with(&format!("{expected} (last:")),
+                        "{summary}"
+                    );
+                } else {
+                    assert_eq!(summary, expected);
+                }
+            }
+        }
+        let serialized = serde_json::to_value(RelayHealth::default()).unwrap();
+        assert_eq!(serialized.as_object().unwrap().len(), 4);
+        assert!(serialized.get("state").is_none());
+        assert_eq!(serialized["extensionHealth"], json!(null));
+        assert_eq!(serialized["hostDiagnostic"], false);
+    }
+
+    #[test]
+    fn duplicate_extensions_require_live_identities_and_distinct_extension_ids() {
+        let a = json!({"id":"profile-a","email":"Person@example.test", "browser":"chrome", "extensionId":"store-id", "installType":"normal"});
+        let b = json!({"id":"profile-b","email":"person@example.test", "browser":"chrome", "extensionId":"dev-id", "installType":"development"});
+        let live = live_profile_identities([
+            (Some(a.clone()), true),
+            (Some(b.clone()), true),
+            (None, true),
+        ]);
+        let warnings = duplicate_extension_warnings(&live);
+        assert_eq!(warnings, vec!["possible duplicate chrome-use extensions: profiles profile-b (development, extension dev-id) and profile-a (normal, extension store-id) report the same account person@example.test in chrome; if both are installed in the same Chrome profile, disable one at chrome://extensions"]);
+        assert!(duplicate_extension_warnings(&live_profile_identities([
+            (Some(a.clone()), true),
+            (Some(b.clone()), false)
+        ]))
+        .is_empty());
+        let mut same_id = b.clone();
+        same_id["extensionId"] = a["extensionId"].clone();
+        assert!(duplicate_extension_warnings(&[a.clone(), same_id]).is_empty());
+        for key in ["email", "browser", "extensionId", "id"] {
+            for empty in [json!(null), json!(""), json!("  ")] {
+                let mut invalid = b.clone();
+                invalid[key] = empty;
+                assert!(duplicate_extension_warnings(&[a.clone(), invalid]).is_empty());
+            }
+        }
+        for (key, other) in [("email", "other@example.test"), ("browser", "edge")] {
+            let mut different = b.clone();
+            different[key] = json!(other);
+            assert!(duplicate_extension_warnings(&[a.clone(), different]).is_empty());
+        }
+    }
+
     #[tokio::test]
-    async fn relay_probe_requires_extension_reply_not_just_an_open_socket() {
+    async fn relay_health_delayed_state_and_fallback_share_one_connection() {
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::tungstenite::Message;
-        for mode in ["reply", "error", "unsupported", "local_success", "silent"] {
+        for fallback in [false, true] {
+            for diagnostic_host in [false, true] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("ws://{}", listener.local_addr().unwrap());
+                let server = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut ws = tokio_tungstenite::accept_hdr_async(stream,
+                        |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                         mut resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                            assert_eq!(req.headers()["x-chrome-use-diagnostic"], "1");
+                            if diagnostic_host { resp.headers_mut().insert("x-chrome-use-diagnostic", "1".parse().unwrap()); }
+                            Ok(resp)
+                        }).await.unwrap();
+                    let cmd: serde_json::Value =
+                        serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap())
+                            .unwrap();
+                    assert_eq!(cmd, json!({"id":1,"method":"ABExt.state","params":{}}));
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    ws.send(Message::Text(
+                        json!({"method":"Target.targetCreated"}).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                    let reply = if fallback {
+                        json!({"id":1,"error":{"message":"unsupported"}})
+                    } else {
+                        json!({"id":1,"result":{"ownedTabs":[99],"relayHealth":{"answered":2,"timedOut":0,"workerAgeMs":60000}}})
+                    };
+                    ws.send(Message::Text(reply.to_string())).await.unwrap();
+                    if fallback {
+                        let cmd: serde_json::Value = serde_json::from_str(
+                            ws.next().await.unwrap().unwrap().to_text().unwrap(),
+                        )
+                        .unwrap();
+                        assert_eq!(cmd, json!({"id":2,"method":"ABExt.inspectTab","params":{}}));
+                        ws.send(Message::Text(json!({"id":2,"error":{"message":"inspectTab: no tab matches the requested session or target"}}).to_string())).await.unwrap();
+                    }
+                    if let Some(Ok(Message::Text(extra))) = ws.next().await {
+                        panic!("unexpected command {extra}")
+                    }
+                    assert!(tokio::time::timeout(
+                        std::time::Duration::from_millis(20),
+                        listener.accept()
+                    )
+                    .await
+                    .is_err());
+                });
+                let health = probe_relay_health(&url, std::time::Duration::from_secs(1)).await;
+                assert!(health.transport_responsive);
+                assert_eq!(health.host_diagnostic, diagnostic_host);
+                assert_eq!(health.host_notice().is_some(), !diagnostic_host);
+                assert_eq!(health.extension_health.is_none(), fallback);
+                if fallback {
+                    assert_eq!(health.debugger, debugger_summary(None));
+                }
+                server.await.unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn relay_health_budget_and_exact_fallback_validation() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+        for mode in ["silent", "success", "wrong_error"] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let url = format!("ws://{}", listener.local_addr().unwrap());
             let server = tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.unwrap();
                 let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-                let msg = ws.next().await.unwrap().unwrap();
-                let cmd: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
-                assert_eq!(cmd["method"], "ABExt.inspectTab");
-                assert_eq!(cmd["params"], json!({}));
-                // Events must not be mistaken for the response.
-                ws.send(Message::Text(
-                    json!({"method":"Target.targetCreated"}).to_string(),
-                ))
-                .await
-                .unwrap();
+                let _ = ws.next().await;
                 if mode != "silent" {
-                    let reply = if mode == "reply" {
-                        json!({"id":1,"error":{"message":"inspectTab: no tab matches the requested session or target"}})
-                    } else if mode == "local_success" {
-                        json!({"id":1,"result":{}})
-                    } else if mode == "unsupported" {
-                        json!({"id":1,"error":{"message":"method not found"}})
+                    ws.send(Message::Text(json!({"id":1,"error":{}}).to_string()))
+                        .await
+                        .unwrap();
+                    let _ = ws.next().await;
+                    let reply = if mode == "success" {
+                        json!({"id":2,"result":{}})
                     } else {
-                        json!({"id":1,"error":{"message":"extension disconnected"}})
+                        json!({"id":2,"error":{"message":"extension disconnected"}})
                     };
                     ws.send(Message::Text(reply.to_string())).await.unwrap();
                 }
                 let _ = ws.next().await;
             });
-            assert_eq!(
-                probe_relay(&url, std::time::Duration::from_millis(200)).await,
-                mode == "reply"
-            );
+            let health = probe_relay_health(&url, std::time::Duration::from_millis(100)).await;
+            assert!(!health.transport_responsive);
+            assert_eq!(health.debugger, RelayHealth::default().debugger);
             server.await.unwrap();
         }
     }
 
     #[tokio::test]
-    async fn relay_probe_rejects_a_stale_endpoint() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("ws://{}", listener.local_addr().unwrap());
-        drop(listener);
-        assert!(!probe_relay(&url, std::time::Duration::from_millis(200)).await);
+    async fn diagnostic_host_handler_echoes_header_and_suppresses_attach_all() {
+        use std::sync::Arc;
+        use tokio::sync::{mpsc, Mutex};
+        for diagnostic in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("ws://{}/test", listener.local_addr().unwrap());
+            let (to_ext, mut extension) = mpsc::channel(8);
+            let (relay_tx, relay_rx) = mpsc::unbounded_channel();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                handle_cdp_client(
+                    stream,
+                    "test".into(),
+                    Arc::new(Mutex::new(crate::native::relay::RelayState::new())),
+                    1,
+                    relay_rx,
+                    to_ext,
+                    Arc::new(Mutex::new(std::collections::HashMap::new())),
+                )
+                .await;
+            });
+            let (mut ws, response) = if diagnostic {
+                diagnostic_socket(&url).await.unwrap()
+            } else {
+                tokio_tungstenite::connect_async(&url).await.unwrap()
+            };
+            assert_eq!(
+                response.headers().get("x-chrome-use-diagnostic").is_some(),
+                diagnostic
+            );
+            if diagnostic {
+                assert!(tokio::time::timeout(
+                    std::time::Duration::from_millis(50),
+                    extension.recv()
+                )
+                .await
+                .is_err());
+            } else {
+                let msg = tokio::time::timeout(std::time::Duration::from_secs(1), extension.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&msg).unwrap(),
+                    json!({"method":"attachAll"})
+                );
+            }
+            ws.close(None).await.unwrap();
+            server.await.unwrap();
+            drop(relay_tx);
+        }
+    }
+
+    #[tokio::test]
+    async fn profile_liveness_connects_without_handshake() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/unused", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut byte = [0];
+            assert_eq!(stream.read(&mut byte).await.unwrap(), 0);
+        });
+        assert!(relay_tcp_live(&url).await);
+        server.await.unwrap();
+        assert!(!relay_tcp_live(&url).await);
     }
 
     fn profile(dir: &str, email: Option<&str>, with_ext: bool) -> ChromeProfileInfo {

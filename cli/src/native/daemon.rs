@@ -355,7 +355,15 @@ async fn run_socket_server(
                 }
             }
             _ = drain_interval.tick() => {
-                let mut s = state.lock().await;
+                // Never wait for the session lock here: this loop also accepts
+                // connections, and a command can hold the lock for a minute.
+                // Waiting parked accept(), so a second client for a busy
+                // session was not even read until the command ended, got no
+                // keepalives and stopped the daemon at its 45s stall budget.
+                // The drain could not run during the command anyway.
+                let Ok(mut s) = state.try_lock() else {
+                    continue;
+                };
                 if let Some(ref mut mgr) = s.browser {
                     if mgr.has_process_exited() {
                         let _ = mgr.close().await;
@@ -522,6 +530,87 @@ async fn run_socket_server(
     Ok(())
 }
 
+const KEEPALIVE_PERIOD: Duration = Duration::from_secs(10);
+
+// A second command for a busy session waits here for the session lock, which
+// the running command holds until it finishes. Without keepalives during that
+// wait the queued client still hit its 45s stall budget and stopped the busy
+// daemon. A client that has left by the time the lock frees up gets nothing
+// run on its behalf: a queued command must not fire after its caller gave up.
+async fn lock_for_client<'a, T, W>(
+    state: &'a tokio::sync::Mutex<T>,
+    writer: &mut W,
+    keepalive: bool,
+    period: Duration,
+) -> Option<tokio::sync::MutexGuard<'a, T>>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    if !keepalive {
+        return Some(state.lock().await);
+    }
+    // An idle session answers without any extra bytes.
+    if let Ok(guard) = state.try_lock() {
+        return Some(guard);
+    }
+    let lock = state.lock();
+    tokio::pin!(lock);
+    let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let guard = loop {
+        tokio::select! {
+            guard = &mut lock => break guard,
+            _ = ticks.tick() => {
+                if writer.write_all(b"\n").await.is_err() {
+                    return None;
+                }
+            }
+        }
+    };
+    // After any wait, confirm the client is still there: it may have left
+    // before the first keepalive or between two of them.
+    if writer.write_all(b"\n").await.is_err() {
+        return None;
+    }
+    Some(guard)
+}
+
+// A command can succeed at 51s yet lose its client at 45s while making
+// sequential CDP calls. Only clients that opt in can consume blank keepalives.
+async fn with_keepalive<W, F>(
+    writer: &mut W,
+    enabled: bool,
+    period: std::time::Duration,
+    command: F,
+) -> F::Output
+where
+    W: tokio::io::AsyncWrite + Unpin,
+    F: std::future::Future,
+{
+    if !enabled {
+        return command.await;
+    }
+    let heartbeats = async {
+        let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticks.tick().await;
+            if writer.write_all(b"\n").await.is_err() {
+                break;
+            }
+        }
+    };
+    tokio::pin!(command);
+    tokio::select! {
+        result = &mut command => result,
+        _ = heartbeats => {
+            // Losing the client must not cancel a command halfway through its
+            // side effects. A blocked heartbeat write must not hold it up either.
+            command.await
+        }
+    }
+}
+
 async fn handle_connection<S>(
     stream: S,
     state: std::sync::Arc<tokio::sync::Mutex<DaemonState>>,
@@ -569,16 +658,27 @@ async fn handle_connection<S>(
                     == Some(crate::upgrade_handoff::HANDOFF_ACTION);
                 let mut is_close = cmd.get("action").and_then(|v| v.as_str()) == Some("close");
 
+                let keepalive = cmd.get("_keepalive").and_then(Value::as_bool) == Some(true);
                 let response = {
-                    let mut s = state.lock().await;
+                    let Some(mut s) =
+                        lock_for_client(&state, &mut writer, keepalive, KEEPALIVE_PERIOD).await
+                    else {
+                        // The client left while its command was queued.
+                        break;
+                    };
                     // Each top-level command states its own ChooseBrowser
                     // choice; a command without `_cbSkip` (any non-CLI
                     // client) is checked. Never inherit the previous
                     // command's skip. Nested script steps inherit this value
                     // through `execute_command`, which runs below this point.
                     s.cb_skip = crate::native::actions::cb_skip_of(&cmd);
-                    let (mut response, timing) =
-                        super::timing::timed(execute_command_recovering(&cmd, &mut s)).await;
+                    let (mut response, timing) = with_keepalive(
+                        &mut writer,
+                        keepalive,
+                        KEEPALIVE_PERIOD,
+                        super::timing::timed(execute_command_recovering(&cmd, &mut s)),
+                    )
+                    .await;
                     let ok = response.get("success").and_then(|v| v.as_bool()) == Some(true);
                     let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
                     super::timing::log_command(&s.session_id, action, ok, &timing);
@@ -781,6 +881,191 @@ mod idle_tests {
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+
+    async fn slow_reply_output(enabled: bool) -> Vec<u8> {
+        use tokio::io::AsyncReadExt;
+        let (mut writer, mut reader) = tokio::io::duplex(128);
+        let reply = with_keepalive(
+            &mut writer,
+            enabled,
+            std::time::Duration::from_millis(10),
+            async {
+                tokio::time::sleep(std::time::Duration::from_millis(55)).await;
+                b"{\"success\":true}\n"
+            },
+        )
+        .await;
+        writer.write_all(reply).await.unwrap();
+        drop(writer);
+        let mut output = Vec::new();
+        reader.read_to_end(&mut output).await.unwrap();
+        output
+    }
+
+    #[tokio::test]
+    async fn opted_in_slow_command_sends_keepalives_before_reply() {
+        let output = slow_reply_output(true).await;
+        assert_eq!(output[0], b'\n');
+        assert_eq!(
+            String::from_utf8(output).unwrap().trim_start_matches('\n'),
+            "{\"success\":true}\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn command_without_keepalive_writes_only_the_reply() {
+        assert_eq!(slow_reply_output(false).await, b"{\"success\":true}\n");
+    }
+
+    #[tokio::test]
+    async fn failed_keepalive_write_does_not_cancel_command() {
+        let (mut writer, reader) = tokio::io::duplex(1);
+        drop(reader);
+        let mut completed = 0;
+        with_keepalive(
+            &mut writer,
+            true,
+            std::time::Duration::from_millis(10),
+            async {
+                tokio::time::sleep(std::time::Duration::from_millis(55)).await;
+                completed += 1;
+            },
+        )
+        .await;
+        assert_eq!(completed, 1);
+    }
+
+    #[tokio::test]
+    async fn blocked_keepalive_write_does_not_block_command() {
+        let (mut writer, _reader) = tokio::io::duplex(1);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            with_keepalive(
+                &mut writer,
+                true,
+                std::time::Duration::from_millis(10),
+                async {
+                    tokio::time::sleep(std::time::Duration::from_millis(55)).await;
+                    42
+                },
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, 42);
+    }
+
+    #[tokio::test]
+    async fn queued_client_gets_keepalives_while_waiting_for_the_lock() {
+        use tokio::io::AsyncReadExt;
+        let state = std::sync::Arc::new(tokio::sync::Mutex::new(0u32));
+        let held = state.clone().lock_owned().await;
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(55)).await;
+            drop(held);
+        });
+        let (mut writer, mut reader) = tokio::io::duplex(128);
+        let guard = lock_for_client(
+            &state,
+            &mut writer,
+            true,
+            std::time::Duration::from_millis(10),
+        )
+        .await;
+        assert!(guard.is_some());
+        drop(guard);
+        release.await.unwrap();
+        drop(writer);
+        let mut output = Vec::new();
+        reader.read_to_end(&mut output).await.unwrap();
+        assert!(!output.is_empty());
+        assert!(output.iter().all(|b| *b == b'\n'));
+    }
+
+    #[tokio::test]
+    async fn queued_command_is_dropped_when_its_client_left() {
+        let state = std::sync::Arc::new(tokio::sync::Mutex::new(0u32));
+        let held = state.clone().lock_owned().await;
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(55)).await;
+            drop(held);
+        });
+        let (mut writer, reader) = tokio::io::duplex(128);
+        drop(reader);
+        let guard = lock_for_client(
+            &state,
+            &mut writer,
+            true,
+            std::time::Duration::from_millis(10),
+        )
+        .await;
+        assert!(guard.is_none());
+        release.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn queued_command_is_dropped_when_its_client_left_before_the_first_keepalive() {
+        let state = std::sync::Arc::new(tokio::sync::Mutex::new(0u32));
+        let held = state.clone().lock_owned().await;
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            drop(held);
+        });
+        let (mut writer, reader) = tokio::io::duplex(128);
+        drop(reader);
+        let guard = lock_for_client(
+            &state,
+            &mut writer,
+            true,
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+        assert!(guard.is_none());
+        release.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_idle_session_answers_without_extra_bytes() {
+        let state = tokio::sync::Mutex::new(0u32);
+        let mut output = Vec::new();
+        assert!(lock_for_client(
+            &state,
+            &mut output,
+            true,
+            std::time::Duration::from_millis(10)
+        )
+        .await
+        .is_some());
+        assert!(output.is_empty());
+    }
+
+    #[tokio::test]
+    async fn lock_wait_without_keepalive_writes_nothing() {
+        let state = tokio::sync::Mutex::new(0u32);
+        let mut output = Vec::new();
+        assert!(lock_for_client(
+            &state,
+            &mut output,
+            false,
+            std::time::Duration::from_millis(10)
+        )
+        .await
+        .is_some());
+        assert!(output.is_empty());
+    }
+
+    #[tokio::test]
+    async fn keepalive_first_tick_is_delayed() {
+        let mut output = Vec::new();
+        with_keepalive(
+            &mut output,
+            true,
+            std::time::Duration::from_millis(100),
+            async { tokio::time::sleep(std::time::Duration::from_millis(20)).await },
+        )
+        .await;
+        assert!(output.is_empty());
+    }
 
     /// #472: a daemon deregistered by a relay recovery must not delete the
     /// session's binding records when it finally exits.

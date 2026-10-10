@@ -10,6 +10,18 @@ use crate::native::state::get_state_dir;
 
 pub(super) fn check(checks: &mut Vec<Check>) {
     let category = "Environment";
+    if let Some(load) = crate::system_load::current() {
+        checks.push(Check::new(
+            "env.load",
+            category,
+            if load.overloaded() {
+                Status::Warn
+            } else {
+                Status::Info
+            },
+            load.description(),
+        ));
+    }
 
     let version = env!("CARGO_PKG_VERSION");
     let platform = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);

@@ -29,6 +29,10 @@ response carries `siteAdapterSuggestion`, ask the user before saving the steps
 you keep repeating on that site as an adapter (`core/site-adapters`). Adapters
 run as the logged-in user; call only operations within the task.
 
+If a command reports "daemon still busy", wait before checking the session again.
+Do not replay a side-effecting command; it is still running. See
+[behaviour](references/behaviour.md) for keepalive and waiting limits.
+
 ## The loop
 
 ```bash
@@ -154,7 +158,7 @@ Run `chrome-use skills get <name>` with one name below.
 | Scoped reads, frames, shadow roots, screenshots | `core/reading` |
 | Mid-transition reads, `wait`, observation limits | `core/waiting` |
 | Ref identity, context annotations, snapshot detail | `core/snapshot-refs` |
-| `status`, extension setup, browser/profile choice, relay denial | `core/connection` |
+| `status`/`doctor`: one 10-second diagnostic connection, passive worker-local debugger counts (“in the last 10 min” for a full window; otherwise since worker start, whole seconds below 120 s and whole minutes thereafter), possible duplicate extensions, version skew, load, browser/profile choice | `core/connection` |
 | Several Chrome profiles/accounts: which to use, connecting one | `core/connection` (Choosing a profile) |
 | Site adapter arguments, installation, sources | `core/site-adapters` |
 | Login, cookies, vault, passkeys, OAuth, handoff | `core/authentication` |

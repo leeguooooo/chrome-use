@@ -16,20 +16,19 @@
 // attach + Target handling; the transport is rewritten from WebSocket+token to
 // native messaging.
 
+import { getRelayHealth, observeDebuggerCommand } from './relay-health.js';
+import { extensionInstallIdentity } from './relay-identity.js';
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
 import {
   agentTabPredicate,
-  agentWindowStillOurs,
   confirmAttachedPopup,
   isVerifiedAgentPopup,
   migratePopupRecord,
-  isUntouchedPlaceholder,
-  placeholderCleanup,
 } from './agent-window.js';
 import { attachTabById } from './attach-by-id.js';
 import { shouldForwardEvent } from './cdp-event-filter.js';
 import { clearDownloads, listDownloads, startDownload } from './download-manager.js';
-import { isRelayTimeoutError, withRelayTimeout } from './relay-timeout.js';
+import { isRelayTimeoutError, relayUnresolvedOperations, withRelayTimeout } from './relay-timeout.js';
 import {
   reconcileAttachedTabEntries,
   resolveFirstLiveTab,
@@ -49,7 +48,8 @@ import {
   RELOAD_LOOP_WINDOW_MS,
 } from './reload-loop.js';
 import { targetInfoForTab } from './target-info.js';
-import { sendTabCommand } from './tab-command.js';
+import { createAgentTabQueue } from './agent-tab-queue.js';
+import { createAttachmentHealth, sendTabCommand } from './tab-command.js';
 import { HostConnectionState } from './host-connection.js';
 import { isDebuggerAccessDenied, debuggerAccessError } from './debugger-access.js';
 import {
@@ -168,9 +168,6 @@ async function isNativeDuplicateLifecycleEvent(tab) {
 // yet this SW lifetime.
 const AGENT_WINDOW_KEY = 'ab_agent_window_id';
 let agentWindowId = null;
-// In-flight window-creation promise: serializes first use so concurrent
-// `Target.createTarget` calls share ONE window instead of each creating their own.
-let agentWindowInit = null;
 // Why the last attempt to open the agent window failed (reported in
 // ABExt.state and in the createTarget refusal), or null.
 let agentWindowError = null;
@@ -225,150 +222,24 @@ async function migrateAgentPopup(removedTabId, addedTabId) {
     await chrome.storage.session.set({ [AGENT_POPUPS_KEY]: [...agentPopups] }).catch(() => {});
 }
 
-async function agentPlaceholderRecord() {
-  const got = await chrome.storage.local.get(AGENT_PLACEHOLDER_KEY).catch(() => null);
-  const rec = got && got[AGENT_PLACEHOLDER_KEY];
-  return rec && Number.isInteger(rec.windowId) && Number.isInteger(rec.tabId) ? rec : null;
-}
-
-// Whether window `id` still exists AND is still the agent's (see
-// agent-window.js): a remembered window the user has since started working in
-// must stop receiving agent tabs, or every agent tab lands in the window the
-// user is looking at. Anything it cannot read counts as "not ours".
-async function isUsableAgentWindow(id) {
-  const win = await chrome.windows.get(id).catch(() => null);
-  await loadOwnedTabs();
-  const winTabs = win ? await chrome.tabs.query({ windowId: id }).catch(() => null) : null;
-  const record = await agentPlaceholderRecord();
-  // The agent's tabs: ones it created (ownedTabs) and pop-ups verified as the
-  // agent's (agentPopups). Not "anything attached": user tabs taken with
-  // adopt/inspect are attached too and stay the user's.
-  await loadAgentPopups();
-  const isAgentTab = agentTabPredicate(ownedTabs, agentPopups);
-  const verdict = agentWindowStillOurs(win, winTabs, isAgentTab, record);
-  if (!verdict.ours) agentWindowRejected = { windowId: id, reason: verdict.reason };
-  // A record for this window whose tab is gone or no longer an untouched
-  // placeholder is stale: drop it (never the tab).
-  if (record && record.windowId === id && Array.isArray(winTabs)) {
-    const tab = winTabs.find((t) => t && t.id === record.tabId);
-    if (!isUntouchedPlaceholder(tab, record))
-      await chrome.storage.local.remove(AGENT_PLACEHOLDER_KEY).catch(() => {});
-  }
-  return verdict.ours;
-}
-
-// Resolve the existing agent window (this SW's memory, then the persisted id),
-// validating it still exists and is still the agent's. Returns its id, or null
-// if there is no usable agent window yet.
-async function resolveAgentWindow() {
-  if (agentWindowId != null) {
-    if (await isUsableAgentWindow(agentWindowId)) return agentWindowId;
-    agentWindowId = null;
-    agentWindowInit = null;
-    await chrome.storage.local.remove([AGENT_WINDOW_KEY, AGENT_PLACEHOLDER_KEY]).catch(() => {});
-  }
-  try {
-    const got = await chrome.storage.local.get(AGENT_WINDOW_KEY);
-    const persisted = got && got[AGENT_WINDOW_KEY];
-    if (persisted != null) {
-      if (await isUsableAgentWindow(persisted)) {
-        agentWindowId = persisted;
-        return agentWindowId;
-      }
-      await chrome.storage.local.remove([AGENT_WINDOW_KEY, AGENT_PLACEHOLDER_KEY]).catch(() => {});
-    }
-  } catch {}
-  return null;
-}
-
-// Ensure the shared agent window exists, returning its id (or null if the
-// windows API is unavailable). First use is serialized via `agentWindowInit` so
-// concurrent callers don't each open a window.
-async function ensureAgentWindowId() {
-  const existing = await resolveAgentWindow();
-  if (existing != null) return existing;
-  if (!(chrome.windows && chrome.windows.create)) {
-    agentWindowError = 'the chrome.windows API is unavailable';
-    return null;
-  }
-  if (!agentWindowInit) {
-    agentWindowInit = (async () => {
-      const win = await chrome.windows
-        .create({ focused: false, url: 'about:blank' })
-        .catch((e) => {
-          agentWindowError = String((e && e.message) || e);
-          return null;
-        });
-      if (!win || win.id == null) {
-        agentWindowError ??= 'chrome.windows.create returned no window';
-        return null;
-      }
-      agentWindowError = null;
-      agentWindowId = win.id;
-      const placeholderId = win.tabs && win.tabs[0] && win.tabs[0].id;
-      try {
-        await chrome.storage.local.set({
-          [AGENT_WINDOW_KEY]: win.id,
-          [AGENT_PLACEHOLDER_KEY]: Number.isInteger(placeholderId)
-            ? { windowId: win.id, tabId: placeholderId }
-            : null,
-        });
-      } catch {}
-      return win.id;
-    })();
-  }
-  const id = await agentWindowInit.catch(() => null);
-  if (id == null) agentWindowInit = null; // creation failed → let a later call retry
-  return id;
-}
-
-// Create an agent tab in the shared agent window (created in the background,
-// `focused: false`, so it never steals the user's foreground). Fails, rather
-// than falling back to the user's active window, when no agent window can be
-// opened.
-//
-// Serialized, and the tab is marked owned before the next caller runs: the
-// agent-window check (isUsableAgentWindow) treats an unowned tab as the user's,
-// so a concurrent caller must never see another session's brand-new tab before
-// it is owned.
-let agentTabChain = Promise.resolve();
-
-// Once a real agent tab exists in window `winId`, close the window's initial
-// placeholder, but only if it is still untouched, re-read right before the
-// removal. If the user navigated it (say tabs.create failed earlier and the
-// window sat with just that blank tab), it is theirs: forget the record and
-// leave the tab. Runs inside the serialized chain, so no concurrent caller
-// sees the record half-updated.
-async function cleanUpPlaceholder(winId) {
-  const record = await agentPlaceholderRecord();
-  if (!record || record.windowId !== winId) return;
-  const tab = await chrome.tabs.get(record.tabId).catch(() => null);
-  if (placeholderCleanup(tab, record, winId) === 'remove') {
-    await chrome.tabs.remove(record.tabId).catch(() => {});
-  }
-  await chrome.storage.local.remove(AGENT_PLACEHOLDER_KEY).catch(() => {});
-}
-function createAgentTab(url) {
-  const run = agentTabChain.then(() => createAgentTabNow(url));
-  agentTabChain = run.catch(() => {});
-  return run;
-}
-
-async function createAgentTabNow(url) {
-  const winId = await ensureAgentWindowId();
-  // No agent window: refuse rather than put the agent's tab in the window the
-  // user is working in (that used to be the fallback here).
-  if (winId == null)
-    throw new Error(
-      `createTarget: could not open the background agent window (${agentWindowError || 'unknown error'}), ` +
-        "and agent tabs never go into the user's window. To use the user's window on purpose, " +
-        'run with `--window user` (AGENT_BROWSER_DEDICATED_WINDOW=user).',
-    );
-  const tab = await chrome.tabs.create({ url, active: false, windowId: winId });
-  if (tab && tab.id != null) await markOwned(tab.id);
-  await cleanUpPlaceholder(winId);
-  return tab;
-}
+// The queue bounds every Chrome/storage step and owns late-result cleanup.
+// Callbacks defer access to the ownership sets until module startup completes.
+const createAgentTab = createAgentTabQueue({
+  chrome,
+  windowKey: AGENT_WINDOW_KEY,
+  placeholderKey: AGENT_PLACEHOLDER_KEY,
+  getWindowId: () => agentWindowId,
+  setWindowId: id => { agentWindowId = id; agentWindowError = null; },
+  rejectWindow: verdict => { agentWindowRejected = verdict; },
+  get ownedTabs() { return ownedTabs; },
+  get agentPopups() { return agentPopups; },
+  loadOwnedTabs,
+  loadAgentPopups,
+  persistOwnedTabs: () => chrome.storage.local.set({ ab_owned_tabs: [...ownedTabs] }),
+  isAdopted: id => ownedTabs.has(id) || agentPopups.has(id) || tabs.has(id),
+  onError: message => { agentWindowError = message; },
+  onCleanupError: error => { agentWindowError = `expired creation cleanup failed: ${error.message}`; },
+});
 
 // Forget the agent window when the user (or Chrome) closes it, so the next agent
 // tab creates a fresh one instead of targeting a dead window id.
@@ -376,7 +247,6 @@ if (chrome.windows && chrome.windows.onRemoved) {
   chrome.windows.onRemoved.addListener((windowId) => {
     if (windowId === agentWindowId) {
       agentWindowId = null;
-      agentWindowInit = null;
       chrome.storage.local.remove([AGENT_WINDOW_KEY, AGENT_PLACEHOLDER_KEY]).catch(() => {});
     }
   });
@@ -572,7 +442,7 @@ async function tabScopeHints(tabId) {
 // needed. `profileEmail` is included only when the optional `identity` permission
 // is present and the profile is signed in; otherwise it's omitted (never throws).
 async function buildHelloIdentity() {
-  const extra = {};
+  const extra = await extensionInstallIdentity(chrome);
   try {
     const KEY = 'ab_profile_id';
     const got = await chrome.storage.local.get(KEY);
@@ -998,12 +868,45 @@ async function recoverSessionTab(sessionId) {
 // Accessibility.getFullAXTree runs INSIDE the iframe instead of on the top
 // frame — this is what lets the daemon pierce the GSI sign-in iframe over the
 // relay. Omitted/undefined ⇒ the top (page) session, addressed by tabId alone.
-async function sendCdpToTab(tabId, method, params, childSessionId) {
-  return await sendTabCommand(tabId, method, params, childSessionId, {
+// Internal initialization and idle replay must invalidate the same attachment
+// as caller commands when their renderer stops answering.
+async function trackedDebuggerCommand(target, method, params) {
+  try {
+    return await observeDebuggerCommand(
+      method,
+      withRelayTimeout(chrome.debugger.sendCommand(target, method, params),
+        `chrome.debugger.sendCommand(${method})`),
+    );
+  } catch (error) {
+    if (isRelayTimeoutError(error)) attachmentHealth.mark(target.tabId);
+    throw error;
+  }
+}
+
+const attachmentHealth = createAttachmentHealth();
+
+function tabCommandDependencies() {
+  return {
+    health: attachmentHealth,
+    detachDebugger: async id => {
+      // Recovery may reset only a tab already authorized by an attachment or
+      // persisted ownership. Chrome still enforces protected-URL permissions.
+      if (!tabs.has(id) && !ownedTabs.has(id) && !agentPopups.has(id))
+        throw new Error('debugger recovery refused: tab is no longer authorized');
+      await chrome.debugger.detach({ tabId: id });
+    },
+    attachTab,
     sendCommand: (target, command, args) => chrome.debugger.sendCommand(target, command, args),
     detachTab,
     recoverSessionTab,
-  });
+  };
+}
+
+async function sendCdpToTab(tabId, method, params, childSessionId) {
+  return await observeDebuggerCommand(
+    method,
+    sendTabCommand(tabId, method, params, childSessionId, tabCommandDependencies()),
+  );
 }
 
 function anyConnectedTab() {
@@ -1200,6 +1103,7 @@ async function handleForwardCdpCommand(msg) {
     const { tabId, tab } = resolved;
     const entry = tabs.get(tabId);
     return {
+      relayHealth: getRelayHealth(),
       chromeTabId: tabId,
       sessionId: requestedSession || entry?.sessionId || null,
       targetId: entry?.targetId || requestedTarget || null,
@@ -1300,11 +1204,13 @@ async function handleForwardCdpCommand(msg) {
     await loadOwnedTabs();
     return {
       version: chrome.runtime.getManifest().version,
+      relayHealth: getRelayHealth(),
       policy: policySummary(),
       connected: port != null,
       attachedTargets: attachedTargetsFrom(tabs.entries()),
       ownedTabs: [...ownedTabs],
       groups: [...groupIdByName.entries()].map(([name, id]) => ({ name, id })),
+      unresolvedOperations: relayUnresolvedOperations(),
       agentWindowId,
       agentWindowError,
       agentWindowRejected,
@@ -1455,7 +1361,7 @@ async function handleForwardCdpCommand(msg) {
   // Idle auto-detach bookkeeping (issue #201): re-attach a released tab before
   // the command and count in-flight commands so the sweep never detaches under
   // a running one. State-setting commands are remembered for replay.
-  const entry = tabs.get(tabId);
+  let entry = tabs.get(tabId);
   if (entry && (method === 'Page.navigate' || method === 'Page.reload')) {
     // An explicit navigation/reload is a recovery action. Do not let the prior
     // page's diagnosis prevent the caller from escaping it.
@@ -1470,7 +1376,11 @@ async function handleForwardCdpCommand(msg) {
       );
     }
   }
-  if (entry && entry.attached === false) await reattachTab(tabId, entry);
+  const reset = await attachmentHealth.recover(tabId, tabCommandDependencies());
+  if (reset && childSid)
+    throw new Error('tab_reset: child session invalidated; rediscover frames before retrying');
+  if (reset) entry = tabs.get(tabId);
+  if (!reset && entry && entry.attached === false) await reattachTab(tabId, entry);
   if (entry) {
     entry.inflight++;
     entry.lastActivity = Date.now();
@@ -1515,7 +1425,16 @@ async function attachTab(tabId, transactionIsActive) {
   if (existing) return await reattachTab(tabId, existing);
   const dbg = { tabId };
   try {
-    await withRelayTimeout(chrome.debugger.attach(dbg, '1.3'), 'chrome.debugger.attach');
+    const attaching = chrome.debugger.attach(dbg, '1.3');
+    if (transactionIsActive) {
+      // Promise.race cannot cancel attach either. A late acknowledgement must
+      // not leave an expired recovery attached invisibly.
+      void attaching.then(() => {
+        if (!transactionIsActive())
+          return withRelayTimeout(chrome.debugger.detach(dbg), 'detach late recovery attachment');
+      }).catch(error => console.warn('[ab-connect] late recovery attachment cleanup', String(error)));
+    }
+    await withRelayTimeout(attaching, 'chrome.debugger.attach');
   } catch (e) {
     // After a service-worker restart, chrome.debugger may still be bound to
     // this tab from the previous instance — "Another debugger is already
@@ -1524,7 +1443,7 @@ async function attachTab(tabId, transactionIsActive) {
     // blank tab instead). Re-announce it. Any other error (restricted page) is
     // surfaced and the caller skips this tab.
     const msg = String((e && e.message) || e);
-    if (!/already attached|already being debugged/i.test(msg)) throw e;
+    if (transactionIsActive || !/already attached|already being debugged/i.test(msg)) throw e;
   }
   // Resolve identity through Chrome's browser-level target registry first.
   // Unlike Target.getTargetInfo on the page session, getTargets does not wait
@@ -1553,18 +1472,15 @@ async function attachTab(tabId, transactionIsActive) {
   }
   if (!targetInfo) {
     const info = /** @type {any} */ (
-      await withRelayTimeout(
-        chrome.debugger.sendCommand(dbg, 'Target.getTargetInfo'),
-        'chrome.debugger.sendCommand(Target.getTargetInfo)'
-      )
+      await trackedDebuggerCommand(dbg, 'Target.getTargetInfo')
     );
     targetInfo = info?.targetInfo;
   }
   const targetId = String(targetInfo?.targetId || '');
   if (!targetId) throw new Error('attachTab: no targetId');
   if (transactionIsActive && !transactionIsActive()) {
-    await chrome.debugger.detach(dbg).catch(() => {});
-    throw new Error('attachTab: duplicate transaction cancelled');
+    await withRelayTimeout(chrome.debugger.detach(dbg), 'detach expired attachment').catch(() => {});
+    throw new Error('attachTab: transaction cancelled');
   }
   // Derive the session id from the STABLE Chrome tabId, not a monotonic counter
   // (issue #17). A tab's chrome.debugger session can be torn down and
@@ -1577,8 +1493,8 @@ async function attachTab(tabId, transactionIsActive) {
   // session the daemon already holds → eval/snapshot auto-follow the new page.
   const { openerTargetId, abGroup } = await tabScopeHints(tabId);
   if (transactionIsActive && !transactionIsActive()) {
-    await chrome.debugger.detach(dbg).catch(() => {});
-    throw new Error('attachTab: duplicate transaction cancelled');
+    await withRelayTimeout(chrome.debugger.detach(dbg), 'detach expired attachment').catch(() => {});
+    throw new Error('attachTab: transaction cancelled');
   }
   const sessionId = `cb-tab-${tabId}`;
   const entry = newTabEntry(tabId, sessionId, targetId, true);
@@ -1591,18 +1507,12 @@ async function attachTab(tabId, transactionIsActive) {
   // Domain initialization is best-effort and must not hold the attach result
   // hostage to an unresponsive renderer. Register the stable tab/session first,
   // then arm Page and OOPIF support in the background.
-  void withRelayTimeout(
-    chrome.debugger.sendCommand(dbg, 'Page.enable'),
-    'chrome.debugger.sendCommand(Page.enable)'
-  ).catch(() => {});
-  void withRelayTimeout(
-    chrome.debugger.sendCommand(dbg, 'Target.setAutoAttach', {
-      autoAttach: true,
-      flatten: true,
-      waitForDebuggerOnStart: false,
-    }),
-    'chrome.debugger.sendCommand(Target.setAutoAttach)'
-  ).catch(() => {});
+  void trackedDebuggerCommand(dbg, 'Page.enable').catch(() => {});
+  void trackedDebuggerCommand(dbg, 'Target.setAutoAttach', {
+    autoAttach: true,
+    flatten: true,
+    waitForDebuggerOnStart: false,
+  }).catch(() => {});
   return entry;
 }
 
@@ -1652,10 +1562,7 @@ async function reattachTab(tabId, entry) {
     setBadge(tabId, port ? 'on' : 'connecting');
     const arm = async (method, params) => {
       try {
-        await withRelayTimeout(
-          chrome.debugger.sendCommand(dbg, method, params),
-          `chrome.debugger.sendCommand(${method})`
-        );
+        await trackedDebuggerCommand(dbg, method, params);
       } catch {}
     };
     await arm('Page.enable');
@@ -1698,7 +1605,9 @@ function sweepIdleTabs() {
   }
 }
 
-function detachTab(tabId, notify) {
+function detachTab(tabId, notify, preserveRecovery = false) {
+  // Only the recovery's own intermediate reset may retain its health token.
+  if (!preserveRecovery) attachmentHealth.clear(tabId);
   const entry = tabs.get(tabId);
   if (!entry) return;
   tabs.delete(tabId);
@@ -1848,6 +1757,7 @@ chrome.debugger.onDetach.addListener(
     void whenReady(async () => {
       const tabId = source.tabId;
       if (!tabId) return;
+      if (attachmentHealth.isRecovering(tabId)) return;
       const known = tabs.get(tabId);
       // Our own idle release (#201) — nothing to recover, the entry is kept.
       if (known && known.attached === false) return;

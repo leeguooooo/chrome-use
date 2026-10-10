@@ -164,12 +164,9 @@
 <span class="du-prompt">$</span> chrome-use extension status
 <span class="du-prompt">$</span> chrome-use doctor</code></pre>
       </div>
-      <p>
-        <code>doctor</code> reports both the live extension version and the version bundled with the CLI. If they
-        differ, update or reload ab-connect at <code>chrome://extensions</code> first. An older extension can make
-        the tab liveness probe unavailable; probe failure alone does not prove that the page renderer is stuck.
-        <code>tab inspect</code> requires ab-connect 0.5.16 or newer.
-      </p>
+      <p><code>status</code>, <code>extension status</code>, and doctor's relay check read <code>ABExt.state</code> over one diagnostic connection with a total 10-second budget. An error reply falls back to <code>ABExt.inspectTab</code> on that same connection. They send no debugger commands. The debugger summary passively counts answered commands (including non-timeout errors) and timeouts with “in the last 10 min” for a full reporting window, otherwise “since the extension worker started &lt;age&gt; ago” (whole seconds below 120 seconds, such as “45s”; whole minutes otherwise, such as “3 min”). No samples means “not exercised”; an older extension without health data reports that explicitly. Counts use bounded one-second buckets and reset when the service worker restarts. If commands keep failing, reload the chrome-use extension at <code>chrome://extensions</code> or restart Chrome.</p>
+      <p>New native hosts acknowledge diagnostic connections and skip <code>attachAll</code>. A still-running older host performs its usual <code>attachAll</code> once; the diagnostic notice recommends reloading the extension after upgrading to start the new host. Possible duplicate extensions are identified from sidecar identities and concurrent TCP liveness checks with a one-second limit and no WebSocket handshake. Matching account/browser with distinct extension ids does not prove a shared Chrome profile: disable one only if both are installed in the same profile.</p>
+      <p>JSON health contains only <code>transportResponsive</code>, <code>hostDiagnostic</code>, <code>debugger</code>, and <code>extensionHealth</code> (<code>windowMs</code>, <code>workerAgeMs</code>, <code>answered</code>, <code>timedOut</code>, <code>lastTimeout</code>, or null). <code>connectedProfiles</code> and <code>warnings</code> remain available. <code>extension status --json</code> retains <code>relayUp</code> as endpoint presence; <code>status --json</code> uses an extension transport reply. Update an older extension when a newer version is published; if the live extension is newer than this CLI expects, run <code>chrome-use upgrade</code>. Only <code>installType: development</code> identifies a development install. On macOS/Linux, doctor shows one-minute system load and CPU count; load above twice the CPU count warns and adds a hint to relay/CDP timeout errors.</p>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ sticky per session</div>

@@ -66,6 +66,9 @@
       <p>扩展弹窗只在收到原生主机回应后显示 Connected。确认前为 Connecting，连接失败时显示具体错误。旧主机可由首次实际 CLI 命令确认连接；主机接通不代表所有页面都可驱动。</p>
       <p>网页中的其他扩展 iframe 也可能导致 <code>debugger_access_denied</code>。Chrome 会在执行主页面命令前检查整个框架树；关闭 auto-attach 或过滤子框架事件无法解除这个限制。先保存工作，再禁用该站点上注入框架的扩展并重新加载，或使用不含该扩展的独立 profile。不要把权限错误当作成功，也不要循环重连。使用 <code>tab inspect &lt;ref&gt;</code> 查看浏览器级状态，或选择独立测试 profile。开发验收可在原生主机和 CLI 中设置相同的绝对路径 <code>CHROME_USE_RELAY_DIR</code>，配合唯一 session 与明确的 <code>--browser</code>，避免把候选中继登记到共享目录。</p>
       <p>中继导航最多执行三次有时限的访问检查，确认 debugger 访问被拒绝时提前结束等待；成功检查或临时错误不会被当作页面已经就绪。</p>
+      <h2>Daemon 仍忙碌</h2>
+      <p>CLI 在命令执行期间接收 daemon 每 10 秒发送的心跳。无响应超时预算不变，总等待上限为 180 秒或该命令预算中的较大值。出现 "daemon still busy" 时命令仍在执行：等待后再检查会话，不要重放有副作用的命令。</p>
+
       <h2>先跑一次体检：doctor</h2>
       <p>
         命令出现意外失败——<code>Unknown command</code>、<code>Failed to connect</code>、守护进程僵死、
@@ -463,6 +466,11 @@ EOF</code></pre>
         并发多 agent<strong>是支持的</strong>——给每个 agent 一个不同的 <code>--session</code> 名字，
         它们就各自拥有独立的标签页组、互不干扰。详见 <a href="/sessions.html">会话与并发</a>。
       </div>
+
+      <h2>中继与 debugger 健康状态</h2>
+      <p><code>status</code>、<code>extension status</code> 和 doctor 的中继检查使用一个诊断连接读取 <code>ABExt.state</code>，总预算为 10 秒；收到错误回复时，在同一连接上回退到 <code>ABExt.inspectTab</code>，不发送 debugger 命令。debugger 摘要被动统计最近十分钟的已回答命令（包括非超时错误）和超时次数；完整窗口显示“in the last 10 min”，否则显示“since the extension worker started &lt;age&gt; ago”；不足 120 秒使用整数秒（如“45s”），否则使用整数分钟（如“3 min”）。没有样本时显示“not exercised”，旧扩展没有健康数据时明确说明。计数使用有界的一秒桶，service worker 重启后清空。命令持续失败时，在 <code>chrome://extensions</code> 重新加载 chrome-use 扩展或重启 Chrome。</p>
+      <p>新原生主机会确认诊断连接并跳过 <code>attachAll</code>。仍在运行的旧主机会像以前一样执行一次 <code>attachAll</code>；诊断提示会建议升级后重新加载扩展以启动新主机。疑似重复扩展检测读取 sidecar 身份，并发执行最多一秒的 TCP 存活检查，不进行 WebSocket 握手。同账号、同浏览器且扩展 id 不同不能证明属于同一 Chrome profile；只有确认同一 profile 安装了两份时才禁用其中一份。</p>
+      <p>JSON 健康摘要只包含 <code>transportResponsive</code>、<code>hostDiagnostic</code>、<code>debugger</code> 和 <code>extensionHealth</code>（<code>windowMs</code>、<code>workerAgeMs</code>、<code>answered</code>、<code>timedOut</code>、<code>lastTimeout</code>，或 null），保留 <code>connectedProfiles</code> 和 <code>warnings</code>。<code>extension status --json</code> 的 <code>relayUp</code> 仍表示存在中继地址，<code>status --json</code> 则表示收到扩展传输回复。旧扩展在有已发布新版时更新扩展；当前扩展比 CLI 预期更新时运行 <code>chrome-use upgrade</code>。仅 <code>installType: development</code> 表示开发版。macOS/Linux 上 doctor 显示一分钟负载和 CPU 数；负载超过 CPU 数两倍时警告，并在 relay/CDP 超时错误中附带负载提示。</p>
 
       <h2>卡住的守护进程</h2>
       <p>

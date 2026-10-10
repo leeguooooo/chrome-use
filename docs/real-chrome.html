@@ -159,12 +159,9 @@
 <span class="du-prompt">$</span> chrome-use extension status
 <span class="du-prompt">$</span> chrome-use doctor</code></pre>
       </div>
-      <p>
-        <code>doctor</code> 会同时显示当前运行中的扩展版本和 CLI 内置版本。若两者不一致，请先在
-        <code>chrome://extensions</code> 更新或重新加载 ab-connect。旧扩展可能让标签存活探针不可用；
-        探针失败本身不能证明页面 renderer 已卡死。<code>tab inspect</code> 需要 ab-connect 0.5.16
-        或更新版本。
-      </p>
+      <p><code>status</code>、<code>extension status</code> 和 doctor 的中继检查使用一个诊断连接读取 <code>ABExt.state</code>，总预算为 10 秒；收到错误回复时，在同一连接上回退到 <code>ABExt.inspectTab</code>，不发送 debugger 命令。debugger 摘要被动统计最近十分钟的已回答命令（包括非超时错误）和超时次数；完整窗口显示“in the last 10 min”，否则显示“since the extension worker started &lt;age&gt; ago”；不足 120 秒使用整数秒（如“45s”），否则使用整数分钟（如“3 min”）。没有样本时显示“not exercised”，旧扩展没有健康数据时明确说明。计数使用有界的一秒桶，service worker 重启后清空。命令持续失败时，在 <code>chrome://extensions</code> 重新加载 chrome-use 扩展或重启 Chrome。</p>
+      <p>新原生主机会确认诊断连接并跳过 <code>attachAll</code>。仍在运行的旧主机会像以前一样执行一次 <code>attachAll</code>；诊断提示会建议升级后重新加载扩展以启动新主机。疑似重复扩展检测读取 sidecar 身份，并发执行最多一秒的 TCP 存活检查，不进行 WebSocket 握手。同账号、同浏览器且扩展 id 不同不能证明属于同一 Chrome profile；只有确认同一 profile 安装了两份时才禁用其中一份。</p>
+      <p>JSON 健康摘要只包含 <code>transportResponsive</code>、<code>hostDiagnostic</code>、<code>debugger</code> 和 <code>extensionHealth</code>（<code>windowMs</code>、<code>workerAgeMs</code>、<code>answered</code>、<code>timedOut</code>、<code>lastTimeout</code>，或 null），保留 <code>connectedProfiles</code> 和 <code>warnings</code>。<code>extension status --json</code> 的 <code>relayUp</code> 仍表示存在中继地址，<code>status --json</code> 则表示收到扩展传输回复。旧扩展在有已发布新版时更新扩展；当前扩展比 CLI 预期更新时运行 <code>chrome-use upgrade</code>。仅 <code>installType: development</code> 表示开发版。macOS/Linux 上 doctor 显示一分钟负载和 CPU 数；负载超过 CPU 数两倍时警告，并在 relay/CDP 超时错误中附带负载提示。</p>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ sticky per session</div>
