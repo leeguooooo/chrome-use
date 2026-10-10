@@ -2883,6 +2883,17 @@ impl BrowserManager {
         Ok(removed)
     }
 
+    /// A created tab is leaving `pages` while the session still owns it: keep
+    /// its relay Chrome tab id, so `close` can read it back by exact id.
+    fn remember_dropped_chrome_tab(&mut self, pos: usize) {
+        let page = &self.pages[pos];
+        if self.created_targets.contains(&page.target_id) {
+            if let Some(tab) = relay_chrome_tab_id(&page.session_id) {
+                self.dropped_chrome_tabs.insert(page.target_id.clone(), tab);
+            }
+        }
+    }
+
     /// Drop the page bound to `session_id` from the tracked list — used when the
     /// relay reports its tab is gone (issue #35) so the stale entry can't keep
     /// resolving as active. Keeps persisted created ownership so a later daemon
@@ -2892,11 +2903,7 @@ impl BrowserManager {
             return;
         };
         let target_id = self.pages[pos].target_id.clone();
-        if self.created_targets.contains(&target_id) {
-            if let Some(tab) = relay_chrome_tab_id(session_id) {
-                self.dropped_chrome_tabs.insert(target_id.clone(), tab);
-            }
-        }
+        self.remember_dropped_chrome_tab(pos);
         self.pages.remove(pos);
         self.adopted_targets.remove(&target_id);
         if self.active_target_id.as_deref() == Some(target_id.as_str()) {
@@ -6889,6 +6896,7 @@ impl BrowserManager {
         if let Some(pos) = self.pages.iter().position(|p| p.target_id == target_id) {
             let previous_pin = self.active_target_id.clone();
             let on_relay = self.agent_group().is_some();
+            self.remember_dropped_chrome_tab(pos);
             self.pages.remove(pos);
             self.update_active_page_after_removal(pos);
             self.active_target_id = active_target_after_removal(

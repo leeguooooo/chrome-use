@@ -522,12 +522,7 @@ fn tab_close_never_closes_a_tab_the_session_did_not_create() {
     }
     let d = Daemon::start("hc-foreign", &url, false);
     let r = d.send(json!({"id": "a", "action": "tab_adopt", "spec": "USER"}));
-    if r["success"] != true {
-        // Adoption is not what this test is about; without it there is no
-        // user tab in the session to refuse.
-        eprintln!("adopt unavailable on the fake: {r}");
-        return;
-    }
+    assert_eq!(r["success"], true, "adopting the user's tab failed: {r}");
     let tabs = d.tabs();
     let user = tabs.iter().find(|(_, t)| t == "USER").unwrap().0.clone();
     let r = d.send(json!({"id": "c", "action": "tab_close", "tabId": user}));
