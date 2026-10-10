@@ -1660,6 +1660,7 @@ pub(crate) async fn resolve_incomplete_navigation<P, F>(
     elapsed_ms: u64,
     wait_error: &str,
     loader_id: Option<&str>,
+    commit_event: Option<String>,
     probe: P,
     frame_tree: F,
 ) -> Result<String, String>
@@ -1677,6 +1678,16 @@ where
         Ok(Err(cause)) if is_debugger_access_denied(&cause) => return Err(cause),
         Ok(Ok(value)) => Some(LoadProgress::from_value(&value)),
         _ => None,
+    };
+    // A main-frame `Page.frameNavigated` for this session after the
+    // navigation started is direct evidence that a new document committed in
+    // the frame. Over the extension relay the frame tree's loader id does not
+    // match the one `Page.navigate` returned (measured), so without this a
+    // committed page read as "not committed".
+    let commit = match (commit, commit_event) {
+        (c @ CommitEvidence::Committed { .. }, _) => c,
+        (_, Some(url)) => CommitEvidence::Committed { url },
+        (c, None) => c,
     };
     let commit = match commit {
         CommitEvidence::Unknown { url: None } => CommitEvidence::Unknown {
@@ -3573,6 +3584,9 @@ impl BrowserManager {
         }
         let mut session_id = self.active_session_id()?.to_string();
         let mut lifecycle_rx = self.client.subscribe();
+        // A second receiver only for commit evidence: the lifecycle wait reads
+        // and discards every other event on its own receiver.
+        let mut commit_rx = self.client.subscribe();
         // Carries a graceful-degradation note when navigation didn't complete
         // cleanly but the page is usable anyway (issues #10, #126). Surfaced to the
         // CLI in the response so the agent knows to expect a still-rendering page.
@@ -3616,6 +3630,7 @@ impl BrowserManager {
                     }
                 }
                 lifecycle_rx = self.client.subscribe();
+                commit_rx = self.client.subscribe();
                 self.client
                     .send_command_typed("Page.navigate", &nav_params(), Some(&session_id))
                     .await?
@@ -3742,6 +3757,7 @@ impl BrowserManager {
                 // "Operation timed out" this used to collapse into said none of
                 // that.
                 let elapsed_ms = wait_started.elapsed().as_millis() as u64;
+                let commit_event = main_frame_commit(&mut commit_rx, &session_id);
                 let warning = resolve_incomplete_navigation(
                     url,
                     wait_until,
@@ -3749,6 +3765,7 @@ impl BrowserManager {
                     elapsed_ms,
                     &e,
                     nav_result.loader_id.as_deref(),
+                    commit_event,
                     self.evaluate_simple(LOAD_PROGRESS_JS),
                     self.client
                         .send_command("Page.getFrameTree", None, Some(&session_id)),
@@ -8895,6 +8912,214 @@ mod tests {
         assert!(!is_command_timeout_error(
             "Navigation failed: net::ERR_NAME_NOT_RESOLVED"
         ));
+    }
+
+    fn tree(loader: &str, url: &str) -> Value {
+        json!({ "frameTree": { "frame": { "id": "F", "loaderId": loader, "url": url } } })
+    }
+
+    fn progress(rs: &str, url: &str, pending: &[&str]) -> Value {
+        json!({ "readyState": rs, "url": url, "pending": pending, "pendingTotal": pending.len() })
+    }
+
+    /// Drive the real decision with a mocked wait result and mocked probes.
+    async fn decide(
+        elapsed_ms: u64,
+        wait_error: &str,
+        probe: Result<Value, String>,
+        frame_tree: Result<Value, String>,
+    ) -> Result<String, String> {
+        decide_with(elapsed_ms, wait_error, None, probe, frame_tree).await
+    }
+
+    async fn decide_with(
+        elapsed_ms: u64,
+        wait_error: &str,
+        commit_event: Option<String>,
+        probe: Result<Value, String>,
+        frame_tree: Result<Value, String>,
+    ) -> Result<String, String> {
+        resolve_incomplete_navigation(
+            "https://a.example/start",
+            WaitUntil::Load,
+            25_000,
+            elapsed_ms,
+            wait_error,
+            Some("L-NAV"),
+            commit_event,
+            async move { probe },
+            async move { frame_tree },
+        )
+        .await
+    }
+
+    /// #502 review: a cross-site redirect commits on another host. Commit is
+    /// read from this navigation's loader, not from host equality.
+    #[tokio::test]
+    async fn cross_site_redirect_counts_as_committed_by_loader() {
+        let err = decide(
+            25_000,
+            "Timeout waiting for Page.loadEventFired",
+            Ok(progress("loading", "https://b.example/landing", &[])),
+            Ok(tree("L-NAV", "https://b.example/landing")),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("This navigation committed; the tab is on https://b.example/landing"),
+            "{err}"
+        );
+        assert_eq!(to_ai_friendly_error(&err), err);
+        assert!(!err.contains("Operation timed out"));
+    }
+
+    /// #502 review: on the same host the previous document does not prove
+    /// the new navigation committed, even when that document is complete:
+    /// that must not read as a usable page.
+    #[tokio::test]
+    async fn same_host_old_document_is_not_committed_and_not_usable() {
+        let err = decide(
+            25_000,
+            "Timeout waiting for Page.loadEventFired",
+            Ok(progress("complete", "https://a.example/old", &[])),
+            Ok(tree("L-OLD", "https://a.example/old")),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("has not committed"), "{err}");
+        assert!(err.contains("https://a.example/old"), "{err}");
+    }
+
+    /// #502 review: the wait can end at once ("Event stream closed"). The
+    /// error reports the real elapsed time and the real error; 25s is only
+    /// named as the upper limit.
+    #[tokio::test]
+    async fn an_immediate_wait_failure_reports_the_real_elapsed_time() {
+        let err = decide(
+            3,
+            "Event stream closed",
+            Ok(progress("loading", "https://a.example/start", &[])),
+            Ok(tree("L-NAV", "https://a.example/start")),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("after 0.0s (upper limit 25.0s): Event stream closed"),
+            "{err}"
+        );
+        assert!(!err.contains("within 25"), "{err}");
+    }
+
+    /// #502 review: a probe that never answers is reported as that, with no
+    /// cause invented for it, and commit stays unknown without a frame tree.
+    #[tokio::test]
+    async fn an_unanswered_probe_leaves_the_cause_unknown() {
+        let err = resolve_incomplete_navigation(
+            "https://a.example/start",
+            WaitUntil::Load,
+            25_000,
+            25_000,
+            "Timeout waiting for Page.loadEventFired",
+            Some("L-NAV"),
+            None,
+            std::future::pending::<Result<Value, String>>(),
+            std::future::pending::<Result<Value, String>>(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("did not answer a readiness check within 5.0s; the cause is unknown"),
+            "{err}"
+        );
+        assert!(
+            err.contains("Whether this navigation committed is unknown."),
+            "{err}"
+        );
+        assert!(!err.contains("main thread"), "{err}");
+        assert!(!err.contains("renderer is still starting"), "{err}");
+    }
+
+    /// #502 review: references with no Resource Timing record are only
+    /// candidates (a cleared or full buffer, a finished resource); a slow
+    /// async script does not block the parser. Neither mechanism is claimed.
+    #[tokio::test]
+    async fn missing_timing_records_are_candidates_not_a_mechanism() {
+        let err = decide(
+            25_000,
+            "Timeout waiting for Page.loadEventFired",
+            Ok(progress(
+                "loading",
+                "https://a.example/start",
+                &[
+                    "script (async) https://cdn.example/slow.js",
+                    "image https://a.example/x.png",
+                ],
+            )),
+            Ok(tree("L-NAV", "https://a.example/start")),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("may still be loading, or their record is missing"),
+            "{err}"
+        );
+        assert!(
+            err.contains("script (async) https://cdn.example/slow.js"),
+            "{err}"
+        );
+        assert!(!err.contains("blocks the parser"), "{err}");
+        assert!(!err.contains("Still loading:"), "{err}");
+
+        let ok = decide(
+            25_000,
+            "Timeout waiting for Page.loadEventFired",
+            Ok(progress(
+                "interactive",
+                "https://a.example/start",
+                &["image https://a.example/x.png"],
+            )),
+            Ok(tree("L-NAV", "https://a.example/start")),
+        )
+        .await
+        .unwrap();
+        assert!(
+            ok.contains("this navigation committed and its DOM is ready (interactive)"),
+            "{ok}"
+        );
+        assert!(ok.contains("no Resource Timing record"), "{ok}");
+    }
+
+    /// A ready DOM whose commit cannot be confirmed (the frame tree failed)
+    /// is not reported as a usable page.
+    #[tokio::test]
+    async fn a_ready_dom_without_commit_evidence_is_not_success() {
+        let err = decide(
+            25_000,
+            "Timeout waiting for Page.loadEventFired",
+            Ok(progress("complete", "https://a.example/start", &[])),
+            Err("Page.getFrameTree failed".into()),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("Whether this navigation committed is unknown; the tab reports https://a.example/start"), "{err}");
+    }
+
+    /// #502 live, over the relay: the frame tree's loader id did not match
+    /// the one Page.navigate returned although the page had committed. A
+    /// main-frame frameNavigated seen after the navigation started is the
+    /// evidence then, and a ready DOM is success.
+    #[tokio::test]
+    async fn a_commit_event_counts_when_the_loader_ids_disagree() {
+        let ok = decide_with(
+            25_000,
+            "Timeout waiting for Page.loadEventFired",
+            Some("http://127.0.0.1/slow.html".into()),
+            Ok(progress("interactive", "http://127.0.0.1/slow.html", &[])),
+            Ok(tree("L-RELAY", "http://127.0.0.1/slow.html")),
+        )
+        .await
+        .unwrap();
+        assert!(ok.contains("this navigation committed"), "{ok}");
     }
 
     #[test]
