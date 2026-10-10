@@ -2,6 +2,15 @@ import { cli, Strategy } from '@jackwener/opencli/registry';
 import { ArgumentError, CommandExecutionError } from '@jackwener/opencli/errors';
 import { browserFetch } from './_shared/browser-fetch.js';
 import { requireObjectEvaluateResult } from './_shared/evaluate-result.js';
+import { BIGINT_JSON_PAGE_SOURCE } from './_shared/bigint-json.js';
+
+// chrome-use patch (leeguooooo/chrome-use#508) over @jackwener/opencli@1.8.8:
+// - work_list is parsed with parseJsonKeepingBigInts, so item_id (a bare JSON
+//   number past 2^53) stays an exact string and ids compare as strings;
+// - the work card is found by its title (or id) instead of by position, which
+//   needed a card for every work work_list returned: the page showed fewer,
+//   and the run failed with card_not_found (#508). It scrolls to load more
+//   cards, and when the work has a title only a card showing it is clicked.
 
 const CREATOR_MANAGE_URL = 'https://creator.douyin.com/creator-micro/content/manage';
 const WORK_LIST_URL = '/janus/douyin/creator/pc/work_list?status=0&count=20&max_cursor=0&scene=star_atlas&device_platform=android&aid=1128';
@@ -27,27 +36,32 @@ async function deleteViaCreatorManage(page, workId) {
     await sleep(3000);
     const result = requireObjectEvaluateResult(await page.evaluate(`
     (async () => {
+      ${BIGINT_JSON_PAGE_SOURCE}
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const idOf = (value) => (value == null ? '' : String(value));
       const targetId = ${JSON.stringify(String(workId))};
       const textOf = (node) => (node && (node.innerText || node.textContent) || '').trim();
       const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
 
       async function loadTarget() {
         const res = await fetch(${JSON.stringify(WORK_LIST_URL)}, { credentials: 'include' });
-        const payload = await res.json();
+        const payload = parseJsonKeepingBigInts(await res.text());
         const list = Array.isArray(payload.aweme_list) ? payload.aweme_list : [];
         const matches = list
           .map((entry, index) => ({ entry, index }))
-          .filter(({ entry }) => String(entry.aweme_id || '') === targetId || String(entry.item_id || '') === targetId);
+          .filter(({ entry }) => idOf(entry.aweme_id) === targetId || idOf(entry.item_id) === targetId);
         if (matches.length === 0) {
           return { ok: false, reason: 'not_found', status_code: payload.status_code, count: list.length };
         }
         if (matches.length !== 1) {
           return { ok: false, reason: 'target_not_unique', count: matches.length };
         }
-        const { entry: item, index } = matches[0];
-        const title = normalize(item.desc || item.caption || item.title || item.item_title || '');
-        return { ok: true, item, index, listCount: list.length, title };
+        const { entry, index } = matches[0];
+        const item = { aweme_id: idOf(entry.aweme_id), item_id: idOf(entry.item_id) };
+        const title = normalize(entry.desc || entry.caption || entry.title || entry.item_title || '');
+        // What a work card shows: its title, or the first line of its text.
+        const key = normalize(entry.item_title || String(entry.desc || entry.caption || entry.title || '').split('\\n')[0]).slice(0, 12);
+        return { ok: true, item, index, listCount: list.length, title, key };
       }
 
       function visibleWorkCards() {
@@ -59,6 +73,26 @@ async function deleteViaCreatorManage(page, workId) {
         return candidates.filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
       }
 
+      // The card for the target. With a title: the only card showing it; among
+      // several, the one whose markup carries the id, else the one at the API
+      // index. Without a title: the only card whose markup carries the id, else
+      // the API index once every listed work is rendered (the original rule).
+      function findCard(cards, target) {
+        const ids = [target.item.aweme_id, target.item.item_id].filter(Boolean);
+        const carriesId = (card) => ids.some((id) => String(card.outerHTML || '').includes(id));
+        const atIndex = cards[target.index] || null;
+        if (target.key) {
+          const byTitle = cards.filter((card) => normalize(textOf(card)).includes(target.key));
+          if (byTitle.length === 1) return byTitle[0];
+          const byId = byTitle.filter(carriesId);
+          if (byId.length === 1) return byId[0];
+          return byTitle.includes(atIndex) ? atIndex : null;
+        }
+        const byId = cards.filter(carriesId);
+        if (byId.length === 1) return byId[0];
+        return cards.length >= target.listCount ? atIndex : null;
+      }
+
       const target = await loadTarget();
       if (!target.ok) return target;
 
@@ -68,8 +102,8 @@ async function deleteViaCreatorManage(page, workId) {
       await sleep(1000);
       for (let attempt = 0; attempt < 20; attempt += 1) {
         const cards = visibleWorkCards();
-        if (cards.length >= target.listCount && cards[target.index]) {
-          const card = cards[target.index];
+        const card = findCard(cards, target);
+        if (card) {
           const deleteButton = Array.from(card.querySelectorAll('button,[role="button"],span,div'))
             .find((element) => /^删除作品$/.test(normalize(textOf(element))));
           if (!deleteButton) return { ok: false, reason: 'delete_button_not_found', aweme_id: target.item.aweme_id, item_id: target.item.item_id, index: target.index, cardCount: cards.length };
@@ -88,9 +122,11 @@ async function deleteViaCreatorManage(page, workId) {
           }
           return { ok: false, reason: 'delete_not_confirmed', aweme_id: target.item.aweme_id, item_id: target.item.item_id };
         }
+        // Cards load as the list scrolls; bring the last one into view.
+        cards[cards.length - 1]?.scrollIntoView?.({ block: 'end' });
         await sleep(500);
       }
-      return { ok: false, reason: 'card_not_found', aweme_id: target.item.aweme_id, item_id: target.item.item_id, index: target.index, listCount: target.listCount };
+      return { ok: false, reason: 'card_not_found', aweme_id: target.item.aweme_id, item_id: target.item.item_id, index: target.index, listCount: target.listCount, cardCount: visibleWorkCards().length };
     })()
   `), '抖音后台管理删除响应异常');
 

@@ -1,0 +1,34 @@
+{
+ "_fixture": "Shape of creator.douyin.com /janus/douyin/creator/pc/work_list, trimmed. item_id is a bare JSON number past 2^53, as Douyin sends it (chrome-use#508); ids are synthetic.",
+ "status_code": 0,
+ "has_more": false,
+ "max_cursor": 1767000348000,
+ "min_cursor": 0,
+ "total": 3,
+ "aweme_list": [
+  {
+   "aweme_id": "7694857245896576001",
+   "item_id": 7694857245896576001,
+   "desc": "第一条作品 #AI",
+   "item_title": "第一条作品",
+   "create_time": 1791266063,
+   "statistics": { "play_count": 566, "digg_count": 10 }
+  },
+  {
+   "aweme_id": "7694857245896576275",
+   "item_id": 7694857245896576275,
+   "desc": "要删除的作品\n第二行正文 #开源",
+   "item_title": "",
+   "create_time": 1791266000,
+   "statistics": { "play_count": 12, "digg_count": 1 }
+  },
+  {
+   "aweme_id": "7694857245896576999",
+   "item_id": 7694857245896576999,
+   "desc": "第三条作品，引号 \"7694857245896576275\" 在字符串里",
+   "item_title": "第三条作品",
+   "create_time": 1791265000,
+   "statistics": { "play_count": 3, "digg_count": 0 }
+  }
+ ]
+}

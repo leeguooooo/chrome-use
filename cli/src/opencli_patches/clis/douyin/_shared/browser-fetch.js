@@ -1,5 +1,6 @@
 import { AuthRequiredError, CommandExecutionError } from '@jackwener/opencli/errors';
 import { unwrapEvaluateResult } from './evaluate-result.js';
+import { BIGINT_JSON_PAGE_SOURCE } from './bigint-json.js';
 
 function isAuthLikeError(code, message) {
     const text = String(message ?? '');
@@ -13,6 +14,7 @@ function isAuthLikeError(code, message) {
 export async function browserFetch(page, method, url, options = {}) {
     const js = `
     (async () => {
+      ${BIGINT_JSON_PAGE_SOURCE}
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), ${Number(options.timeoutMs ?? 30000)});
       try {
@@ -32,7 +34,8 @@ export async function browserFetch(page, method, url, options = {}) {
         // endpoint (issue #1405 fixed it, #1587 dropped it again).
         if (!text.trim()) return res.ok ? null : { status_code: res.status, status_msg: 'Empty response body' };
         try {
-          return JSON.parse(text);
+          // chrome-use patch (#508): keep 64-bit ids exact.
+          return parseJsonKeepingBigInts(text);
         } catch (error) {
           return { status_code: res.ok ? -2 : res.status, status_msg: \`JSON parse failed: \${text.slice(0, 500) || String(error && error.message || error)}\` };
         }
