@@ -23,10 +23,16 @@ chrome-use site github/issues owner/repo --json   # run it → JSON (navigates t
   runs two default sources: the official [chrome-use-sites](https://github.com/leeguooooo/chrome-use-sites)
   pack and the [bb-sites](https://github.com/epiral/bb-sites) community pack. On a shared
   `name/cmd` the official one wins.
+- **Where a command comes from, in priority order:** a configured extra source
+  (`site add`), the official chrome-use-sites pack, the bb-sites community pack, and only
+  then OpenCLI (below). Ours always win a shared name. `douyin/delete`, `douyin/update` and
+  `twitter/delete` used to come from OpenCLI and are now maintained in chrome-use-sites
+  (ported with attribution); OpenCLI never runs them, and a cache that predates them is
+  synced on first use. Both deletes open their page first: run them with `--until-done`.
 - **OpenCLI commands work too.** When Node.js 20+ is on PATH, `site update` also installs
   [OpenCLI](https://github.com/jackwener/OpenCLI) (~1,300 commands over ~180 sites). A
-  `name/cmd` that neither pack has runs through OpenCLI's own runtime, driving this same
-  session. They show as `(opencli)` in `site list`, `site info` shows their args, and they come
+  `name/cmd` that neither pack has runs through OpenCLI's own runtime in Node, driving this
+  same session. They show as `(opencli)` in `site list`, `site info` shows their args, and they come
   last in the `siteAdapters` hint. If one of our adapters fails and OpenCLI has a read command
   of the same name, chrome-use runs that instead (stderr says so; `--json` adds
   `source: "opencli"` and `fallbackFrom`). Writes never retry. Same command, same JSON: `chrome-use site hackernews/best

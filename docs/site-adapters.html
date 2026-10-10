@@ -268,7 +268,8 @@ site adapters for github.com: github/issues, github/pulls, github/repo …</code
         装了 Node.js 20+ 时，<code>site update</code> 会顺带安装 <a href="https://github.com/jackwener/OpenCLI">OpenCLI</a>（约 180 个站点、1300 多条命令，固定版本，<code>--ignore-scripts</code>）。
         两个适配器库都没有的 <code>name/cmd</code>，会用 OpenCLI 自己的运行时执行，操作的还是你当前的 chrome-use 会话和登录态，比如
         <code>chrome-use site hackernews/best --limit 5 --json</code>。<code>site list</code> 里标着 <code>(opencli)</code>，<code>site info</code> 能看参数，站点提示里排在最后。
-        同名时用我们自己的；我们的只读命令运行失败而 OpenCLI 有同名的只读命令时，会自动改用它（写操作不会重试）。<code>AGENT_BROWSER_SITES_NO_OPENCLI=1</code> 关闭。
+        同名时永远用我们自己的（优先级：<code>site add</code> 加的来源 → 官方 chrome-use-sites → 社区 bb-sites → OpenCLI）；我们的只读命令运行失败而 OpenCLI 有同名的只读命令时，会自动改用它（写操作不会重试）。<code>AGENT_BROWSER_SITES_NO_OPENCLI=1</code> 关闭。
+        <code>douyin/delete</code>、<code>douyin/update</code>、<code>twitter/delete</code> 以前走 OpenCLI，现在移植到 chrome-use-sites 维护（注明出处，Apache-2.0），OpenCLI 不再运行它们；本地缓存里还没有时，第一次使用会先同步。两个删除命令要先打开对应页面，请加 <code>--until-done</code>。
       </p>
 
       <h3>站点没登录时</h3>

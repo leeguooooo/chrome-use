@@ -1937,6 +1937,34 @@ fn main() {
                 ),
             }
         }
+        // A command chrome-use-sites took over from OpenCLI (opencli::PORTED)
+        // that this adapter cache predates: sync now so ours runs, instead of
+        // failing or ever falling back to OpenCLI's copy.
+        {
+            let at = if clean.get(1).map(|s| s.as_str()) == Some("verify") {
+                2
+            } else {
+                1
+            };
+            if let Some(spec) = clean
+                .get(at)
+                .filter(|s| opencli::is_ported(s) && site::load_adapter(s).is_err())
+            {
+                let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                match rt.block_on(site::update()) {
+                    Ok(_) => eprintln!(
+                        "{}",
+                        color::dim(&format!(
+                            "site: synced adapters for {spec}, which chrome-use-sites now maintains"
+                        ))
+                    ),
+                    Err(e) => eprintln!(
+                        "{}",
+                        color::dim(&format!("site: sync for {spec} failed ({e})"))
+                    ),
+                }
+            }
+        }
         // A `name/cmd` we have no adapter for but OpenCLI does: run it with
         // OpenCLI's runtime over this session (opencli.rs). `site verify` too.
         {
