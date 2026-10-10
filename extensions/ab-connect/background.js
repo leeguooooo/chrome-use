@@ -26,6 +26,7 @@ import {
   migratePopupRecord,
 } from './agent-window.js';
 import { attachTabById } from './attach-by-id.js';
+import { releaseTab } from './release-tab.js';
 import { shouldForwardEvent } from './cdp-event-filter.js';
 import { clearDownloads, listDownloads, startDownload } from './download-manager.js';
 import { isRelayTimeoutError, relayUnresolvedOperations, withRelayTimeout } from './relay-timeout.js';
@@ -664,6 +665,8 @@ function connectHost() {
         // CLI that wants them on an older extension says "update" instead of
         // sending a method Chrome answers with "wasn't found".
         // `attachTabById` (0.5.30): attach one tab by Chrome tab id (#456).
+        // `releaseTab` (0.5.34): detach from a tab a session took with
+        // `--force` (the user's own) when that session ends.
         capabilities: [
           'nativeTabDuplicate',
           'downloadsApi',
@@ -671,6 +674,7 @@ function connectHost() {
           'state',
           'batchCommands',
           'attachTabById',
+          'releaseTab',
         ],
         ...extra,
       });
@@ -1038,6 +1042,24 @@ async function handleForwardCdpCommand(msg) {
       queryAll: () => chrome.tabs.query({}),
       isAgentTab: agentTabPredicate(ownedTabs, agentPopups),
       mark: (tabId) => markAgentPopup(tabId),
+    });
+  }
+
+  // Let go of a tab a session took with `--force` (0.5.34): detach the
+  // debugger from it, never close it. Agent-created tabs are refused here;
+  // their session closes them.
+  if (method === 'ABExt.releaseTab') {
+    await loadOwnedTabs();
+    return await releaseTab(params, {
+      tabForTarget,
+      isOwned: (tabId) => ownedTabs.has(tabId),
+      detach: (tabId) => {
+        // A released tab must not be re-attached by the onDetach recovery.
+        releasedTabs.add(tabId);
+        setTimeout(() => releasedTabs.delete(tabId), 10_000);
+        return withRelayTimeout(chrome.debugger.detach({ tabId }), 'chrome.debugger.detach');
+      },
+      forget: (tabId) => detachTab(tabId, true),
     });
   }
 
@@ -1773,11 +1795,15 @@ chrome.debugger.onEvent.addListener(
     })
 );
 
+// Tabs `ABExt.releaseTab` let go of: their detach is ours and final.
+const releasedTabs = new Set();
+
 chrome.debugger.onDetach.addListener(
   (source, reason) =>
     void whenReady(async () => {
       const tabId = source.tabId;
       if (!tabId) return;
+      if (releasedTabs.has(tabId)) return;
       if (attachmentHealth.isRecovering(tabId)) return;
       const known = tabs.get(tabId);
       // Our own idle release (#201) — nothing to recover, the entry is kept.

@@ -892,6 +892,50 @@ pub fn created_target_ids(session: &str) -> HashSet<String> {
         .unwrap_or_default()
 }
 
+/// Every other session's recorded created targets, as target id → session
+/// name, read from the ownership records in the socket dir. Best effort: an
+/// unreadable record is skipped. Only for telling the agent and the user
+/// whose a tab is (`tab list --all`, `--force` results); never for permission.
+pub fn created_targets_by_other_sessions(own: &str) -> std::collections::HashMap<String, String> {
+    created_targets_by_other_sessions_in(&get_socket_dir(), own)
+}
+
+fn created_targets_by_other_sessions_in(
+    dir: &Path,
+    own: &str,
+) -> std::collections::HashMap<String, String> {
+    let mut by_target = std::collections::HashMap::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return by_target;
+    };
+    let mut sessions: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()?
+                .strip_suffix(CREATED_TARGETS_SUFFIX)
+                .map(str::to_string)
+        })
+        .filter(|session| session != own)
+        .collect();
+    // Deterministic when two records name one target.
+    sessions.sort();
+    for session in sessions {
+        let Some(registry) =
+            fs::read_to_string(dir.join(format!("{session}{CREATED_TARGETS_SUFFIX}")))
+                .ok()
+                .and_then(|text| serde_json::from_str::<CreatedTargetRegistry>(&text).ok())
+        else {
+            continue;
+        };
+        for target in registry.target_ids {
+            by_target.entry(target).or_insert_with(|| session.clone());
+        }
+    }
+    by_target
+}
+
 /// Read the target IDs this named session created in an earlier daemon lifetime.
 /// Missing, malformed, or mismatched state fails closed: no tab receives
 /// deletion rights. A record from the same relay profile on a restarted relay

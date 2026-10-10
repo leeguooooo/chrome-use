@@ -1105,28 +1105,40 @@ fn tab_switch_is_allowed(
 /// matches a spec against targetIds and URL substrings only (see
 /// `adopt_existing_target`), so `tab adopt t1` would just fail with "no open tab
 /// matching `t1`" and send the agent in circles.
-fn refuse_unowned_tab_message(tab_id: u32, target_id: &str) -> String {
+fn refuse_unowned_tab_message(tab_id: u32, target_id: &str, owner: &TabOwner) -> String {
     format!(
-        "Refusing to select tab {} because this session did not create or adopt it \
-         (run `chrome-use tab adopt {}` to drive it)",
+        "Refusing to select tab {} because this session did not create or adopt it; it \
+         belongs to {} (run `chrome-use tab adopt {}` to drive it). To act on it in place, \
+         without bringing it forward, pass `--tab {} --force`, and only when the user asked \
+         you to act on that tab",
         format_tab_id(tab_id),
+        owner.label(),
+        target_id,
         target_id
     )
 }
 
-/// Refusal text for closing a tab this session did not create. Names what to
-/// do instead: leave the tab open (it is the user's, or adopted), and end the
-/// session with `close`, which never closes it.
-fn refuse_unowned_tab_close_message(tab_id: u32, adopted: bool) -> String {
+/// Refusal text for closing a tab this session did not create. Names whose
+/// it is and what to do instead: leave the tab open, and end the session with
+/// `close`, which never closes it; `--force` only on the user's request.
+fn refuse_unowned_tab_close_message(tab_id: u32, adopted: bool, owner: &TabOwner) -> String {
     let whose = if adopted {
-        "it was adopted, not created, so it stays open for the user"
+        format!(
+            "it was adopted, not created, so it stays open for its owner, {}",
+            owner.label()
+        )
     } else {
-        "it is not one of this session's tabs"
+        format!(
+            "it is not one of this session's tabs; it belongs to {}",
+            owner.label()
+        )
     };
     format!(
         "Refusing to close tab {} because this session did not create it ({whose}). Leave it \
          open; run `chrome-use close` to end the session (it closes only the tabs this session \
-         created), or `chrome-use tab list` to see which tabs are `created`",
+         created), or `chrome-use tab list` to see which tabs are `created`. Only when the \
+         user asked you to close that tab: `chrome-use tab close {} --force`",
+        format_tab_id(tab_id),
         format_tab_id(tab_id)
     )
 }
@@ -1161,6 +1173,459 @@ fn register_scoped_target_ownership(
             .filter(|target_id| !created_targets.contains(*target_id))
             .cloned(),
     );
+}
+
+// ---------------------------------------------------------------------------
+// `tab list --all`: every tab in the connected profile, by observation only
+// ---------------------------------------------------------------------------
+
+/// Rows `tab list --all` returns unless `--limit` says otherwise.
+pub const ALL_TABS_DEFAULT_LIMIT: usize = 200;
+/// The most rows `--limit` may ask for.
+pub const ALL_TABS_MAX_LIMIT: usize = 1000;
+/// Per-field caps, in characters. A page can set a multi-KB title and a
+/// sign-in URL can carry a multi-KB token; past these the field is cut and
+/// the row says so (`titleCut` / `urlCut`), so the listing stays bounded.
+const ALL_TABS_TITLE_MAX_CHARS: usize = 300;
+const ALL_TABS_URL_MAX_CHARS: usize = 2048;
+/// How long `tab list --all` waits for one window lookup on direct CDP.
+const ALL_TABS_WINDOW_LOOKUP_BUDGET: Duration = Duration::from_millis(1_500);
+/// The handle `tab list --all` gives a Chrome tab seen over the relay.
+pub const CHROME_TAB_HANDLE_PREFIX: &str = "chrome-tab:";
+/// First ab-connect that attaches one tab by its Chrome tab id.
+pub const ATTACH_BY_ID_MIN_EXTENSION_VERSION: &str = "0.5.30";
+/// First ab-connect that can release (detach from) a tab it did not create.
+pub const RELEASE_TAB_MIN_EXTENSION_VERSION: &str = "0.5.34";
+/// Extension capability for `ABExt.releaseTab`.
+const RELEASE_TAB_CAPABILITY: &str = "releaseTab";
+/// What `tab list --all` says about every tab the session does not own.
+pub const FORCE_HINT: &str = "acting on a tab this session does not own needs `--tab <handle> \
+     --force` (or `tab close <handle> --force`), and only when the user asked for that tab";
+
+/// The Chrome tab id in a `chrome-tab:<id>` handle.
+pub fn parse_chrome_tab_handle(spec: &str) -> Option<i64> {
+    spec.trim()
+        .strip_prefix(CHROME_TAB_HANDLE_PREFIX)?
+        .parse::<i64>()
+        .ok()
+        .filter(|id| *id >= 0)
+}
+
+pub fn chrome_tab_handle(chrome_tab_id: i64) -> String {
+    format!("{CHROME_TAB_HANDLE_PREFIX}{chrome_tab_id}")
+}
+
+/// The first `max` characters of `text`, and whether anything was cut.
+fn clip_chars(text: &str, max: usize) -> (String, bool) {
+    match text.char_indices().nth(max) {
+        Some((end, _)) => (text[..end].to_string(), true),
+        None => (text.to_string(), false),
+    }
+}
+
+/// Whose a tab is, as far as this session can tell. Only for telling the
+/// agent and the user; it never grants or refuses anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TabOwner {
+    /// This session created or adopted it.
+    This,
+    /// Another chrome-use session: named when its ownership record names the
+    /// tab, with whether its daemon answers right now.
+    Session {
+        name: Option<String>,
+        live: Option<bool>,
+    },
+    /// Nobody's but the user's.
+    User,
+}
+
+impl TabOwner {
+    /// Sort rank: this session, then other sessions, then the user.
+    fn rank(&self) -> u8 {
+        match self {
+            TabOwner::This => 0,
+            TabOwner::Session { .. } => 1,
+            TabOwner::User => 2,
+        }
+    }
+
+    /// `{kind: "self"|"session"|"user", session?, live?}`.
+    pub fn to_json(&self) -> Value {
+        match self {
+            TabOwner::This => json!({ "kind": "self" }),
+            TabOwner::Session { name, live } => {
+                let mut v = json!({ "kind": "session", "session": name });
+                if let Some(live) = live {
+                    v["live"] = json!(live);
+                }
+                v
+            }
+            TabOwner::User => json!({ "kind": "user" }),
+        }
+    }
+
+    /// The owner in words: `this session`, `session <name> (live)`, `user`.
+    pub fn label(&self) -> String {
+        match self {
+            TabOwner::This => "this session".to_string(),
+            TabOwner::Session { name, live } => {
+                let who = match name {
+                    Some(name) => format!("session {name}"),
+                    None => "another chrome-use session".to_string(),
+                };
+                match live {
+                    Some(true) => format!("{who} (live)"),
+                    Some(false) => format!("{who} (not running)"),
+                    None => who,
+                }
+            }
+            TabOwner::User => "the user".to_string(),
+        }
+    }
+}
+
+/// The owner of a tab this session does not hold: a session whose record
+/// names it, else an agent tab (the extension created it, or it sits in an
+/// agent tab group) of a session not known by name, else the user.
+pub(crate) fn foreign_owner(
+    agent_tab: bool,
+    other_session: Option<&str>,
+    live: impl Fn(&str) -> bool,
+) -> TabOwner {
+    match (other_session, agent_tab) {
+        (Some(name), _) => TabOwner::Session {
+            name: Some(name.to_string()),
+            live: Some(live(name)),
+        },
+        (None, true) => TabOwner::Session {
+            name: None,
+            live: None,
+        },
+        (None, false) => TabOwner::User,
+    }
+}
+
+/// Whether a chrome-use session's daemon answers on its socket now.
+pub(crate) fn session_is_live(session: &str) -> bool {
+    crate::connection::daemon_ready(session)
+}
+
+/// What this session holds of one tab, for `tab list --all`.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct HeldTab {
+    pub tab_ref: String,
+    pub target_id: String,
+    /// `created`, `adopted` or `foreign` (seen by the session, not owned).
+    pub ownership: &'static str,
+    /// Taken with `--force` (a tab the session did not own).
+    pub forced: bool,
+}
+
+/// Fill a `tab list --all` row's title, url and owner. The url is kept as
+/// Chrome reports it, only cut past [`ALL_TABS_URL_MAX_CHARS`]: it may carry
+/// tokens, which is why this lists titles and urls and never page content.
+pub(crate) fn finish_all_tabs_row(
+    row: &mut Value,
+    title: &str,
+    url: &str,
+    held: Option<&HeldTab>,
+    foreign: TabOwner,
+) {
+    let (title, title_cut) = clip_chars(title, ALL_TABS_TITLE_MAX_CHARS);
+    let (url, url_cut) = clip_chars(url, ALL_TABS_URL_MAX_CHARS);
+    row["title"] = json!(title);
+    row["url"] = json!(url);
+    if title_cut {
+        row["titleCut"] = json!(true);
+    }
+    if url_cut {
+        row["urlCut"] = json!(true);
+    }
+    let owner = match held {
+        Some(held) if held.ownership != "foreign" => {
+            row["tabId"] = json!(held.tab_ref);
+            row["ownership"] = json!(held.ownership);
+            if held.forced {
+                row["forced"] = json!(true);
+            }
+            TabOwner::This
+        }
+        Some(held) => {
+            row["tabId"] = json!(held.tab_ref);
+            row["ownership"] = json!("foreign");
+            foreign
+        }
+        None => {
+            row["ownership"] = json!("foreign");
+            foreign
+        }
+    };
+    if owner != TabOwner::This {
+        let handle = row
+            .get("handle")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        row["needsForce"] = json!(true);
+        row["actOn"] = json!(format!("--tab {handle} --force"));
+    }
+    row["ownerLabel"] = json!(owner.label());
+    row["owner"] = owner.to_json();
+}
+
+/// One relay `chrome.tabs.Tab` as a `tab list --all` row. `None` for a record
+/// without a tab id (nothing could be done with it, and Chrome always sets
+/// one on a real tab).
+pub(crate) fn relay_all_tabs_row(
+    tab: &Value,
+    held: Option<&HeldTab>,
+    attached_target: Option<&str>,
+    foreign: TabOwner,
+) -> Option<Value> {
+    let chrome_tab_id = tab.get("id").and_then(Value::as_i64)?;
+    let mut row = json!({
+        "handle": chrome_tab_handle(chrome_tab_id),
+        "chromeTabId": chrome_tab_id,
+        "windowId": tab.get("windowId").cloned().unwrap_or(Value::Null),
+        "index": tab.get("index").cloned().unwrap_or(Value::Null),
+        "active": tab.get("active").and_then(Value::as_bool).unwrap_or(false),
+    });
+    for key in ["incognito", "pinned", "discarded", "audible"] {
+        if let Some(v) = tab.get(key).and_then(Value::as_bool) {
+            row[key] = json!(v);
+        }
+    }
+    if let Some(group) = tab
+        .get("groupId")
+        .and_then(Value::as_i64)
+        .filter(|g| *g >= 0)
+    {
+        row["groupId"] = json!(group);
+    }
+    if let Some(target) = held.map(|h| h.target_id.as_str()).or(attached_target) {
+        row["targetId"] = json!(target);
+    }
+    let url = tab
+        .get("url")
+        .and_then(Value::as_str)
+        .filter(|u| !u.is_empty())
+        .or_else(|| tab.get("pendingUrl").and_then(Value::as_str))
+        .unwrap_or("");
+    let title = tab.get("title").and_then(Value::as_str).unwrap_or("");
+    finish_all_tabs_row(&mut row, title, url, held, foreign);
+    Some(row)
+}
+
+/// Order rows: this session's tabs, then other sessions' grouped by session
+/// name (unnamed last), then the user's; within each, by window, then tab
+/// index (Chrome's own order where there is no index). Stable.
+pub(crate) fn sort_all_tabs_rows(rows: &mut [Value]) {
+    fn key(row: &Value) -> (u8, u8, String, i64, i64) {
+        let kind = row.pointer("/owner/kind").and_then(Value::as_str);
+        let rank = match kind {
+            Some("self") => TabOwner::This.rank(),
+            Some("session") => 1,
+            _ => TabOwner::User.rank(),
+        };
+        let session = row.pointer("/owner/session").and_then(Value::as_str);
+        (
+            rank,
+            u8::from(rank == 1 && session.is_none()),
+            session.unwrap_or_default().to_string(),
+            row.get("windowId")
+                .and_then(Value::as_i64)
+                .unwrap_or(i64::MAX),
+            row.get("index").and_then(Value::as_i64).unwrap_or(i64::MAX),
+        )
+    }
+    rows.sort_by_key(key);
+}
+
+/// The `tab list --all` reply: at most `limit` rows, and what was left out.
+pub(crate) fn bound_all_tabs(mut rows: Vec<Value>, limit: usize, source: &str) -> Value {
+    sort_all_tabs_rows(&mut rows);
+    let total = rows.len();
+    let windows: HashSet<String> = rows
+        .iter()
+        .filter_map(|r| r.get("windowId").filter(|w| !w.is_null()))
+        .map(Value::to_string)
+        .collect();
+    let shown: Vec<Value> = rows.into_iter().take(limit).collect();
+    let omitted = total - shown.len();
+    let cut = shown
+        .iter()
+        .filter(|r| r.get("titleCut").is_some() || r.get("urlCut").is_some())
+        .count();
+    let mut out = json!({
+        "all": true,
+        "readOnly": true,
+        "source": source,
+        "total": total,
+        "shown": shown.len(),
+        "omitted": omitted,
+        "windows": windows.len(),
+        "forceHint": FORCE_HINT,
+        "browserTabs": shown,
+    });
+    let mut notes = Vec::new();
+    if omitted > 0 {
+        notes.push(format!(
+            "{omitted} tab(s) not listed: over the {limit}-row limit (pass --limit <n>, up to \
+             {ALL_TABS_MAX_LIMIT})"
+        ));
+    }
+    if cut > 0 {
+        notes.push(format!(
+            "{cut} row(s) had a title over {ALL_TABS_TITLE_MAX_CHARS} or a url over \
+             {ALL_TABS_URL_MAX_CHARS} characters, cut (titleCut / urlCut)"
+        ));
+    }
+    if !notes.is_empty() {
+        out["leftOut"] = json!(notes.join("; "));
+    }
+    out
+}
+
+/// Whose a relay Chrome tab is when this session does not hold it: the
+/// session whose ownership record names its target, else the session whose
+/// tab group it sits in (named by the group, liveness unknown), else an agent
+/// tab the extension created for a session not known by name, else the user.
+pub(crate) fn classify_relay_owner(
+    agent_tab: bool,
+    recorded_session: Option<&str>,
+    group_name: Option<&str>,
+    live: impl Fn(&str) -> bool,
+) -> TabOwner {
+    if let Some(name) = recorded_session {
+        return TabOwner::Session {
+            name: Some(name.to_string()),
+            live: Some(live(name)),
+        };
+    }
+    if let Some(group) = group_name {
+        return TabOwner::Session {
+            name: Some(group.to_string()),
+            live: None,
+        };
+    }
+    foreign_owner(agent_tab, None, live)
+}
+
+/// The facts `ABExt.state` gives about who holds which tab.
+#[derive(Debug, Default)]
+pub(crate) struct RelayHoldings {
+    /// Tabs the extension created for some session.
+    pub agent_tabs: HashSet<i64>,
+    /// Agent tab groups: group id -> name (the session's display name).
+    pub groups: HashMap<i64, String>,
+    /// Chrome tab id -> target id of every tab the relay holds attached.
+    pub attached: HashMap<i64, String>,
+}
+
+impl RelayHoldings {
+    pub(crate) fn from_state(state: Option<&Value>) -> Self {
+        let Some(state) = state else {
+            return Self::default();
+        };
+        let agent_tabs = state
+            .get("ownedTabs")
+            .and_then(Value::as_array)
+            .map(|ids| ids.iter().filter_map(Value::as_i64).collect())
+            .unwrap_or_default();
+        let groups = state
+            .get("groups")
+            .and_then(Value::as_array)
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|g| {
+                        Some((g.get("id")?.as_i64()?, g.get("name")?.as_str()?.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let attached = state
+            .get("attachedTargets")
+            .and_then(Value::as_array)
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|r| {
+                        Some((
+                            r.get("tabId")?.as_i64()?,
+                            r.get("targetId")?.as_str()?.to_string(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        RelayHoldings {
+            agent_tabs,
+            groups,
+            attached,
+        }
+    }
+
+    /// The owner of Chrome tab `chrome_tab_id` (in tab group `group_id`).
+    pub(crate) fn owner_of(
+        &self,
+        chrome_tab_id: i64,
+        group_id: Option<i64>,
+        records: &HashMap<String, String>,
+        live: impl Fn(&str) -> bool,
+    ) -> TabOwner {
+        let recorded = self
+            .attached
+            .get(&chrome_tab_id)
+            .and_then(|target| records.get(target))
+            .map(String::as_str);
+        let group = group_id
+            .and_then(|g| self.groups.get(&g))
+            .map(String::as_str);
+        classify_relay_owner(
+            self.agent_tabs.contains(&chrome_tab_id),
+            recorded,
+            group,
+            live,
+        )
+    }
+}
+
+/// What a `--force` took, kept for the result and for `close`.
+#[derive(Debug, Clone)]
+pub(crate) struct ForcedRecord {
+    pub handle: String,
+    pub title: String,
+    pub url: String,
+    pub owner: TabOwner,
+}
+
+/// The warning a forced action carries when the tab is another session's.
+pub(crate) fn forced_owner_warning(owner: &TabOwner) -> Option<String> {
+    match owner {
+        TabOwner::Session { live, .. } => Some(format!(
+            "this tab belongs to {}{}; acting on it can interfere with that session's work",
+            owner.label(),
+            if *live == Some(true) {
+                ", which is running now and may be driving it"
+            } else {
+                ""
+            }
+        )),
+        _ => None,
+    }
+}
+
+/// The `forcedTab` object a forced action reports.
+pub(crate) fn forced_tab_json(tab_ref: &str, target_id: &str, record: &ForcedRecord) -> Value {
+    json!({
+        "tabId": tab_ref,
+        "handle": record.handle,
+        "targetId": target_id,
+        "title": record.title,
+        "url": record.url,
+        "owner": record.owner.to_json(),
+        "ownerLabel": record.owner.label(),
+        "activated": false,
+    })
 }
 
 /// A successful CDP round trip is not enough: the extension reports a missing
@@ -2711,6 +3176,12 @@ pub struct BrowserManager {
     /// NEVER auto-closed on `close()` — they belong to the user. Kept separate so
     /// the "made by us, safe to close" invariant of `created_targets` holds.
     adopted_targets: HashSet<String>,
+    /// Tabs this session took with `--force` that it did not own (the user's,
+    /// or another session's), with what they were when taken. Also in
+    /// `adopted_targets` (drive rights only): `close` never closes them, and
+    /// releases its debugger hold on them instead (see
+    /// [`BrowserManager::release_forced_targets`]).
+    forced_targets: HashMap<String, ForcedRecord>,
     /// Chrome tab ids (relay `cb-tab-<id>`) of created tabs that left `pages`
     /// while still owned (the relay said their tab was gone). `close` reads
     /// them back by exact tab id instead of reporting them unverified.
@@ -2952,6 +3423,7 @@ impl BrowserManager {
                 visited_origins: HashSet::new(),
                 created_targets: HashSet::new(),
                 adopted_targets: HashSet::new(),
+                forced_targets: HashMap::new(),
                 dropped_chrome_tabs: HashMap::new(),
                 active_target_id: None,
                 relay_target_misses: HashMap::new(),
@@ -3063,6 +3535,7 @@ impl BrowserManager {
                 .map(|session| crate::connection::read_created_targets(session, &ws_url))
                 .unwrap_or_default(),
             adopted_targets: HashSet::new(),
+            forced_targets: HashMap::new(),
             dropped_chrome_tabs: HashMap::new(),
             active_target_id: None,
             relay_target_misses: HashMap::new(),
@@ -3198,6 +3671,12 @@ impl BrowserManager {
     /// a new tab — for `chrome-use adopt`. Attaches it (the relay tags it into our
     /// group), tracks + pins it. Errors if nothing matches (never creates a tab).
     async fn adopt_existing_target(&mut self, spec: &str) -> Result<(), String> {
+        // `chrome-tab:<id>` from `tab list --all`: attach exactly that Chrome
+        // tab, never a URL match.
+        if let Some(chrome_tab_id) = parse_chrome_tab_handle(spec) {
+            let target = self.attach_chrome_tab_by_id(chrome_tab_id).await?;
+            return self.adopt_target_info(target).await;
+        }
         let all = self.collect_all_targets().await?;
         let via_relay = self.via_relay();
         let target = match all.iter().find(|t| t.target_id == spec) {
@@ -3219,7 +3698,97 @@ impl BrowserManager {
                 }
             },
         };
+        self.adopt_target_info(target).await
+    }
 
+    /// Adopt only the tab an exact handle names: a `chrome-tab:<id>` (relay)
+    /// or a targetId. Never a URL substring: `--force` acts on tabs the
+    /// session does not own, so a fragment that matched the wrong tab of the
+    /// user's would be the worst possible guess.
+    async fn adopt_exact_handle(&mut self, spec: &str) -> Result<(), String> {
+        if let Some(chrome_tab_id) = parse_chrome_tab_handle(spec) {
+            let target = self.attach_chrome_tab_by_id(chrome_tab_id).await?;
+            return self.adopt_target_info(target).await;
+        }
+        let all = self.collect_all_targets().await?;
+        let Some(target) = all.into_iter().find(|t| t.target_id == spec) else {
+            let relay_hint = if self.via_relay() {
+                " Over the relay a tab the extension has not attached is named `chrome-tab:<id>`."
+            } else {
+                ""
+            };
+            return Err(format!(
+                "No tab with the handle `{spec}`. `--force` takes an exact handle from \
+                 `chrome-use tab list --all` (a targetId, a `chrome-tab:<id>` or a `t<N>`), never \
+                 a URL fragment, so it cannot act on the wrong tab.{relay_hint}"
+            ));
+        };
+        self.adopt_target_info(target).await
+    }
+
+    /// Attach one Chrome tab by its tab id through the extension
+    /// (`ABExt.attachTabById`, ab-connect 0.5.30+), without activating it.
+    async fn attach_chrome_tab_by_id(&self, chrome_tab_id: i64) -> Result<TargetInfo, String> {
+        let handle = chrome_tab_handle(chrome_tab_id);
+        if !self.via_relay() {
+            return Err(format!(
+                "`{handle}` is a relay handle (a Chrome tab id), and this session is on a direct \
+                 CDP connection, where `tab list --all` names each tab by its targetId"
+            ));
+        }
+        let capable = self
+            .relay_capabilities()
+            .await
+            .iter()
+            .any(|c| c == ATTACH_TAB_BY_ID_CAPABILITY);
+        if !capable {
+            return Err(format!(
+                "acting on `{handle}` needs ab-connect {ATTACH_BY_ID_MIN_EXTENSION_VERSION} or \
+                 newer, which attaches a tab by its Chrome tab id; update the extension from \
+                 chrome://extensions (nothing was attached)"
+            ));
+        }
+        let resp: Value = self
+            .client
+            .send_command_typed(
+                "ABExt.attachTabById",
+                &json!({ "chromeTabId": chrome_tab_id }),
+                None,
+            )
+            .await
+            .map_err(|e| format!("could not attach `{handle}`: {e}"))?;
+        let url = resp
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if resp.get("attached").and_then(Value::as_bool) != Some(true) {
+            return Err(format!(
+                "`{handle}` was not attached: Chrome does not let an extension drive that page \
+                 ({url}), or it has not loaded yet"
+            ));
+        }
+        let target_id = resp
+            .get("targetId")
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| format!("the extension attached `{handle}` but named no target"))?;
+        Ok(TargetInfo {
+            target_id: target_id.to_string(),
+            target_type: "page".to_string(),
+            title: resp
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            url,
+            attached: Some(true),
+            browser_context_id: None,
+        })
+    }
+
+    /// Attach `target`, track it as adopted (never created) and pin it.
+    async fn adopt_target_info(&mut self, target: TargetInfo) -> Result<(), String> {
         let attach: AttachToTargetResult = self
             .client
             .send_command_typed(
@@ -3281,6 +3850,571 @@ impl BrowserManager {
         self.adopt_existing_target(spec).await?;
         self.active_page_info()
             .ok_or_else(|| "Adopted tab could not be resolved".to_string())
+    }
+
+    // -----------------------------------------------------------------------
+    // `tab list --all` and `--force`
+    // -----------------------------------------------------------------------
+
+    fn session_name(&self) -> String {
+        DAEMON_SESSION
+            .get()
+            .cloned()
+            .unwrap_or_else(|| "default".to_string())
+    }
+
+    /// The owner other sessions' ownership records give `target_id`, else the
+    /// user. Ignores this session's own sets: for describing a tab it does
+    /// not own.
+    fn owner_in_records(&self, target_id: &str) -> TabOwner {
+        let records = crate::connection::created_targets_by_other_sessions(&self.session_name());
+        foreign_owner(
+            false,
+            records.get(target_id).map(String::as_str),
+            session_is_live,
+        )
+    }
+
+    /// Whose `target_id` is: this session's when it created or adopted it,
+    /// else what other sessions' records say, else the user's.
+    pub(crate) fn owner_from_records(&self, target_id: &str) -> TabOwner {
+        if self.owned_targets().contains(target_id) {
+            return TabOwner::This;
+        }
+        self.owner_in_records(target_id)
+    }
+
+    /// This session's view of `page` for `tab list --all`.
+    fn held_tab(&self, page: &PageInfo) -> HeldTab {
+        HeldTab {
+            tab_ref: format_tab_id(page.tab_id),
+            target_id: page.target_id.clone(),
+            ownership: tab_ownership(
+                self.browser_process.is_none(),
+                &page.target_id,
+                &self.created_targets,
+                &self.adopted_targets,
+            )
+            .unwrap_or("created"),
+            forced: self.forced_targets.contains_key(&page.target_id),
+        }
+    }
+
+    /// `tab list --all`: every tab in the connected profile, across windows,
+    /// including the user's own and other sessions'. Pure observation: over
+    /// the relay `chrome.tabs.query` and `ABExt.state`; on direct CDP
+    /// `Target.getTargets` and `Browser.getWindowForTarget`. Nothing is
+    /// attached, activated, focused, moved or reloaded, and no page is read.
+    pub async fn list_all_tabs(&self, limit: usize) -> Result<Value, String> {
+        let limit = limit.clamp(1, ALL_TABS_MAX_LIMIT);
+        let records = crate::connection::created_targets_by_other_sessions(&self.session_name());
+        // Whether each session the records name is running, asked once.
+        let live: HashMap<String, bool> = records
+            .values()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .map(|session| (session.clone(), session_is_live(session)))
+            .collect();
+        if self.via_relay() {
+            self.list_all_tabs_relay(limit, &records, &live).await
+        } else {
+            self.list_all_tabs_cdp(limit, &records, &live).await
+        }
+    }
+
+    async fn list_all_tabs_relay(
+        &self,
+        limit: usize,
+        records: &HashMap<String, String>,
+        live_sessions: &HashMap<String, bool>,
+    ) -> Result<Value, String> {
+        let live = |s: &str| live_sessions.get(s).copied().unwrap_or(false);
+        let tabs = self
+            .chrome_call("tabs", "query", json!([{}]))
+            .await
+            .map_err(|e| {
+                let lower = e.to_ascii_lowercase();
+                if lower.contains("abext.call")
+                    && (lower.contains("wasn't found")
+                        || lower.contains("method not found")
+                        || lower.contains("-32601"))
+                {
+                    format!(
+                        "tab list --all over the relay needs ab-connect 0.5.25 or newer (it \
+                         reads chrome.tabs through ABExt.call); update the extension from \
+                         chrome://extensions ({e})"
+                    )
+                } else {
+                    format!("tab list --all: chrome.tabs.query failed: {e}")
+                }
+            })?;
+        let tabs = tabs
+            .as_array()
+            .cloned()
+            .ok_or_else(|| "tab list --all: chrome.tabs.query returned no list".to_string())?;
+        let state = self
+            .client
+            .send_command("ABExt.state", None, None)
+            .await
+            .ok();
+        let holdings = RelayHoldings::from_state(state.as_ref());
+        let mut held: HashMap<i64, HeldTab> = HashMap::new();
+        for page in &self.pages {
+            let chrome_tab = relay_chrome_tab_id(&page.session_id).or_else(|| {
+                holdings
+                    .attached
+                    .iter()
+                    .find(|(_, t)| **t == page.target_id)
+                    .map(|(id, _)| *id)
+            });
+            if let Some(id) = chrome_tab {
+                held.insert(id, self.held_tab(page));
+            }
+        }
+        let rows: Vec<Value> = tabs
+            .iter()
+            .filter_map(|tab| {
+                let id = tab.get("id").and_then(Value::as_i64)?;
+                let group = tab
+                    .get("groupId")
+                    .and_then(Value::as_i64)
+                    .filter(|g| *g >= 0);
+                let owner = holdings.owner_of(id, group, records, live);
+                relay_all_tabs_row(
+                    tab,
+                    held.get(&id),
+                    holdings.attached.get(&id).map(String::as_str),
+                    owner,
+                )
+            })
+            .collect();
+        let mut out = bound_all_tabs(rows, limit, "relay:chrome.tabs.query");
+        if state.is_none() {
+            out["ownershipNote"] = json!(
+                "the extension did not answer ABExt.state, so other sessions' tabs may be \
+                 listed as the user's"
+            );
+        }
+        Ok(out)
+    }
+
+    async fn list_all_tabs_cdp(
+        &self,
+        limit: usize,
+        records: &HashMap<String, String>,
+        live_sessions: &HashMap<String, bool>,
+    ) -> Result<Value, String> {
+        let live = |s: &str| live_sessions.get(s).copied().unwrap_or(false);
+        let result: GetTargetsResult = self
+            .client
+            .send_command_typed("Target.getTargets", &json!({}), None)
+            .await?;
+        let pages: Vec<TargetInfo> = result
+            .target_infos
+            .into_iter()
+            .filter(|t| t.target_type == "page")
+            .take(ALL_TABS_MAX_LIMIT)
+            .collect();
+        let windows = futures_util::future::join_all(pages.iter().map(|t| async move {
+            let lookup = self.client.send_command(
+                "Browser.getWindowForTarget",
+                Some(json!({ "targetId": t.target_id })),
+                None,
+            );
+            match tokio::time::timeout(ALL_TABS_WINDOW_LOOKUP_BUDGET, lookup).await {
+                Ok(Ok(v)) => v.get("windowId").and_then(Value::as_i64),
+                _ => None,
+            }
+        }))
+        .await;
+        let rows: Vec<Value> = pages
+            .iter()
+            .zip(windows)
+            .enumerate()
+            .map(|(order, (t, window))| {
+                let mut row = json!({
+                    "handle": t.target_id,
+                    "targetId": t.target_id,
+                    "windowId": window,
+                    "index": order,
+                });
+                if let Some(ctx) = t.browser_context_id.as_deref() {
+                    row["browserContextId"] = json!(ctx);
+                }
+                let held = self
+                    .pages
+                    .iter()
+                    .find(|p| p.target_id == t.target_id)
+                    .map(|p| self.held_tab(p));
+                let owner =
+                    foreign_owner(false, records.get(&t.target_id).map(String::as_str), live);
+                finish_all_tabs_row(&mut row, &t.title, &t.url, held.as_ref(), owner);
+                row
+            })
+            .collect();
+        let mut out = bound_all_tabs(rows, limit, "cdp:Target.getTargets");
+        out["activeUnknown"] = json!(
+            "direct CDP does not say which tab is active in its window; `active` is listed over \
+             the extension relay only"
+        );
+        Ok(out)
+    }
+
+    /// The owner of relay Chrome tab `chrome_tab_id`, read before a
+    /// `--force` attaches it (observation only).
+    pub(crate) async fn relay_tab_owner(&self, chrome_tab_id: i64) -> TabOwner {
+        let records = crate::connection::created_targets_by_other_sessions(&self.session_name());
+        let state = self
+            .client
+            .send_command("ABExt.state", None, None)
+            .await
+            .ok();
+        let holdings = RelayHoldings::from_state(state.as_ref());
+        let group = self
+            .chrome_call("tabs", "get", json!([chrome_tab_id]))
+            .await
+            .ok()
+            .and_then(|tab| tab.get("groupId").and_then(Value::as_i64))
+            .filter(|g| *g >= 0);
+        holdings.owner_of(chrome_tab_id, group, &records, session_is_live)
+    }
+
+    /// `--tab <handle> --force`: let this session act on a tab it does not
+    /// own (the user's own, or another session's), named by an exact handle
+    /// from `tab list --all` or a `t<N>` the session already sees. The tab is
+    /// attached in place: not activated, not focused, not moved, and its
+    /// window is left alone. It is tracked as adopted and recorded as forced,
+    /// so `close` never closes it and releases it instead.
+    ///
+    /// Returns the tab's `t<N>`, and the forced record (`None` when the tab
+    /// already was this session's and nothing was forced).
+    pub async fn force_adopt(&mut self, spec: &str) -> Result<(String, Option<Value>), String> {
+        let spec = spec.trim();
+        if spec.is_empty() {
+            return Err("--force needs a tab handle from `chrome-use tab list --all`".to_string());
+        }
+        let owned_before = self.owned_targets();
+        let known = self.tab_id_for_target(spec).or_else(|| {
+            TabRef::parse(spec)
+                .ok()
+                .and_then(|r| self.resolve_tab_ref(&r).ok())
+        });
+        let mut owner = None;
+        match known {
+            Some(tab_id) => {
+                let target = self
+                    .target_id_for_tab(tab_id)
+                    .unwrap_or_default()
+                    .to_string();
+                if owned_before.contains(&target) {
+                    return Ok((format_tab_id(tab_id), None));
+                }
+                self.adopt_exact_handle(&target).await?;
+            }
+            None => {
+                if let Some(chrome_tab_id) = parse_chrome_tab_handle(spec) {
+                    if self.via_relay() {
+                        owner = Some(self.relay_tab_owner(chrome_tab_id).await);
+                    }
+                }
+                self.adopt_exact_handle(spec).await?;
+            }
+        }
+        let target = self
+            .active_target_id
+            .clone()
+            .ok_or_else(|| "the forced tab could not be resolved".to_string())?;
+        if owned_before.contains(&target) {
+            let tab_ref = self
+                .tab_id_for_target(&target)
+                .map(format_tab_id)
+                .unwrap_or_default();
+            return Ok((tab_ref, None));
+        }
+        let owner = match owner {
+            Some(TabOwner::User) | None => self.owner_in_records(&target),
+            Some(other) => other,
+        };
+        let page = self
+            .pages
+            .iter()
+            .find(|p| p.target_id == target)
+            .ok_or_else(|| "the forced tab could not be resolved".to_string())?;
+        let tab_ref = format_tab_id(page.tab_id);
+        let record = ForcedRecord {
+            handle: spec.to_string(),
+            title: page.title.clone(),
+            url: page.url.clone(),
+            owner,
+        };
+        let mut out = json!({
+            "forced": true,
+            "forcedTab": forced_tab_json(&tab_ref, &target, &record),
+        });
+        if let Some(w) = forced_owner_warning(&record.owner) {
+            out["warning"] = json!(w);
+        }
+        self.forced_targets.insert(target, record);
+        Ok((tab_ref, Some(out)))
+    }
+
+    /// Whether `spec` names one of this session's tabs that it created.
+    pub fn names_created_tab(&self, spec: Option<&str>) -> bool {
+        let target = match spec {
+            None => self.active_target_id.clone(),
+            Some(spec) => self
+                .tab_id_for_target(spec)
+                .or_else(|| {
+                    TabRef::parse(spec)
+                        .ok()
+                        .and_then(|r| self.resolve_tab_ref(&r).ok())
+                })
+                .and_then(|id| self.target_id_for_tab(id).map(str::to_string)),
+        };
+        target.is_some_and(|t| self.created_targets.contains(&t))
+    }
+
+    /// The `t<N>` of the session's own (created or adopted) tab a relay
+    /// `chrome-tab:<id>` handle names, if it is one.
+    pub fn owned_tab_ref_for_handle(&self, handle: &str) -> Option<String> {
+        let chrome_tab_id = parse_chrome_tab_handle(handle)?;
+        let owned = self.owned_targets();
+        self.pages
+            .iter()
+            .find(|p| {
+                relay_chrome_tab_id(&p.session_id) == Some(chrome_tab_id)
+                    && owned.contains(&p.target_id)
+            })
+            .map(|p| format_tab_id(p.tab_id))
+    }
+
+    /// Pin `target` again when it is still one of the session's pages.
+    fn repin_target(&mut self, target: Option<&str>) -> bool {
+        let Some(target) = target else {
+            return false;
+        };
+        let Some(index) = self.pages.iter().position(|p| p.target_id == target) else {
+            return false;
+        };
+        self.active_page_index = index;
+        self.active_target_id = Some(target.to_string());
+        true
+    }
+
+    /// `tab close <handle> --force`: close a tab this session did not create
+    /// (the user's own, adopted, or another session's), read it back, and
+    /// keep the session on the tab it was driving. `spec` `None` closes the
+    /// active tab. Tabs the session created go through [`Self::tab_close`].
+    pub async fn tab_close_forced(&mut self, spec: Option<&str>) -> Result<Value, String> {
+        let previous = self.active_target_id.clone();
+        let forced = match spec {
+            Some(spec) => match self.force_adopt(spec).await {
+                Ok((_, forced)) => forced,
+                Err(e) => {
+                    self.repin_target(previous.as_deref());
+                    return Err(e);
+                }
+            },
+            None => None,
+        };
+        let target = match spec {
+            Some(spec) => self
+                .tab_id_for_target(spec)
+                .or_else(|| {
+                    TabRef::parse(spec)
+                        .ok()
+                        .and_then(|r| self.resolve_tab_ref(&r).ok())
+                })
+                .and_then(|id| self.target_id_for_tab(id).map(str::to_string))
+                .or_else(|| self.active_target_id.clone()),
+            None => {
+                let index = strict_session_index(
+                    &self.pages,
+                    self.active_target_id.as_deref(),
+                    self.active_page_index,
+                    self.browser_process.is_none(),
+                    &self.owned_targets(),
+                )
+                .ok();
+                index
+                    .and_then(|i| self.pages.get(i))
+                    .map(|p| p.target_id.clone())
+            }
+        }
+        .ok_or_else(|| {
+            "No tab to close; run `chrome-use tab list --all` and name one".to_string()
+        })?;
+        if self.created_targets.contains(&target) {
+            self.repin_target(previous.as_deref());
+            return Err(
+                "that tab is one this session created; close it with `tab close` (no --force)"
+                    .to_string(),
+            );
+        }
+        let Some(index) = self.pages.iter().position(|p| p.target_id == target) else {
+            self.repin_target(previous.as_deref());
+            return Err("the tab to close is not one of the session's pages".to_string());
+        };
+        let page = self.pages[index].clone();
+        let record = self
+            .forced_targets
+            .get(&target)
+            .cloned()
+            .unwrap_or_else(|| ForcedRecord {
+                handle: spec.unwrap_or(&target).to_string(),
+                title: page.title.clone(),
+                url: page.url.clone(),
+                owner: self.owner_in_records(&target),
+            });
+        let tab_ref = format_tab_id(page.tab_id);
+        let chrome_tabs: HashMap<String, i64> = relay_chrome_tab_id(&page.session_id)
+            .map(|id| HashMap::from([(target.clone(), id)]))
+            .unwrap_or_default();
+        let verdicts = close_and_verify_targets(
+            &self.client,
+            &HashSet::from([target.clone()]),
+            chrome_tabs,
+            self.on_relay(),
+            CLOSE_TOTAL_BUDGET,
+        )
+        .await;
+        let not_closed = |what: String| {
+            format!(
+                "tab {tab_ref} ({}) was not closed: {what} (targetId {target}). Run `chrome-use \
+                 tab list --all` to check it",
+                record.url
+            )
+        };
+        let failure = match verdicts.get(&target) {
+            Some(TabPresence::Absent) => None,
+            Some(TabPresence::Present) => Some(not_closed("Chrome still reports it open".into())),
+            Some(TabPresence::Unsupported(reason)) | Some(TabPresence::Unverified(reason)) => Some(
+                not_closed(format!("it could not be confirmed gone ({reason})")),
+            ),
+            None => Some(not_closed("it was not read back".into())),
+        };
+        if let Some(e) = failure {
+            if previous.as_deref() != Some(target.as_str()) {
+                self.repin_target(previous.as_deref());
+            }
+            return Err(e);
+        }
+        self.pages.remove(index);
+        self.adopted_targets.remove(&target);
+        self.forced_targets.remove(&target);
+        self.dropped_chrome_tabs.remove(&target);
+        let kept_pin =
+            previous.as_deref() != Some(target.as_str()) && self.repin_target(previous.as_deref());
+        if !kept_pin {
+            self.update_active_page_after_removal(index);
+            self.pin_active_target();
+        }
+        if let Some(session_id) = self
+            .pages
+            .get(self.active_page_index)
+            .map(|p| p.session_id.clone())
+        {
+            let _ = self.enable_domains(&session_id).await;
+        }
+        let mut out = json!({
+            "tabId": tab_ref,
+            "closed": true,
+            "verifiedAbsent": true,
+            "verifiedBy": self.verification_source(),
+            "forced": true,
+            "forcedTab": forced_tab_json(&tab_ref, &target, &record),
+        });
+        if let Some(w) = forced
+            .as_ref()
+            .and_then(|f| f.get("warning"))
+            .and_then(Value::as_str)
+        {
+            out["warning"] = json!(w);
+        }
+        Ok(out)
+    }
+
+    /// Let go of every tab taken with `--force`, for `close`: never close
+    /// one, release the debugger hold instead. Over the relay that is
+    /// `ABExt.releaseTab` (ab-connect 0.5.34+; an older extension keeps the
+    /// tab attached until it restarts, and the report says so); on direct
+    /// CDP, `Target.detachFromTarget`. Returns one report row per tab.
+    pub async fn release_forced_targets(&mut self) -> Vec<Value> {
+        if self.forced_targets.is_empty() {
+            return Vec::new();
+        }
+        let relay = self.via_relay();
+        let can_release = !relay
+            || self
+                .relay_capabilities()
+                .await
+                .iter()
+                .any(|c| c == RELEASE_TAB_CAPABILITY);
+        let forced: Vec<(String, ForcedRecord)> = self.forced_targets.drain().collect();
+        let mut report = Vec::new();
+        for (target, record) in forced {
+            let session_id = self
+                .pages
+                .iter()
+                .find(|p| p.target_id == target)
+                .map(|p| p.session_id.clone());
+            let release = if self.created_targets.contains(&target) {
+                // Never: a created tab is closed with the session instead.
+                continue;
+            } else if session_id.is_none() {
+                "gone".to_string()
+            } else if self.browser_process.is_some() {
+                "the browser closes with the session".to_string()
+            } else if relay && !can_release {
+                format!(
+                    "left attached: releasing it needs ab-connect \
+                     {RELEASE_TAB_MIN_EXTENSION_VERSION}; the extension lets it go when it restarts"
+                )
+            } else if relay {
+                match self
+                    .client
+                    .send_command(
+                        "ABExt.releaseTab",
+                        Some(json!({ "targetId": target })),
+                        None,
+                    )
+                    .await
+                {
+                    Ok(v) if v.get("released").and_then(Value::as_bool) == Some(true) => {
+                        "released".to_string()
+                    }
+                    Ok(v) => format!(
+                        "not released: {}",
+                        v.get("reason").and_then(Value::as_str).unwrap_or("unknown")
+                    ),
+                    Err(e) => format!("not released: {e}"),
+                }
+            } else {
+                match self
+                    .client
+                    .send_command(
+                        "Target.detachFromTarget",
+                        Some(json!({ "sessionId": session_id })),
+                        None,
+                    )
+                    .await
+                {
+                    Ok(_) => "detached".to_string(),
+                    Err(e) => format!("not detached: {e}"),
+                }
+            };
+            self.adopted_targets.remove(&target);
+            report.push(json!({
+                "targetId": target,
+                "handle": record.handle,
+                "title": record.title,
+                "url": record.url,
+                "owner": record.owner.to_json(),
+                "leftOpen": session_id.is_some(),
+                "release": release,
+            }));
+        }
+        report
     }
 
     /// Ask the extension to find a pre-existing tab by `spec` (targetId or URL
@@ -4430,6 +5564,10 @@ impl BrowserManager {
             // sequential walk over N tabs never finished N round trips. Firing
             // them together means one stuck tab costs only itself, and the total
             // stays inside the shutdown budget the caller allows us.
+            //
+            // Tabs taken with `--force` are the user's (or another session's):
+            // never closed here, only released from the debugger.
+            let _ = self.release_forced_targets().await;
             if !self.created_targets.is_empty() {
                 let remaining_before_cleanup = self.created_targets.len();
                 close_created_targets(
@@ -6825,6 +7963,7 @@ impl BrowserManager {
         Err(refuse_unowned_tab_close_message(
             target.tab_id,
             self.adopted_targets.contains(&target.target_id),
+            &self.owner_from_records(&target.target_id),
         ))
     }
 
@@ -7802,7 +8941,11 @@ impl BrowserManager {
             &target.target_id,
             &self.owned_targets(),
         ) {
-            return Err(refuse_unowned_tab_message(target.tab_id, &target.target_id));
+            return Err(refuse_unowned_tab_message(
+                target.tab_id,
+                &target.target_id,
+                &self.owner_from_records(&target.target_id),
+            ));
         }
         let mut warning = None;
         if activate {
@@ -8198,6 +9341,7 @@ async fn initialize_lightpanda_manager(
             visited_origins: HashSet::new(),
             created_targets: HashSet::new(),
             adopted_targets: HashSet::new(),
+            forced_targets: HashMap::new(),
             dropped_chrome_tabs: HashMap::new(),
             active_target_id: None,
             relay_target_misses: HashMap::new(),
@@ -8309,7 +9453,7 @@ async fn resolve_cdp_url(input: &str) -> Result<String, String> {
 mod honest_close_tests {
     use super::{
         presence_from_tab_presence, presence_from_targets, refuse_unowned_tab_close_message,
-        tab_close_is_allowed, CloseReport, GetTargetsResult, TabPresence, TargetInfo,
+        tab_close_is_allowed, CloseReport, GetTargetsResult, TabOwner, TabPresence, TargetInfo,
     };
     use serde_json::json;
     use std::collections::HashSet;
@@ -8500,12 +9644,25 @@ mod honest_close_tests {
         assert!(tab_close_is_allowed(true, "MINE", &created));
         assert!(!tab_close_is_allowed(true, "ADOPTED", &created));
         assert!(!tab_close_is_allowed(true, "USER", &created));
-        let adopted = refuse_unowned_tab_close_message(2, true);
+        let adopted = refuse_unowned_tab_close_message(2, true, &TabOwner::User);
         assert!(adopted.contains("tab t2"), "{adopted}");
         assert!(adopted.contains("adopted"), "{adopted}");
         assert!(adopted.contains("`chrome-use close`"), "{adopted}");
-        let foreign = refuse_unowned_tab_close_message(3, false);
+        let foreign = refuse_unowned_tab_close_message(
+            3,
+            false,
+            &TabOwner::Session {
+                name: Some("other".into()),
+                live: Some(true),
+            },
+        );
         assert!(foreign.contains("`chrome-use tab list`"), "{foreign}");
+        assert!(
+            foreign.contains("belongs to session other (live)"),
+            "{foreign}"
+        );
+        assert!(foreign.contains("tab close t3 --force"), "{foreign}");
+        assert!(adopted.contains("its owner, the user"), "{adopted}");
     }
 }
 
@@ -10165,7 +11322,9 @@ mod tests {
     /// be a dead end.
     #[test]
     fn unowned_tab_refusal_hints_adopt_by_target_id() {
-        let msg = refuse_unowned_tab_message(1, "FOREIGN-TARGET-ID");
+        let msg = refuse_unowned_tab_message(1, "FOREIGN-TARGET-ID", &TabOwner::User);
+        assert!(msg.contains("belongs to the user"), "{msg}");
+        assert!(msg.contains("--tab FOREIGN-TARGET-ID --force"), "{msg}");
 
         assert!(msg.contains("did not create or adopt it"), "{msg}");
         assert!(
@@ -11260,5 +12419,237 @@ mod first_tab_custody_tests {
         assert_eq!(chrome.0.lock().unwrap().created, 1, "a tab was opened");
         first_tab::release_unsaved(&url, &held);
         first_tab::forget_tab_ids(&url, &held);
+    }
+}
+
+#[cfg(test)]
+mod all_tabs_tests {
+    use super::{
+        bound_all_tabs, chrome_tab_handle, classify_relay_owner, finish_all_tabs_row,
+        forced_owner_warning, parse_chrome_tab_handle, relay_all_tabs_row, HeldTab, RelayHoldings,
+        TabOwner, ALL_TABS_MAX_LIMIT,
+    };
+    use serde_json::{json, Value};
+    use std::collections::HashMap;
+
+    fn user() -> TabOwner {
+        TabOwner::User
+    }
+
+    fn session(name: &str, live: bool) -> TabOwner {
+        TabOwner::Session {
+            name: Some(name.to_string()),
+            live: Some(live),
+        }
+    }
+
+    fn chrome_tab(id: i64, window: i64, index: i64) -> Value {
+        json!({ "id": id, "windowId": window, "index": index, "active": index == 0,
+                "title": format!("tab {id}"), "url": format!("https://x.example/{id}?token=s3cret"),
+                "pinned": false, "incognito": false, "discarded": false, "groupId": -1 })
+    }
+
+    #[test]
+    fn chrome_tab_handles_round_trip_and_reject_anything_else() {
+        assert_eq!(parse_chrome_tab_handle("chrome-tab:12"), Some(12));
+        assert_eq!(parse_chrome_tab_handle(" chrome-tab:0 "), Some(0));
+        assert_eq!(chrome_tab_handle(12), "chrome-tab:12");
+        for bad in [
+            "chrome-tab:",
+            "chrome-tab:-1",
+            "chrome-tab:x",
+            "t2",
+            "12",
+            "ABCDEF",
+        ] {
+            assert_eq!(parse_chrome_tab_handle(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_user_tab_row_says_whose_it_is_and_how_to_act_on_it() {
+        let mut tab = chrome_tab(5, 1, 2);
+        tab["pinned"] = json!(true);
+        let row = relay_all_tabs_row(&tab, None, None, user()).unwrap();
+        assert_eq!(row["handle"], "chrome-tab:5");
+        assert_eq!(row["chromeTabId"], 5);
+        assert_eq!(row["windowId"], 1);
+        assert_eq!(row["active"], false);
+        assert_eq!(row["pinned"], true);
+        assert_eq!(row["incognito"], false);
+        assert!(row.get("groupId").is_none(), "{row}");
+        assert!(row.get("targetId").is_none(), "{row}");
+        assert!(row.get("tabId").is_none(), "{row}");
+        // The url is as Chrome reports it, token included.
+        assert_eq!(row["url"], "https://x.example/5?token=s3cret");
+        assert_eq!(row["ownership"], "foreign");
+        assert_eq!(row["owner"], json!({ "kind": "user" }));
+        assert_eq!(row["ownerLabel"], "the user");
+        assert_eq!(row["needsForce"], true);
+        assert_eq!(row["actOn"], "--tab chrome-tab:5 --force");
+    }
+
+    #[test]
+    fn the_sessions_own_tab_needs_no_force() {
+        let held = HeldTab {
+            tab_ref: "t2".to_string(),
+            target_id: "T2".to_string(),
+            ownership: "created",
+            forced: false,
+        };
+        let row =
+            relay_all_tabs_row(&chrome_tab(7, 3, 0), Some(&held), Some("T2"), user()).unwrap();
+        assert_eq!(row["tabId"], "t2");
+        assert_eq!(row["targetId"], "T2");
+        assert_eq!(row["ownership"], "created");
+        assert_eq!(row["owner"], json!({ "kind": "self" }));
+        assert_eq!(row["ownerLabel"], "this session");
+        assert!(row.get("needsForce").is_none(), "{row}");
+        let forced = HeldTab {
+            ownership: "adopted",
+            forced: true,
+            ..held
+        };
+        let row = relay_all_tabs_row(&chrome_tab(7, 3, 0), Some(&forced), None, user()).unwrap();
+        assert_eq!(row["forced"], true);
+        assert_eq!(row["owner"]["kind"], "self");
+    }
+
+    #[test]
+    fn long_titles_and_urls_are_cut_and_flagged() {
+        let mut row = json!({ "handle": "T" });
+        let title = "é".repeat(1000);
+        let url = format!("https://a.example/{}", "q".repeat(5000));
+        finish_all_tabs_row(&mut row, &title, &url, None, user());
+        assert_eq!(row["title"].as_str().unwrap().chars().count(), 300);
+        assert_eq!(row["url"].as_str().unwrap().chars().count(), 2048);
+        assert_eq!(row["titleCut"], true);
+        assert_eq!(row["urlCut"], true);
+    }
+
+    #[test]
+    fn owners_come_from_records_then_groups_then_extension_ownership() {
+        let state = json!({
+            "ownedTabs": [10, 11, 12],
+            "groups": [{ "name": "builder", "id": 900 }],
+            "attachedTargets": [
+                { "targetId": "TA", "tabId": 10, "attached": true },
+                { "targetId": "TU", "tabId": 20, "attached": true },
+            ],
+        });
+        let holdings = RelayHoldings::from_state(Some(&state));
+        let records: HashMap<String, String> = [("TA".to_string(), "alpha".to_string())]
+            .into_iter()
+            .collect();
+        let live = |s: &str| s == "alpha";
+        assert_eq!(
+            holdings.owner_of(10, None, &records, live),
+            session("alpha", true)
+        );
+        assert_eq!(
+            holdings.owner_of(11, Some(900), &records, live),
+            TabOwner::Session {
+                name: Some("builder".to_string()),
+                live: None
+            }
+        );
+        assert_eq!(
+            holdings.owner_of(12, None, &records, live),
+            TabOwner::Session {
+                name: None,
+                live: None
+            }
+        );
+        // Attached but nobody's record and not an agent tab: the user's.
+        assert_eq!(holdings.owner_of(20, None, &records, live), user());
+        assert_eq!(holdings.owner_of(30, Some(5), &records, live), user());
+        // No state at all: everyone is the user, nothing is invented.
+        let none = RelayHoldings::from_state(None);
+        assert_eq!(none.owner_of(10, Some(900), &records, live), user());
+        assert_eq!(
+            classify_relay_owner(false, Some("beta"), None, |_| false),
+            session("beta", false)
+        );
+    }
+
+    #[test]
+    fn owner_labels_and_json_are_the_same_three_kinds() {
+        assert_eq!(TabOwner::This.to_json(), json!({ "kind": "self" }));
+        assert_eq!(
+            session("alpha", true).to_json(),
+            json!({ "kind": "session", "session": "alpha", "live": true })
+        );
+        assert_eq!(session("alpha", true).label(), "session alpha (live)");
+        assert_eq!(
+            session("alpha", false).label(),
+            "session alpha (not running)"
+        );
+        assert_eq!(user().to_json(), json!({ "kind": "user" }));
+        assert!(forced_owner_warning(&session("alpha", true))
+            .unwrap()
+            .contains("running now"));
+        assert!(forced_owner_warning(&session("alpha", false)).is_some());
+        assert_eq!(forced_owner_warning(&user()), None);
+        assert_eq!(forced_owner_warning(&TabOwner::This), None);
+    }
+
+    #[test]
+    fn rows_are_ordered_self_then_sessions_by_name_then_user_by_window_and_index() {
+        let row = |id: i64, window: i64, index: i64, owner: TabOwner| {
+            relay_all_tabs_row(&chrome_tab(id, window, index), None, None, owner).unwrap()
+        };
+        let held = HeldTab {
+            tab_ref: "t1".to_string(),
+            target_id: "M".to_string(),
+            ownership: "created",
+            forced: false,
+        };
+        let mine = relay_all_tabs_row(&chrome_tab(1, 9, 4), Some(&held), None, user()).unwrap();
+        let rows = vec![
+            row(2, 2, 1, user()),
+            row(3, 1, 3, session("zeta", true)),
+            row(4, 1, 0, user()),
+            row(
+                5,
+                1,
+                0,
+                TabOwner::Session {
+                    name: None,
+                    live: None,
+                },
+            ),
+            row(6, 2, 0, session("alpha", false)),
+            mine,
+            row(7, 1, 1, session("alpha", false)),
+            row(8, 2, 0, user()),
+        ];
+        let out = bound_all_tabs(rows, 100, "test");
+        let order: Vec<i64> = out["browserTabs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["chromeTabId"].as_i64().unwrap())
+            .collect();
+        assert_eq!(order, vec![1, 7, 6, 3, 5, 4, 8, 2]);
+        assert_eq!(out["total"], 8);
+        assert_eq!(out["omitted"], 0);
+        assert_eq!(out["windows"], 3);
+        assert_eq!(out["readOnly"], true);
+        assert!(out["forceHint"].as_str().unwrap().contains("--force"));
+        assert!(out.get("leftOut").is_none());
+    }
+
+    #[test]
+    fn the_listing_is_bounded_and_says_what_it_left_out() {
+        let rows: Vec<Value> = (0..250)
+            .map(|i| relay_all_tabs_row(&chrome_tab(i, 1, i), None, None, user()).unwrap())
+            .collect();
+        let out = bound_all_tabs(rows, 200, "test");
+        assert_eq!(out["shown"], 200);
+        assert_eq!(out["omitted"], 50);
+        assert_eq!(out["browserTabs"].as_array().unwrap().len(), 200);
+        let left = out["leftOut"].as_str().unwrap();
+        assert!(left.contains("50 tab(s) not listed"), "{left}");
+        assert!(left.contains(&ALL_TABS_MAX_LIMIT.to_string()), "{left}");
     }
 }

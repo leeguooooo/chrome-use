@@ -33,6 +33,46 @@ pub enum ParseError {
 const PICK_USAGE: &str =
     "pick <selector|@ref> --option \"<text>\"  (or: pick <selector|@ref> \"<text>\")";
 
+const TAB_LIST_USAGE: &str = "tab list [--full] [--all [--limit <n>]]";
+
+/// `tab list [--full] [--all [--limit <n>]]`. `--all` lists every tab in the
+/// connected profile (read-only); `--limit` bounds it and needs `--all`.
+fn tab_list_command(
+    id: &str,
+    rest: &[&str],
+    full: bool,
+    limit: Option<&str>,
+) -> Result<Value, ParseError> {
+    let mut cmd = json!({ "id": id, "action": "tab_list" });
+    if full {
+        cmd["full"] = json!(true);
+    }
+    let all = rest.contains(&"--all");
+    if rest.contains(&"--limit") {
+        if !all {
+            return Err(ParseError::InvalidValue {
+                message: "--limit applies to `tab list --all` only".to_string(),
+                usage: TAB_LIST_USAGE,
+            });
+        }
+        let n = limit
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|n| *n >= 1)
+            .ok_or_else(|| ParseError::InvalidValue {
+                message: format!(
+                    "--limit needs a positive number of rows, got {:?}",
+                    limit.unwrap_or("")
+                ),
+                usage: TAB_LIST_USAGE,
+            })?;
+        cmd["limit"] = json!(n);
+    }
+    if all {
+        cmd["all"] = json!(true);
+    }
+    Ok(cmd)
+}
+
 /// `pick` arguments: `<target> --option <text…>` or the positional sugar
 /// `<target> <text…>`. A stray word between the target and `--option`, or an
 /// unknown flag in the positional form, is ambiguous and refused rather than
@@ -565,6 +605,11 @@ fn stamp_command_flags(result: &mut Value, flags: &Flags) {
         if let Some(obj) = result.as_object_mut() {
             if !obj.contains_key("tabId") && !obj.contains_key("tab") {
                 obj.insert("tabId".to_string(), json!(t));
+            }
+            // `--tab <handle> --force`: act on a tab the session does not own
+            // (the user's own), in place, only on the user's request.
+            if flags.tab_force {
+                obj.insert("forceTab".to_string(), json!(true));
             }
         }
     }
@@ -3133,7 +3178,21 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // the subcommand as the first non-flag arg so the flag can appear
             // anywhere (`tab --full`, `tab list --full`).
             let full = rest.contains(&"--full");
-            match rest.iter().find(|a| !a.starts_with("--")).copied() {
+            // `--limit <n>` belongs to `tab list --all`; its value is not a
+            // subcommand (`tab --all --limit 50` is still a listing).
+            let limit_value = rest
+                .iter()
+                .position(|a| *a == "--limit")
+                .and_then(|i| rest.get(i + 1))
+                .copied();
+            let subcommand = rest
+                .iter()
+                .enumerate()
+                .find(|(i, a)| {
+                    !a.starts_with("--") && !(*i > 0 && rest.get(i - 1) == Some(&"--limit"))
+                })
+                .map(|(_, a)| *a);
+            match subcommand {
                 Some("new") => {
                     // Accepted forms:
                     //   tab new [url]
@@ -3213,13 +3272,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     }
                     Ok(cmd)
                 }
-                Some("list") => {
-                    let mut cmd = json!({ "id": id, "action": "tab_list" });
-                    if full {
-                        cmd["full"] = json!(true);
-                    }
-                    Ok(cmd)
-                }
+                Some("list") => tab_list_command(&id, &rest, full, limit_value),
                 Some("select") | Some("switch") => {
                     let sub = rest
                         .iter()
@@ -3284,9 +3337,20 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     Ok(json!({ "id": id, "action": "tab_inspect", "tabId": tab_ref }))
                 }
                 Some("close") => {
+                    // `tab close [ref] [--force]`: `--force` closes a tab the
+                    // session did not create (the user's own), only on the
+                    // user's request.
                     let mut cmd = json!({ "id": id, "action": "tab_close" });
-                    if let Some(tab_ref) = rest.get(1) {
+                    let close_index = rest.iter().position(|a| *a == "close").unwrap_or(0);
+                    if let Some(tab_ref) = rest
+                        .iter()
+                        .skip(close_index + 1)
+                        .find(|a| !a.starts_with("--"))
+                    {
                         cmd["tabId"] = json!(tab_ref);
+                    }
+                    if rest.contains(&"--force") {
+                        cmd["force"] = json!(true);
                     }
                     Ok(cmd)
                 }
@@ -3303,13 +3367,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     }
                     Ok(cmd)
                 }
-                None => {
-                    let mut cmd = json!({ "id": id, "action": "tab_list" });
-                    if full {
-                        cmd["full"] = json!(true);
-                    }
-                    Ok(cmd)
-                }
+                None => tab_list_command(&id, &rest, full, limit_value),
             }
         }
 
@@ -6013,6 +6071,7 @@ mod tests {
             remember: false,
             new_tab: false,
             tab: None,
+            tab_force: false,
             tab_label: None,
             session: "test".to_string(),
             session_explicit: true,
@@ -7119,6 +7178,58 @@ mod tests {
         let plain = parse_command(&args("tab list"), &default_flags()).unwrap();
         assert_eq!(plain["action"], "tab_list");
         assert!(plain.get("full").is_none());
+    }
+
+    #[test]
+    fn tab_list_all_takes_a_limit_and_nothing_else_does() {
+        for inv in ["tab list --all", "tab --all", "tabs --all --full"] {
+            let cmd = parse_command(&args(inv), &default_flags()).unwrap();
+            assert_eq!(cmd["action"], "tab_list", "{inv}");
+            assert_eq!(cmd["all"], true, "{inv}");
+            assert!(cmd.get("limit").is_none(), "{inv}");
+        }
+        // The value after --limit is not a subcommand (no `tab 50` switch).
+        for inv in ["tab --all --limit 50", "tab list --all --limit 50"] {
+            let cmd = parse_command(&args(inv), &default_flags()).unwrap();
+            assert_eq!(cmd["action"], "tab_list", "{inv}");
+            assert_eq!(cmd["limit"], 50, "{inv}");
+        }
+        assert!(parse_command(&args("tab list --limit 5"), &default_flags()).is_err());
+        assert!(parse_command(&args("tab list --all --limit 0"), &default_flags()).is_err());
+        assert!(parse_command(&args("tab list --all --limit x"), &default_flags()).is_err());
+        let plain = parse_command(&args("tab list"), &default_flags()).unwrap();
+        assert!(plain.get("all").is_none());
+    }
+
+    #[test]
+    fn tab_close_force_is_explicit_and_keeps_the_ref() {
+        let cmd =
+            parse_command(&args("tab close chrome-tab:42 --force"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "tab_close");
+        assert_eq!(cmd["tabId"], "chrome-tab:42");
+        assert_eq!(cmd["force"], true);
+        // Flag first: the ref is still the ref, never `--force`.
+        let cmd = parse_command(&args("tab close --force t3"), &default_flags()).unwrap();
+        assert_eq!(cmd["tabId"], "t3");
+        assert_eq!(cmd["force"], true);
+        let cmd = parse_command(&args("tab close --force"), &default_flags()).unwrap();
+        assert!(cmd.get("tabId").is_none());
+        let plain = parse_command(&args("tab close t2"), &default_flags()).unwrap();
+        assert_eq!(plain["tabId"], "t2");
+        assert!(plain.get("force").is_none());
+    }
+
+    #[test]
+    fn tab_force_flag_reaches_the_daemon_only_with_tab() {
+        let mut flags = default_flags();
+        flags.tab = Some("chrome-tab:7".to_string());
+        flags.tab_force = true;
+        let cmd = parse_command(&args("snapshot"), &flags).unwrap();
+        assert_eq!(cmd["tabId"], "chrome-tab:7");
+        assert_eq!(cmd["forceTab"], true);
+        flags.tab_force = false;
+        let cmd = parse_command(&args("snapshot"), &flags).unwrap();
+        assert!(cmd.get("forceTab").is_none());
     }
 
     #[test]

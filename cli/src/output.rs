@@ -377,6 +377,30 @@ fn report_nudge_line(data: Option<&serde_json::Value>) -> Option<String> {
 
 pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &OutputOptions) {
     print_response_body(resp, action, opts);
+    // `--force` acted on a tab this session did not own: say which, always,
+    // so the agent can tell the user which of their tabs it touched.
+    if !opts.json {
+        if let Some(line) = resp.data.as_ref().and_then(forced_tab_line) {
+            eprintln!("{} {}", color::warning_indicator(), line);
+        }
+        for t in resp
+            .data
+            .as_ref()
+            .and_then(|d| d.get("forcedTabsLeftOpen"))
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            let s = |k: &str| t.get(k).and_then(|v| v.as_str()).unwrap_or("");
+            eprintln!(
+                "left open (taken with --force, not this session's): {} \"{}\" {} — {}",
+                s("handle"),
+                truncate_middle(s("title"), 80),
+                truncate_middle(s("url"), 120),
+                s("release")
+            );
+        }
+    }
     // A @ref that landed on a node other than the one its snapshot recorded:
     // one stderr line each, so it is never silent — on a failed action too.
     if !opts.json {
@@ -1472,6 +1496,11 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             }
             return;
         }
+        // `tab list --all`
+        if data.get("browserTabs").is_some() {
+            print_all_tabs(data);
+            return;
+        }
         // Tabs
         if let Some(tabs) = data.get("tabs").and_then(|v| v.as_array()) {
             // `tab list --full` prints untruncated URLs so a long SSO/redirect
@@ -2438,6 +2467,119 @@ fn describe_find_target(t: &serde_json::Value) -> String {
 }
 
 /// The stderr line for one `data.relocated` entry.
+/// The line a `--force` result prints: which tab it acted on, whose, and that
+/// it stayed in the background.
+fn forced_tab_line(data: &serde_json::Value) -> Option<String> {
+    let tab = data.get("forcedTab")?;
+    if data.get("forced").and_then(|v| v.as_bool()) != Some(true) {
+        return None;
+    }
+    let s = |k: &str| tab.get(k).and_then(|v| v.as_str()).unwrap_or("");
+    Some(format!(
+        "forced: acted on {}'s tab {} [{}] \"{}\" {} (not brought forward)",
+        s("ownerLabel"),
+        s("handle"),
+        s("tabId"),
+        truncate_middle(s("title"), 80),
+        truncate_middle(s("url"), 120)
+    ))
+}
+
+/// `tab list --all`: every tab in the profile, grouped by owner (this
+/// session, other sessions by name, the user), with the `--force` rule said
+/// once up front.
+fn print_all_tabs(data: &serde_json::Value) {
+    let full = data.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
+    let rows = data
+        .get("browserTabs")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let n = |k: &str| data.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+    println!(
+        "{} tab(s) in {} window(s) of this Chrome profile (read-only listing; nothing was \
+         attached or activated)",
+        n("total"),
+        n("windows")
+    );
+    if let Some(hint) = data.get("forceHint").and_then(|v| v.as_str()) {
+        println!(
+            "{}",
+            color::dim(&format!("Not this session's tab: {hint}."))
+        );
+    }
+    let mut heading: Option<String> = None;
+    for row in &rows {
+        let s = |k: &str| row.get(k).and_then(|v| v.as_str()).unwrap_or("");
+        let owner = s("ownerLabel").to_string();
+        if heading.as_deref() != Some(owner.as_str()) {
+            let own = row.pointer("/owner/kind").and_then(|v| v.as_str()) == Some("self");
+            let suffix = if own {
+                String::new()
+            } else {
+                " — act on one with --tab <handle> --force".to_string()
+            };
+            println!("== {owner}{suffix} ==");
+            heading = Some(owner);
+        }
+        let active = row.get("active").and_then(|v| v.as_bool()) == Some(true);
+        let mut marks = Vec::new();
+        if let Some(t) = row.get("tabId").and_then(|v| v.as_str()) {
+            marks.push(t.to_string());
+        }
+        if let Some(o) = row.get("ownership").and_then(|v| v.as_str()) {
+            if o != "foreign" {
+                marks.push(o.to_string());
+            }
+        }
+        if row.get("forced").and_then(|v| v.as_bool()) == Some(true) {
+            marks.push("forced".to_string());
+        }
+        for flag in ["pinned", "incognito", "discarded"] {
+            if row.get(flag).and_then(|v| v.as_bool()) == Some(true) {
+                marks.push(flag.to_string());
+            }
+        }
+        let window = row
+            .get("windowId")
+            .and_then(|v| v.as_i64())
+            .map(|w| format!("w{w}"))
+            .unwrap_or_else(|| "w?".to_string());
+        let url = if full {
+            s("url").to_string()
+        } else {
+            truncate_middle(s("url"), 120)
+        };
+        let marks = if marks.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", marks.join(", "))
+        };
+        println!(
+            "{} {} {}{} {} - {}",
+            if active {
+                color::cyan("*")
+            } else {
+                " ".to_string()
+            },
+            s("handle"),
+            window,
+            marks,
+            truncate_middle(s("title"), 120),
+            url
+        );
+    }
+    if let Some(left) = data.get("leftOut").and_then(|v| v.as_str()) {
+        println!("{}", color::dim(&format!("Left out: {left}")));
+    }
+    if let Some(note) = data.get("activeUnknown").and_then(|v| v.as_str()) {
+        println!("{}", color::dim(note));
+    }
+    if let Some(note) = data.get("ownershipNote").and_then(|v| v.as_str()) {
+        println!("{}", color::dim(note));
+    }
+}
+
 fn relocation_line(r: &serde_json::Value) -> Option<String> {
     let s = |v: Option<&serde_json::Value>| v.and_then(|x| x.as_str()).unwrap_or("").to_string();
     let ref_id = r.get("ref").and_then(|v| v.as_str())?;
@@ -4309,6 +4451,9 @@ until you pick one with `tab select <ref>`, `tab new` or `--tab <ref>`.
 
 Operations:
   list                       List tabs with ids and labels (external: ownership too)
+  list --all [--limit <n>]   List every tab in the connected Chrome profile, across
+                             all windows: the user's own and other sessions' too
+                             (read-only; see "Every tab" below)
   new [url] [--activate]     Open a new tab, optionally in the foreground
   new --label <name> [url]   Open a new tab with a label like `docs` or `app`
   duplicate [ref]            Natively duplicate a tab (current if no ref given)
@@ -4322,7 +4467,37 @@ Operations:
                              (refused without it, since that tab would be hidden)
   inspect <ref>              Read browser-level state (relay requires ab-connect 0.5.16+)
   close [ref]                Close a tab (external: session-created only)
+  close <handle> --force     Close a tab the session did not create (the user's own),
+                             only when the user asked for it
   <ref>                      Switch tabs (external: created or adopted only)
+
+Every tab (`tab list --all`):
+  Lists the tabs of the whole connected profile by observation only: nothing is
+  attached, activated, focused, moved or reloaded, and no page content is read.
+  Each row has a `handle` (relay: `chrome-tab:<id>`; direct CDP: the targetId),
+  its window, whether it is the active tab of that window (relay only), title,
+  url, pinned/incognito/discarded (relay only) and its owner: this session,
+  `session <name>` (another chrome-use session, with whether it is live) or the
+  user. This session's tabs come first, then other sessions' by name, then the
+  user's; each group by window and tab position. At most 200 rows (`--limit`,
+  up to 1000); the reply says how many were left out. Urls are as Chrome
+  reports them and may carry tokens; titles over 300 and urls over 2048
+  characters are cut. Over the relay it needs ab-connect 0.5.25+.
+
+Acting on a tab the session does not own (`--force`):
+  --tab <handle> --force     Run any page command (snapshot, click, fill, open/
+                             navigate, ...) on that tab: it is attached in place,
+                             not activated or moved (to bring it forward as well,
+                             only on request: `tab adopt <handle> --activate`).
+                             The result has `forced: true` and `forcedTab`
+                             (title, url, owner); another live session's tab
+                             also gets a warning. Without --force the refusal
+                             names the owner and the flag.
+  Use it only when the user asked you to act on that tab, and tell them which
+  tab you touched. `close` never closes a forced tab: it stays open and the
+  session lets go of it (`forcedTabsLeftOpen`; releasing it over the relay
+  needs ab-connect 0.5.34, an older one keeps it attached until it restarts).
+  `chrome-tab:<id>` handles need ab-connect 0.5.30+.
 
 Native duplication requires real Chrome connected through the chrome-use
 extension. It restores the previously visible foreground tab when complete.
