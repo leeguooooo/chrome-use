@@ -322,6 +322,8 @@ fn core_tools() -> Vec<Value> {
                 ("llms", json!({ "type": "string", "enum": ["index", "full"], "description": "Read from the site's llms.txt instead of the page itself." })),
                 ("outline", json!({ "type": "boolean", "description": "Return only the heading outline instead of full content." })),
                 ("filter", json!({ "type": "string", "description": "Keep only lines matching this text/regex filter." })),
+                ("links", json!({ "type": "boolean", "description": "Append the page's links as absolute URLs (a `## Links` section; at most 100 unless maxLinks)." })),
+                ("maxLinks", json!({ "type": "integer", "description": "Cap for links (1-1000); implies links." })),
                 ("timeoutMs", json!({ "type": "integer", "description": "Read-specific timeout in ms (distinct from the top-level timeoutMs, which bounds the whole child process)." })),
                 ("tabId", json!({ "type": "string", "description": "Target tab id (e.g. t2), label, or targetId (--tab)." })),
             ]), &[]),
@@ -781,6 +783,12 @@ fn call_read(arguments: &Value) -> Result<Value, ProtocolError> {
     if let Some(filter) = optional_string(arguments, "filter")? {
         args.push("--filter".to_string());
         args.push(filter);
+    }
+    if let Some(max) = optional_u64(arguments, "maxLinks")? {
+        args.push("--max-links".to_string());
+        args.push(max.to_string());
+    } else if optional_bool(arguments, "links")?.unwrap_or(false) {
+        args.push("--links".to_string());
     }
     if let Some(timeout) = optional_u64(arguments, "timeoutMs")? {
         args.push("--timeout".to_string());

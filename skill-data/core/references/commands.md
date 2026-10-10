@@ -74,6 +74,7 @@ chrome-use read <url>          # Fetch a URL as agent-readable markdown/text (pr
 chrome-use read                # No URL: read the rendered DOM of the active tab
 chrome-use read <url> --outline        # Heading outline only
 chrome-use read <url> --filter auth    # Keep sections/headings matching text
+chrome-use read <url> --links          # Append a `## Links` list of absolute URLs (first 100, unique; --max-links <n> up to 1000; says how many it left out)
 chrome-use read <url> --llms index     # Nearest llms.txt (or --llms full); --raw for the untouched body; --json for metadata+content
 ```
 

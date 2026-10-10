@@ -49,6 +49,8 @@ pub struct ReadOptions {
     pub allowed_domains: Vec<String>,
     /// Additional allowlists inherited from daemon state. URLs must match every non-empty allowlist.
     pub enforced_allowed_domains: Vec<Vec<String>>,
+    /// `--links`: append the page's links as absolute URLs, at most this many (#503).
+    pub links: Option<usize>,
 }
 
 impl Default for ReadOptions {
@@ -63,6 +65,7 @@ impl Default for ReadOptions {
             headers: HashMap::new(),
             allowed_domains: Vec::new(),
             enforced_allowed_domains: Vec::new(),
+            links: None,
         }
     }
 }
@@ -136,6 +139,10 @@ pub fn options_from_command(cmd: &Value) -> Result<ReadOptions, String> {
         headers,
         allowed_domains,
         enforced_allowed_domains: Vec::new(),
+        links: cmd
+            .get("links")
+            .and_then(|v| v.as_u64())
+            .map(|n| (n as usize).clamp(1, MAX_MAX_LINKS)),
     })
 }
 
@@ -497,7 +504,7 @@ fn read_json_from_content(
     content: String,
     options: &ReadOptions,
 ) -> Value {
-    if options.outline {
+    let mut value = if options.outline {
         let outline = format_page_outline(&content, &fetch.final_url, options.filter.as_deref());
         read_json(target, fetch, &format!("{}-outline", source), outline)
     } else if let Some(filter) = options.filter.as_deref() {
@@ -505,10 +512,24 @@ fn read_json_from_content(
         read_json(target, fetch, &format!("{}-filtered", source), filtered)
     } else {
         read_json(target, fetch, source, content)
+    };
+    if let Some(max) = options.links {
+        match (source, Url::parse(&fetch.final_url)) {
+            ("html-fallback", Ok(page)) => {
+                attach_links(&mut value, &collect_links(&fetch.body, &page, max))
+            }
+            _ => note_links_unavailable(&mut value, source),
+        }
     }
+    value
 }
 
 pub fn read_json_from_active_html(active_url: &str, html: String, options: &ReadOptions) -> Value {
+    let html_for_links = if options.links.is_some() && !options.raw {
+        html.clone()
+    } else {
+        String::new()
+    };
     let (source, content) = if options.raw {
         ("active-tab-raw", html)
     } else {
@@ -528,14 +549,23 @@ pub fn read_json_from_active_html(active_url: &str, html: String, options: &Read
     } else {
         source.to_string()
     };
-    json!({
+    let mut value = json!({
         "url": active_url,
         "finalUrl": active_url,
         "contentType": "text/html",
         "source": source,
         "truncated": false,
         "content": content,
-    })
+    });
+    if let Some(max) = options.links {
+        match (options.raw, Url::parse(active_url)) {
+            (false, Ok(page)) => {
+                attach_links(&mut value, &collect_links(&html_for_links, &page, max))
+            }
+            _ => note_links_unavailable(&mut value, &source),
+        }
+    }
+    value
 }
 
 fn is_markdown_content_type(content_type: &str) -> bool {
@@ -1091,6 +1121,228 @@ async fn read_limited_text(response: reqwest::Response) -> Result<(String, bool)
     Ok((String::from_utf8_lossy(&bytes).to_string(), truncated))
 }
 
+/// Default and ceiling for `read --links` (#503): enough for a front page
+/// (Hacker News lists ~230 unique links), bounded so a link farm cannot
+/// flood the reply.
+pub const DEFAULT_MAX_LINKS: usize = 100;
+pub const MAX_MAX_LINKS: usize = 1000;
+
+/// Longest link text kept in the list; the URL is the point, not the prose.
+const LINK_TEXT_MAX: usize = 80;
+
+pub fn parse_max_links(raw: &str) -> Result<usize, String> {
+    let n = raw
+        .parse::<usize>()
+        .map_err(|_| format!("Invalid read --max-links value: {raw}"))?;
+    if n == 0 || n > MAX_MAX_LINKS {
+        return Err(format!(
+            "read --max-links must be between 1 and {MAX_MAX_LINKS}, got {n}"
+        ));
+    }
+    Ok(n)
+}
+
+/// The links of an HTML page, resolved to absolute URLs (#503).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PageLinks {
+    /// `(text, absolute url)` in document order, unique by URL, at most the
+    /// requested number.
+    pub shown: Vec<(String, String)>,
+    /// Unique navigable links on the page, shown or not.
+    pub total: usize,
+}
+
+/// Collect `<a href>` links from `html`, resolved against the page's
+/// `<base href>` (or `page_url`). Skipped: no href, a same-page `#fragment`,
+/// and `javascript:` pseudo-links, none of which lead anywhere. Duplicates of
+/// a URL keep the first text.
+pub fn collect_links(html: &str, page_url: &Url, max: usize) -> PageLinks {
+    let base = find_base_href(html)
+        .and_then(|h| page_url.join(&h).ok())
+        .unwrap_or_else(|| page_url.clone());
+    let stripped = strip_ignored_html_blocks(html);
+    let lower = stripped.to_ascii_lowercase();
+    let mut out = PageLinks::default();
+    let mut seen = HashSet::new();
+    let mut cursor = 0;
+    while let Some(start) = find_open_tag(&lower, "a", cursor) {
+        let Some(tag_end) = lower[start..].find('>').map(|i| start + i) else {
+            break;
+        };
+        let close = lower[tag_end..]
+            .find("</a")
+            .map(|i| tag_end + i)
+            .unwrap_or(stripped.len());
+        cursor = close.max(tag_end + 1);
+        let tag = &stripped[start + 2..tag_end];
+        let Some(href) = attr_value(tag, "href") else {
+            continue;
+        };
+        let href = decode_html_entities(href.trim());
+        let lower_href = href.to_ascii_lowercase();
+        if href.is_empty() || href.starts_with('#') || lower_href.starts_with("javascript:") {
+            continue;
+        }
+        let Ok(url) = base.join(&href) else {
+            continue;
+        };
+        let url = url.to_string();
+        if !seen.insert(url.clone()) {
+            continue;
+        }
+        out.total += 1;
+        if out.shown.len() < max {
+            let inner = &stripped[tag_end + 1..close];
+            out.shown.push((link_text(tag, inner), url));
+        }
+    }
+    out
+}
+
+/// A one-line label for a link: its text, else `aria-label` / `title`, else
+/// an image's `alt`.
+fn link_text(tag: &str, inner: &str) -> String {
+    let text = html_to_markdownish(inner)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let text = if !text.is_empty() {
+        text
+    } else if let Some(label) = attr_value(tag, "aria-label").or_else(|| attr_value(tag, "title")) {
+        decode_html_entities(label.trim())
+    } else {
+        let lower = inner.to_ascii_lowercase();
+        find_open_tag(&lower, "img", 0)
+            .and_then(|i| {
+                let end = lower[i..].find('>').map(|e| i + e)?;
+                attr_value(&inner[i + 4..end], "alt")
+            })
+            .map(|alt| decode_html_entities(alt.trim()))
+            .filter(|alt| !alt.is_empty())
+            .unwrap_or_else(|| "(no text)".to_string())
+    };
+    let text = text.replace(['[', ']'], "");
+    if text.chars().count() > LINK_TEXT_MAX {
+        let mut t: String = text.chars().take(LINK_TEXT_MAX - 1).collect();
+        t.push('…');
+        t
+    } else {
+        text
+    }
+}
+
+/// The `href` of the document's first `<base>` element, if any.
+fn find_base_href(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let start = find_open_tag(&lower, "base", 0)?;
+    let end = lower[start..].find('>').map(|i| start + i)?;
+    attr_value(&html[start + 5..end], "href").map(|h| decode_html_entities(h.trim()))
+}
+
+/// The value of attribute `name` in the inside of a start tag (everything
+/// after the tag name), quoted or not. Attribute names compare ASCII
+/// case-insensitively, as in HTML.
+fn attr_value<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let bytes = tag.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        while i < bytes.len() && (bytes[i].is_ascii_whitespace() || bytes[i] == b'/') {
+            i += 1;
+        }
+        let name_start = i;
+        while i < bytes.len()
+            && !bytes[i].is_ascii_whitespace()
+            && bytes[i] != b'='
+            && bytes[i] != b'>'
+            && bytes[i] != b'/'
+        {
+            i += 1;
+        }
+        if i == name_start {
+            i += 1;
+            continue;
+        }
+        let attr = &tag[name_start..i];
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let value = if i < bytes.len() && bytes[i] == b'=' {
+            i += 1;
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i < bytes.len() && (bytes[i] == b'"' || bytes[i] == b'\'') {
+                let quote = bytes[i];
+                let v_start = i + 1;
+                let v_end = tag[v_start..]
+                    .bytes()
+                    .position(|b| b == quote)
+                    .map(|p| v_start + p)
+                    .unwrap_or(tag.len());
+                i = v_end + 1;
+                Some(&tag[v_start..v_end])
+            } else {
+                let v_start = i;
+                while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'>' {
+                    i += 1;
+                }
+                Some(&tag[v_start..i])
+            }
+        } else {
+            None
+        };
+        if attr.eq_ignore_ascii_case(name) {
+            return value;
+        }
+    }
+    None
+}
+
+/// Append the page's links to a `read` reply (#503): a `## Links` section at
+/// the end of `content` (so text mode shows it inside the same content
+/// boundaries as the page), plus `links` / `linksTotal` / `linksShown` in
+/// JSON. A list cut at the cap says how many it left out.
+fn attach_links(value: &mut Value, links: &PageLinks) {
+    let shown = links.shown.len();
+    let mut section = String::from("\n\n## Links\n");
+    if links.total == 0 {
+        section.push_str("\n(no links on this page)\n");
+    } else {
+        section.push('\n');
+        for (text, url) in &links.shown {
+            section.push_str(&format!("- [{text}]({url})\n"));
+        }
+        if links.total > shown {
+            section.push_str(&format!(
+                "\n({} more links not shown; raise the cap with --max-links <n>, up to {MAX_MAX_LINKS})\n",
+                links.total - shown
+            ));
+        }
+    }
+    if let Some(content) = value.get("content").and_then(Value::as_str) {
+        value["content"] = json!(format!("{}{}", content.trim_end(), section.trim_end()));
+    }
+    value["links"] = json!(links
+        .shown
+        .iter()
+        .map(|(text, url)| json!({ "text": text, "url": url }))
+        .collect::<Vec<_>>());
+    value["linksTotal"] = json!(links.total);
+    value["linksShown"] = json!(shown);
+}
+
+/// `--links` on a response that is not an HTML page: nothing to collect,
+/// and the reply says so instead of looking like a page without links.
+fn note_links_unavailable(value: &mut Value, source: &str) {
+    let note = format!(
+        "--links applies to HTML pages; this response came from {source}, whose links (if any) \
+         are inline in the content"
+    );
+    if value.get("warning").is_none() {
+        value["warning"] = json!(note);
+    }
+}
+
 fn html_to_markdownish(html: &str) -> String {
     let stripped = strip_ignored_html_blocks(html);
     let mut out = String::new();
@@ -1347,6 +1599,102 @@ mod tests {
         assert!(text.contains("Hello world."));
         assert!(text.contains("- One"));
         assert!(!text.contains(".x{}"));
+    }
+
+    /// #503: `read --links` lists each link once, as an absolute URL, and
+    /// skips what leads nowhere.
+    #[test]
+    fn collect_links_resolves_dedupes_and_skips_non_navigation() {
+        let html = r##"<html><head><title>t</title></head><body>
+          <a href="item?id=1">First <b>story</b></a>
+          <a href='https://example.com/second'>Second story</a>
+          <a href=../up/third.html>Third &amp; story</a>
+          <a href="mailto:carol@example.com">carol</a>
+          <a href="#top">fragment</a> <a href="javascript:void(0)">js</a> <a>no href</a>
+          <a href="item?id=1">duplicate of first</a>
+          <abbr title="x">not a link</abbr>
+          <a href="/q?a=1&amp;b=2" aria-label="Query"></a>
+          <a href="/img"><img src="x.png" alt="Logo"></a>
+          <script>document.write('<a href="/hidden">x</a>')</script>
+        </body></html>"##;
+        let page = Url::parse("https://news.example.org/news/").unwrap();
+        let links = collect_links(html, &page, 100);
+        assert_eq!(
+            links.shown,
+            vec![
+                (
+                    "First story".to_string(),
+                    "https://news.example.org/news/item?id=1".to_string()
+                ),
+                (
+                    "Second story".to_string(),
+                    "https://example.com/second".to_string()
+                ),
+                (
+                    "Third & story".to_string(),
+                    "https://news.example.org/up/third.html".to_string()
+                ),
+                ("carol".to_string(), "mailto:carol@example.com".to_string()),
+                (
+                    "Query".to_string(),
+                    "https://news.example.org/q?a=1&b=2".to_string()
+                ),
+                (
+                    "Logo".to_string(),
+                    "https://news.example.org/img".to_string()
+                ),
+            ]
+        );
+        assert_eq!(links.total, 6);
+    }
+
+    #[test]
+    fn collect_links_honours_base_href_and_the_cap() {
+        let html = r#"<html><head><base href="https://cdn.example.com/docs/"></head><body>
+          <a href="a">A</a><a href="b">B</a><a href="c">C</a></body></html>"#;
+        let page = Url::parse("https://example.com/page").unwrap();
+        let links = collect_links(html, &page, 2);
+        assert_eq!(links.total, 3);
+        assert_eq!(links.shown.len(), 2);
+        assert_eq!(links.shown[0].1, "https://cdn.example.com/docs/a");
+        let mut value = json!({ "content": "# Page" });
+        attach_links(&mut value, &links);
+        let content = value["content"].as_str().unwrap();
+        assert!(content.contains("## Links"), "{content}");
+        assert!(
+            content.contains("- [A](https://cdn.example.com/docs/a)"),
+            "{content}"
+        );
+        assert!(content.contains("1 more links not shown"), "{content}");
+        assert_eq!(value["linksTotal"], 3);
+        assert_eq!(value["linksShown"], 2);
+        assert_eq!(value["links"][1]["url"], "https://cdn.example.com/docs/b");
+    }
+
+    #[test]
+    fn active_tab_read_appends_links_only_when_asked() {
+        let html = r#"<html><body><p>Hi</p><a href="/x">X</a></body></html>"#;
+        let plain =
+            read_json_from_active_html("https://a.example/", html.into(), &ReadOptions::default());
+        assert!(plain.get("links").is_none());
+        let options = ReadOptions {
+            links: Some(10),
+            ..ReadOptions::default()
+        };
+        let with = read_json_from_active_html("https://a.example/", html.into(), &options);
+        assert_eq!(with["links"][0]["url"], "https://a.example/x");
+        assert!(with["content"]
+            .as_str()
+            .unwrap()
+            .ends_with("- [X](https://a.example/x)"));
+    }
+
+    #[test]
+    fn max_links_is_bounded() {
+        assert_eq!(parse_max_links("50").unwrap(), 50);
+        assert!(parse_max_links("0").is_err());
+        assert!(parse_max_links("1001").is_err());
+        assert!(parse_max_links("many").is_err());
     }
 
     #[test]

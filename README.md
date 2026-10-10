@@ -236,7 +236,8 @@ For an authorized task, the bundled skill tells the agent to inspect and attempt
 | Command | Purpose |
 |---|---|
 | `chrome-use open <url>` | Connect to your Chrome and navigate |
-| `chrome-use snapshot -i` | Read the page; the start of every interaction |
+| `chrome-use snapshot -i` | Read the page; the start of every interaction (`-u` adds each link's absolute URL) |
+| `chrome-use read --links` | The page as text, plus a bounded `## Links` list of `[text](absolute URL)` (first 100, `--max-links <n>` up to 1000) |
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | Click by text, by snapshot ref, or on a raw viewport coordinate |
 | `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` replaces a whole value and `type` appends, both with trusted input events; a ⚠ warning says when the page did not react (e.g. its Save stayed disabled) |
 | `chrome-use extract --schema '{"rows":".item","fields":{"title":"a","url":{"sel":"a","get":"@href"}}}'` | Structured rows in one call; `"@href"` alone reads the row element's own attribute. A spec it does not understand is an error, and a field empty in every row is named in a ⚠ warning, never a silent null |

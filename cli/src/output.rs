@@ -3670,7 +3670,9 @@ Designed for AI agents to understand page structure.
 
 Options:
   -i, --interactive    Controls, local context, and status receipts
-  -u, --urls           Include href URLs for link elements
+  -u, --urls           Include each link's absolute URL (url=...) for the first
+                       400 links; a note says how many more were left without
+                       one (scope with -s). For a flat list: `read --links`
   --reveal-values      Print card / password / one-time-code values instead of
                        <filled N chars> (they then land in the transcript)
   -c, --compact        Remove empty structural elements
@@ -5666,6 +5668,9 @@ Core Commands:
   open <url>                 Navigate to URL
   read [url]                 Fetch a URL (or the active tab) as agent-readable text
                              [--raw --require-md --llms <index|full> --outline --filter <t> --timeout <ms>]
+                             --links appends a `## Links` list of the page's links
+                             as absolute URLs (first 100, unique; --max-links <n>
+                             up to 1000, and the list says how many it left out)
   click <sel|x y>            Click element/@ref, or a viewport coordinate
   dblclick <sel>             Double-click element
   type <sel> <text>          Type into element

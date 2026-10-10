@@ -16,7 +16,7 @@ at the end only when the task or a symptom needs it.
 |---|---|
 | Discover public sources | Search tool |
 | Public article or docs URL | `chrome-use read <url>` |
-| Active logged-in page | `chrome-use read` |
+| Active logged-in page | `chrome-use read` (`--links` adds absolute link URLs) |
 | Structured data from a supported site | listed `site <name>/<cmd>` adapter |
 | Table or repeating records | `extract --schema '{"rows":"tbody tr","fields":{"job":"td:nth-child(1)","link":{"sel":"a","get":"@href"}}}'` |
 | Operate controls | `snapshot -i`, then refs |
