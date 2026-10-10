@@ -1767,15 +1767,34 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
         }
         // Closed (browser or tab)
         if data.get("closed").is_some() {
+            // `close` (and a `tab close` that ended the session) reads the
+            // tabs back before reporting them closed.
+            let verified = match (
+                data.get("tabsClosed").and_then(|v| v.as_array()),
+                data.get("verifiedAbsent").and_then(|v| v.as_bool()),
+            ) {
+                (Some(tabs), Some(true)) if !tabs.is_empty() => {
+                    format!(" ({} tab(s) closed, verified absent)", tabs.len())
+                }
+                _ => String::new(),
+            };
+            let session_closed = data.get("sessionClosed").and_then(|v| v.as_bool()) == Some(true);
             let label = match action {
                 Some("tab_close") => {
-                    if let Some(closed_id) = data.get("tabId").and_then(|v| v.as_str()) {
-                        println!("{} Tab [{}] closed", color::success_indicator(), closed_id);
-                        return;
+                    let tab = data
+                        .get("tabId")
+                        .and_then(|v| v.as_str())
+                        .map(|id| format!("Tab [{id}] closed"))
+                        .unwrap_or_else(|| "Tab closed".to_string());
+                    if session_closed {
+                        format!(
+                            "{tab}: it was the session's last tab, so the session ended{verified}"
+                        )
+                    } else {
+                        tab
                     }
-                    "Tab closed"
                 }
-                _ => "Browser closed",
+                _ => format!("Browser closed{verified}"),
             };
             println!("{} {}", color::success_indicator(), label);
             return;
