@@ -80,9 +80,13 @@ pub struct SettleOutcome {
     /// that in (see `mark_changed`) so the reported flag never contradicts the
     /// delta printed beside it.
     pub saw_change: bool,
-    /// Signals still busy when the ceiling hit: `dom`, `animation`, `network`.
-    /// Empty when `quiet`.
+    /// Signals still busy when the ceiling hit: `dom`, `animation`, `network`,
+    /// `probe` (the page did not answer the check). Empty when `quiet`.
     pub pending: Vec<String>,
+    /// The requests behind a `network` entry, as `GET host/path (1.2s)`, so a
+    /// warning names what kept the page busy instead of only saying a
+    /// request was in flight (#505). Empty unless `network` is pending.
+    pub requests: Vec<String>,
 }
 
 impl SettleOutcome {
@@ -94,6 +98,7 @@ impl SettleOutcome {
             quiet: true,
             saw_change: false,
             pending: Vec::new(),
+            requests: Vec::new(),
         }
     }
 
@@ -106,8 +111,13 @@ impl SettleOutcome {
         if self.quiet {
             return None;
         }
+        let requests = if self.requests.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", self.requests.join(", "))
+        };
         Some(format!(
-            "Page had not settled after {}ms ({} still active) — this capture may be \
+            "Page had not settled after {}ms ({} still active{requests}) — this capture may be \
              mid-transition. Re-read to confirm, or raise the ceiling with {}.",
             self.waited_ms,
             describe_pending(&self.pending),
@@ -130,6 +140,7 @@ impl SettleOutcome {
             "quiet": self.quiet,
             "sawChange": self.saw_change,
             "pending": self.pending,
+            "pendingRequests": self.requests,
         })
     }
 }
@@ -145,6 +156,7 @@ pub fn describe_pending(pending: &[String]) -> String {
             "dom" => "DOM still mutating",
             "animation" => "animation running",
             "network" => "request in flight",
+            "probe" => "page did not answer the settle check",
             other => other,
         })
         .collect::<Vec<_>>()
@@ -255,6 +267,7 @@ pub async fn settle_armed(
             0
         });
     let mut last_pending: Vec<String> = Vec::new();
+    let mut last_requests: Vec<String> = Vec::new();
     let mut saw_change = false;
 
     loop {
@@ -278,6 +291,7 @@ pub async fn settle_armed(
         if state.pending_request_count(since) > 0 {
             saw_change = true;
             last_pending = vec!["network".to_string()];
+            last_requests = state.pending_request_detail(since);
             tokio::time::sleep(Duration::from_millis(NETWORK_POLL_MS.min(remaining))).await;
             continue;
         }
@@ -329,20 +343,26 @@ pub async fn settle_armed(
                         quiet: true,
                         saw_change,
                         pending: Vec::new(),
+                        requests: Vec::new(),
                     };
                 }
                 saw_change = true;
                 last_pending = vec!["network".to_string()];
+                last_requests = state.pending_request_detail(since);
             }
             Ok(page) => {
                 saw_change |= page.saw_change;
                 last_pending = page.pending;
+                last_requests.clear();
             }
             Err(_) => {
                 // The execution context went away mid-wait — a navigation, or a
                 // renderer that is busy enough not to answer. Neither is a
                 // settled page, so keep waiting rather than reporting quiet.
-                last_pending = vec!["dom".to_string()];
+                // It is not evidence of DOM mutation either, so it is named
+                // for what it is (#505).
+                last_pending = vec!["probe".to_string()];
+                last_requests.clear();
                 tokio::time::sleep(Duration::from_millis(NETWORK_POLL_MS.min(remaining))).await;
             }
         }
@@ -356,11 +376,15 @@ pub async fn settle_armed(
     if last_pending.is_empty() {
         last_pending.push("dom".to_string());
     }
+    if !last_pending.iter().any(|p| p == "network") {
+        last_requests.clear();
+    }
     SettleOutcome {
         waited_ms: start.elapsed().as_millis() as u64,
         quiet: false,
         saw_change,
         pending: last_pending,
+        requests: last_requests,
     }
 }
 
@@ -666,14 +690,113 @@ pub fn lookback() -> Instant {
         .unwrap_or(now)
 }
 
+/// A request seen going out and not finished yet (#228, #505).
+#[derive(Debug, Clone, PartialEq)]
+pub struct InFlightRequest {
+    pub id: String,
+    pub method: String,
+    pub url: String,
+    /// When the request started, from the event's own `wallTime` when the
+    /// clocks agree (see [`InFlightRequest::from_event`]), else when the
+    /// daemon read the event.
+    pub started: Instant,
+    /// When the daemon read the event: what the bounded list is pruned by.
+    pub seen: Instant,
+}
+
+/// The most a request's `wallTime` may lie behind the moment the daemon
+/// reads its event and still be believed. Beyond this the two clocks
+/// probably disagree (a remote browser), and the read time is used instead.
+const WALL_TIME_TRUST_S: f64 = 600.0;
+
+impl InFlightRequest {
+    /// Build from a `Network.requestWillBeSent` event.
+    ///
+    /// The start time comes from the event's `wallTime`, not from when the
+    /// daemon got round to reading it. Events queue between commands, so a
+    /// request the page started 25 seconds ago (a script left hanging by the
+    /// previous document) used to be stamped "now" on the next command and
+    /// counted as the page still loading, holding `snapshot` to its ceiling
+    /// (#505). A `wallTime` in the future, or implausibly old, means the
+    /// browser's clock is not ours: fall back to the read time, which can
+    /// only make a request look newer, never hide one.
+    pub fn from_event(id: &str, params: &serde_json::Value) -> Self {
+        let now = Instant::now();
+        let wall_now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        let started = params
+            .get("wallTime")
+            .and_then(serde_json::Value::as_f64)
+            .map(|wall| wall_now - wall)
+            .filter(|age| (0.0..WALL_TIME_TRUST_S).contains(age))
+            .and_then(|age| now.checked_sub(Duration::from_secs_f64(age)))
+            .unwrap_or(now);
+        let request = params.get("request");
+        let field = |k: &str| {
+            request
+                .and_then(|r| r.get(k))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        Self {
+            id: id.to_string(),
+            method: field("method"),
+            url: field("url"),
+            started,
+            seen: now,
+        }
+    }
+
+    fn counts(&self, since: Instant) -> bool {
+        self.started >= since && self.started.elapsed() < Duration::from_millis(NETWORK_STALE_MS)
+    }
+
+    /// `GET www.google.com/gen_204 (0.4s)`: host and path only (no query, no
+    /// credentials), shortened, with how long it has been in flight.
+    fn describe(&self) -> String {
+        let place = match url::Url::parse(&self.url) {
+            Ok(u) if u.scheme() == "data" => "data: URL".to_string(),
+            Ok(u) => format!("{}{}", u.host_str().unwrap_or(""), u.path()),
+            Err(_) => self.url.chars().take(60).collect(),
+        };
+        let place = if place.chars().count() > 70 {
+            let mut p: String = place.chars().take(69).collect();
+            p.push('…');
+            p
+        } else {
+            place
+        };
+        let method = if self.method.is_empty() {
+            "request"
+        } else {
+            self.method.as_str()
+        };
+        format!(
+            "{method} {place} ({:.1}s)",
+            self.started.elapsed().as_secs_f64()
+        )
+    }
+}
+
 /// Requests that started at or after `since` and have not finished, ignoring
 /// ones old enough to be a stream rather than a page load.
-pub fn pending_requests(in_flight: &[(String, Instant)], since: Instant) -> usize {
-    let stale = Duration::from_millis(NETWORK_STALE_MS);
-    in_flight
-        .iter()
-        .filter(|(_, started)| *started >= since && started.elapsed() < stale)
-        .count()
+pub fn pending_requests(in_flight: &[InFlightRequest], since: Instant) -> usize {
+    in_flight.iter().filter(|r| r.counts(since)).count()
+}
+
+/// The requests [`pending_requests`] counts, at most three, oldest first,
+/// plus a count of the rest.
+pub fn describe_pending_requests(in_flight: &[InFlightRequest], since: Instant) -> Vec<String> {
+    let mut pending: Vec<&InFlightRequest> = in_flight.iter().filter(|r| r.counts(since)).collect();
+    pending.sort_by_key(|r| r.started);
+    let mut out: Vec<String> = pending.iter().take(3).map(|r| r.describe()).collect();
+    if pending.len() > 3 {
+        out.push(format!("+{} more", pending.len() - 3));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -699,6 +822,7 @@ mod tests {
             quiet: false,
             saw_change: true,
             pending: vec!["network".to_string(), "dom".to_string()],
+            requests: Vec::new(),
         };
         let w = s.warning().expect("a non-quiet settle must warn");
         assert!(w.contains("1000ms"), "{w}");
@@ -737,6 +861,73 @@ mod tests {
         assert_eq!(env_ms("AGENT_BROWSER_SETTLE_DEFINITELY_UNSET", 123), 123);
     }
 
+    fn req(id: &str, started: Instant) -> InFlightRequest {
+        InFlightRequest {
+            id: id.to_string(),
+            method: "GET".to_string(),
+            url: format!("https://example.com/{id}?token=secret"),
+            started,
+            seen: Instant::now(),
+        }
+    }
+
+    /// #505: a request the page started long before the daemon read its
+    /// event (a script left hanging by the previous document) is not the
+    /// page loading now. Its start comes from the event's wallTime.
+    #[test]
+    fn request_start_comes_from_the_events_wall_time() {
+        let wall_now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let old = InFlightRequest::from_event(
+            "1",
+            &json!({ "wallTime": wall_now - 25.0, "request": { "method": "GET", "url": "http://h/x" } }),
+        );
+        assert!(old.started.elapsed() >= Duration::from_secs(24));
+        assert_eq!(pending_requests(&[old], lookback()), 0);
+        // A clock that disagrees (future or absurdly old) falls back to the
+        // read time, which can only make a request look newer.
+        for wall in [wall_now + 30.0, wall_now - 86_400.0] {
+            let r = InFlightRequest::from_event("2", &json!({ "wallTime": wall }));
+            assert!(r.started.elapsed() < Duration::from_secs(1));
+            assert_eq!(pending_requests(&[r], lookback()), 1);
+        }
+        let none = InFlightRequest::from_event("3", &json!({}));
+        assert_eq!(pending_requests(&[none], lookback()), 1);
+    }
+
+    /// The warning names the request, host and path only (no query).
+    #[test]
+    fn network_warning_names_the_request_without_its_query() {
+        let since = Instant::now() - Duration::from_secs(5);
+        let in_flight: Vec<InFlightRequest> = (0..5)
+            .map(|i| req(&format!("r{i}"), Instant::now()))
+            .collect();
+        let detail = describe_pending_requests(&in_flight, since);
+        assert_eq!(detail.len(), 4, "{detail:?}");
+        assert!(detail[0].starts_with("GET example.com/r"), "{detail:?}");
+        assert!(!detail[0].contains("secret"), "{detail:?}");
+        assert_eq!(detail[3], "+2 more");
+        let s = SettleOutcome {
+            waited_ms: 1001,
+            quiet: false,
+            saw_change: true,
+            pending: vec!["network".to_string()],
+            requests: detail,
+        };
+        let w = s.warning().unwrap();
+        assert!(w.contains("request in flight: GET example.com/r"), "{w}");
+    }
+
+    #[test]
+    fn unanswered_probe_is_not_called_dom_mutation() {
+        assert_eq!(
+            describe_pending(&["probe".to_string()]),
+            "page did not answer the settle check"
+        );
+    }
+
     /// A streaming response (SSE, long-poll) never finishes. Counting it would
     /// hold every later observation to the ceiling, so age it out.
     #[test]
@@ -744,10 +935,7 @@ mod tests {
         let since = Instant::now() - Duration::from_secs(60);
         let fresh = Instant::now();
         let ancient = Instant::now() - Duration::from_millis(NETWORK_STALE_MS + 500);
-        let in_flight = vec![
-            ("fresh".to_string(), fresh),
-            ("stream".to_string(), ancient),
-        ];
+        let in_flight = vec![req("fresh", fresh), req("stream", ancient)];
         assert_eq!(pending_requests(&in_flight, since), 1);
     }
 
@@ -758,7 +946,7 @@ mod tests {
     fn requests_older_than_the_action_are_ignored() {
         let before = Instant::now() - Duration::from_millis(50);
         let since = Instant::now();
-        let in_flight = vec![("prior".to_string(), before)];
+        let in_flight = vec![req("prior", before)];
         assert_eq!(pending_requests(&in_flight, since), 0);
     }
 

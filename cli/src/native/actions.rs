@@ -579,13 +579,13 @@ pub struct DaemonState {
     /// engine on its own thread, so `const tab = …` in one call is still there
     /// in the next. Dropped with the session's daemon.
     pub script_contexts: super::script_js::JsContexts,
-    /// Requests seen going out and not yet finished, as (requestId, start).
+    /// Requests seen going out and not yet finished.
     /// Feeds the adaptive settle (#228): a click that fires an XHR leaves the
     /// DOM quiet for the whole round trip, so DOM stillness alone would report
     /// the pre-response tree as the result. Tracked unconditionally — gating it
     /// on `request_tracking` would make the wait blind unless someone happened
     /// to ask for `network requests`.
-    pub in_flight_requests: Vec<(String, std::time::Instant)>,
+    pub in_flight_requests: Vec<super::settle::InFlightRequest>,
     pub active_frame_id: Option<String>,
     /// Last `snapshot` this session produced, as (url, options fingerprint, tree).
     /// `snapshot --diff` compares against it so a re-read of a mostly-unchanged
@@ -818,6 +818,12 @@ impl DaemonState {
     /// every observation to its ceiling.
     pub fn pending_request_count(&self, since: std::time::Instant) -> usize {
         super::settle::pending_requests(&self.in_flight_requests, since)
+    }
+
+    /// The requests [`pending_request_count`](Self::pending_request_count)
+    /// counts, described for a settle warning (#505).
+    pub fn pending_request_detail(&self, since: std::time::Instant) -> Vec<String> {
+        super::settle::describe_pending_requests(&self.in_flight_requests, since)
     }
 
     /// Create state with an optional stream client slot and server instance
@@ -1394,11 +1400,15 @@ impl DaemonState {
                             if let Some(rid) =
                                 event.params.get("requestId").and_then(|v| v.as_str())
                             {
-                                let now = std::time::Instant::now();
                                 // A redirect reuses the requestId; keep the
                                 // original start so the chain ages out together.
-                                if !self.in_flight_requests.iter().any(|(id, _)| id == rid) {
-                                    self.in_flight_requests.push((rid.to_string(), now));
+                                if !self.in_flight_requests.iter().any(|r| r.id == rid) {
+                                    self.in_flight_requests.push(
+                                        super::settle::InFlightRequest::from_event(
+                                            rid,
+                                            &event.params,
+                                        ),
+                                    );
                                 }
                             }
                             // Bounded: a page that streams forever would
@@ -1406,14 +1416,14 @@ impl DaemonState {
                             if self.in_flight_requests.len() > 256 {
                                 let cutoff = std::time::Duration::from_secs(30);
                                 self.in_flight_requests
-                                    .retain(|(_, t)| t.elapsed() < cutoff);
+                                    .retain(|r| r.seen.elapsed() < cutoff);
                             }
                         }
                         "Network.loadingFinished" | "Network.loadingFailed" => {
                             if let Some(rid) =
                                 event.params.get("requestId").and_then(|v| v.as_str())
                             {
-                                self.in_flight_requests.retain(|(id, _)| id != rid);
+                                self.in_flight_requests.retain(|r| r.id != rid);
                             }
                         }
                         _ => {}
