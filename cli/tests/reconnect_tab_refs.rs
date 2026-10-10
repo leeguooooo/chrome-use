@@ -179,6 +179,31 @@ impl Fake {
                 b.targets.retain(|(t, _)| *t != id);
                 json!({"success": true})
             }
+            // The extension's tab record, which `close` reads tabs back from
+            // over a relay endpoint. Target `T<n>` is Chrome tab `<n>`.
+            "ABExt.inspectTab" => {
+                let tab_of = |t: &str| t.strip_prefix('T').and_then(|n| n.parse::<i64>().ok());
+                let wanted = params["sessionId"]
+                    .as_str()
+                    .and_then(|s| s.strip_prefix("cb-tab-"))
+                    .and_then(|n| n.parse::<i64>().ok())
+                    .or_else(|| params["targetId"].as_str().and_then(tab_of));
+                let open = b
+                    .targets
+                    .iter()
+                    .find(|(t, _)| wanted.is_some() && tab_of(t) == wanted);
+                return match (open, wanted) {
+                    (Some((t, url)), Some(tab)) => {
+                        json!({"chromeTabId": tab, "targetId": t, "url": url})
+                    }
+                    (_, Some(tab)) => json!({"__error": format!(
+                        "inspectTab: Chrome tab {tab} no longer exists"
+                    )}),
+                    _ => {
+                        json!({"__error": "inspectTab: no tab matches the requested session or target"})
+                    }
+                };
+            }
             "Target.getTargetInfo" => {
                 let id = params["targetId"].as_str().unwrap_or("");
                 let url = b
@@ -225,7 +250,13 @@ async fn serve(fake: Fake, stream: tokio::net::TcpStream, generation: u64) {
         if fake.0.lock().unwrap().generation != generation {
             return;
         }
-        let mut reply = json!({"id": req["id"], "result": fake.reply(&req)});
+        let result = fake.reply(&req);
+        let mut reply = match result.get("__error") {
+            Some(message) => {
+                json!({"id": req["id"], "error": {"code": -32000, "message": message}})
+            }
+            None => json!({"id": req["id"], "result": result}),
+        };
         if let Some(s) = req.get("sessionId") {
             reply["sessionId"] = s.clone();
         }
