@@ -161,6 +161,10 @@ impl Fake {
         let method = req["method"].as_str().unwrap_or("");
         let params = &req["params"];
         Ok(match method {
+            // The profile has a window (#486 checks before a first tab).
+            "ABExt.call" if params["namespace"] == "windows" && params["method"] == "getAll" => {
+                json!({"result": [{"id": 1, "type": "normal"}]})
+            }
             "Target.getTargets" => {
                 let list: Vec<Value> = b
                     .tabs
