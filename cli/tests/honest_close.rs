@@ -867,12 +867,17 @@ fn tab_close_without_a_tab_refuses_when_the_pinned_tab_is_gone() {
     let t2 = d.tabs().into_iter().find(|(id, _)| id == "t2").unwrap().1;
     // The user closes the pinned tab; the session has only t1 left.
     fake.remove(&t2);
-    let r = d.send(json!({"id": "l", "action": "tab_list"}));
-    let listed: Vec<&str> = r["data"]["tabs"]
-        .as_array()
-        .map(|tabs| tabs.iter().filter_map(|t| t["targetId"].as_str()).collect())
-        .unwrap_or_default();
-    assert!(!listed.contains(&t2.as_str()), "{t2} still tracked: {r}");
+    // The daemon drains Chrome's events at the start of a command.
+    let mut last = Value::Null;
+    let gone = (0..5).any(|i| {
+        last = d.send(json!({"id": format!("l{i}"), "action": "tab_list"}));
+        let listed: Vec<&str> = last["data"]["tabs"]
+            .as_array()
+            .map(|tabs| tabs.iter().filter_map(|t| t["targetId"].as_str()).collect())
+            .unwrap_or_default();
+        !listed.contains(&t2.as_str())
+    });
+    assert!(gone, "{t2} still tracked: {last}");
     let r = d.send(json!({"id": "c", "action": "tab_close"}));
     assert_eq!(r["success"], false, "{r}");
     assert_ne!(r["data"]["sessionClosed"], true, "{r}");
