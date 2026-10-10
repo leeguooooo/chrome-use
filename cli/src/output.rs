@@ -6142,7 +6142,9 @@ Options:
   --settle-ms <ms>           Ceiling on the wait before an observation captures
                              (default 1000, or AGENT_BROWSER_SETTLE_MS). The wait
                              ends early on DOM quiet + no in-flight request; a
-                             capture that hit the ceiling says so. A mutation the
+                             capture that hit the ceiling says so, naming up to
+                             three in-flight requests (host and path; JSON
+                             settle.pendingRequests). A mutation the
                              action made while being dispatched counts as its
                              reaction, so the wait then only owes the quiet window.
   --no-settle                Capture immediately, without waiting for the page

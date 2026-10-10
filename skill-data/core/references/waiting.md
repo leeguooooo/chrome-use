@@ -46,7 +46,8 @@ ceiling with AGENT_BROWSER_SETTLE_MS.` — so re-read rather than trusting that
 tree. A network wait names up to three requests (host and path, never the
 query) and how long each has been in flight (`settle.pendingRequests` in
 JSON), as they were when the wait stopped; `state at the deadline unknown`
-means the requests it waited on had just finished. `page did not answer the
+means the requests it waited on are no longer counted (finished, or past the
+stale cutoff). `page did not answer the
 settle check` means the page was busy or navigating, not that its DOM was
 changing.
 

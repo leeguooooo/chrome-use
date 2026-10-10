@@ -157,7 +157,7 @@ pub fn describe_pending(pending: &[String]) -> String {
             "animation" => "animation running",
             "network" => "request in flight",
             "probe" => "page did not answer the settle check",
-            "unknown" => "state at the deadline unknown: the requests waited on had just finished",
+            "unknown" => "state at the deadline unknown: the requests waited on are no longer counted (finished, or past the stale cutoff)",
             other => other,
         })
         .collect::<Vec<_>>()
@@ -378,9 +378,9 @@ pub async fn settle_armed(
         last_pending.push("dom".to_string());
     }
     // The ceiling hit: describe the requests as they are now, not as the
-    // last round saw them. If the ones the wait was holding for finished in
-    // the meantime, say the state at the deadline is unknown rather than
-    // naming requests that are no longer active.
+    // last round saw them. If none of them is counted any more (finished,
+    // or aged past the stale cutoff), say the state at the deadline is
+    // unknown rather than naming requests that are no longer counted.
     if last_pending.iter().any(|p| p == "network") {
         state.drain_cdp_events_background().await;
         last_requests = state.pending_request_detail(since);

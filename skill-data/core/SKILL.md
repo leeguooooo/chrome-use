@@ -76,6 +76,8 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
    dispatch alone does not. Stop when the task is done.
 7. Do not `open` the URL already in the tab; use `reload --observe` on purpose.
    Wait on a condition (`wait --text`, `wait <sel>`, `wait --url`), not a sleep.
+   A "Page had not settled" warning names the requests still in flight
+   (`settle.pendingRequests`); re-read rather than trusting that capture.
 8. Before writing `eval`, use the command that already does it; it keeps
    the verification and hints `eval` loses (more: `core/interacting`):
 

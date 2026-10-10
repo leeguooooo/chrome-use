@@ -149,7 +149,7 @@
         may be mid-transition. Re-read to confirm, or raise the ceiling with
         AGENT_BROWSER_SETTLE_MS.</code>——意思是这张树可能是中间态，请重读一次再信它。
         卡在网络上时，会点名最多三个请求（只写主机和路径，不带查询参数）和各自已经等了多久，
-        JSON 里是 <code>settle.pendingRequests</code>，取的是等待结束那一刻的状态；等的请求恰好在截止时完成，就写
+        JSON 里是 <code>settle.pendingRequests</code>，取的是等待结束那一刻的状态；等的请求到截止时已不再计入（已完成，或超过了过期阈值），就写
         <code>state at the deadline unknown</code>；<code>page did not answer the settle check</code>
         表示页面忙或正在跳转，不代表 DOM 还在变。
         中间态被当成最终态返回，比慢更糟，所以这条永远不会被吞掉。
