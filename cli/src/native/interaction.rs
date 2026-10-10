@@ -1157,8 +1157,7 @@ pub async fn hover_reporting(
         return Err(refusal);
     }
     let coord = |k: &str| point.get(k).and_then(Value::as_f64);
-    let (Some(x), Some(y), Some(gx), Some(gy)) = (coord("x"), coord("y"), coord("gx"), coord("gy"))
-    else {
+    let (Some(gx), Some(gy)) = (coord("gx"), coord("gy")) else {
         return Err(format!(
             "hover failed: could not compute a point on {selector_or_ref} (the page returned \
              {point})"
