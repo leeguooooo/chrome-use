@@ -106,7 +106,8 @@ test('a reply under the limit is delivered unchanged', async () => {
   const w = worker(1000)
   w.context.handleForwardCdpCommand = async () => ({ ok: 1 })
   await w.context.onHostMessage({ id: 42, method: 'forwardCDPCommand', params: { method: 'Page.navigate' } })
-  assert.deepEqual(w.delivered, [{ id: 42, result: { ok: 1 } }])
+  // Built inside the vm: compare by value, not by prototype.
+  assert.equal(JSON.stringify(w.delivered), JSON.stringify([{ id: 42, result: { ok: 1 } }]))
 })
 
 test('an oversized event is dropped without breaking anything', () => {
