@@ -517,7 +517,9 @@ EOF</code></pre>
         <code>first_tab_setup_failed</code>, Chrome confirms the tab is gone and rerunning is safe. With
         <code>first_tab_cleanup_incomplete</code>, the tab may still be open (a close acknowledgement alone is not
         proof). The session keeps its delete right, so run <code>chrome-use close</code> in the same session before
-        opening again. With <code>first_tab_outcome_unknown</code>, Chrome never confirmed the tab, so look for a stray
+        opening again. When the error says the right could not be saved to disk, only the session's running
+        daemon holds it: run <code>close</code> right away, and if the daemon has already exited, close that blank
+        tab in Chrome yourself. With <code>first_tab_outcome_unknown</code>, Chrome never confirmed the tab, so look for a stray
         blank tab in that profile before rerunning.
       </p>
 

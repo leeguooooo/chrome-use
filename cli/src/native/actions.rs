@@ -3197,6 +3197,8 @@ async fn retry_relay_connect_after_wait(mut last_err: String) -> Result<BrowserM
         waited += step;
         match connect_auto_with_fresh_tab().await {
             Ok(mgr) => return Ok(mgr),
+            // The relay is back and answered for good (#486): stop waiting.
+            Err(e) if is_final_relay_refusal(&e) => return Err(e),
             Err(e) => last_err = e,
         }
     }
@@ -6315,12 +6317,16 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     // First tabs whose delete right a failed connect could not save (#486)
     // are held by this daemon only; close them over a new connection.
     if state.browser.is_none() {
-        for (endpoint, held) in super::first_tab::take_unsaved() {
+        let groups = super::first_tab::take_unsaved();
+        for (i, (endpoint, held)) in groups.iter().enumerate() {
             if let Err(error) =
-                close_tabs_after_lost_connection(&state.session_id, &endpoint, &held).await
+                close_tabs_after_lost_connection(&state.session_id, endpoint, held).await
             {
-                for target in &held {
-                    super::first_tab::hold_unsaved(&endpoint, target);
+                // Keep this group and every one not tried yet.
+                for (endpoint, held) in &groups[i..] {
+                    for target in held {
+                        super::first_tab::hold_unsaved(endpoint, target);
+                    }
                 }
                 return Err(format!(
                     "close incomplete: {} tab(s) this session opened but could not record are \

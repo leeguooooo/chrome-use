@@ -480,7 +480,7 @@ EOF</code></pre>
       <p>
         如果第一个标签页已经建了但没设置成功，错误会说明清理的结果。<code>first_tab_setup_failed</code> 表示 Chrome
         确认那个标签页已经没了，可以放心重跑。<code>first_tab_cleanup_incomplete</code> 表示它可能还开着（光有关闭确认不算数）。
-        会话保留着删除权，所以再次打开前先在同一个会话里跑 <code>chrome-use close</code>。
+        会话保留着删除权，所以再次打开前先在同一个会话里跑 <code>chrome-use close</code>。如果错误说删除权没能写到磁盘，那它只在这个会话正在运行的守护进程里：马上跑 <code>close</code>；守护进程已经退出的话，就自己在 Chrome 里关掉那个空白标签页。
         <code>first_tab_outcome_unknown</code> 表示 Chrome 一直没确认那个标签页，重跑前先在那个 profile 里看看有没有多出来的空白标签页。
       </p>
 
