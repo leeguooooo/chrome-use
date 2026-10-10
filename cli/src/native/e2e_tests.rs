@@ -4252,6 +4252,17 @@ async fn spawn_slow_load_server() -> u16 {
                         let _ = stream.flush().await;
                         hold().await;
                     }
+                    // The previous page: navigates itself to /b after 3s,
+                    // while the test's own navigation to /hang is pending.
+                    "/timer" => {
+                        let body = "<!doctype html><title>timer</title><h1>timer</h1>\
+                                    <script>setTimeout(()=>{location.href='/b'},3000)</script>";
+                        let _ = stream.write_all(html(body).as_bytes()).await;
+                    }
+                    "/b" => {
+                        let body = "<!doctype html><title>b</title><h1>page B</h1>";
+                        let _ = stream.write_all(html(body).as_bytes()).await;
+                    }
                     "/old" => {
                         let _ = stream
                             .write_all(
@@ -4368,6 +4379,15 @@ async fn e2e_open_reports_commit_and_candidates_from_evidence() {
         .parse()
         .unwrap_or(999.0);
     assert!(secs < 35.0, "{err}");
+
+    // 2b. A never commits; the previous page's own timer commits B meanwhile.
+    //     B's commit is not A's: never "This navigation committed".
+    let resp = open_for_e2e(&mut state, "4a", &format!("{base}/timer")).await;
+    assert_success(&resp);
+    let resp = open_for_e2e(&mut state, "4b", &format!("{base}/hang")).await;
+    assert_eq!(resp["success"], false, "{resp}");
+    let err = resp["error"].as_str().unwrap_or("");
+    assert!(!err.contains("This navigation committed"), "{err}");
 
     // 3. A cleared timing buffer: the stylesheet that finished has no record
     //    and is listed only as a candidate; the page itself is usable.

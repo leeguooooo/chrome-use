@@ -68,7 +68,8 @@ so dead bootstrap `about:blank` records are dropped instead of becoming active.
 `load`. If this navigation committed and its DOM is ready by then, it succeeds
 with a ⚠ warning; use the page. Otherwise it fails with
 `navigation_incomplete:`, which gives the real elapsed time and error, whether
-this navigation committed (read from its own loader, or "unknown"), the URL
+this navigation committed (read only from its own loader id; over the
+extension relay, which has none, "unknown"), the URL
 and readyState the tab reports, and references with no Resource Timing record
 as candidates only. It names no cause it did not observe. Do not repeat the
 `open`: check

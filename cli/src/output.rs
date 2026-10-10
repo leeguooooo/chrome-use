@@ -2495,7 +2495,9 @@ early or runs out:
   - this navigation committed (its own loader is the frame's document) and
     the DOM is ready: success, with a ⚠ warning;
   - anything else: error `navigation_incomplete:` with the real elapsed time
-    and error, whether this navigation committed (or that this is unknown),
+    and error, whether this navigation committed (read only from its own
+    loader id; over the extension relay, which navigates through the tab API
+    and has no loader id, it is reported as unknown),
     the URL and readyState the tab reports, and references with no Resource
     Timing record, listed only as candidates (a record can be missing for a
     finished resource). No cause is claimed that was not observed. Check

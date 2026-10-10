@@ -204,7 +204,8 @@
         <code>open</code> waits up to 25 seconds for the <code>load</code> event. If this navigation committed (the
         frame's document is this navigation's loader) and its DOM is ready, it succeeds with a ⚠ warning and the page
         is usable. Otherwise it fails with <code>navigation_incomplete:</code>, which gives the real elapsed time and
-        error, whether this navigation committed (or that this is unknown), the URL and readyState the tab reports,
+        error, whether this navigation committed (read only from its own loader id; over the extension relay, which navigates
+        through the tab API and has none, it is "unknown"), the URL and readyState the tab reports,
         and the references with no Resource Timing record. Those are candidates only: a missing record does not mean
         something is still loading, and no cause is inferred. This used to be a bare "Operation timed out".
       </p>

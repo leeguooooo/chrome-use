@@ -193,7 +193,7 @@
       <p>
         <code>open</code> 最多等 25 秒的 <code>load</code> 事件。这次导航已经提交（框架当前文档就是这次导航的 loader）
         且 DOM 已就绪，就算成功，附一条 ⚠ 警告，页面可以直接用。其他情况报 <code>navigation_incomplete:</code>，
-        写明实际等了多久和真实的错误、这次导航有没有提交（拿不到证据就写「未知」）、标签页报告的 URL 和 readyState，
+        写明实际等了多久和真实的错误、这次导航有没有提交（只认这次导航自己的 loader id；扩展中继走浏览器的标签页接口、没有 loader id，会写「未知」）、标签页报告的 URL 和 readyState，
         以及没有 Resource Timing 记录的引用资源。这些只是候选，记录缺失不代表还在加载，也不推断原因。
         以前这种情况只报一句「Operation timed out」。
       </p>

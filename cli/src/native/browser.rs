@@ -1513,7 +1513,10 @@ impl CommitEvidence {
         let current = frame
             .and_then(|f| f.get("loaderId"))
             .and_then(Value::as_str);
-        match (loader_id, current, url) {
+        // The relay's synthetic loader names no document: no evidence either
+        // way, so the commit is unknown rather than "not committed".
+        let ours = loader_id.filter(|l| !l.is_empty() && *l != SYNTHETIC_LOADER);
+        match (ours, current, url) {
             (Some(ours), Some(now), Some(url)) if ours == now => Self::Committed { url },
             (Some(_), Some(_), Some(url)) => Self::NotCommitted { url },
             (_, _, url) => Self::Unknown { url },
@@ -1521,10 +1524,22 @@ impl CommitEvidence {
     }
 }
 
-/// The URL of a main-frame commit seen on `rx` for `session_id`
-/// (`Page.frameNavigated` with no parent frame), if one arrived since the
-/// receiver was subscribed. Events already queued are read without waiting.
-fn main_frame_commit(rx: &mut broadcast::Receiver<CdpEvent>, session_id: &str) -> Option<String> {
+/// The extension relay navigates with `chrome.tabs.update` and returns this
+/// synthetic loader id: it names no real document, so it links nothing.
+const SYNTHETIC_LOADER: &str = "browser-level-navigation";
+
+/// The URL this navigation committed to, if a main-frame
+/// `Page.frameNavigated` for `session_id` carrying this navigation's own
+/// loader id (`loader`, from `Page.navigate`) arrived on `rx`. Events are read
+/// without waiting. A commit of any other loader (an old page's timer, a
+/// concurrent or repeated navigation of the same URL) is not this
+/// navigation's, whatever its URL, so it is ignored.
+fn main_frame_commit(
+    rx: &mut broadcast::Receiver<CdpEvent>,
+    session_id: &str,
+    loader: Option<&str>,
+) -> Option<String> {
+    let loader = loader.filter(|l| !l.is_empty() && *l != SYNTHETIC_LOADER)?;
     let mut committed = None;
     loop {
         match rx.try_recv() {
@@ -1532,6 +1547,7 @@ fn main_frame_commit(rx: &mut broadcast::Receiver<CdpEvent>, session_id: &str) -
                 if ev.method == "Page.frameNavigated"
                     && ev.session_id.as_deref() == Some(session_id)
                     && ev.params.pointer("/frame/parentId").is_none()
+                    && ev.params.pointer("/frame/loaderId").and_then(Value::as_str) == Some(loader)
                 {
                     committed = ev
                         .params
@@ -1679,11 +1695,8 @@ where
         Ok(Ok(value)) => Some(LoadProgress::from_value(&value)),
         _ => None,
     };
-    // A main-frame `Page.frameNavigated` for this session after the
-    // navigation started is direct evidence that a new document committed in
-    // the frame. Over the extension relay the frame tree's loader id does not
-    // match the one `Page.navigate` returned (measured), so without this a
-    // committed page read as "not committed".
+    // `commit_event` is only ever a main-frame commit carrying this
+    // navigation's own loader id (see `main_frame_commit`): direct evidence.
     let commit = match (commit, commit_event) {
         (c @ CommitEvidence::Committed { .. }, _) => c,
         (_, Some(url)) => CommitEvidence::Committed { url },
@@ -3647,7 +3660,9 @@ impl BrowserManager {
                 // `Page.frameNavigated`, not the tab's host: a cross-site
                 // redirect commits elsewhere, and the previous document can
                 // be on the same host (#502).
-                if let Some(landed) = main_frame_commit(&mut lifecycle_rx, &session_id) {
+                // `Page.navigate` never answered, so there is no loader id
+                // to tie a commit to: the commit stays unknown.
+                if let Some(landed) = main_frame_commit(&mut lifecycle_rx, &session_id, None) {
                     nav_warning = Some(format!(
                         "`Page.navigate` timed out (heavy page) but this navigation committed \
                          and the tab is on {landed} — continuing; the document may still be \
@@ -3757,7 +3772,8 @@ impl BrowserManager {
                 // "Operation timed out" this used to collapse into said none of
                 // that.
                 let elapsed_ms = wait_started.elapsed().as_millis() as u64;
-                let commit_event = main_frame_commit(&mut commit_rx, &session_id);
+                let commit_event =
+                    main_frame_commit(&mut commit_rx, &session_id, nav_result.loader_id.as_deref());
                 let warning = resolve_incomplete_navigation(
                     url,
                     wait_until,
@@ -9104,22 +9120,84 @@ mod tests {
         assert!(err.contains("Whether this navigation committed is unknown; the tab reports https://a.example/start"), "{err}");
     }
 
-    /// #502 live, over the relay: the frame tree's loader id did not match
-    /// the one Page.navigate returned although the page had committed. A
-    /// main-frame frameNavigated seen after the navigation started is the
-    /// evidence then, and a ready DOM is success.
+    fn frame_navigated(session: &str, loader: &str, url: &str) -> CdpEvent {
+        cdp_event(
+            "Page.frameNavigated",
+            session,
+            json!({ "frame": { "id": "F", "loaderId": loader, "url": url } }),
+        )
+    }
+
+    /// #502 review: only a main-frame commit carrying this navigation's own
+    /// loader id is evidence. B's commit (an old page's timer, a reload of
+    /// the same URL) is ignored whatever its URL, and the relay's synthetic
+    /// loader links nothing.
+    #[test]
+    fn only_this_navigations_loader_counts_as_its_commit() {
+        let (tx, _) = broadcast::channel(16);
+        let mut rx = tx.subscribe();
+        tx.send(frame_navigated("S", "L-B", "https://a.example/start"))
+            .unwrap();
+        assert_eq!(main_frame_commit(&mut rx, "S", Some("L-A")), None);
+
+        let mut rx = tx.subscribe();
+        tx.send(frame_navigated("S", "L-B", "https://b.example/"))
+            .unwrap();
+        tx.send(frame_navigated("S", "L-A", "https://a.example/landing"))
+            .unwrap();
+        assert_eq!(
+            main_frame_commit(&mut rx, "S", Some("L-A")).as_deref(),
+            Some("https://a.example/landing")
+        );
+
+        for loader in [None, Some(SYNTHETIC_LOADER), Some("")] {
+            let mut rx = tx.subscribe();
+            tx.send(frame_navigated("S", SYNTHETIC_LOADER, "https://a.example/"))
+                .unwrap();
+            assert_eq!(main_frame_commit(&mut rx, "S", loader), None, "{loader:?}");
+        }
+    }
+
+    /// #502 review counter-example: A never commits, B commits on its own and
+    /// is ready. B's ready page must not be reported as A's success.
     #[tokio::test]
-    async fn a_commit_event_counts_when_the_loader_ids_disagree() {
-        let ok = decide_with(
+    async fn another_navigations_commit_is_not_this_ones_success() {
+        let err = decide_with(
             25_000,
             "Timeout waiting for Page.loadEventFired",
-            Some("http://127.0.0.1/slow.html".into()),
-            Ok(progress("interactive", "http://127.0.0.1/slow.html", &[])),
-            Ok(tree("L-RELAY", "http://127.0.0.1/slow.html")),
+            None, // B's event carries L-B, so main_frame_commit yields nothing
+            Ok(progress("complete", "https://b.example/", &[])),
+            Ok(tree("L-B", "https://b.example/")),
         )
         .await
-        .unwrap();
-        assert!(ok.contains("this navigation committed"), "{ok}");
+        .unwrap_err();
+        assert!(!err.contains("This navigation committed"), "{err}");
+        assert!(err.contains("has not committed"), "{err}");
+        assert!(err.contains("https://b.example/"), "{err}");
+    }
+
+    /// Over the relay the loader id is synthetic: there is no evidence either
+    /// way, so a ready page is reported as "commit unknown" with its real URL,
+    /// not as success and not as "not committed".
+    #[tokio::test]
+    async fn the_relays_synthetic_loader_leaves_the_commit_unknown() {
+        let err = resolve_incomplete_navigation(
+            "http://127.0.0.1/slow.html",
+            WaitUntil::Load,
+            25_000,
+            25_000,
+            "Timeout waiting for Page.loadEventFired",
+            Some(SYNTHETIC_LOADER),
+            None,
+            async { Ok(progress("interactive", "http://127.0.0.1/slow.html", &[])) },
+            async { Ok(tree("L-REAL", "http://127.0.0.1/slow.html")) },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("Whether this navigation committed is unknown; the tab reports http://127.0.0.1/slow.html"),
+            "{err}"
+        );
     }
 
     #[test]
