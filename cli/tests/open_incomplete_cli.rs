@@ -1,11 +1,20 @@
 //! An `open` whose page never finishes loading (#502), through the real
 //! daemon, the real CLI and the stdio MCP server, on a fake extension relay.
 //! The fake answers `Page.navigate` and never sends `load`, so the 25s wait
-//! runs out and the CLI reports `navigation_incomplete:`. That message
-//! quotes "Timeout waiting for Page.loadEventFired", and here its URL also
-//! carries denial or connection words. Whatever it quotes, it must keep its
-//! own code with `retryable: false`, run no recovery and never repeat the
-//! navigation. No Chrome runs.
+//! runs out. Then (option C):
+//! - the page is clearly usable but nothing ties it to this navigation (the
+//!   relay's synthetic loader): success with `commit: "unverified"` and a
+//!   warning naming the tab's real URL, also when that is another
+//!   navigation's page;
+//! - this navigation's own loader is the frame's document and the page is
+//!   ready: success as before, with no `commit` field;
+//! - anything else: `navigation_incomplete:`, which quotes "Timeout waiting
+//!   for Page.loadEventFired" and here a URL with denial or connection
+//!   words. Whatever it quotes, it keeps its own code with `retryable:
+//!   false`.
+//!
+//! In every case it runs no recovery and never repeats the navigation. No
+//! Chrome runs.
 #![cfg(unix)]
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -29,6 +38,12 @@ struct Page {
     frame_loader: String,
     /// Where the tab is.
     url: String,
+    /// Where the tab ends up after the next `Page.navigate`, when not the
+    /// requested URL (another navigation committed meanwhile, or blank).
+    land: Option<String>,
+    /// What the readiness probe reports besides the URL.
+    ready_state: String,
+    text_chars: u64,
     created: bool,
     navigates: u32,
     creates: u32,
@@ -44,6 +59,7 @@ impl Fake {
         let fake = Fake(Arc::new(Mutex::new(Page {
             frame_loader: "L1".into(),
             url: "about:blank".into(),
+            ready_state: "loading".into(),
             ..Default::default()
         })));
         let shared = fake.clone();
@@ -74,11 +90,23 @@ impl Fake {
 
     /// How the next navigation answers: the relay's synthetic loader (no
     /// commit can be bound), or a real loader the frame then shows
-    /// (committed, but the document is still loading).
-    fn next_navigation(&self, nav_loader: &str, frame_loader: &str) {
+    /// (committed). And what the tab then shows: where it lands (`None`: the
+    /// requested URL), its readyState and how much rendered text its body
+    /// has.
+    fn next(
+        &self,
+        nav_loader: &str,
+        frame_loader: &str,
+        land: Option<&str>,
+        ready_state: &str,
+        text_chars: u64,
+    ) {
         let mut p = self.0.lock().unwrap();
         p.nav_loader = nav_loader.into();
         p.frame_loader = frame_loader.into();
+        p.land = land.map(String::from);
+        p.ready_state = ready_state.into();
+        p.text_chars = text_chars;
     }
 
     /// `(Page.navigate, Target.createTarget, tabs.update)` calls so far.
@@ -144,7 +172,10 @@ impl Fake {
             // The navigation starts; its `load` never comes.
             "Page.navigate" => {
                 p.navigates += 1;
-                p.url = params["url"].as_str().unwrap_or("").to_string();
+                p.url = match &p.land {
+                    Some(land) => land.clone(),
+                    None => params["url"].as_str().unwrap_or("").to_string(),
+                };
                 json!({"frameId": "T1", "loaderId": p.nav_loader})
             }
             "Page.getFrameTree" => json!({"frameTree": {"frame": {
@@ -153,14 +184,16 @@ impl Fake {
             "Runtime.evaluate" => {
                 let e = params["expression"].as_str().unwrap_or("");
                 if e.contains("getEntriesByType('resource')") {
-                    // The readiness probe: the document is still loading.
+                    // The readiness probe: what the document shows.
                     json!({"result": {"type": "object", "value": {
-                        "readyState": "loading", "url": p.url,
-                        "pending": [], "pendingTotal": 0}}})
+                        "readyState": p.ready_state, "url": p.url,
+                        "pending": ["image https://slow.test/held.png"], "pendingTotal": 1,
+                        "hasBody": true, "textChars": p.text_chars,
+                        "visibleElements": 0}}})
                 } else if e.trim() == "location.href" {
                     json!({"result": {"type": "string", "value": p.url}})
                 } else if e.contains("readyState") {
-                    json!({"result": {"type": "string", "value": "loading"}})
+                    json!({"result": {"type": "string", "value": p.ready_state}})
                 } else {
                     json!({"result": {"type": "undefined"}})
                 }
@@ -361,39 +394,175 @@ fn text(out: &Output) -> String {
     )
 }
 
-/// The cases: (how the navigation answers, a URL whose words read as a
-/// denial, a lost connection or a timeout, the expected code).
-fn cases() -> Vec<(&'static str, &'static str, String, &'static str)> {
+/// How the next navigation answers and what the tab then shows.
+struct Case {
+    label: &'static str,
+    nav_loader: &'static str,
+    frame_loader: &'static str,
+    url: String,
+    /// Where the tab lands instead of `url`, if anywhere.
+    land: Option<&'static str>,
+    ready_state: &'static str,
+    text_chars: u64,
+}
+
+/// Pages that are not clearly usable: (case, the expected code). The URLs
+/// read as a denial, a lost connection or a timeout.
+fn unusable_cases() -> Vec<(Case, &'static str)> {
     vec![
-        // Over the relay: `tabs.update`'s synthetic loader binds nothing,
-        // so the commit is unknown. The URL reads as a denial.
+        // Over the relay: `tabs.update`'s synthetic loader binds nothing, so
+        // the commit is unknown, and the document is still loading with no
+        // content.
         (
-            SYNTHETIC_LOADER,
-            "L-real",
-            "https://slow.test/debugger_access_denied:/blocked?timed-out".to_string(),
+            Case {
+                label: "relay-loading",
+                nav_loader: SYNTHETIC_LOADER,
+                frame_loader: "L-real",
+                url: "https://slow.test/debugger_access_denied:/blocked?timed-out".to_string(),
+                land: None,
+                ready_state: "loading",
+                text_chars: 0,
+            },
+            "navigation_commit_unknown",
+        ),
+        // Over the relay, and the tab shows about:blank, "complete".
+        (
+            Case {
+                label: "relay-blank",
+                nav_loader: SYNTHETIC_LOADER,
+                frame_loader: "L-real",
+                url: "https://slow.test/blank/target closed".to_string(),
+                land: Some("about:blank"),
+                ready_state: "complete",
+                text_chars: 0,
+            },
+            "navigation_commit_unknown",
+        ),
+        // Over the relay, parsed but an empty shell.
+        (
+            Case {
+                label: "relay-empty-shell",
+                nav_loader: SYNTHETIC_LOADER,
+                frame_loader: "L-real",
+                url: "https://slow.test/shell".to_string(),
+                land: None,
+                ready_state: "interactive",
+                text_chars: 0,
+            },
             "navigation_commit_unknown",
         ),
         // A real loader the frame shows: committed, still loading. The URL
         // reads as a lost connection (and a stale target).
         (
-            "L2",
-            "L2",
-            "https://slow.test/connection-refused/failed to connect/target closed".to_string(),
+            Case {
+                label: "committed-loading",
+                nav_loader: "L2",
+                frame_loader: "L2",
+                url: "https://slow.test/connection-refused/failed to connect/target closed"
+                    .to_string(),
+                land: None,
+                ready_state: "loading",
+                text_chars: 0,
+            },
             "navigation_incomplete",
         ),
     ]
 }
 
-/// What every case must show: its own code, `retryable: false`, the
-/// no-repeat instruction, the timeout it quotes, and exactly one navigation
-/// with no tab hidden and no tab opened (no #373 recovery, no replay).
-fn assert_unfinished_open(
-    label: &str,
-    response: &Value,
-    code: &str,
-    fake: &Fake,
-    before: (u32, u32, u32),
-) {
+/// What a usable page reports: (case, expected `commit`, words the warning
+/// must carry, words it must not).
+fn usable_cases() -> Vec<(Case, Option<&'static str>, Vec<String>, Vec<&'static str>)> {
+    let a = "https://slow.test/slow.html?debugger_access_denied:timed-out".to_string();
+    vec![
+        // (a) Over the relay, the page is usable: success, unverified.
+        (
+            Case {
+                label: "relay-usable",
+                nav_loader: SYNTHETIC_LOADER,
+                frame_loader: "L-real",
+                url: a.clone(),
+                land: None,
+                ready_state: "interactive",
+                text_chars: 120,
+            },
+            Some("unverified"),
+            vec![
+                "`load` had not arrived".to_string(),
+                "could not be confirmed that the page in the tab came from this request"
+                    .to_string(),
+                format!("The tab is on {a};"),
+                "readyState is \"interactive\"".to_string(),
+                "image https://slow.test/held.png".to_string(),
+                "may still be loading, or their record is missing".to_string(),
+            ],
+            vec!["this navigation committed", "navigation_incomplete"],
+        ),
+        // (d) Another navigation B committed while A was pending, and B's
+        // page is usable: success, unverified, B's real URL named as not the
+        // requested one, never "committed" for A.
+        (
+            Case {
+                label: "relay-other-navigation",
+                nav_loader: SYNTHETIC_LOADER,
+                frame_loader: "L-B",
+                url: "https://slow.test/a".to_string(),
+                land: Some("https://other.test/b"),
+                ready_state: "complete",
+                text_chars: 40,
+            },
+            Some("unverified"),
+            vec![
+                "The tab is on https://other.test/b, not the requested https://slow.test/a"
+                    .to_string(),
+                "commit: unverified".to_string(),
+            ],
+            vec!["this navigation committed", "This navigation committed"],
+        ),
+        // (c) This navigation's own loader is the frame's document: proven,
+        // so success as before, with no `commit` field.
+        (
+            Case {
+                label: "own-loader",
+                nav_loader: "L3",
+                frame_loader: "L3",
+                url: "https://slow.test/own".to_string(),
+                land: None,
+                ready_state: "interactive",
+                text_chars: 0,
+            },
+            None,
+            vec!["this navigation committed and its DOM is ready (interactive)".to_string()],
+            vec!["unverified"],
+        ),
+    ]
+}
+
+fn arm(fake: &Fake, c: &Case) {
+    fake.next(
+        c.nav_loader,
+        c.frame_loader,
+        c.land,
+        c.ready_state,
+        c.text_chars,
+    );
+}
+
+/// Exactly one navigation, with no tab hidden and no tab opened (no #373
+/// recovery, no replay).
+fn assert_one_navigation(label: &str, fake: &Fake, before: (u32, u32, u32)) {
+    let after = fake.counts();
+    assert_eq!(
+        (after.0 - before.0, after.1 - before.1, after.2 - before.2),
+        (1, 0, 0),
+        "{label}: one Page.navigate, no tab opened or hidden; log: {}",
+        fake.log()
+    );
+}
+
+/// What every unusable case must show: its own code, `retryable: false`,
+/// the no-repeat instruction, the timeout it quotes, the real URL and
+/// readyState.
+fn assert_unfinished_open(label: &str, response: &Value, c: &Case, code: &str, fake: &Fake) {
     assert_eq!(response["success"], false, "{label}: {response}");
     assert_eq!(
         response["code"],
@@ -409,39 +578,103 @@ fn assert_unfinished_open(
         "{label}: {e}"
     );
     assert!(e.contains("Do not repeat the open"), "{label}: {e}");
-    assert!(!e.contains("closed the menu"), "{label}: {e}");
-    let after = fake.counts();
-    assert_eq!(
-        (after.0 - before.0, after.1 - before.1, after.2 - before.2),
-        (1, 0, 0),
-        "{label}: one Page.navigate, no tab opened or hidden; log: {}",
-        fake.log()
+    assert!(
+        e.contains(&format!("readyState \"{}\"", c.ready_state)),
+        "{label}: {e}"
     );
+    assert!(e.contains(c.land.unwrap_or(&c.url)), "{label}: {e}");
+    assert!(!e.contains("closed the menu"), "{label}: {e}");
+}
+
+/// What every usable case must show: success, the real URL, the expected
+/// `commit` field and warning.
+fn assert_usable_open(
+    label: &str,
+    response: &Value,
+    c: &Case,
+    commit: Option<&str>,
+    has: &[String],
+    lacks: &[&str],
+) {
+    assert_eq!(response["success"], true, "{label}: {response}");
+    let data = &response["data"];
+    assert_eq!(
+        data["url"].as_str(),
+        Some(c.land.unwrap_or(&c.url)),
+        "{label}: {response}"
+    );
+    assert_eq!(data["commit"].as_str(), commit, "{label}: {response}");
+    let w = data["warning"].as_str().unwrap_or("");
+    for s in has {
+        assert!(w.contains(s.as_str()), "{label}: missing {s:?} in {w}");
+    }
+    for s in lacks {
+        assert!(!w.contains(s), "{label}: unexpected {s:?} in {w}");
+    }
+}
+
+fn session(kind: &str) -> String {
+    format!("open-inc-{kind}-{}", std::process::id())
 }
 
 #[test]
-fn an_unfinished_open_keeps_its_code_and_is_never_repeated_through_the_cli() {
+fn an_unusable_unfinished_open_keeps_its_code_and_is_never_repeated_through_the_cli() {
     let (fake, cdp) = Fake::start();
-    let d = Daemon::start(&format!("open-inc-cli-{}", std::process::id()), &cdp);
-    for (nav_loader, frame_loader, url, code) in cases() {
-        fake.next_navigation(nav_loader, frame_loader);
+    let d = Daemon::start(&session("cli-err"), &cdp);
+    for (c, code) in unusable_cases() {
+        arm(&fake, &c);
         let before = fake.counts();
-        let (v, out) = d.cli_open(&url);
-        assert!(!out.status.success(), "{code}: {}", text(&out));
-        assert_unfinished_open(&format!("cli {code}"), &v, code, &fake, before);
+        let (v, out) = d.cli_open(&c.url);
+        let label = format!("cli {}", c.label);
+        assert!(!out.status.success(), "{label}: {}", text(&out));
+        assert_unfinished_open(&label, &v, &c, code, &fake);
+        assert_one_navigation(&label, &fake, before);
     }
 }
 
 #[test]
-fn an_unfinished_open_keeps_its_code_and_is_never_repeated_through_stdio_mcp() {
+fn an_unusable_unfinished_open_keeps_its_code_and_is_never_repeated_through_stdio_mcp() {
     let (fake, cdp) = Fake::start();
-    let d = Daemon::start(&format!("open-inc-mcp-{}", std::process::id()), &cdp);
-    for (nav_loader, frame_loader, url, code) in cases() {
-        fake.next_navigation(nav_loader, frame_loader);
+    let d = Daemon::start(&session("mcp-err"), &cdp);
+    for (c, code) in unusable_cases() {
+        arm(&fake, &c);
         let before = fake.counts();
-        let r = d.mcp_open(&url);
-        assert_eq!(r["result"]["isError"], true, "{code}: {r}");
+        let r = d.mcp_open(&c.url);
+        let label = format!("mcp {}", c.label);
+        assert_eq!(r["result"]["isError"], true, "{label}: {r}");
         let response = &r["result"]["structuredContent"]["response"];
-        assert_unfinished_open(&format!("mcp {code}"), response, code, &fake, before);
+        assert_unfinished_open(&label, response, &c, code, &fake);
+        assert_one_navigation(&label, &fake, before);
+    }
+}
+
+#[test]
+fn a_usable_unfinished_open_succeeds_with_what_is_known_through_the_cli() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start(&session("cli-ok"), &cdp);
+    for (c, commit, has, lacks) in usable_cases() {
+        arm(&fake, &c);
+        let before = fake.counts();
+        let (v, out) = d.cli_open(&c.url);
+        let label = format!("cli {}", c.label);
+        assert!(out.status.success(), "{label}: {}", text(&out));
+        assert_usable_open(&label, &v, &c, commit, &has, &lacks);
+        assert_one_navigation(&label, &fake, before);
+    }
+}
+
+#[test]
+fn a_usable_unfinished_open_succeeds_with_what_is_known_through_stdio_mcp() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start(&session("mcp-ok"), &cdp);
+    for (c, commit, has, lacks) in usable_cases() {
+        arm(&fake, &c);
+        let before = fake.counts();
+        let r = d.mcp_open(&c.url);
+        let label = format!("mcp {}", c.label);
+        assert_ne!(r["result"]["isError"], true, "{label}: {r}");
+        let response = &r["result"]["structuredContent"]["response"];
+        assert_usable_open(&label, response, &c, commit, &has, &lacks);
+        assert_one_navigation(&label, &fake, before);
     }
 }

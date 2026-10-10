@@ -66,7 +66,14 @@ so dead bootstrap `about:blank` records are dropped instead of becoming active.
 
 **`open` and a page that never finishes loading.** `open` waits up to 25s for
 `load`. If this navigation committed and its DOM is ready by then, it succeeds
-with a ⚠ warning; use the page. Otherwise it fails with
+with a ⚠ warning; use the page. If nothing ties the tab's page to this
+navigation (always over the extension relay) but that page is clearly usable
+(readyState `interactive`/`complete`, a body showing text or visible content,
+not `about:blank` or an error page), it also succeeds, with
+`commit: "unverified"` and a ⚠ warning giving the tab's real URL and
+readyState. That page may be a redirect, another navigation's page or the
+previous one: check `get url` before relying on it being the requested page,
+and do not reopen. Otherwise it fails with
 `navigation_incomplete:`, which gives the real elapsed time and error, whether
 this navigation committed (read only from its own loader id; over the
 extension relay, which has none, "unknown"), the URL

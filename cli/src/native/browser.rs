@@ -1423,8 +1423,26 @@ pub(crate) const LOAD_PROGRESS_JS: &str = r#"(() => {
     for (const i of document.images) if (!i.complete && i.loading !== 'lazy') add('image', i.currentSrc || i.src);
     for (const f of document.querySelectorAll('iframe[src]')) add('iframe', f.src);
   } catch (e) {}
+  // What the document shows (#502, option C): a body, its rendered text and
+  // content-bearing elements with a box. At most 500 elements are measured.
+  let hasBody = false, textChars = 0, visibleElements = 0;
+  try {
+    const b = document.body;
+    if (b) {
+      hasBody = true;
+      textChars = (b.innerText || '').trim().length;
+      let n = 0;
+      for (const el of b.querySelectorAll(
+          'img,svg,canvas,video,picture,iframe,embed,object,input,textarea,select,button')) {
+        if (++n > 500) break;
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) visibleElements++;
+      }
+    }
+  } catch (e) {}
   return { readyState: document.readyState, url: location.href,
-           pending: pending.slice(0, 5), pendingTotal: pending.length };
+           pending: pending.slice(0, 5), pendingTotal: pending.length,
+           hasBody, textChars, visibleElements };
 })()"#;
 
 /// The answer to [`LOAD_PROGRESS_JS`].
@@ -1434,6 +1452,15 @@ pub(crate) struct LoadProgress {
     pub url: String,
     pub pending: Vec<String>,
     pub pending_total: u64,
+    /// The document has a `<body>`.
+    pub has_body: bool,
+    /// Length of the body's rendered text (`innerText`, trimmed).
+    pub text_chars: u64,
+    /// Content-bearing elements (media, frames, form controls) with a box.
+    pub visible_elements: u64,
+    /// The address Chrome's error page stands for (`Page.getFrameTree`'s
+    /// `unreachableUrl`), when the main frame shows one.
+    pub unreachable_url: Option<String>,
 }
 
 impl LoadProgress {
@@ -1460,12 +1487,57 @@ impl LoadProgress {
                 })
                 .unwrap_or_default(),
             pending_total: v.get("pendingTotal").and_then(Value::as_u64).unwrap_or(0),
+            has_body: v.get("hasBody").and_then(Value::as_bool).unwrap_or(false),
+            text_chars: v.get("textChars").and_then(Value::as_u64).unwrap_or(0),
+            visible_elements: v
+                .get("visibleElements")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            unreachable_url: None,
         }
     }
 
     /// The DOM the tab shows is parsed.
     pub(crate) fn is_ready(&self) -> bool {
         self.ready_state == "interactive" || self.ready_state == "complete"
+    }
+
+    /// Why the document in the tab is not clearly usable, or `None` when it
+    /// is (#502, option C). Usable means all of: parsed (`interactive` or
+    /// `complete`), on a real address (not blank, `about:` or Chrome's error
+    /// page), and a body that shows rendered text or a content-bearing
+    /// element. An empty shell (`<div id=root>` with nothing in it) is not.
+    pub(crate) fn unusable_reason(&self) -> Option<String> {
+        if !self.is_ready() {
+            return Some(format!(
+                "its document is still \"{}\"",
+                if self.ready_state.is_empty() {
+                    "unknown"
+                } else {
+                    self.ready_state.as_str()
+                }
+            ));
+        }
+        if let Some(failed) = &self.unreachable_url {
+            return Some(format!("the tab shows Chrome's error page for {failed}"));
+        }
+        if is_blank_or_error_url(&self.url) {
+            return Some(format!(
+                "the tab shows {}, not a page",
+                if self.url.is_empty() {
+                    "no address"
+                } else {
+                    self.url.as_str()
+                }
+            ));
+        }
+        if !self.has_body {
+            return Some("its document has no body".to_string());
+        }
+        if self.text_chars == 0 && self.visible_elements == 0 {
+            return Some("its body shows no text and no visible content".to_string());
+        }
+        None
     }
 
     /// ` References without a Resource Timing record …: script (async) …,
@@ -1569,6 +1641,13 @@ fn main_frame_commit(
     committed
 }
 
+/// A tab address that is no page: none, an `about:` document (blank,
+/// srcdoc) or Chrome's error page (`chrome-error://chromewebdata/`).
+fn is_blank_or_error_url(url: &str) -> bool {
+    let u = url.trim().to_ascii_lowercase();
+    u.is_empty() || u.starts_with("about:") || u.starts_with("chrome-error:")
+}
+
 /// Keep the start and end of a long URL; the middle is the least telling.
 fn truncate_middle(s: &str, max: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
@@ -1654,12 +1733,15 @@ pub(crate) fn navigation_incomplete_error(
     };
     let state_line = match progress {
         Some(p) => format!(
-            " The document in the tab reports readyState \"{}\".{}",
+            " The document in the tab reports readyState \"{}\".{}{}",
             if p.ready_state.is_empty() {
                 "unknown"
             } else {
                 p.ready_state.as_str()
             },
+            p.unusable_reason()
+                .map(|why| format!(" It is not usable: {why}."))
+                .unwrap_or_default(),
             p.describe_candidates()
         ),
         None => format!(
@@ -1679,12 +1761,74 @@ pub(crate) fn navigation_incomplete_error(
     )
 }
 
+/// The warning for a page that is clearly usable although its lifecycle
+/// event did not arrive and nothing ties it to this navigation (#502,
+/// option C): success, but `commit: "unverified"`. It names the tab's real
+/// address and readyState and never claims the page is the one requested:
+/// over the extension relay the tab API names no navigation, so the document
+/// can be another navigation's (a page script, another client) or, if this
+/// one never started, the previous page.
+pub(crate) fn load_unverified_warning(
+    target: &str,
+    wait_until: WaitUntil,
+    elapsed_ms: u64,
+    budget_ms: u64,
+    progress: &LoadProgress,
+) -> String {
+    // Equal once parsed: Chrome serializes `https://a.test` as `https://a.test/`.
+    let same = progress.url == target
+        || matches!(
+            (url::Url::parse(&progress.url), url::Url::parse(target)),
+            (Ok(a), Ok(b)) if a == b
+        );
+    let address = if same {
+        format!("The tab is on {}", progress.url)
+    } else {
+        format!(
+            "The tab is on {}, not the requested {target} (a redirect, or another \
+             navigation's page)",
+            progress.url
+        )
+    };
+    format!(
+        "`{}` had not arrived when the wait ended after {} (upper limit {}), and it could not \
+         be confirmed that the page in the tab came from this request (commit: unverified). \
+         {address}; its readyState is \"{}\" and it shows content, so `open` continues. \
+         Check `get url` and `snapshot` before relying on it being the requested page.{} \
+         Pass `--wait-until domcontentloaded` to skip this wait on pages with long-lived \
+         requests.",
+        wait_until.as_str(),
+        secs(elapsed_ms),
+        secs(budget_ms),
+        progress.ready_state,
+        progress.describe_candidates(),
+    )
+}
+
+/// A navigation whose lifecycle wait ended early but whose page can be used:
+/// the warning to surface, and whether this navigation's commit was proven.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct NavigationContinued {
+    pub warning: String,
+    /// `false` when the page is usable but nothing ties it to this
+    /// navigation; reported as `commit: "unverified"`.
+    pub commit_verified: bool,
+}
+
 /// Decide what an ended-early lifecycle wait means (#502), given futures for
 /// the readiness probe and the frame tree, each bounded by
-/// [`LOAD_PROGRESS_PROBE_MS`]. Success (with a warning) only when the frame
-/// tree shows this navigation's loader AND its DOM is ready; everything else
-/// is a `navigation_incomplete:` error saying what is known. Split from
-/// `navigate_from` so a test can drive it with a mocked wait and probes.
+/// [`LOAD_PROGRESS_PROBE_MS`]:
+/// - the frame tree (or this navigation's own commit event) shows this
+///   navigation's loader AND its DOM is ready: success with a warning;
+/// - nothing proves or disproves the commit (over the relay, always) and the
+///   tab's document is clearly usable ([`LoadProgress::unusable_reason`]):
+///   success with an "unverified" warning naming the real URL (option C);
+/// - everything else (not usable, probe failed or unanswered, or the frame
+///   shows another loader): a `navigation_incomplete:` error saying what is
+///   known.
+///
+/// Split from `navigate_from` so a test can drive it with a mocked wait and
+/// probes.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn resolve_incomplete_navigation<P, F>(
     target: &str,
@@ -1696,20 +1840,32 @@ pub(crate) async fn resolve_incomplete_navigation<P, F>(
     commit_event: Option<String>,
     probe: P,
     frame_tree: F,
-) -> Result<String, String>
+) -> Result<NavigationContinued, String>
 where
     P: std::future::Future<Output = Result<Value, String>>,
     F: std::future::Future<Output = Result<Value, String>>,
 {
     let bound = Duration::from_millis(LOAD_PROGRESS_PROBE_MS);
+    let mut unreachable: Option<String> = None;
     let commit = match tokio::time::timeout(bound, frame_tree).await {
         Ok(Err(cause)) if is_debugger_access_denied(&cause) => return Err(cause),
-        Ok(Ok(tree)) => CommitEvidence::from_frame_tree(&tree, loader_id),
+        Ok(Ok(tree)) => {
+            // Chrome's error page keeps the failed address here.
+            unreachable = tree
+                .pointer("/frameTree/frame/unreachableUrl")
+                .and_then(Value::as_str)
+                .filter(|u| !u.is_empty())
+                .map(String::from);
+            CommitEvidence::from_frame_tree(&tree, loader_id)
+        }
         _ => CommitEvidence::Unknown { url: None },
     };
     let progress = match tokio::time::timeout(bound, probe).await {
         Ok(Err(cause)) if is_debugger_access_denied(&cause) => return Err(cause),
-        Ok(Ok(value)) => Some(LoadProgress::from_value(&value)),
+        Ok(Ok(value)) => Some(LoadProgress {
+            unreachable_url: unreachable,
+            ..LoadProgress::from_value(&value)
+        }),
         _ => None,
     };
     // `commit_event` is only ever a main-frame commit carrying this
@@ -1729,9 +1885,16 @@ where
         other => other,
     };
     match (&commit, &progress) {
-        (CommitEvidence::Committed { .. }, Some(p)) if p.is_ready() => Ok(load_incomplete_warning(
-            wait_until, elapsed_ms, budget_ms, p,
-        )),
+        (CommitEvidence::Committed { .. }, Some(p)) if p.is_ready() => Ok(NavigationContinued {
+            warning: load_incomplete_warning(wait_until, elapsed_ms, budget_ms, p),
+            commit_verified: true,
+        }),
+        (CommitEvidence::Unknown { .. }, Some(p)) if p.unusable_reason().is_none() => {
+            Ok(NavigationContinued {
+                warning: load_unverified_warning(target, wait_until, elapsed_ms, budget_ms, p),
+                commit_verified: false,
+            })
+        }
         _ => Err(navigation_incomplete_error(
             target,
             wait_until,
@@ -3621,6 +3784,9 @@ impl BrowserManager {
         // cleanly but the page is usable anyway (issues #10, #126). Surfaced to the
         // CLI in the response so the agent knows to expect a still-rendering page.
         let mut nav_warning: Option<String> = None;
+        // `false` when that page is usable but nothing ties it to this
+        // navigation; reported as `commit: "unverified"` (#502, option C).
+        let mut commit_verified = true;
         let nav_started = std::time::Instant::now();
 
         let nav_result: PageNavigateResult = match self
@@ -3669,76 +3835,53 @@ impl BrowserManager {
             // very large server-rendered page (a huge diff/table/log) Chrome holds
             // the navigate result open until the giant document commits+loads, so
             // the command blows past its budget even though the navigation *did*
-            // start. Mirror the #10 fix one layer down: if the tab has actually
-            // landed on the target host, degrade to success-with-warning instead of
-            // a hard failure; only a nav that never committed still errors.
+            // start. `Page.navigate` never answered, so there is no loader id to
+            // tie a commit to: the commit is unknown, whatever the tab's host
+            // (#502). The same decision as an unfinished lifecycle wait applies:
+            // a clearly usable page continues with `commit: "unverified"` and
+            // its real address; anything else is `navigation_incomplete:`.
             Err(e) if is_command_timeout_error(&e) => {
-                // Commit evidence is this navigation's own main-frame
-                // `Page.frameNavigated`, not the tab's host: a cross-site
-                // redirect commits elsewhere, and the previous document can
-                // be on the same host (#502).
-                // `Page.navigate` never answered, so there is no loader id
-                // to tie a commit to: the commit stays unknown.
-                if let Some(landed) = main_frame_commit(&mut lifecycle_rx, &session_id, None) {
-                    nav_warning = Some(format!(
-                        "`Page.navigate` timed out (heavy page) but this navigation committed \
-                         and the tab is on {landed} — continuing; the document may still be \
-                         rendering. For read-only extraction from large pages, `fetch(url)` \
-                         inside `eval` (or `read`) is a lighter path than `open`."
-                    ));
-                    PageNavigateResult {
-                        frame_id: String::new(),
-                        loader_id: None,
-                        error_text: None,
-                        relay_fallback: None,
-                    }
-                } else {
-                    // Elapsed is the navigate call itself; the follow-up
-                    // checks are bounded and not counted in it.
-                    let elapsed_ms = nav_started.elapsed().as_millis() as u64;
-                    let bound = Duration::from_millis(LOAD_PROGRESS_PROBE_MS);
-                    let progress =
-                        match tokio::time::timeout(bound, self.evaluate_simple(LOAD_PROGRESS_JS))
-                            .await
-                        {
-                            Ok(Ok(v)) => Some(LoadProgress::from_value(&v)),
-                            _ => None,
-                        };
-                    // The browser's own record of the tab's address, which
-                    // needs no answer from the page.
-                    let target_url = match self.active_target_id() {
-                        Ok(tid) => tokio::time::timeout(
-                            bound,
-                            self.client.send_command(
-                                "Target.getTargetInfo",
-                                Some(json!({ "targetId": tid })),
-                                None,
-                            ),
+                // Elapsed is the navigate call itself; the follow-up checks
+                // are bounded and not counted in it.
+                let elapsed_ms = nav_started.elapsed().as_millis() as u64;
+                // The browser's own record of the tab's address, which needs
+                // no answer from the page, standing in for the frame tree.
+                let target_id = self.active_target_id().ok();
+                let client = &self.client;
+                let address = async move {
+                    let tid = target_id.ok_or_else(|| "no active target".to_string())?;
+                    let info = client
+                        .send_command(
+                            "Target.getTargetInfo",
+                            Some(json!({ "targetId": tid })),
+                            None,
                         )
-                        .await
-                        .ok()
-                        .and_then(|r| r.ok())
-                        .and_then(|v| {
-                            v.pointer("/targetInfo/url")
-                                .and_then(Value::as_str)
-                                .map(String::from)
-                        }),
-                        Err(_) => None,
-                    };
-                    let tab = progress
-                        .as_ref()
-                        .map(|p| p.url.clone())
-                        .filter(|u| !u.is_empty())
-                        .or(target_url);
-                    return Err(navigation_incomplete_error(
-                        url,
-                        wait_until,
-                        elapsed_ms,
-                        super::cdp::client::CDP_COMMAND_TIMEOUT.as_millis() as u64,
-                        &e,
-                        progress.as_ref(),
-                        &CommitEvidence::Unknown { url: tab },
-                    ));
+                        .await?;
+                    let url = info
+                        .pointer("/targetInfo/url")
+                        .and_then(Value::as_str)
+                        .filter(|u| !u.is_empty());
+                    Ok::<Value, String>(json!({ "frameTree": { "frame": { "url": url } } }))
+                };
+                let continued = resolve_incomplete_navigation(
+                    url,
+                    wait_until,
+                    super::cdp::client::CDP_COMMAND_TIMEOUT.as_millis() as u64,
+                    elapsed_ms,
+                    &e,
+                    None,
+                    None,
+                    self.evaluate_simple(LOAD_PROGRESS_JS),
+                    address,
+                )
+                .await?;
+                commit_verified = continued.commit_verified;
+                nav_warning = Some(continued.warning);
+                PageNavigateResult {
+                    frame_id: String::new(),
+                    loader_id: None,
+                    error_text: None,
+                    relay_fallback: None,
                 }
             }
             Err(e) => return Err(e),
@@ -3783,15 +3926,18 @@ impl BrowserManager {
                 // is common — a long-pending XHR or a stuck sub-resource holds
                 // `load` open long after the DOM is interactive (issue #10), so a
                 // committed navigation with a ready DOM is success with a
-                // warning. Anything else is an error that says what is known:
-                // the real elapsed time and error, commit from this
-                // navigation's loader, and what the tab reports (#502). The bare
-                // "Operation timed out" this used to collapse into said none of
-                // that.
+                // warning. When nothing ties the tab's document to this
+                // navigation (over the relay, never) but that document is
+                // clearly usable, it is success with an "unverified" warning
+                // naming its real address (#502, option C). Anything else is
+                // an error that says what is known: the real elapsed time and
+                // error, commit from this navigation's loader, and what the
+                // tab reports. The bare "Operation timed out" this used to
+                // collapse into said none of that.
                 let elapsed_ms = wait_started.elapsed().as_millis() as u64;
                 let commit_event =
                     main_frame_commit(&mut commit_rx, &session_id, nav_result.loader_id.as_deref());
-                let warning = resolve_incomplete_navigation(
+                let continued = resolve_incomplete_navigation(
                     url,
                     wait_until,
                     self.default_timeout_ms,
@@ -3804,7 +3950,8 @@ impl BrowserManager {
                         .send_command("Page.getFrameTree", None, Some(&session_id)),
                 )
                 .await?;
-                nav_warning = Some(warning);
+                commit_verified = continued.commit_verified;
+                nav_warning = Some(continued.warning);
             }
         }
 
@@ -3881,6 +4028,9 @@ impl BrowserManager {
         let mut out = json!({ "url": page_url, "title": title });
         if let Some(w) = nav_warning {
             out["warning"] = json!(w);
+        }
+        if !commit_verified {
+            out["commit"] = json!("unverified");
         }
         Ok(out)
     }
@@ -8961,7 +9111,7 @@ mod tests {
         wait_error: &str,
         probe: Result<Value, String>,
         frame_tree: Result<Value, String>,
-    ) -> Result<String, String> {
+    ) -> Result<NavigationContinued, String> {
         decide_with(elapsed_ms, wait_error, None, probe, frame_tree).await
     }
 
@@ -8971,7 +9121,7 @@ mod tests {
         commit_event: Option<String>,
         probe: Result<Value, String>,
         frame_tree: Result<Value, String>,
-    ) -> Result<String, String> {
+    ) -> Result<NavigationContinued, String> {
         resolve_incomplete_navigation(
             "https://a.example/start",
             WaitUntil::Load,
@@ -9115,6 +9265,8 @@ mod tests {
         )
         .await
         .unwrap();
+        assert!(ok.commit_verified, "{ok:?}");
+        let ok = ok.warning;
         assert!(
             ok.contains("this navigation committed and its DOM is ready (interactive)"),
             "{ok}"
@@ -9123,7 +9275,8 @@ mod tests {
     }
 
     /// A ready DOM whose commit cannot be confirmed (the frame tree failed)
-    /// is not reported as a usable page.
+    /// and that shows nothing (no body content reported) is not reported as
+    /// a usable page.
     #[tokio::test]
     async fn a_ready_dom_without_commit_evidence_is_not_success() {
         let err = decide(
@@ -9194,8 +9347,8 @@ mod tests {
     }
 
     /// Over the relay the loader id is synthetic: there is no evidence either
-    /// way, so a ready page is reported as "commit unknown" with its real URL,
-    /// not as success and not as "not committed".
+    /// way, so a ready but empty page is reported as "commit unknown" with
+    /// its real URL, not as success and not as "not committed".
     #[tokio::test]
     async fn the_relays_synthetic_loader_leaves_the_commit_unknown() {
         let err = resolve_incomplete_navigation(
@@ -9215,6 +9368,273 @@ mod tests {
             err.contains("Whether this navigation committed is unknown; the tab reports http://127.0.0.1/slow.html"),
             "{err}"
         );
+    }
+
+    /// A probe answer with what the document shows.
+    fn shown(rs: &str, url: &str, text: u64, visible: u64, pending: &[&str]) -> Value {
+        let mut v = progress(rs, url, pending);
+        v["hasBody"] = json!(true);
+        v["textChars"] = json!(text);
+        v["visibleElements"] = json!(visible);
+        v
+    }
+
+    /// Option C: what counts as "clearly usable". All of: parsed, a real
+    /// address, a body showing text or a content-bearing element.
+    #[test]
+    fn a_page_is_usable_only_when_parsed_real_and_showing_content() {
+        let p = |v: Value| LoadProgress::from_value(&v);
+        let ok = "https://a.example/x";
+        for usable in [
+            shown("interactive", ok, 12, 0, &[]),
+            shown("complete", ok, 0, 1, &[]),
+        ] {
+            assert_eq!(p(usable.clone()).unusable_reason(), None, "{usable}");
+        }
+        let cases = [
+            (shown("loading", ok, 500, 9, &[]), "still \"loading\""),
+            (shown("", ok, 500, 9, &[]), "still \"unknown\""),
+            (shown("complete", "about:blank", 5, 0, &[]), "about:blank"),
+            (shown("complete", "about:srcdoc", 5, 0, &[]), "about:srcdoc"),
+            (shown("complete", "", 5, 0, &[]), "no address"),
+            (
+                shown("complete", "chrome-error://chromewebdata/", 80, 1, &[]),
+                "chrome-error://chromewebdata/",
+            ),
+            (progress("complete", ok, &[]), "no body"),
+            (
+                shown("interactive", ok, 0, 0, &[]),
+                "no text and no visible content",
+            ),
+        ];
+        for (v, why) in cases {
+            let reason = p(v.clone()).unusable_reason();
+            assert!(
+                reason.as_deref().is_some_and(|r| r.contains(why)),
+                "{v}: {reason:?}"
+            );
+        }
+        let mut error_page = p(shown("complete", ok, 80, 1, &[]));
+        error_page.unreachable_url = Some("https://down.example/".into());
+        assert!(error_page
+            .unusable_reason()
+            .is_some_and(|r| r.contains("error page for https://down.example/")));
+    }
+
+    async fn decide_relay(
+        target: &str,
+        probe: Result<Value, String>,
+        frame_tree: Result<Value, String>,
+    ) -> Result<NavigationContinued, String> {
+        resolve_incomplete_navigation(
+            target,
+            WaitUntil::Load,
+            25_000,
+            25_000,
+            "Timeout waiting for Page.loadEventFired",
+            Some(SYNTHETIC_LOADER),
+            None,
+            async move { probe },
+            async move { frame_tree },
+        )
+        .await
+    }
+
+    /// Option C (a): over the relay nothing ties the page to this request,
+    /// but it is clearly usable: success, `commit` unverified, and a warning
+    /// that says the load event never arrived, that the page could not be
+    /// confirmed as this request's, the real URL and readyState, and the
+    /// still-loading resources only as candidates.
+    #[tokio::test]
+    async fn a_usable_page_without_commit_evidence_is_success_unverified() {
+        let target = "http://127.0.0.1/slow.html";
+        let ok = decide_relay(
+            target,
+            Ok(shown(
+                "interactive",
+                target,
+                40,
+                0,
+                &["image http://127.0.0.1/slow.png"],
+            )),
+            Ok(tree("L-REAL", target)),
+        )
+        .await
+        .unwrap();
+        assert!(!ok.commit_verified);
+        let w = &ok.warning;
+        assert!(w.contains("`load` had not arrived"), "{w}");
+        assert!(w.contains("after 25.0s"), "{w}");
+        assert!(
+            w.contains("could not be confirmed that the page in the tab came from this request"),
+            "{w}"
+        );
+        assert!(w.contains("commit: unverified"), "{w}");
+        assert!(w.contains(&format!("The tab is on {target};")), "{w}");
+        assert!(w.contains("readyState is \"interactive\""), "{w}");
+        assert!(
+            w.contains("may still be loading, or their record is missing"),
+            "{w}"
+        );
+        assert!(w.contains("image http://127.0.0.1/slow.png"), "{w}");
+        assert!(!w.contains("this navigation committed"), "{w}");
+
+        // The frame tree failing leaves the commit just as unknown.
+        let ok = decide_relay(
+            target,
+            Ok(shown("complete", target, 3, 0, &[])),
+            Err("Page.getFrameTree failed".into()),
+        )
+        .await
+        .unwrap();
+        assert!(!ok.commit_verified);
+    }
+
+    /// Option C (d): navigation B committed while A was pending, and B's page
+    /// is usable. It is reported as usable but unverified, with B's real URL
+    /// named as not the requested one; never "this navigation committed".
+    #[tokio::test]
+    async fn another_navigations_usable_page_is_unverified_and_named() {
+        let ok = decide_relay(
+            "https://a.example/start",
+            Ok(shown("complete", "https://b.example/other", 20, 2, &[])),
+            Ok(tree("L-B", "https://b.example/other")),
+        )
+        .await
+        .unwrap();
+        assert!(!ok.commit_verified);
+        let w = &ok.warning;
+        assert!(
+            w.contains(
+                "The tab is on https://b.example/other, not the requested \
+                 https://a.example/start"
+            ),
+            "{w}"
+        );
+        assert!(!w.contains("this navigation committed"), "{w}");
+        assert!(!w.contains("This navigation committed"), "{w}");
+    }
+
+    /// Option C (b): with no commit evidence, a page that is not clearly
+    /// usable stays a non-retryable `navigation_commit_unknown` error that
+    /// names the real URL, readyState and why it is not usable.
+    #[tokio::test]
+    async fn an_unusable_page_without_commit_evidence_is_still_an_error() {
+        let target = "https://a.example/start";
+        let cases: Vec<(Value, Value, &str)> = vec![
+            (
+                shown("loading", target, 0, 0, &[]),
+                tree("L", target),
+                "readyState \"loading\"",
+            ),
+            (
+                shown("complete", "about:blank", 0, 0, &[]),
+                tree("L", "about:blank"),
+                "the tab shows about:blank",
+            ),
+            (
+                shown("interactive", target, 0, 0, &[]),
+                tree("L", target),
+                "no text and no visible content",
+            ),
+            (
+                shown("complete", "chrome-error://chromewebdata/", 90, 1, &[]),
+                json!({ "frameTree": { "frame": { "id": "F", "loaderId": "L",
+                    "url": target, "unreachableUrl": target } } }),
+                "error page for https://a.example/start",
+            ),
+        ];
+        for (probe, frame_tree, why) in cases {
+            let err = decide_relay(target, Ok(probe), Ok(frame_tree))
+                .await
+                .unwrap_err();
+            assert!(err.starts_with("navigation_incomplete:"), "{err}");
+            assert!(
+                err.contains("Whether this navigation committed is unknown"),
+                "{err}"
+            );
+            assert!(err.contains(why), "{why}: {err}");
+            let m = crate::error_envelope::classify_error(&err);
+            assert_eq!(m.code, "navigation_commit_unknown", "{err}");
+            assert!(!m.retryable, "{err}");
+        }
+
+        // A probe that fails or never answers is not usable either.
+        let err = decide_relay(
+            target,
+            Err("Runtime.evaluate failed".into()),
+            Ok(tree("L", target)),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("did not answer a readiness check"), "{err}");
+        let err = resolve_incomplete_navigation(
+            target,
+            WaitUntil::Load,
+            25_000,
+            25_000,
+            "Timeout waiting for Page.loadEventFired",
+            Some(SYNTHETIC_LOADER),
+            None,
+            std::future::pending::<Result<Value, String>>(),
+            async { Ok(tree("L", target)) },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("did not answer a readiness check"), "{err}");
+    }
+
+    /// Option C applies only where the commit is unknown. Over direct CDP the
+    /// frame showing another navigation's loader disproves this one's commit:
+    /// that usable page is an error, never A's success. A proven commit
+    /// keeps #511's behaviour: success once the DOM is ready.
+    #[tokio::test]
+    async fn proven_and_disproven_commits_keep_their_behaviour() {
+        let err = decide(
+            25_000,
+            "Timeout waiting for Page.loadEventFired",
+            Ok(shown("complete", "https://b.example/", 50, 3, &[])),
+            Ok(tree("L-B", "https://b.example/")),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("has not committed"), "{err}");
+        assert_eq!(
+            crate::error_envelope::classify_error(&err).code,
+            "navigation_incomplete"
+        );
+
+        let ok = decide(
+            25_000,
+            "Timeout waiting for Page.loadEventFired",
+            Ok(progress("interactive", "https://a.example/start", &[])),
+            Ok(tree("L-NAV", "https://a.example/start")),
+        )
+        .await
+        .unwrap();
+        assert!(ok.commit_verified);
+        assert!(!ok.warning.contains("unverified"), "{ok:?}");
+    }
+
+    /// The #373 guard: a denial from either probe is returned as itself,
+    /// never turned into a usable page or a `navigation_incomplete:` error.
+    #[tokio::test]
+    async fn a_denied_probe_is_returned_as_the_denial() {
+        let denial = "debugger_access_denied: Cannot access a chrome-extension:// URL of \
+                      different extension";
+        let target = "https://a.example/start";
+        let err = decide_relay(target, Err(denial.into()), Ok(tree("L", target)))
+            .await
+            .unwrap_err();
+        assert_eq!(err, denial);
+        let err = decide_relay(
+            target,
+            Ok(shown("complete", target, 9, 0, &[])),
+            Err(denial.into()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, denial);
     }
 
     #[test]

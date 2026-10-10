@@ -76,6 +76,10 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
    dispatch alone does not. Stop when the task is done. `hover` moves the real
    pointer and confirms the pointer reached the element; a refused or unconfirmed hover says so.
 7. Do not `open` the URL already in the tab; use `reload --observe` on purpose.
+   An `open` reply with `commit: "unverified"` loaded a usable page that could
+   not be tied to your request: its warning names the tab's real URL; check
+   `get url` before relying on it. `navigation_incomplete` means no usable
+   page: never repeat the open, check `get url` and `snapshot` later.
    Wait on a condition (`wait --text`, `wait <sel>`, `wait --url`), not a sleep.
    A "Page had not settled" warning names the requests still in flight
    (`settle.pendingRequests`); re-read rather than trusting that capture.

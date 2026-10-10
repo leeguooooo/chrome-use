@@ -189,10 +189,20 @@
 
       <hr class="du-divider" />
 
-      <h2>open 报 navigation_incomplete：页面一直没加载完</h2>
+      <h2>open 等不到 load：commit: "unverified" 与 navigation_incomplete</h2>
       <p>
         <code>open</code> 最多等 25 秒的 <code>load</code> 事件。这次导航已经提交（框架当前文档就是这次导航的 loader）
-        且 DOM 已就绪，就算成功，附一条 ⚠ 警告，页面可以直接用。其他情况报 <code>navigation_incomplete:</code>，
+        且 DOM 已就绪，就算成功，附一条 ⚠ 警告，页面可以直接用。
+      </p>
+      <p>
+        如果没有证据把标签页里的页面和这次导航对上（扩展中继走浏览器的标签页接口，总是这样），但页面明显可用
+        （readyState 是 <code>interactive</code> 或 <code>complete</code>，body 里有文字或可见内容，且不是
+        <code>about:blank</code> 或错误页），同样算成功，返回带 <code>commit: "unverified"</code> 和一条 ⚠ 警告。
+        警告写明 <code>load</code> 事件没到、无法确认页面来自这次请求，并给出标签页的真实 URL 和 readyState。
+        它可能是重定向后的页面、别的导航打开的页面，或者原来的页面，所以要先用 <code>get url</code> 核对，再当成你要的页面用。
+      </p>
+      <p>
+        其他情况报 <code>navigation_incomplete:</code>，
         写明实际等了多久和真实的错误、这次导航有没有提交（只认这次导航自己的 loader id；扩展中继走浏览器的标签页接口、没有 loader id，会写「未知」）、标签页报告的 URL 和 readyState，
         以及没有 Resource Timing 记录的引用资源。这些只是候选，记录缺失不代表还在加载，也不推断原因。
         以前这种情况只报一句「Operation timed out」。

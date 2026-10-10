@@ -199,11 +199,23 @@
 
       <hr class="du-divider" />
 
-      <h2>open reports navigation_incomplete: the page never finished loading</h2>
+      <h2>open never saw load: commit: "unverified" and navigation_incomplete</h2>
       <p>
         <code>open</code> waits up to 25 seconds for the <code>load</code> event. If this navigation committed (the
         frame's document is this navigation's loader) and its DOM is ready, it succeeds with a ⚠ warning and the page
-        is usable. Otherwise it fails with <code>navigation_incomplete:</code>, which gives the real elapsed time and
+        is usable.
+      </p>
+      <p>
+        If nothing ties the tab's page to this navigation (always the case over the extension relay, which navigates
+        through the tab API) but that page is clearly usable (readyState <code>interactive</code> or
+        <code>complete</code>, a body showing text or visible content, and not <code>about:blank</code> or an error
+        page), it also succeeds, with <code>commit: "unverified"</code> and a ⚠ warning. The warning says the
+        <code>load</code> event never arrived and that the page could not be confirmed as this request's, and gives
+        the tab's real URL and readyState. It may be a redirect, another navigation's page or the previous page, so
+        check <code>get url</code> before relying on it being the page you asked for.
+      </p>
+      <p>
+        Otherwise it fails with <code>navigation_incomplete:</code>, which gives the real elapsed time and
         error, whether this navigation committed (read only from its own loader id; over the extension relay, which navigates
         through the tab API and has none, it is "unknown"), the URL and readyState the tab reports,
         and the references with no Resource Timing record. Those are candidates only: a missing record does not mean

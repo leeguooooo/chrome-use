@@ -235,7 +235,7 @@ For an authorized task, the bundled skill tells the agent to inspect and attempt
 
 | Command | Purpose |
 |---|---|
-| `chrome-use open <url>` | Connect to your Chrome and navigate; a page that is not confirmed ready after 25s fails with `navigation_incomplete:`, saying what is known (commit, readyState, candidate resources) |
+| `chrome-use open <url>` | Connect to your Chrome and navigate. If `load` has not arrived after 25s but the tab's page is clearly usable, it succeeds with a ⚠ warning; when that page can't be tied to this request (always over the extension relay) the reply carries `commit: "unverified"` and the tab's real URL. A page that isn't usable fails with `navigation_incomplete:`, saying what is known (commit, readyState, candidate resources) |
 | `chrome-use snapshot -i` | Read the page; the start of every interaction (`-u` adds each link's absolute URL) |
 | `chrome-use read --links` | The page as text, plus a bounded `## Links` list of `[text](absolute URL)` (first 100, `--max-links <n>` up to 1000) |
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | Click by text, by snapshot ref, or on a raw viewport coordinate |

@@ -838,7 +838,11 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             // next command, and hit the identical failure it was recovering
             // from. An unconfirmed result must not look like a done one.
             let unconfirmed = data.get("verified").and_then(|v| v.as_str()) == Some("unconfirmed");
-            let indicator = if unconfirmed {
+            // An `open` whose page is usable but not tied to this navigation
+            // (#502): the tab's real page, not a confirmed one.
+            let commit_unverified =
+                data.get("commit").and_then(|v| v.as_str()) == Some("unverified");
+            let indicator = if unconfirmed || commit_unverified {
                 color::warning_indicator()
             } else {
                 color::success_indicator()
@@ -2494,6 +2498,13 @@ Waiting: `open` waits up to 25s for the page's `load` event
 early or runs out:
   - this navigation committed (its own loader is the frame's document) and
     the DOM is ready: success, with a ⚠ warning;
+  - nothing ties the tab's page to this navigation (always the case over the
+    extension relay) but the page is clearly usable (readyState interactive
+    or complete, a body showing text or visible content, not about:blank or
+    an error page): success with `commit: "unverified"` and a ⚠ warning
+    naming the tab's real URL and readyState. It may be another
+    navigation's page or the previous one: check `get url` before relying
+    on it being the requested page;
   - anything else: error `navigation_incomplete:` with the real elapsed time
     and error, whether this navigation committed (read only from its own
     loader id; over the extension relay, which navigates through the tab API

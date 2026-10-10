@@ -225,7 +225,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 
 | 命令 | 用途 |
 |---|---|
-| `chrome-use open <url>` | 连接你的 Chrome 并导航；25 秒后仍不能确认页面就绪时报 `navigation_incomplete:`，写明已知的信息（是否提交、readyState、候选资源） |
+| `chrome-use open <url>` | 连接你的 Chrome 并导航。25 秒后 `load` 仍没到、但标签页里的页面明显可用时算成功，附 ⚠ 警告；如果无法确认这个页面来自这次请求（走扩展中继时总是如此），返回里带 `commit: "unverified"` 和标签页的真实 URL。页面不可用时报 `navigation_incomplete:`，写明已知的信息（是否提交、readyState、候选资源） |
 | `chrome-use snapshot -i` | 读页面；每次交互的起点（`-u` 给每个链接带上绝对 URL） |
 | `chrome-use read --links` | 页面正文，外加一段有上限的 `## Links`：`[文字](绝对 URL)`（默认前 100 个，`--max-links <n>` 最多 1000） |
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | 按文本、按快照 ref、或按视口坐标点击 |

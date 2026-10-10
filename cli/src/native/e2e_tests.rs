@@ -4356,17 +4356,33 @@ async fn e2e_open_reports_commit_and_candidates_from_evidence() {
     let resp = open_for_e2e(&mut state, "3", &format!("{base}/old")).await;
     assert_success(&resp);
     let resp = open_for_e2e(&mut state, "4", &format!("{base}/hang")).await;
-    assert_eq!(resp["success"], false, "{resp}");
-    let err = resp["error"].as_str().unwrap_or("");
     // Chrome may hold `Page.navigate` itself until response headers arrive;
-    // either way the old document must not be taken as the new one: it is
-    // "not committed" (frame tree shows another loader) or "unknown", and
-    // the tab's real URL is named.
-    assert!(
-        err.contains("has not committed") || err.contains("committed is unknown"),
-        "{err}"
-    );
-    assert!(!err.contains("This navigation committed"), "{err}");
+    // either way the old document must not be taken as the new one. With a
+    // loader, the frame tree shows another one: "not committed", an error.
+    // Without one (`Page.navigate` timed out), the commit is unknown and the
+    // old page is usable, so option C reports it as success with
+    // `commit: "unverified"`, naming /old as not the requested page.
+    let err = if resp["success"] == true {
+        let data = get_data(&resp);
+        assert_eq!(data["commit"], "unverified", "{resp}");
+        let w = data["warning"].as_str().unwrap_or("").to_string();
+        assert!(
+            w.contains(&format!(
+                "The tab is on {base}/old, not the requested {base}/hang"
+            )),
+            "{w}"
+        );
+        assert!(!w.contains("this navigation committed"), "{w}");
+        w
+    } else {
+        let err = resp["error"].as_str().unwrap_or("").to_string();
+        assert!(
+            err.contains("has not committed") || err.contains("committed is unknown"),
+            "{err}"
+        );
+        assert!(!err.contains("This navigation committed"), "{err}");
+        err
+    };
     // The tab's address is reported (the browser may already show the
     // pending one), and the elapsed time is the navigation's own, not
     // inflated by the follow-up checks.
@@ -4385,9 +4401,17 @@ async fn e2e_open_reports_commit_and_candidates_from_evidence() {
     let resp = open_for_e2e(&mut state, "4a", &format!("{base}/timer")).await;
     assert_success(&resp);
     let resp = open_for_e2e(&mut state, "4b", &format!("{base}/hang")).await;
-    assert_eq!(resp["success"], false, "{resp}");
-    let err = resp["error"].as_str().unwrap_or("");
-    assert!(!err.contains("This navigation committed"), "{err}");
+    if resp["success"] == true {
+        // Commit unknown, B's page usable: unverified, never A's commit.
+        let data = get_data(&resp);
+        assert_eq!(data["commit"], "unverified", "{resp}");
+        let w = data["warning"].as_str().unwrap_or("");
+        assert!(w.contains(&format!("not the requested {base}/hang")), "{w}");
+        assert!(!w.contains("this navigation committed"), "{w}");
+    } else {
+        let err = resp["error"].as_str().unwrap_or("");
+        assert!(!err.contains("This navigation committed"), "{err}");
+    }
 
     // 3. A cleared timing buffer: the stylesheet that finished has no record
     //    and is listed only as a candidate; the page itself is usable.
