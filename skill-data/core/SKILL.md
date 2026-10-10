@@ -49,7 +49,9 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
    refs are checked live before use and refused if anything changed: run
    `snapshot -i`, and do not repeat the action.
 2. Pair actions with `--observe` and read `observed.status`. A separate
-   snapshot after every click is unnecessary. Inside `batch`, write it on the
+   snapshot after every click is unnecessary; on a small page
+   `observed.snapshot` already is the fresh post-action tree, with
+   `observed.changes` listing what moved. Inside `batch`, write it on the
    step: `batch "fill @e1 Ada" "click @e2 --observe"`. `status: complete`
    means the capture is complete, not that the task is: a page still showing
    `Loading` needs `wait --text` for its final signal.

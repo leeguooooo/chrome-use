@@ -277,6 +277,14 @@
         least 80% of each changed. Refs in that tree are live; use them directly.
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ A small page comes back whole</div>
+        When the post-action tree is at most 4 KB and 60 lines, <code>observed.snapshot</code> is that whole current
+        tree, the same capture, refs registered, and <code>observed.changes</code> lists only the <code>+</code>/<code>-</code>
+        lines, with no context. A <code>snapshot</code> straight after it adds nothing. Larger pages keep the unified
+        <code>delta</code>. An incomplete capture still says partial or unavailable in <code>observed.status</code>.
+      </div>
+
       <div class="du-callout tip">
         <div class="du-callout-title">✅ expect or --observe?</div>
         For a <strong>hard pass/fail gate</strong> (with exit codes, <code>&amp;&amp;</code>, batches) use

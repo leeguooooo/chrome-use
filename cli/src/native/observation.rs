@@ -433,6 +433,43 @@ pub(super) fn page_replaced(delta: &super::diff::SnapshotDiffResult) -> bool {
     delta.removals * 10 >= before_lines * 8 && delta.additions * 10 >= after_lines * 8
 }
 
+/// A post-action tree at or under both limits is returned whole, beside a
+/// compact list of what changed: on a page this small the caller otherwise
+/// spends a round trip on `snapshot` just to read the receipt in context.
+pub(super) const SMALL_TREE_BYTES: usize = 4096;
+pub(super) const SMALL_TREE_LINES: usize = 60;
+/// Cap on the compact change list that rides with a small tree. The tree is
+/// bounded, but a page that shrank to a small one can drop many lines.
+const MAX_CHANGE_LINES: usize = 60;
+
+/// Whether the post-action tree is small enough to return whole.
+pub(super) fn small_tree(after: &str) -> bool {
+    let after = after.trim_end();
+    after.len() <= SMALL_TREE_BYTES && after.lines().count() <= SMALL_TREE_LINES
+}
+
+/// The added and removed lines alone, `+ ` / `- ` prefixed, in diff order:
+/// no context lines and no hunk headers, since the whole tree rides beside
+/// them. Returns the lines kept and how many were left out by the cap.
+pub(super) fn compact_changes(before: &str, after: &str) -> (Vec<String>, usize) {
+    use similar::{ChangeTag, TextDiff};
+    let mut lines = Vec::new();
+    let mut omitted = 0;
+    for change in TextDiff::from_lines(before, after).iter_all_changes() {
+        let sign = match change.tag() {
+            ChangeTag::Insert => '+',
+            ChangeTag::Delete => '-',
+            ChangeTag::Equal => continue,
+        };
+        if lines.len() == MAX_CHANGE_LINES {
+            omitted += 1;
+            continue;
+        }
+        lines.push(format!("{sign} {}", change.value().trim_end_matches('\n')));
+    }
+    (lines, omitted)
+}
+
 /// Compare only evidence actually captured. Missing evidence is never an empty
 /// page, an empty URL, or proof that an action changed nothing.
 pub(super) fn changes(
@@ -457,13 +494,28 @@ pub(super) fn changes(
     let mut changed = false;
     match (before, after) {
         (Ok(before), Ok(after)) => {
-            let delta = super::diff::diff_snapshots(
-                &format!("{}\n", before.trim_end()),
-                &format!("{}\n", after.trim_end()),
-            );
+            let before_text = format!("{}\n", before.trim_end());
+            let after_text = format!("{}\n", after.trim_end());
+            let delta = super::diff::diff_snapshots(&before_text, &after_text);
             changed = delta.changed;
-            if delta.changed {
-                if page_replaced(&delta) {
+            let replaced = delta.changed && page_replaced(&delta);
+            if !replaced && small_tree(after) {
+                // Both trees were captured, so this is the whole current
+                // tree, the same capture the delta came from (refs already
+                // registered). Whether the observation as a whole is
+                // complete is still `status`, below.
+                out.insert("snapshot".into(), json!(after.trim_end()));
+                if delta.changed {
+                    let (lines, omitted) = compact_changes(&before_text, &after_text);
+                    out.insert("changes".into(), json!(lines));
+                    if omitted > 0 {
+                        out.insert("changesOmitted".into(), json!(omitted));
+                    }
+                    out.insert("added".into(), json!(delta.additions));
+                    out.insert("removed".into(), json!(delta.removals));
+                }
+            } else if delta.changed {
+                if replaced {
                     // A click that navigated: the diff is the whole old tree
                     // as removals plus the whole new tree as additions, twice
                     // the bytes of the page for no information the new tree
@@ -618,9 +670,10 @@ mod capture_tests {
     }
 
     #[test]
-    fn an_in_page_change_still_returns_a_delta() {
-        // One row re-sorted on a 40-line page is a delta, not a replacement.
-        let before = tree("row", 40);
+    fn an_in_page_change_on_a_large_page_still_returns_a_delta() {
+        // One row re-sorted on an 80-line page is a delta, not a replacement,
+        // and the page is past the small-tree line limit.
+        let before = tree("row", 80);
         let mut lines: Vec<&str> = before.lines().collect();
         lines.swap(3, 30);
         let after = lines.join("\n");
@@ -629,20 +682,123 @@ mod capture_tests {
         assert!(out.contains_key("delta"));
         assert!(!out.contains_key("replaced"));
         assert!(!out.contains_key("snapshot"));
+        assert!(!out.contains_key("changes"));
     }
 
     #[test]
     fn small_trees_are_never_reported_as_replaced() {
-        // A dialog swapping for another dialog is cheap as a diff, and a
-        // "replaced" flag there would make agents expect a page-sized tree.
+        // A dialog swapping for another dialog: a small tree, returned whole
+        // with the compact changes, never flagged as a page replacement.
         let out = changes(
             &ok("- button \"OK\" [ref=e1]"),
             &ok("- button \"Done\" [ref=e2]"),
             &ok("u"),
             &ok("u"),
         );
-        assert!(out.contains_key("delta"));
         assert!(!out.contains_key("replaced"));
+        assert!(!out.contains_key("delta"));
+        assert_eq!(out["snapshot"], "- button \"Done\" [ref=e2]");
+        assert_eq!(
+            out["changes"],
+            json!(["- - button \"OK\" [ref=e1]", "+ - button \"Done\" [ref=e2]"])
+        );
+    }
+
+    #[test]
+    fn a_small_after_tree_comes_whole_with_only_the_changed_lines() {
+        let before = "- heading \"Kit catalog\" [level=1, ref=e1]\n\
+                      - button \"Select Cedar kit\" [ref=e5]\n\
+                      - button \"Previous page\" [disabled, ref=e2]\n\
+                      - button \"Next page\" [ref=e3]";
+        let after = "- heading \"Kit catalog\" [level=1, ref=e1]\n\
+                     - button \"Select Birch kit\" [ref=e10]\n\
+                     - button \"Previous page\" [ref=e2]\n\
+                     - button \"Next page\" [ref=e3]";
+        let out = changes(&ok(before), &ok(after), &ok("u"), &ok("u"));
+        assert_eq!(out["status"], "complete");
+        assert_eq!(out["changed"], true);
+        assert_eq!(out["snapshot"], after);
+        let lines: Vec<&str> = out["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l.as_str().unwrap())
+            .collect();
+        // No context lines: the unchanged heading and Next button are only in
+        // the tree, never in the change list.
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        assert!(lines
+            .iter()
+            .all(|l| l.starts_with("+ ") || l.starts_with("- ")));
+        assert!(!lines
+            .iter()
+            .any(|l| l.contains("Kit catalog") || l.contains("Next page")));
+        assert!(!out.contains_key("delta"));
+        assert_eq!(out["added"], 2);
+        assert_eq!(out["removed"], 2);
+    }
+
+    #[test]
+    fn a_small_unchanged_tree_still_comes_whole() {
+        let out = changes(&ok("button Save"), &ok("button Save"), &ok("u"), &ok("u"));
+        assert_eq!(out["changed"], false);
+        assert_eq!(out["status"], "complete");
+        assert_eq!(out["snapshot"], "button Save");
+        assert!(!out.contains_key("changes"));
+    }
+
+    #[test]
+    fn the_small_tree_threshold_is_bytes_and_lines() {
+        let line = "- link \"x\" [ref=e1]";
+        let lines = |n: usize| vec![line; n].join("\n");
+        assert!(small_tree(&lines(SMALL_TREE_LINES)));
+        assert!(!small_tree(&lines(SMALL_TREE_LINES + 1)));
+        let wide = "x".repeat(SMALL_TREE_BYTES);
+        assert!(small_tree(&wide));
+        assert!(!small_tree(&format!("{wide}x")));
+        // A tree over the byte limit in few lines keeps the delta.
+        let fat = format!("- text \"{}\"", "y".repeat(SMALL_TREE_BYTES));
+        let out = changes(&ok("- text \"a\""), &ok(&fat), &ok("u"), &ok("u"));
+        assert!(out.contains_key("delta"));
+        assert!(!out.contains_key("snapshot"));
+    }
+
+    #[test]
+    fn a_partial_capture_with_a_small_tree_stays_partial() {
+        // The tree is real, but the url read failed: the observation says so.
+        let out = changes(&ok("button Save"), &ok("button Next"), &ok("u"), &missing());
+        assert_eq!(out["status"], "partial");
+        assert_eq!(out["snapshot"], "button Next");
+        assert_eq!(out["changed"], true);
+        assert!(out.contains_key("errors"));
+        // An unavailable after-tree never yields a snapshot.
+        let out = changes(&ok("button Save"), &missing(), &ok("u"), &ok("u"));
+        assert_eq!(out["status"], "unavailable");
+        assert!(!out.contains_key("snapshot"));
+        assert!(!out.contains_key("changes"));
+    }
+
+    #[test]
+    fn a_shrinking_page_caps_the_change_list() {
+        let before = tree("row", 200);
+        let after = "- button \"Done\" [ref=e999]";
+        let (lines, omitted) = compact_changes(&format!("{before}\n"), &format!("{after}\n"));
+        assert_eq!(lines.len(), MAX_CHANGE_LINES);
+        assert_eq!(omitted, 201 - MAX_CHANGE_LINES);
+    }
+
+    #[test]
+    fn page_replacement_needs_twenty_lines_on_each_side() {
+        let before = tree("old", 19);
+        let after = tree("new", 19);
+        let out = changes(&ok(&before), &ok(&after), &ok("u"), &ok("u"));
+        assert!(!out.contains_key("replaced"));
+        assert_eq!(out["snapshot"], after);
+        let before = tree("old", 20);
+        let after = tree("new", 20);
+        let out = changes(&ok(&before), &ok(&after), &ok("u"), &ok("u"));
+        assert_eq!(out["replaced"], true);
+        assert!(!out.contains_key("changes"));
     }
 
     #[test]

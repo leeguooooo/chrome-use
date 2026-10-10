@@ -23,7 +23,7 @@ into a crawl.
 An action and the read that checks it belong in the same command:
 
 ```bash
-chrome-use click @e3 --observe       # act, then see what changed (delta + requests)
+chrome-use click @e3 --observe       # act, then see what changed (delta, or a small page whole)
 chrome-use fill @e7 "cheese" --observe
 chrome-use navigate /cart --observe  # navigation returns the new tree, not a diff
 ```

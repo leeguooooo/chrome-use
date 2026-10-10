@@ -259,6 +259,13 @@
         判定条件是两棵树都有页面规模（≥20 行）且各自 ≥80% 的行换掉；树里的 ref 是活的，直接用。
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 小页面直接给整棵当前树</div>
+        动作后的树不超过 4 KB 且不超过 60 行时，<code>observed.snapshot</code> 就是这次采集到的整棵当前树（ref 已登记，直接用），
+        <code>observed.changes</code> 只列出 <code>+</code>/<code>-</code> 行，不带上下文。动作之后紧跟一次 <code>snapshot</code> 不会多出信息。
+        更大的页面照旧给统一格式的 <code>delta</code>。采集不完整时 <code>observed.status</code> 照实写 partial 或 unavailable。
+      </div>
+
       <div class="du-callout tip">
         <div class="du-callout-title">✅ expect 还是 --observe？</div>
         想要一个<strong>硬性 pass/fail 门禁</strong>（配合退出码、<code>&amp;&amp;</code>、批处理）用

@@ -6054,6 +6054,9 @@ Options:
                              erroring when the target element is absent
   --observe                  After a mutating action, return only what changed
                              (a11y delta + url + requests) — skip act→snapshot→diff
+                             A small page (tree ≤4 KB and ≤60 lines) instead comes
+                             whole as observed.snapshot (the current tree, refs
+                             live) plus observed.changes (+/- lines only).
                              Requests: at most 20 summaries, 256 UTF-8 bytes each;
                              data URL payloads omitted. Full capture: network requests --json
                              Applies to click, dblclick, fill, type, press, select,
@@ -6271,18 +6274,19 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
             );
         }
     }
+    let replaced = obs.get("replaced").and_then(|v| v.as_bool()) == Some(true);
     if let Some(snapshot) = obs.get("snapshot").and_then(|v| v.as_str()) {
         // A click that replaced the page: say so, then show the new tree
         // instead of a diff that is the old page struck through.
-        if obs.get("replaced").and_then(|v| v.as_bool()) == Some(true) {
+        if replaced {
             let removed = obs.get("removed").and_then(|v| v.as_i64()).unwrap_or(0);
             println!(
                 "{} page replaced ({} lines gone); refs below are the new page's",
                 color::dim("observed:"),
                 color::red(&removed.to_string())
             );
+            print_observed_snapshot(snapshot);
         }
-        print_observed_snapshot(snapshot);
     }
     // How long the adaptive wait watched (#228). On "no change" this is the
     // difference between "the page did nothing" and "we did not look": the
@@ -6340,6 +6344,32 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
             } else {
                 println!("{}", color::dim(line));
             }
+        }
+    }
+    // A small page: the changed lines alone, then the whole current tree.
+    if let Some(lines) = obs.get("changes").and_then(|v| v.as_array()) {
+        let added = obs.get("added").and_then(|v| v.as_i64()).unwrap_or(0);
+        let removed = obs.get("removed").and_then(|v| v.as_i64()).unwrap_or(0);
+        println!(
+            "{} {} added, {} removed",
+            color::dim("observed:"),
+            color::green(&added.to_string()),
+            color::red(&removed.to_string())
+        );
+        for line in lines.iter().filter_map(|v| v.as_str()) {
+            if line.starts_with('+') {
+                println!("{}", color::green(line));
+            } else {
+                println!("{}", color::red(line));
+            }
+        }
+        if let Some(n) = obs.get("changesOmitted").and_then(|v| v.as_u64()) {
+            println!("{}", color::dim(&format!("  … {n} more changed lines")));
+        }
+    }
+    if !replaced {
+        if let Some(snapshot) = obs.get("snapshot").and_then(|v| v.as_str()) {
+            print_observed_snapshot(snapshot);
         }
     }
     // A cross-origin frame that appeared during the action: its content is in

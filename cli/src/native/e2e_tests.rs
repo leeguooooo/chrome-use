@@ -29,6 +29,25 @@ fn get_data(resp: &Value) -> &Value {
     resp.get("data").expect("Missing 'data' in response")
 }
 
+/// What an `--observe` reply says changed, whichever form it took: the
+/// unified `delta` of a large page, or the compact `changes` that ride with a
+/// small page's whole tree.
+fn observed_changes(observed: &Value) -> String {
+    if let Some(delta) = observed["delta"].as_str() {
+        return delta.to_string();
+    }
+    observed["changes"]
+        .as_array()
+        .map(|lines| {
+            lines
+                .iter()
+                .filter_map(|l| l.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
 async fn select_values(
     state: &mut DaemonState,
     id: &str,
@@ -10154,10 +10173,7 @@ document.getElementById('go').addEventListener('click', () => {
         "the wait must have covered the late render: {observed}"
     );
     assert!(
-        observed["delta"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Confirmed"),
+        observed_changes(&observed).contains("Confirmed"),
         "the observed delta must carry the late-rendered button: {observed}"
     );
     assert!(
@@ -10223,10 +10239,7 @@ document.getElementById('go').addEventListener('click', async () => {
     let observed = &get_data(&resp)["observed"];
     assert_eq!(observed["settle"]["quiet"], json!(true), "{observed}");
     assert!(
-        observed["delta"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("late payload"),
+        observed_changes(&observed).contains("late payload"),
         "the wait must outlast the request that renders the result: {observed}"
     );
 
@@ -11162,10 +11175,7 @@ document.getElementById('go').addEventListener('click', () => {
     assert_success(&resp);
     let data = get_data(&resp);
     assert!(
-        data["observed"]["delta"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Appeared"),
+        observed_changes(&data["observed"]).contains("Appeared"),
         "the delta must be the post-action one: {data}"
     );
     let saved = data["screenshot"]
@@ -12186,7 +12196,7 @@ document.getElementById('open').addEventListener('click', () => {{
         if observe {
             let observed = &data["observed"];
             assert_eq!(observed["target"]["targetId"], opener_target, "{observed}");
-            let delta = observed["delta"].as_str().unwrap_or_default();
+            let delta = observed_changes(&observed);
             assert!(delta.contains("Opened"), "the opener's change: {observed}");
             assert!(!delta.contains("Popup ready"), "{observed}");
         }
@@ -12315,7 +12325,7 @@ document.getElementById('open').addEventListener('click', () => {{
     assert!(data.get("followed").is_none(), "{resp}");
     let observed = &data["observed"];
     assert_eq!(observed["settle"]["quiet"], json!(true), "{observed}");
-    let delta = observed["delta"].as_str().unwrap_or_default();
+    let delta = observed_changes(&observed);
     assert!(delta.contains("Opened"), "opener's own change: {observed}");
     assert!(!delta.contains("Popup ready"), "{observed}");
 
@@ -12342,10 +12352,7 @@ document.getElementById('open').addEventListener('click', () => {{
         "3s is ample for an 800ms popup: {observed}"
     );
     assert!(
-        observed["delta"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Popup ready"),
+        observed_changes(&observed).contains("Popup ready"),
         "a popup reported quiet must have finished mutating: {observed}"
     );
     assert!(

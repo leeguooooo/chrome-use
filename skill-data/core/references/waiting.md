@@ -166,6 +166,14 @@ moved. e.g. `chrome-use click @e8 --observe` → see the dialog/toast/row that
 appeared in one ~20-80 token reply. Use `expect` when you want a hard pass/fail
 gate; use `--observe` when you want to *see* what happened.
 
+On a small page (post-action tree at most 4 KB and 60 lines) the observation
+carries the whole current tree as `observed.snapshot`, refs registered, plus
+`observed.changes`: only the `+`/`-` lines, no context. That tree is the fresh
+post-action read, so a `snapshot` straight after it adds nothing. Larger pages
+keep the unified `delta`. A partial or unavailable capture says so in
+`observed.status` either way; a snapshot beside `status: partial` is a real
+tree, but the observation as a whole is still incomplete.
+
 `navigate`/`reload`/`back`/`forward` take `--observe` too, and return the
 post-navigation **snapshot** instead of a delta — across a page swap a diff
 shares no nodes with the old tree, so it would be 100% removals plus 100%
