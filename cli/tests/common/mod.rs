@@ -97,6 +97,10 @@ impl Stub {
             .env_remove("AGENT_BROWSER_PROVIDER")
             .env_remove("AGENT_BROWSER_SESSION")
             .env_remove("CHROME_USE_CHOOSEBROWSER_RULES_FILE")
+            // `CI` with no extension relay means "launch a browser" (#460),
+            // which also lifts ChooseBrowser rules. The stub stands in for a
+            // desktop daemon, so the runner's own `CI=true` must not leak in.
+            .env_remove("CI")
             .env("NO_COLOR", "1");
         for (k, v) in envs {
             c.env(k, v);

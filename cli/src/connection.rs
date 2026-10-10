@@ -2493,10 +2493,63 @@ fn exchange_command(
         .write_all(json_str.as_bytes())
         .map_err(|e| format!("Failed to send: {}", e))?;
 
-    // Under load, commands that succeeded at 51s were killed at 45s: one
-    // command can make several sequential CDP calls. Blank keepalives renew
-    // the stall budget, not the overall ceiling. Older daemons just reply once.
     let started = std::time::Instant::now();
+    let mut reader = BufReader::new(stream);
+    await_reply(&mut reader, || started.elapsed(), session, read_to, overall)
+}
+
+/// One bounded read of the daemon's reply stream.
+enum ReplyRead {
+    /// A whole line: a blank keepalive or the reply itself.
+    Line(String),
+    /// Nothing complete arrived within the read's timeout.
+    TimedOut,
+    /// The daemon closed the connection.
+    Closed,
+    Failed(std::io::Error),
+}
+
+/// Where [`await_reply`] reads from: the daemon socket, or a scripted stream
+/// in tests, which is what lets the stall budget and the ceiling be tested
+/// without racing a real clock.
+trait ReplySource {
+    fn read_line_within(&mut self, timeout: Duration) -> ReplyRead;
+}
+
+impl ReplySource for BufReader<Connection> {
+    fn read_line_within(&mut self, timeout: Duration) -> ReplyRead {
+        self.get_ref().set_read_timeout(Some(timeout)).ok();
+        let mut line = String::new();
+        match self.read_line(&mut line) {
+            Ok(0) => ReplyRead::Closed,
+            Ok(_) => ReplyRead::Line(line),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                ReplyRead::TimedOut
+            }
+            Err(e) => ReplyRead::Failed(e),
+        }
+    }
+}
+
+/// Wait for the reply to a command already sent. `elapsed` is the time since
+/// it was sent.
+///
+/// Under load, commands that succeeded at 51s were killed at 45s: one
+/// command can make several sequential CDP calls. Blank keepalives renew
+/// the stall budget (`read_to`), not the overall ceiling (`overall`). Older
+/// daemons just reply once.
+fn await_reply(
+    reader: &mut impl ReplySource,
+    elapsed: impl Fn() -> Duration,
+    session: &str,
+    read_to: Duration,
+    overall: Duration,
+) -> Result<Response, String> {
     let mut heard_keepalive = false;
     let busy = || {
         format!(
@@ -2504,44 +2557,32 @@ fn exchange_command(
              Wait before checking the session again; do not replay a side-effecting command."
         )
     };
-    let mut reader = BufReader::new(stream);
     loop {
-        let remaining = overall.saturating_sub(started.elapsed());
+        let remaining = overall.saturating_sub(elapsed());
         if remaining.is_zero() {
             return Err(busy());
         }
         let ceiling_limited = remaining < read_to;
-        reader
-            .get_ref()
-            .set_read_timeout(Some(read_to.min(remaining)))
-            .ok();
-        let mut response_line = String::new();
-        let bytes = reader.read_line(&mut response_line).map_err(|e| {
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-            ) {
-                if ceiling_limited && heard_keepalive {
-                    busy()
-                } else {
-                    format!(
-                        "session unresponsive: no response within {}s — the browser connection is \
-                         likely stale. Reconnect with `connect`, or close and reopen the session.",
-                        read_to.as_secs()
-                    )
-                }
-            } else {
-                format!("Failed to read: {}", e)
+        let response_line = match reader.read_line_within(read_to.min(remaining)) {
+            ReplyRead::Line(line) => line,
+            ReplyRead::TimedOut if ceiling_limited && heard_keepalive => return Err(busy()),
+            ReplyRead::TimedOut => {
+                return Err(format!(
+                    "session unresponsive: no response within {}s — the browser connection is \
+                     likely stale. Reconnect with `connect`, or close and reopen the session.",
+                    read_to.as_secs()
+                ))
             }
-        })?;
-        if bytes == 0 {
-            kill_stale_daemon(session);
-            return Err(format!(
-                "daemon disconnected unexpectedly for session '{session}'. \
-                 The unreachable daemon was stopped and its stale state was cleared. \
-                 Rerun the command to start a fresh daemon."
-            ));
-        }
+            ReplyRead::Failed(e) => return Err(format!("Failed to read: {}", e)),
+            ReplyRead::Closed => {
+                kill_stale_daemon(session);
+                return Err(format!(
+                    "daemon disconnected unexpectedly for session '{session}'. \
+                     The unreachable daemon was stopped and its stale state was cleared. \
+                     Rerun the command to start a fresh daemon."
+                ));
+            }
+        };
         if response_line.trim().is_empty() {
             heard_keepalive = true;
             continue;
@@ -2567,71 +2608,137 @@ mod tests {
         assert!(!super::timing_disabled(None));
     }
 
-    #[cfg(unix)]
-    fn fake_keepalive_exchange(
-        heartbeat: bool,
-        reply: bool,
-        overall_ms: u64,
-    ) -> Result<super::Response, String> {
-        use std::io::{BufRead, BufReader, Write};
-        use std::time::Duration;
-        let (client, mut daemon) = std::os::unix::net::UnixStream::pair().unwrap();
-        let server = std::thread::spawn(move || {
-            let mut line = String::new();
-            BufReader::new(daemon.try_clone().unwrap())
-                .read_line(&mut line)
-                .unwrap();
-            let cmd: serde_json::Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(cmd["_keepalive"], true);
-            for _ in 0..12 {
-                std::thread::sleep(Duration::from_millis(20));
-                if heartbeat && daemon.write_all(b"\n").is_err() {
-                    return;
+    /// A daemon on a fake clock: each line arrives `after` the previous one
+    /// (or the start), and a read that would wait longer than its timeout
+    /// times out, advancing the clock by exactly that timeout. No thread, no
+    /// sleep, no wall clock: the outcome depends only on the script.
+    struct ScriptedDaemon {
+        clock: std::rc::Rc<std::cell::Cell<std::time::Duration>>,
+        lines: std::collections::VecDeque<(std::time::Duration, &'static str)>,
+        /// The timeout of every read, in order.
+        reads: Vec<std::time::Duration>,
+    }
+
+    impl super::ReplySource for ScriptedDaemon {
+        fn read_line_within(&mut self, timeout: std::time::Duration) -> super::ReplyRead {
+            self.reads.push(timeout);
+            match self.lines.front_mut() {
+                Some((after, line)) if *after <= timeout => {
+                    self.clock.set(self.clock.get() + *after);
+                    let line = line.to_string();
+                    self.lines.pop_front();
+                    super::ReplyRead::Line(line)
+                }
+                Some((after, _)) => {
+                    *after -= timeout;
+                    self.clock.set(self.clock.get() + timeout);
+                    super::ReplyRead::TimedOut
+                }
+                None => {
+                    self.clock.set(self.clock.get() + timeout);
+                    super::ReplyRead::TimedOut
                 }
             }
-            if reply {
-                let _ = daemon.write_all(b"{\"success\":true,\"data\":{\"done\":true}}\n");
-            }
-        });
-        let result = super::exchange_command(
-            super::Connection::Unix(client),
-            &json!({"action": "launch"}),
+        }
+    }
+
+    const REPLY: &str = "{\"success\":true,\"data\":{\"done\":true}}\n";
+
+    /// Run [`super::await_reply`] against `lines` with a 120ms stall budget
+    /// and `overall_ms` ceiling: the result, the fake time it ended at, and
+    /// the timeout of each read.
+    fn scripted_exchange(
+        lines: Vec<(u64, &'static str)>,
+        overall_ms: u64,
+    ) -> (
+        Result<super::Response, String>,
+        std::time::Duration,
+        Vec<std::time::Duration>,
+    ) {
+        use std::time::Duration;
+        let clock = std::rc::Rc::new(std::cell::Cell::new(Duration::ZERO));
+        let mut daemon = ScriptedDaemon {
+            clock: clock.clone(),
+            lines: lines
+                .into_iter()
+                .map(|(ms, l)| (Duration::from_millis(ms), l))
+                .collect(),
+            reads: Vec::new(),
+        };
+        let result = super::await_reply(
+            &mut daemon,
+            || clock.get(),
             "keepalive-test",
             Duration::from_millis(120),
             Duration::from_millis(overall_ms),
         );
-        server.join().unwrap();
-        result
+        (result, clock.get(), daemon.reads)
     }
 
-    #[cfg(unix)]
+    fn ms(n: u64) -> std::time::Duration {
+        std::time::Duration::from_millis(n)
+    }
+
     #[test]
     fn keepalives_allow_a_reply_after_the_stall_budget() {
-        let reply = fake_keepalive_exchange(true, true, 1000).unwrap_or_else(|e| panic!("{e}"));
+        // Twelve keepalives 20ms apart, then the reply: 260ms in all, more
+        // than twice the 120ms stall budget, and no gap reaches it.
+        let mut lines = vec![(20, "\n"); 12];
+        lines.push((20, REPLY));
+        let (result, at, reads) = scripted_exchange(lines, 1000);
+        let reply = result.unwrap_or_else(|e| panic!("{e}"));
         assert!(reply.success);
         assert_eq!(reply.data.unwrap()["done"], true);
+        assert_eq!(at, ms(260));
+        // Each keepalive renewed the full stall budget.
+        assert!(reads.iter().all(|r| *r == ms(120)), "{reads:?}");
     }
 
-    #[cfg(unix)]
+    #[test]
+    fn a_keepalive_does_not_lift_the_stall_budget() {
+        // One keepalive, then silence: unresponsive one stall budget after
+        // it, long before the ceiling.
+        let (result, at, _) = scripted_exchange(vec![(20, "\n")], 1000);
+        let error = result.err().unwrap();
+        assert!(super::is_session_unresponsive_error(&error), "{error}");
+        assert_eq!(at, ms(140));
+    }
+
     #[test]
     fn silence_keeps_the_session_unresponsive_error() {
-        let error = fake_keepalive_exchange(false, false, 1000).err().unwrap();
+        let (result, at, _) = scripted_exchange(Vec::new(), 1000);
+        let error = result.err().unwrap();
         assert!(super::is_session_unresponsive_error(&error), "{error}");
+        assert_eq!(at, ms(120));
     }
 
-    #[cfg(unix)]
     #[test]
     fn keepalives_cannot_extend_the_overall_ceiling() {
-        let error = fake_keepalive_exchange(true, false, 180).err().unwrap();
+        // Keepalives every 20ms forever, reply never: refused as busy exactly
+        // at the 180ms ceiling, the last read cut to what was left of it.
+        let (result, at, reads) = scripted_exchange(vec![(20, "\n"); 100], 180);
+        let error = result.err().unwrap();
         assert!(error.contains("still busy"), "{error}");
         assert!(!super::is_session_unresponsive_error(&error));
         assert!(!super::is_transient_error(&error));
+        assert_eq!(at, ms(180));
+        assert!(reads.iter().all(|r| *r <= ms(120)), "{reads:?}");
+    }
+
+    #[test]
+    fn a_reply_cut_off_by_the_ceiling_without_keepalives_is_unresponsive() {
+        // No keepalive was ever heard: a daemon silent until the ceiling is
+        // a stale connection, not a busy one.
+        let (result, at, _) = scripted_exchange(vec![(500, REPLY)], 100);
+        let error = result.err().unwrap();
+        assert!(super::is_session_unresponsive_error(&error), "{error}");
+        assert_eq!(at, ms(100));
     }
 
     #[cfg(unix)]
     #[test]
     fn older_daemon_can_reply_without_keepalives() {
-        use std::io::Write;
+        use std::io::{BufRead, BufReader, Write};
         use std::time::Duration;
         let (client, mut daemon) = std::os::unix::net::UnixStream::pair().unwrap();
         daemon.write_all(b"{\"success\":true}\n").unwrap();
@@ -2644,6 +2751,11 @@ mod tests {
         )
         .unwrap_or_else(|e| panic!("{e}"));
         assert!(reply.success);
+        // The command went out asking for keepalives.
+        let mut line = String::new();
+        BufReader::new(daemon).read_line(&mut line).unwrap();
+        let cmd: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(cmd["_keepalive"], true);
     }
 
     #[test]
