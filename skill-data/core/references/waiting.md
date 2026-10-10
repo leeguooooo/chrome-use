@@ -134,9 +134,6 @@ When only the post-action capture fails, `observed.refs` says what became of the
 session's refs: `kept-unverified` keeps the previous snapshot's refs, but each
 is checked live (same tab, frame, document and element) before it is used and
 refused otherwise, never re-anchored; `dropped` means run `snapshot -i`.
-A capture denied with `debugger_access_denied` is first read again (at most
-twice) after hiding a session-created tab for a moment; the action itself is
-never repeated.
 For `form fill`, unavailable validation is `errors:null`, not an empty error list.
 
 Action observations include at most 20 request summaries, each capped at 256 UTF-8

@@ -1885,11 +1885,6 @@ pub async fn read_document_identity(
     Ok(identity)
 }
 
-/// Why a kept ref could not be checked while the tab is blocked.
-pub const KEPT_REF_ACCESS_DENIED: &str =
-    "Chrome denied debugger access to the tab (debugger access denied), so the page could not \
-     be read";
-
 /// A ref the map kept from before a failed post-action capture
 /// ([`RefMap::kept`]) may be acted on only once this confirms, live, that the
 /// page is the same target, the ref's frame and the top frame hold the same
@@ -1924,16 +1919,7 @@ pub async fn verify_kept_ref(
     let frames: Vec<String> = entry.frame_id.iter().cloned().collect();
     let now = read_document_identity(client, session_id, iframe_sessions, &frames)
         .await
-        .map_err(|e| {
-            // Named without the raw error: this refusal comes before any
-            // action, and must not read as a blocked command that may
-            // already have run.
-            if super::browser::is_debugger_access_denied(&e) {
-                refuse(KEPT_REF_ACCESS_DENIED)
-            } else {
-                refuse(&format!("the page could not be read ({e})"))
-            }
-        })?;
+        .map_err(|e| refuse(&format!("the page could not be read ({e})")))?;
     kept.identity
         .check_same(&now, entry.frame_id.as_deref())
         .map_err(|e| refuse(&e))?;
