@@ -2161,6 +2161,9 @@ let updateVersion = null;
 let updatePendingSince = 0;
 let applyingUpdate = false;
 let updateApplyTimer = null;
+// After a failed handoff write, wait this long before trying again.
+const UPDATE_HANDOFF_RETRY_MS = 30 * 1000;
+let updateRetryAfter = 0;
 // Host commands being handled now, and when the last one started or ended.
 // The worker's start counts as activity: tabs re-announced at startup belong
 // to a session that may be about to continue.
@@ -2219,6 +2222,8 @@ function scheduleUpdateApply() {
 
 async function applyUpdateWhenIdle() {
   if (!updatePending || applyingUpdate) return;
+  // A failed handoff write is retried by the keepalive alarm, not in a loop.
+  if (Date.now() < updateRetryAfter) return;
   // Records of closed tabs are not "being driven": prune them first so they
   // never hold the update back (#519).
   await pruneDeadTabRecords();
@@ -2231,16 +2236,23 @@ async function applyUpdateWhenIdle() {
   try {
     // Leave a note for the worker that starts after the reload: this update
     // was applied on purpose, so the tabs this extension created stay owned.
-    await withRelayTimeout(
-      chrome.storage.local.set({
-        [UPDATE_HANDOFF_KEY]: {
-          at: Date.now(),
-          from: chrome.runtime.getManifest().version,
-          to: updateVersion,
-        },
-      }),
-      'chrome.storage.local.set'
-    ).catch(() => {});
+    // Without the note the next worker would forget them and the session
+    // could not continue, so no note, no reload: try again later.
+    try {
+      await withRelayTimeout(
+        chrome.storage.local.set({
+          [UPDATE_HANDOFF_KEY]: {
+            at: Date.now(),
+            from: chrome.runtime.getManifest().version,
+            to: updateVersion,
+          },
+        }),
+        'chrome.storage.local.set'
+      );
+    } catch {
+      updateRetryAfter = Date.now() + UPDATE_HANDOFF_RETRY_MS;
+      return;
+    }
     // A command may have arrived while the note was written.
     if (!currentUpdatePlan().apply) return;
     // Release every attached tab (idle agent tabs; a user tab a session

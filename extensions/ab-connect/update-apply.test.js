@@ -172,6 +172,7 @@ function worker({ tabs = [], storage = {} } = {}) {
           set: async (obj) => {
             calls.storageSet.push(obj)
             if (context.storageSetGate) await context.storageSetGate
+            if (context.storageFails) throw new Error('storage unavailable')
             Object.assign(store, obj)
           },
           get: async (key) => ({ [key]: store[key] }),
@@ -305,6 +306,29 @@ test('a command that arrives while the update is being applied stops the reload'
   await command
   await w.advance(GRACE + 1_000)
   assert.equal(w.calls.reload, 1, 'the next quiet period applies it')
+})
+
+test('no handoff note, no reload: a failed write is retried later, not in a loop', async () => {
+  const w = worker({ tabs: [idleTab(0)] })
+  w.context.storageFails = true
+  await w.advance(GRACE + 1_000)
+  await w.updateAvailable()
+  assert.equal(w.calls.storageSet.length, 1)
+  assert.equal(w.calls.reload, 0, 'the next worker would forget the session tabs')
+  assert.deepEqual(w.calls.detach, [], 'and nothing is released')
+  assert.equal(w.context.tabs.get(7).attached, true)
+  // The keepalive alarm calls in again; within the back-off nothing is tried.
+  w.context.storageFails = false
+  await w.advance(10_000)
+  await w.read('applyUpdateWhenIdle()')
+  await w.advance(0)
+  assert.equal(w.calls.storageSet.length, 1)
+  await w.advance(25_000)
+  await w.read('applyUpdateWhenIdle()')
+  await w.advance(0)
+  assert.equal(w.calls.storageSet.length, 2)
+  assert.equal(w.calls.reload, 1)
+  assert.deepEqual(w.calls.detach, [7])
 })
 
 test('a state read (status, doctor) does not count as a session working', async () => {
