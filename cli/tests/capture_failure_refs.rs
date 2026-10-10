@@ -225,6 +225,8 @@ impl Fake {
                 );
                 match call.as_str() {
                     "windows.get" => json!({"result": {"state": "normal", "focused": true}}),
+                    // The profile has a window (#486 checks before a first tab).
+                    "windows.getAll" => json!({"result": [{"id": 1, "type": "normal"}]}),
                     "tabs.query" => json!({"result": [{"id": 11, "index": 0, "active": true,
                                                        "windowId": 1}]}),
                     "tabs.get" => json!({"result": {"id": 11, "groupId": -1}}),
