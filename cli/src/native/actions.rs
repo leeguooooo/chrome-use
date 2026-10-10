@@ -548,11 +548,6 @@ pub struct DaemonState {
     /// means the documented recovery has already been tried and did not work —
     /// repeating it is the loop #235 describes, so the error says so instead.
     pub last_unconfirmed_tab_switch: Option<(&'static str, String, std::time::Instant)>,
-    /// The (tabId, targetId, url) the last `--observe` reported as
-    /// `observed.target`, or saw unchanged. An observation names its target
-    /// only when it differs from this, or when the action itself moved the
-    /// session; otherwise the target is the one the caller already has.
-    pub last_observed_target: Option<(String, String, String)>,
     /// Set by the dispatcher for `click --observe`: the click leaves its
     /// new-tab check in `deferred_click_tab_check` instead of sleeping for it,
     /// and the observation runs the check after its settle.
@@ -717,7 +712,6 @@ impl DaemonState {
             tracked_requests: Vec::new(),
             request_tracking: false,
             last_unconfirmed_tab_switch: None,
-            last_observed_target: None,
             defer_click_tab_check: false,
             deferred_click_tab_check: None,
             pre_action_document: None,
@@ -2876,36 +2870,18 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         // navigation, or a tab switch — and reuses refs across the boundary
         // (issue #237). Ids only: no account email, no query string beyond the
         // url the page itself reports.
-        //
-        // Named only when it is news: the first observation in the session,
-        // a target or url other than the one the last observation reported,
-        // or an action that moved the session to another tab. An unchanged
-        // target is the one the caller already holds refs for.
-        // The loop detector keys on the target whether or not it is shown.
-        let mut target_for_progress = None;
-        if let Some(current) = state.browser.as_ref().and_then(|mgr| mgr.observed_target()) {
-            let moved_during_action = state
-                .browser
-                .as_ref()
-                .and_then(|m| m.active_target_id().ok())
-                .map(ToString::to_string)
-                != target_before_action;
-            let (tab_id, target_id, url) = &current;
-            let target = json!({
-                "session": state.session_id,
-                "tabId": tab_id,
-                "targetId": target_id,
-                "url": url,
-            });
-            if super::observation::target_is_news(
-                state.last_observed_target.as_ref(),
-                &current,
-                moved_during_action,
-            ) {
-                observed.insert("target".into(), target.clone());
-            }
-            target_for_progress = Some(target);
-            state.last_observed_target = Some(current);
+        if let Some((tab_id, target_id, url)) =
+            state.browser.as_ref().and_then(|mgr| mgr.observed_target())
+        {
+            observed.insert(
+                "target".into(),
+                json!({
+                    "session": state.session_id,
+                    "tabId": tab_id,
+                    "targetId": target_id,
+                    "url": url,
+                }),
+            );
         }
 
         if let Some(obj) = resp.as_object_mut() {
@@ -2922,11 +2898,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                     // popup or dialog action. It is not a stalled attempt.
                     state.progress.reset();
                 } else if let Ok(screen) = &snap1 {
-                    let mut keyed = observation.clone();
-                    if let Some(target) = target_for_progress.take() {
-                        keyed["target"] = target;
-                    }
-                    if let Some(hint) = state.progress.observe(cmd, &keyed, screen) {
+                    if let Some(hint) = state.progress.observe(cmd, &observation, screen) {
                         observation["noProgress"] = hint;
                     }
                 } else {

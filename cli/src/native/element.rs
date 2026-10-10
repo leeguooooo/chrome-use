@@ -3198,12 +3198,12 @@ pub struct FrameText {
 // honors CSS visibility (skips display:none), textContent is the fallback.
 const FRAME_INNERTEXT_JS: &str = "(function(){try{var b=document.body||document.documentElement;return b?(b.innerText||b.textContent||''):'';}catch(e){return '';}})()";
 
-async fn eval_text_default(client: &CdpClient, session_id: &str, expr: &str) -> String {
+async fn eval_text_default(client: &CdpClient, session_id: &str) -> String {
     let res = client
         .send_command(
             "Runtime.evaluate",
             Some(serde_json::json!({
-                "expression": expr,
+                "expression": FRAME_INNERTEXT_JS,
                 "returnByValue": true,
             })),
             Some(session_id),
@@ -3218,12 +3218,7 @@ async fn eval_text_default(client: &CdpClient, session_id: &str, expr: &str) -> 
 // Same-process child frames share the top renderer but live in their own
 // execution context. Page.createIsolatedWorld hands us a context id bound to
 // that frame so Runtime.evaluate reads the child document, not the parent.
-async fn eval_text_in_frame(
-    client: &CdpClient,
-    session_id: &str,
-    frame_id: &str,
-    expr: &str,
-) -> String {
+async fn eval_text_in_frame(client: &CdpClient, session_id: &str, frame_id: &str) -> String {
     let ctx = client
         .send_command(
             "Page.createIsolatedWorld",
@@ -3240,7 +3235,7 @@ async fn eval_text_in_frame(
         .send_command(
             "Runtime.evaluate",
             Some(serde_json::json!({
-                "expression": expr,
+                "expression": FRAME_INNERTEXT_JS,
                 "returnByValue": true,
                 "contextId": ctx_id,
             })),
@@ -3289,19 +3284,6 @@ pub async fn collect_all_frames_text(
     top_session: &str,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<Vec<FrameText>, String> {
-    collect_all_frames_text_with(client, top_session, iframe_sessions, FRAME_INNERTEXT_JS).await
-}
-
-/// [`collect_all_frames_text`] with the per-frame reader supplied: the same
-/// frame walk (top, same-process children, out-of-process frames), a
-/// different expression. `--observe` uses it with a reader that leaves out
-/// what was typed into fields.
-pub(crate) async fn collect_all_frames_text_with(
-    client: &CdpClient,
-    top_session: &str,
-    iframe_sessions: &HashMap<String, String>,
-    expr: &str,
-) -> Result<Vec<FrameText>, String> {
     let mut out: Vec<FrameText> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -3321,11 +3303,11 @@ pub(crate) async fn collect_all_frames_text_with(
             continue;
         }
         let (kind, text) = if is_top {
-            ("top", eval_text_default(client, top_session, expr).await)
+            ("top", eval_text_default(client, top_session).await)
         } else {
             (
                 "inline",
-                eval_text_in_frame(client, top_session, &fid, expr).await,
+                eval_text_in_frame(client, top_session, &fid).await,
             )
         };
         out.push(FrameText {
@@ -3353,7 +3335,7 @@ pub(crate) async fn collect_all_frames_text_with(
                     .map(|s| s.to_string())
             })
             .unwrap_or_default();
-        let text = eval_text_default(client, sid, expr).await;
+        let text = eval_text_default(client, sid).await;
         out.push(FrameText {
             frame_id: fid.clone(),
             url,
