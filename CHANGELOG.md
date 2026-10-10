@@ -1,8 +1,28 @@
 # Changelog
 
-## 1.5.184
+## 1.5.185
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.34; 0.5.35 (submitted to the Chrome Web Store, Chrome updates it automatically once published) adds the update and large-reply fixes below.
+
+### Bug Fixes
+
+- **A failed `adopt` never leaves you on someone else's tab.** When `adopt <url>` finds no match, the session now has no current tab (remembered across daemon restarts) and commands that act on the current tab are refused with what to do next, instead of running in an unrelated tab you had open. `tab new`, `tab adopt`, `tab <id>` and `--force` still work, and user tabs an earlier adopt had grouped into the session are released (0.5.34+). (#527, fixes #507)
+- **Large uploads over the relay work.** Files are streamed in bounded chunks and each reply is just a byte count, so 200 MB uploads complete (about 13 s on a test machine) where anything above about 45 MB used to time out, and a plain 31 MB `upload` takes about a second instead of over two minutes. Uploads to the same browser run one at a time; a waiting one says which session holds the queue. A page that navigates mid-upload fails the upload. (#528, #532, fixes #506)
+- **Extension updates apply on their own (0.5.35).** A downloaded update used to wait forever while any driven tab stayed attached. Now the extension applies it once no command is running and the relay has been quiet for 60 s; sessions keep their tabs, ids and refs, and nothing is activated or closed. `status` and `doctor` show a pending update, what holds it back, the last update check and when the running version arrived. (#526, fixes #524)
+- **Oversized replies fail at once (0.5.35).** A reply over Chrome's 64 MiB messaging limit returns `reply_too_large` (not retryable) instead of a 30 s timeout. (#526, fixes #530)
+
+### Improvements
+
+- **Our own site adapters always win over OpenCLI.** `douyin/delete`, `douyin/update` and `twitter/delete` are now maintained in chrome-use-sites (ported from OpenCLI, Apache-2.0, with attribution), run in the page with chrome-use's stealth handling, and never fall back to OpenCLI. `douyin/delete` pages through older works. (#529)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.184
+
 Requires extension ab-connect 0.5.34 (published on the Chrome Web Store; Chrome updates it automatically).
 
 ### Features
@@ -19,7 +39,6 @@ Requires extension ab-connect 0.5.34 (published on the Chrome Web Store; Chrome 
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.183
 
