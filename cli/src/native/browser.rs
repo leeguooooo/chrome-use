@@ -52,6 +52,17 @@ thread_local! {
 }
 
 #[cfg(test)]
+thread_local! {
+    /// Treats every connection made on this thread as the extension relay.
+    static RELAY_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn relay_for_test(relay: bool) {
+    RELAY_FOR_TEST.with(|r| r.set(relay));
+}
+
+#[cfg(test)]
 pub(crate) fn first_tab_save_fails_for_test(fails: bool) {
     FIRST_TAB_SAVE_FAILS.with(|f| f.set(fails));
 }
@@ -377,20 +388,23 @@ async fn close_and_verify_targets(
     on_relay: bool,
     budget: Duration,
 ) -> HashMap<String, TabPresence> {
-    close_and_verify_targets_tracking(client, targets, chrome_tabs, on_relay, budget)
+    close_and_verify_targets_tracking(client, targets, chrome_tabs, on_relay, budget, &|_, _| {})
         .await
         .0
 }
 
 /// [`close_and_verify_targets`], also returning the Chrome tab id each target
 /// was last seen in, so a caller that cannot confirm a close yet can pass the
-/// same ids to a later read-back (#486).
+/// same ids to a later read-back (#486). `learned` hears each target → tab id
+/// mapping the pre-close lookup confirms, before any close or read-back is
+/// awaited, so a caller whose future is dropped mid-way still has it.
 async fn close_and_verify_targets_tracking(
     client: &Arc<CdpClient>,
     targets: &HashSet<String>,
     mut chrome_tabs: HashMap<String, i64>,
     on_relay: bool,
     budget: Duration,
+    learned: &(dyn Fn(&str, i64) + Sync),
 ) -> (HashMap<String, TabPresence>, HashMap<String, i64>) {
     let deadline = tokio::time::Instant::now() + budget;
     let ordered: Vec<String> = targets.iter().cloned().collect();
@@ -409,6 +423,7 @@ async fn close_and_verify_targets_tracking(
                 .await;
         for (target, (presence, tab)) in lookups {
             if let (TabPresence::Present, Some(tab)) = (presence, tab) {
+                learned(&target, tab);
                 chrome_tabs.insert(target, tab);
             }
         }
@@ -4228,20 +4243,26 @@ impl BrowserManager {
     ) -> first_tab::Cleanup {
         let targets = HashSet::from([target_id.to_string()]);
         let budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let endpoint = self.ws_url.clone();
+        // Kept the moment the lookup confirms it, for this endpoint and
+        // target only: if this future is dropped during the close or the
+        // read-back, a later `close` can still read the tab back by id.
+        let keep = move |target: &str, tab: i64| first_tab::remember_tab_id(&endpoint, target, tab);
         let (verdicts, tabs) = close_and_verify_targets_tracking(
             &self.client,
             &targets,
             HashMap::new(),
             self.via_relay(),
             budget,
+            &keep,
         )
         .await;
-        // The tab id the verifier saw, kept for this endpoint and target only,
-        // so a later `close` can still read the tab back once it is gone.
-        if let Some(tab) = tabs.get(target_id) {
-            if !matches!(verdicts.get(target_id), Some(TabPresence::Absent)) {
-                first_tab::remember_tab_id(&self.ws_url, target_id, *tab);
-            }
+        // The tab id the verifier ended on (a replacement may have moved it),
+        // kept for this endpoint and target; dropped once the tab is gone.
+        if matches!(verdicts.get(target_id), Some(TabPresence::Absent)) {
+            first_tab::forget_tab_ids(&self.ws_url, &targets);
+        } else if let Some(tab) = tabs.get(target_id) {
+            first_tab::remember_tab_id(&self.ws_url, target_id, *tab);
         }
         let why = match verdicts.get(target_id) {
             Some(TabPresence::Absent) => return first_tab::Cleanup::Gone,
@@ -5540,6 +5561,10 @@ impl BrowserManager {
     /// the native-messaging host published. Used to avoid relay-unsafe CDP that
     /// would disturb the user's window (e.g. Browser.setContentsSize, issue #47).
     fn via_relay(&self) -> bool {
+        #[cfg(test)]
+        if RELAY_FOR_TEST.with(|r| r.get()) {
+            return true;
+        }
         crate::connect::is_relay_url(&self.ws_url)
     }
 
@@ -9670,6 +9695,10 @@ mod first_tab_custody_tests {
         targets: Vec<String>,
         created: u32,
         hang_close: bool,
+        /// Relay mode: `ABExt.tabPresence` never answers for a target whose
+        /// close went through.
+        hang_read_back: bool,
+        closed: Vec<String>,
     }
     type Shared = Arc<(std::sync::Mutex<Chrome>, tokio::sync::Notify)>;
 
@@ -9689,14 +9718,44 @@ mod first_tab_custody_tests {
             "Target.attachToTarget" => {
                 json!({"sessionId": format!("S-{}", params["targetId"].as_str().unwrap_or(""))})
             }
+            // The relay side (ab-connect 0.5.33): target `T<n>` is Chrome tab
+            // `10 + n`. Listed is present; unlisted is absent only for the
+            // exact tab id asked about.
+            "ABExt.call" => json!({"result": [{"id": 1, "type": "normal"}]}),
+            "ABExt.tabPresence" => {
+                let target = params["targetId"].as_str().unwrap_or("").to_string();
+                if c.hang_read_back && c.closed.contains(&target) {
+                    chrome.1.notify_one();
+                    return None;
+                }
+                let tab_of = |t: &str| {
+                    t.strip_prefix('T')
+                        .and_then(|n| n.parse::<i64>().ok())
+                        .map(|n| 10 + n)
+                };
+                let listed = c.targets.contains(&target);
+                let (presence, tab) = match (listed, params["tabId"].as_i64()) {
+                    (true, _) => ("present", tab_of(&target)),
+                    (false, Some(tab)) if !c.targets.iter().any(|t| tab_of(t) == Some(tab)) => {
+                        ("absent", Some(tab))
+                    }
+                    (false, tab) => ("unknown", tab),
+                };
+                json!({"tabPresenceVersion": 1, "targetId": target, "tabId": tab,
+                       "presence": presence})
+            }
             "Target.closeTarget" if c.hang_close => {
                 chrome.1.notify_one();
                 return None;
             }
             "Target.closeTarget" => {
                 let id = params["targetId"].as_str().unwrap_or("").to_string();
+                let had = c.targets.contains(&id);
                 c.targets.retain(|t| *t != id);
-                json!({"success": true})
+                if had {
+                    c.closed.push(id);
+                }
+                json!({"success": had})
             }
             _ => json!({}),
         })
@@ -9774,5 +9833,59 @@ mod first_tab_custody_tests {
         let report = mgr.close_verified().await.unwrap();
         assert!(report.is_complete(), "{:?}", report.to_json());
         assert!(chrome.0.lock().unwrap().targets.is_empty());
+    }
+
+    /// Relay mode. The record cannot be written; the verifier's lookup learns
+    /// T1 → Chrome tab 11; the close takes effect; the read-back never
+    /// answers, and the connect future is dropped there (a dropped future, not
+    /// a socket disconnect). The daemon still holds T1 and tab 11, and the
+    /// verifier `close` uses proves T1 gone with that id, which it cannot
+    /// without it. Nothing creates a tab after the first.
+    #[tokio::test]
+    async fn a_dropped_relay_cleanup_keeps_the_tab_id_it_learned() {
+        let (chrome, url) = start().await;
+        chrome.0.lock().unwrap().hang_read_back = true;
+        relay_for_test(true);
+        first_tab_save_fails_for_test(true);
+        {
+            let connect = BrowserManager::connect_cdp(&url);
+            tokio::select! {
+                r = connect => panic!("the read-back never answers: {:?}", r.err()),
+                _ = chrome.1.notified() => {}
+            }
+            // Leaving the block drops the connect future during the read-back.
+        }
+        first_tab_save_fails_for_test(false);
+        relay_for_test(false);
+        assert!(
+            chrome.0.lock().unwrap().targets.is_empty(),
+            "the close took effect"
+        );
+        assert_eq!(
+            first_tab::unsaved_for(&url),
+            HashSet::from(["T1".to_string()])
+        );
+        assert_eq!(first_tab::tab_ids_for(&url).get("T1"), Some(&11));
+
+        chrome.0.lock().unwrap().hang_read_back = false;
+        let client = Arc::new(CdpClient::connect(&url).await.unwrap());
+        let held = HashSet::from(["T1".to_string()]);
+        // Without the kept tab id the relay cannot tell.
+        let blind =
+            close_and_verify_targets(&client, &held, HashMap::new(), true, Duration::from_secs(5))
+                .await;
+        assert_ne!(blind.get("T1"), Some(&TabPresence::Absent), "{blind:?}");
+        // With it, the same verifier proves the tab gone.
+        let known = first_tab::tab_ids_for(&url);
+        let verdicts =
+            close_and_verify_targets(&client, &held, known, true, Duration::from_secs(5)).await;
+        assert_eq!(
+            verdicts.get("T1"),
+            Some(&TabPresence::Absent),
+            "{verdicts:?}"
+        );
+        assert_eq!(chrome.0.lock().unwrap().created, 1, "a tab was opened");
+        first_tab::release_unsaved(&url, &held);
+        first_tab::forget_tab_ids(&url, &held);
     }
 }
