@@ -5,13 +5,14 @@
 //! `@jackwener/opencli` package (public npm tarball, `--ignore-scripts`) into
 //! `~/.chrome-use/opencli`, and `opencli_runner.mjs` runs an adapter with
 //! OpenCLI's own registry, argument coercion, pipeline executor and `BasePage`
-//! helpers, over a page whose transport is chrome-use. Nothing is converted or
-//! copied into our packs; the one exception is `PATCHES`, whole-file fixes to
-//! a few adapter files of the pinned release, written over the installed copy.
+//! helpers, over a page whose transport is chrome-use. The installed package
+//! is used as published; chrome-use writes nothing over it.
 //!
 //! Precedence: a chrome-use adapter (official, configured, then community) with
 //! the same `name/cmd` always wins; OpenCLI only answers names we don't have,
-//! and it is listed last in the domain hint.
+//! and it is listed last in the domain hint. Commands we rely on are ported to
+//! leeguooooo/chrome-use-sites and maintained there (`PORTED`); OpenCLI never
+//! answers those names, even before the ported adapter is synced.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -27,29 +28,19 @@ pub const SOURCE_LABEL: &str = "opencli";
 
 const RUNNER_JS: &str = include_str!("opencli_runner.mjs");
 
-/// chrome-use's fixes to files of the pinned OpenCLI release, as
-/// `(path inside the package, full file)`. Each replaces that release's file
-/// whole (the originals were first committed verbatim, so `git log -p` shows
-/// the patch), so they are written only over PINNED_VERSION; an overridden
-/// version runs unpatched. A version bump must re-derive or drop them, and
-/// `cli/src/opencli_patches/douyin.test.mjs` runs them against the package.
-/// - douyin: Douyin sends 64-bit ids (item_id) as bare JSON numbers, which
-///   JSON.parse rounds; `douyin/delete` then reported a rounded item_id and
-///   failed with card_not_found (#508).
-const PATCHES: &[(&str, &str)] = &[
-    (
-        "clis/douyin/_shared/bigint-json.js",
-        include_str!("opencli_patches/clis/douyin/_shared/bigint-json.js"),
-    ),
-    (
-        "clis/douyin/_shared/browser-fetch.js",
-        include_str!("opencli_patches/clis/douyin/_shared/browser-fetch.js"),
-    ),
-    (
-        "clis/douyin/delete.js",
-        include_str!("opencli_patches/clis/douyin/delete.js"),
-    ),
-];
+/// OpenCLI commands that leeguooooo/chrome-use-sites now maintains, ported
+/// from this release under its Apache-2.0 license with attribution. OpenCLI
+/// never answers these names: they are dropped from its manifest here, so
+/// `site` runs our adapter, and a cache synced before the port arrived is
+/// refreshed rather than falling back to the upstream command (main.rs). The
+/// ports carry chrome-use's fixes to `douyin/delete` (#508, #525), which used
+/// to be written over the installed package.
+pub const PORTED: &[&str] = &["douyin/delete", "douyin/update", "twitter/delete"];
+
+/// Whether `spec` is one of the `PORTED` commands.
+pub fn is_ported(spec: &str) -> bool {
+    PORTED.contains(&spec)
+}
 
 pub fn disabled() -> bool {
     std::env::var_os("AGENT_BROWSER_SITES_NO_OPENCLI").is_some()
@@ -150,30 +141,8 @@ pub fn sync() -> Result<Option<usize>, String> {
             ));
         }
     }
-    apply_patches(&pkg_dir(&root), installed_version(&root).as_deref())?;
     write_runner(&root)?;
     Ok(Some(manifest().len()))
-}
-
-/// Write `PATCHES` over the package in `pkg` when it is the pinned release.
-/// Idempotent; returns how many files were (re)written.
-fn apply_patches(pkg: &Path, installed: Option<&str>) -> Result<usize, String> {
-    if installed != Some(PINNED_VERSION) {
-        return Ok(0);
-    }
-    let mut written = 0;
-    for (rel, body) in PATCHES {
-        let path = pkg.join(rel);
-        if std::fs::read_to_string(&path).ok().as_deref() == Some(*body) {
-            continue;
-        }
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("opencli: patch {rel}: {e}"))?;
-        }
-        std::fs::write(&path, body).map_err(|e| format!("opencli: patch {rel}: {e}"))?;
-        written += 1;
-    }
-    Ok(written)
 }
 
 fn write_runner(root: &Path) -> Result<PathBuf, String> {
@@ -184,7 +153,8 @@ fn write_runner(root: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// The package's `cli-manifest.json` entries (one per command), or empty.
+/// The package's `cli-manifest.json` entries (one per command), without the
+/// `PORTED` ones, or empty.
 pub fn manifest() -> Vec<Value> {
     if disabled() {
         return Vec::new();
@@ -196,6 +166,9 @@ pub fn manifest() -> Vec<Value> {
         .ok()
         .and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok())
         .unwrap_or_default()
+        .into_iter()
+        .filter(|e| !spec_of(e).is_some_and(|s| is_ported(&s)))
+        .collect()
 }
 
 pub fn spec_of(entry: &Value) -> Option<String> {
@@ -211,10 +184,13 @@ pub fn lookup(spec: &str) -> Option<Value> {
         .find(|e| spec_of(e).as_deref() == Some(spec))
 }
 
-/// Whether `spec` should run through OpenCLI: we have no adapter by that name
-/// and OpenCLI does.
+/// Whether `spec` should run through OpenCLI: we have no adapter by that name,
+/// it is not one we ported, and OpenCLI has it.
 pub fn handles(spec: &str) -> bool {
-    spec.contains('/') && crate::site::load_adapter(spec).is_err() && lookup(spec).is_some()
+    spec.contains('/')
+        && !is_ported(spec)
+        && crate::site::load_adapter(spec).is_err()
+        && lookup(spec).is_some()
 }
 
 /// `site info` for an OpenCLI command, shaped like an adapter's @meta.
@@ -367,10 +343,6 @@ pub fn run(spec: &str, entry: &Value, rest: &[String], session: &str) -> Value {
         Ok(p) => p,
         Err(e) => return fail(e),
     };
-    // A package installed by an older chrome-use has no patches yet.
-    if let Err(e) = apply_patches(&pkg_dir(&root), installed_version(&root).as_deref()) {
-        return fail(e);
-    }
     let kwargs = match map_args(entry, rest) {
         Ok(k) => k,
         Err(e) => return fail(e),
@@ -499,45 +471,82 @@ mod tests {
         assert_eq!(pairs.len(), 2, "{a:?}");
     }
 
-    #[test]
-    fn patches_apply_only_to_the_pinned_release_and_are_idempotent() {
-        let dir =
-            std::env::temp_dir().join(format!("cu-oc-patch-{}", uuid::Uuid::new_v4().simple()));
-        let pkg = dir.join("pkg");
-        std::fs::create_dir_all(pkg.join("clis/douyin")).unwrap();
-        std::fs::write(pkg.join("clis/douyin/delete.js"), "upstream").unwrap();
-
-        assert_eq!(apply_patches(&pkg, Some("0.0.1")).unwrap(), 0);
-        assert_eq!(apply_patches(&pkg, None).unwrap(), 0);
-        assert_eq!(
-            std::fs::read_to_string(pkg.join("clis/douyin/delete.js")).unwrap(),
-            "upstream"
-        );
-
-        assert_eq!(
-            apply_patches(&pkg, Some(PINNED_VERSION)).unwrap(),
-            PATCHES.len()
-        );
-        for (rel, body) in PATCHES {
-            assert_eq!(
-                std::fs::read_to_string(pkg.join(rel)).unwrap(),
-                *body,
-                "{rel}"
-            );
+    /// A HOME with an OpenCLI manifest listing `opencli` and adapters of ours
+    /// at `ours` (each `name/cmd`).
+    fn home_with(opencli: &[&str], ours: &[&str]) -> PathBuf {
+        let home =
+            std::env::temp_dir().join(format!("cu-oc-prec-{}", uuid::Uuid::new_v4().simple()));
+        let pkg = pkg_dir(&home.join(".chrome-use").join("opencli"));
+        std::fs::create_dir_all(&pkg).unwrap();
+        let entries: Vec<Value> = opencli
+            .iter()
+            .map(|s| {
+                let (site, name) = s.split_once('/').unwrap();
+                json!({"site": site, "name": name, "access": "write", "domain": "example.com"})
+            })
+            .collect();
+        std::fs::write(
+            pkg.join("cli-manifest.json"),
+            serde_json::to_string(&entries).unwrap(),
+        )
+        .unwrap();
+        for spec in ours {
+            let (name, cmd) = spec.split_once('/').unwrap();
+            let dir = home.join(".chrome-use").join("sites").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            let meta = json!({"name": spec, "domain": "example.com", "args": {}});
+            std::fs::write(
+                dir.join(format!("{cmd}.js")),
+                format!("/* @meta\n{meta}\n*/\nasync function(args) {{ return {{}} }}\n"),
+            )
+            .unwrap();
         }
-        assert_eq!(apply_patches(&pkg, Some(PINNED_VERSION)).unwrap(), 0);
-        let _ = std::fs::remove_dir_all(&dir);
+        home
     }
 
     #[test]
-    fn douyin_patches_keep_64_bit_ids_as_strings() {
-        let body = |rel: &str| PATCHES.iter().find(|(r, _)| *r == rel).unwrap().1;
-        assert!(
-            body("clis/douyin/_shared/browser-fetch.js").contains("parseJsonKeepingBigInts(text)")
+    fn our_adapter_wins_over_opencli_for_the_same_name() {
+        let guard = crate::test_utils::EnvGuard::new(&["HOME", "AGENT_BROWSER_SITES_NO_OPENCLI"]);
+        guard.remove("AGENT_BROWSER_SITES_NO_OPENCLI");
+        let home = home_with(
+            &[
+                "bilibili/feed",
+                "hackernews/best",
+                "douyin/delete",
+                "douyin/update",
+                "twitter/delete",
+            ],
+            &["bilibili/feed", "douyin/delete"],
         );
-        let delete = body("clis/douyin/delete.js");
-        assert!(delete.contains("parseJsonKeepingBigInts(await res.text())"));
-        assert!(!delete.contains("res.json()"));
+        guard.set("HOME", home.to_str().unwrap());
+
+        // Both have it: ours.
+        assert!(crate::site::load_adapter("bilibili/feed").is_ok());
+        assert!(lookup("bilibili/feed").is_some());
+        assert!(!handles("bilibili/feed"));
+        // Only OpenCLI has it: OpenCLI.
+        assert!(handles("hackernews/best"));
+        // Ported and synced: ours.
+        assert!(crate::site::load_adapter("douyin/delete").is_ok());
+        assert!(!handles("douyin/delete"));
+        // Ported but not synced yet: still never OpenCLI.
+        assert!(crate::site::load_adapter("douyin/update").is_err());
+        assert!(!handles("douyin/update"));
+        assert!(!handles("twitter/delete"));
+        for spec in PORTED {
+            assert!(lookup(spec).is_none(), "{spec} must not resolve to OpenCLI");
+        }
+        let listed: Vec<String> = manifest().iter().filter_map(spec_of).collect();
+        assert_eq!(listed, ["bilibili/feed", "hackernews/best"]);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn ported_names_cover_the_douyin_writes() {
+        for spec in ["douyin/delete", "douyin/update", "twitter/delete"] {
+            assert!(is_ported(spec), "{spec}");
+        }
+        assert!(!is_ported("douyin/videos"));
     }
 
     #[test]

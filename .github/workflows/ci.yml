@@ -72,14 +72,6 @@ jobs:
         if: steps.changes.outputs.run_heavy == 'true'
         run: node --test extensions/ab-connect/*.test.js
 
-      - name: Test OpenCLI adapter patches
-        run: |
-          ver=$(sed -n 's/^pub const PINNED_VERSION: &str = "\(.*\)";/\1/p' cli/src/opencli.rs)
-          npm install --prefix "$RUNNER_TEMP/opencli" "@jackwener/opencli@$ver" \
-            --ignore-scripts --omit=dev --no-audit --no-fund --no-save --loglevel=error
-          OPENCLI_PKG_DIR="$RUNNER_TEMP/opencli/node_modules/@jackwener/opencli" \
-            node --test cli/src/opencli_patches/douyin.test.mjs
-
       - name: Warn when doc sources change without their generated pages
         if: github.event_name == 'pull_request'
         env:

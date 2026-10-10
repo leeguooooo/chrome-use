@@ -5820,8 +5820,9 @@ with one call. Adapters ship in the official leeguooooo/chrome-use-sites pack
 and the community epiral/bb-sites pack; `update` syncs both. When Node.js 20+
 is on PATH, `update` also installs OpenCLI (jackwener/OpenCLI): a `name/command`
 neither pack has runs through OpenCLI's own runtime over this session, marked
-"(opencli)" in `site list`. Ours win on a shared name.
-AGENT_BROWSER_SITES_NO_OPENCLI=1 turns OpenCLI off.
+"(opencli)" in `site list`. Ours always win on a shared name, and
+douyin/delete, douyin/update and twitter/delete are ours (chrome-use-sites),
+never OpenCLI's. AGENT_BROWSER_SITES_NO_OPENCLI=1 turns OpenCLI off.
 
 The spec is always `name/command`. `site` alone, or a wrong spec, prints a
 one-line usage and points you at `site list`.
