@@ -12795,27 +12795,36 @@ document.getElementById('open').addEventListener('click', () => {{
 /// `click --observe --follow` must settle the tab it follows to, not the one
 /// it left. The opener mutates synchronously on the click (so a watcher on the
 /// opener sees its reaction at once and goes quiet in ~100ms) while the popup
-/// keeps mutating for ~800ms after it opens and only then renders "Popup
+/// keeps mutating for ~1.6s after it opens and only then renders "Popup
 /// ready". Settling the opener and capturing the popup labelled a still-moving
 /// popup quiet; the observation must say quiet only once "Popup ready" is in
 /// the captured tree. Without `--follow` the session stays on the opener and
 /// observes it as before.
+///
+/// The popup stamps every mutation with its own clock, so the settle is
+/// checked against what the page did, not against how long the settle
+/// happened to wait: `waitedMs` counts only from when the settle started,
+/// after the click and the follow, and that is a different share of the
+/// popup's life on every machine (on Linux CI the click alone takes ~560ms).
 #[tokio::test]
 #[ignore]
 async fn e2e_click_observe_follow_settles_the_followed_popup() {
     let popup = r##"<!doctype html><meta charset="utf-8"><title>popup</title>
 <p>popup</p>
 <script>
+window.__mutations = [];
 let n = 0;
 const t = setInterval(() => {
   const d = document.createElement('div');
   d.textContent = 'tick ' + n;
   document.body.appendChild(d);
-  if (++n >= 20) {
+  window.__mutations.push(Date.now());
+  if (++n >= 40) {
     clearInterval(t);
     const b = document.createElement('button');
     b.textContent = 'Popup ready';
     document.body.appendChild(b);
+    window.__mutations.push(Date.now());
   }
 }, 40);
 </script>"##
@@ -12877,6 +12886,10 @@ document.getElementById('open').addEventListener('click', () => {{
                 "observe": true, "settleMs": 3000, "follow": true }),
     )
     .await;
+    let replied_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
     assert_success(&resp);
     let data = get_data(&resp);
     assert_eq!(data["followed"], json!(true), "{resp}");
@@ -12884,15 +12897,35 @@ document.getElementById('open').addEventListener('click', () => {{
     assert_eq!(
         observed["settle"]["quiet"],
         json!(true),
-        "3s is ample for an 800ms popup: {observed}"
+        "3s is ample for a 1.6s popup: {observed}"
     );
     assert!(
         observed_changes(&observed).contains("Popup ready"),
         "a popup reported quiet must have finished mutating: {observed}"
     );
+    // The popup's own record (the session is on it now): every mutation,
+    // the last one being "Popup ready".
+    let stamps = run_cmd(
+        &mut state,
+        json!({ "id": "6", "action": "evaluate",
+                "script": "JSON.stringify(window.__mutations)" }),
+    )
+    .await;
+    assert_success(&stamps);
+    let stamps: Vec<u64> =
+        serde_json::from_str(get_data(&stamps)["result"].as_str().unwrap_or("null"))
+            .unwrap_or_default();
+    assert_eq!(stamps.len(), 41, "the popup ran to the end: {stamps:?}");
+    let ready_at = stamps[40];
+    // The settle ended before the reply, so it started no later than
+    // `replied_at - waitedMs`, and that is before "Popup ready": the settle
+    // was watching the popup while it still changed, and called it quiet
+    // only after its last change (which the capture above holds).
+    let waited = observed["settle"]["waitedMs"].as_u64().unwrap_or(0);
     assert!(
-        observed["settle"]["waitedMs"].as_u64().unwrap_or(0) >= 300,
-        "the wait must have covered the popup's mutations: {observed}"
+        replied_at.saturating_sub(waited) < ready_at,
+        "the settle must have been watching the popup before its last mutation \
+         (replied at {replied_at}, waited {waited}ms, ready at {ready_at}): {observed}"
     );
 
     close_state(&mut state).await;
