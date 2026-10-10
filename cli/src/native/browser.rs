@@ -45,6 +45,17 @@ const UNIT_TEST_LAUNCH_REFUSAL: Option<&str> = None;
 /// and the caller's SIGKILL is no longer what decides whether cleanup ran.
 pub const OWNED_TAB_CLEANUP_BUDGET: Duration = Duration::from_secs(5);
 
+#[cfg(test)]
+thread_local! {
+    /// Makes [`BrowserManager::save_first_tab_record`] fail on this thread.
+    static FIRST_TAB_SAVE_FAILS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn first_tab_save_fails_for_test(fails: bool) {
+    FIRST_TAB_SAVE_FAILS.with(|f| f.set(fails));
+}
+
 /// The contract version of `ABExt.tabPresence` this CLI understands. A relay
 /// reply without `tabPresenceVersion` (ab-connect 0.5.32 and older) never
 /// proves a tab gone.
@@ -362,10 +373,25 @@ async fn read_tab_presence(
 async fn close_and_verify_targets(
     client: &Arc<CdpClient>,
     targets: &HashSet<String>,
-    mut chrome_tabs: HashMap<String, i64>,
+    chrome_tabs: HashMap<String, i64>,
     on_relay: bool,
     budget: Duration,
 ) -> HashMap<String, TabPresence> {
+    close_and_verify_targets_tracking(client, targets, chrome_tabs, on_relay, budget)
+        .await
+        .0
+}
+
+/// [`close_and_verify_targets`], also returning the Chrome tab id each target
+/// was last seen in, so a caller that cannot confirm a close yet can pass the
+/// same ids to a later read-back (#486).
+async fn close_and_verify_targets_tracking(
+    client: &Arc<CdpClient>,
+    targets: &HashSet<String>,
+    mut chrome_tabs: HashMap<String, i64>,
+    on_relay: bool,
+    budget: Duration,
+) -> (HashMap<String, TabPresence>, HashMap<String, i64>) {
     let deadline = tokio::time::Instant::now() + budget;
     let ordered: Vec<String> = targets.iter().cloned().collect();
     if on_relay {
@@ -455,7 +481,7 @@ async fn close_and_verify_targets(
             TabPresence::Unverified("not read back within the close budget".to_string())
         });
     }
-    verdicts
+    (verdicts, chrome_tabs)
 }
 
 /// Close the targets of a persisted ownership record over `client` and keep in
@@ -516,7 +542,13 @@ pub async fn close_persisted_session_tabs_at(
         );
     }
     let client = Arc::new(CdpClient::connect(endpoint).await?);
-    close_recorded_targets(session, endpoint, &client, &mut targets, &HashMap::new()).await
+    // Tab ids a failed first-tab cleanup learned on this endpoint (#486).
+    let known = first_tab::tab_ids_for(endpoint);
+    let closed = close_recorded_targets(session, endpoint, &client, &mut targets, &known).await;
+    if let Ok(ids) = &closed {
+        first_tab::forget_tab_ids(endpoint, &ids.iter().cloned().collect());
+    }
+    closed
 }
 
 /// Rediscover the original external browser rather than storing its possibly
@@ -2429,7 +2461,13 @@ impl BrowserManager {
         if !unsaved.is_empty() {
             manager.created_targets.extend(unsaved.iter().cloned());
             if manager.persist_created_targets().is_ok() {
-                first_tab::release_unsaved(&unsaved);
+                first_tab::release_unsaved(&ws_url, &unsaved);
+            }
+        }
+        // And the Chrome tab ids their cleanup learned, for `close`.
+        for (target, tab) in first_tab::tab_ids_for(&ws_url) {
+            if manager.created_targets.contains(&target) {
+                manager.dropped_chrome_tabs.entry(target).or_insert(tab);
             }
         }
 
@@ -4081,11 +4119,16 @@ impl BrowserManager {
         // The delete right goes to disk before anything else can fail, so a
         // later `close` can still find the tab if this daemon goes away.
         if let Err(error) = self.try_remember_created_target(&target_id) {
+            // Held before any await: if this future is dropped during the
+            // cleanup below, the daemon still has the right (#486).
+            first_tab::hold_unsaved(&self.ws_url, &target_id);
+            let mine = HashSet::from([target_id.clone()]);
             let cleanup = self.clean_up_first_tab(&target_id, total).await;
             let cause =
                 format!("saving this session's delete right for its new tab failed ({error})");
             return Err(match cleanup {
                 first_tab::Cleanup::Gone => {
+                    first_tab::release_unsaved(&self.ws_url, &mine);
                     let _ = self.forget_created_target(&target_id);
                     format!(
                         "{}: {cause}, so the tab was closed again and Chrome confirms it is \
@@ -4095,10 +4138,10 @@ impl BrowserManager {
                 }
                 first_tab::Cleanup::NotConfirmed { why } => {
                     // One more try at the record before reporting; failing
-                    // that, this daemon holds the right (see `hold_unsaved`).
-                    let recorded = self.persist_created_targets().is_ok();
-                    if !recorded {
-                        first_tab::hold_unsaved(&self.ws_url, &target_id);
+                    // that, this daemon keeps holding the right.
+                    let recorded = self.save_first_tab_record().is_ok();
+                    if recorded {
+                        first_tab::release_unsaved(&self.ws_url, &mine);
                     }
                     first_tab::cleanup_incomplete(&target_id, &cause, &why, recorded)
                 }
@@ -4162,6 +4205,16 @@ impl BrowserManager {
     /// Used only by [`Self::open_first_tab`].
     fn try_remember_created_target(&mut self, target_id: &str) -> Result<(), String> {
         self.created_targets.insert(target_id.to_string());
+        self.save_first_tab_record()
+    }
+
+    /// Save the ownership record on the first-tab path. A test can make the
+    /// save fail on its own thread ([`first_tab_save_fails_for_test`]).
+    fn save_first_tab_record(&self) -> Result<(), String> {
+        #[cfg(test)]
+        if FIRST_TAB_SAVE_FAILS.with(|f| f.get()) {
+            return Err("the record could not be written (test)".to_string());
+        }
         self.persist_created_targets()
     }
 
@@ -4169,13 +4222,13 @@ impl BrowserManager {
     /// `close`'s own verifier ([`close_and_verify_targets`], #496), never past
     /// `deadline`. Only `Absent` counts as gone.
     async fn clean_up_first_tab(
-        &self,
+        &mut self,
         target_id: &str,
         deadline: tokio::time::Instant,
     ) -> first_tab::Cleanup {
         let targets = HashSet::from([target_id.to_string()]);
         let budget = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let verdicts = close_and_verify_targets(
+        let (verdicts, tabs) = close_and_verify_targets_tracking(
             &self.client,
             &targets,
             HashMap::new(),
@@ -4183,12 +4236,23 @@ impl BrowserManager {
             budget,
         )
         .await;
+        // The tab id the verifier saw, kept for this endpoint and target only,
+        // so a later `close` can still read the tab back once it is gone.
+        if let Some(tab) = tabs.get(target_id) {
+            if !matches!(verdicts.get(target_id), Some(TabPresence::Absent)) {
+                first_tab::remember_tab_id(&self.ws_url, target_id, *tab);
+            }
+        }
         let why = match verdicts.get(target_id) {
             Some(TabPresence::Absent) => return first_tab::Cleanup::Gone,
             Some(TabPresence::Present) => "Chrome still lists it".to_string(),
             Some(TabPresence::Unverified(why)) | Some(TabPresence::Unsupported(why)) => why.clone(),
             None => "it was not read back".to_string(),
         };
+        if let Some(tab) = tabs.get(target_id) {
+            // A live manager's own `close` reads it back with this id too.
+            self.dropped_chrome_tabs.insert(target_id.to_string(), *tab);
+        }
         first_tab::Cleanup::NotConfirmed { why }
     }
 
@@ -9590,5 +9654,125 @@ mod eval_mode_tests {
         assert!(!script_may_return_promise("let asyncData = 1; asyncData"));
         assert!(!script_may_return_promise("const myPromise = 2; myPromise"));
         assert!(script_may_return_promise("new Promise(r => r(1))"));
+    }
+}
+
+/// #486: a first tab whose record cannot be saved is held by the daemon before
+/// any await, so dropping the connect future during its cleanup loses nothing.
+#[cfg(test)]
+mod first_tab_custody_tests {
+    use super::*;
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    #[derive(Default)]
+    struct Chrome {
+        targets: Vec<String>,
+        created: u32,
+        hang_close: bool,
+    }
+    type Shared = Arc<(std::sync::Mutex<Chrome>, tokio::sync::Notify)>;
+
+    fn reply(chrome: &Shared, req: &Value) -> Option<Value> {
+        let mut c = chrome.0.lock().unwrap();
+        let params = &req["params"];
+        Some(match req["method"].as_str().unwrap_or("") {
+            "Target.getTargets" => json!({"targetInfos": c.targets.iter().map(|t| json!({
+                "targetId": t, "type": "page", "title": t, "url": "about:blank",
+                "attached": true, "browserContextId": "C1"})).collect::<Vec<_>>()}),
+            "Target.createTarget" => {
+                c.created += 1;
+                let id = format!("T{}", c.created);
+                c.targets.push(id.clone());
+                json!({"targetId": id})
+            }
+            "Target.attachToTarget" => {
+                json!({"sessionId": format!("S-{}", params["targetId"].as_str().unwrap_or(""))})
+            }
+            "Target.closeTarget" if c.hang_close => {
+                chrome.1.notify_one();
+                return None;
+            }
+            "Target.closeTarget" => {
+                let id = params["targetId"].as_str().unwrap_or("").to_string();
+                c.targets.retain(|t| *t != id);
+                json!({"success": true})
+            }
+            _ => json!({}),
+        })
+    }
+
+    async fn start() -> (Shared, String) {
+        let chrome: Shared = Arc::new(Default::default());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let shared = chrome.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let chrome = shared.clone();
+                tokio::spawn(async move {
+                    let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+                        return;
+                    };
+                    while let Some(Ok(msg)) = ws.next().await {
+                        let Message::Text(text) = msg else { continue };
+                        let req: Value = serde_json::from_str(&text).unwrap();
+                        let Some(result) = reply(&chrome, &req) else {
+                            continue;
+                        };
+                        let mut out = json!({"id": req["id"], "result": result});
+                        if let Some(sid) = req.get("sessionId") {
+                            out["sessionId"] = sid.clone();
+                        }
+                        if ws
+                            .send(Message::Text(out.to_string().into()))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (chrome, url)
+    }
+
+    /// The record cannot be written, the cleanup close hangs, and the connect
+    /// future is dropped mid-cleanup. The daemon still holds the right: the
+    /// next connection to that browser takes the tab back as created, opens
+    /// nothing new, and its verified close removes it.
+    #[tokio::test]
+    async fn a_connect_dropped_during_cleanup_keeps_the_held_right() {
+        let (chrome, url) = start().await;
+        chrome.0.lock().unwrap().hang_close = true;
+        first_tab_save_fails_for_test(true);
+        {
+            let connect = BrowserManager::connect_cdp(&url);
+            tokio::select! {
+                r = connect => panic!("the cleanup close never answers: {:?}", r.err()),
+                _ = chrome.1.notified() => {}
+            }
+            // Leaving the block drops the connect future mid-cleanup.
+        }
+        first_tab_save_fails_for_test(false);
+        assert_eq!(
+            first_tab::unsaved_for(&url),
+            HashSet::from(["T1".to_string()]),
+            "the right was lost with the dropped future"
+        );
+        assert_eq!(chrome.0.lock().unwrap().targets, vec!["T1".to_string()]);
+
+        chrome.0.lock().unwrap().hang_close = false;
+        let mut mgr = BrowserManager::connect_cdp(&url).await.unwrap();
+        assert_eq!(chrome.0.lock().unwrap().created, 1, "opened another tab");
+        assert!(mgr.created_target_ids().contains("T1"));
+        assert!(
+            first_tab::unsaved_for(&url).is_empty(),
+            "saved again, so released"
+        );
+        let report = mgr.close_verified().await.unwrap();
+        assert!(report.is_complete(), "{:?}", report.to_json());
+        assert!(chrome.0.lock().unwrap().targets.is_empty());
     }
 }

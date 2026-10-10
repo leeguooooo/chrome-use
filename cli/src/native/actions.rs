@@ -6367,32 +6367,22 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     // session's own manager is closed: a manager on a newer endpoint did not
     // take them over, and the helper finds the profile's current endpoint.
     {
-        let groups = super::first_tab::take_unsaved();
-        for (i, (endpoint, held)) in groups.iter().enumerate() {
-            let result = close_tabs_after_lost_connection(
-                &state.session_id,
-                endpoint,
-                held,
-                &HashMap::new(),
-            )
-            .await;
-            match result {
-                Ok(closed) => report = report.with_closed_ids(closed, "reconnect"),
-                Err(error) => {
-                    // Keep this group and every one not tried yet.
-                    for (endpoint, held) in &groups[i..] {
-                        for target in held {
-                            super::first_tab::hold_unsaved(endpoint, target);
-                        }
-                    }
-                    return Err(format!(
-                        "close incomplete: {} tab(s) this session opened but could not record are \
-                     not confirmed closed: {error}. This daemon still holds them; retry `close`.",
-                        held.len()
-                    ));
+        let session = state.session_id.clone();
+        let groups = super::first_tab::snapshot_unsaved();
+        let closed = super::first_tab::close_held(groups, |endpoint, held| {
+            let session = session.clone();
+            async move {
+                let known = super::first_tab::tab_ids_for(&endpoint);
+                let closed =
+                    close_tabs_after_lost_connection(&session, &endpoint, &held, &known).await;
+                if let Ok(ids) = &closed {
+                    super::first_tab::forget_tab_ids(&endpoint, &ids.iter().cloned().collect());
                 }
+                closed
             }
-        }
+        })
+        .await?;
+        report = report.with_closed_ids(closed, "reconnect");
     }
     state.launch_hash = None;
     state.screencasting = false;

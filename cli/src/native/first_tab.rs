@@ -187,23 +187,97 @@ pub fn unsaved_for(endpoint: &str) -> HashSet<String> {
         .collect()
 }
 
-/// Drop `targets` from the held list (saved to disk, or closed).
-pub fn release_unsaved(targets: &HashSet<String>) {
-    unsaved().retain(|(_, t)| !targets.contains(t));
+/// Drop the rights for exactly `targets` on `endpoint` (saved to disk, or
+/// confirmed closed). Target ids are opaque per browser: the same id held for
+/// another endpoint is a different tab and stays held.
+pub fn release_unsaved(endpoint: &str, targets: &HashSet<String>) {
+    unsaved().retain(|(e, t)| !(e == endpoint && targets.contains(t)));
 }
 
-/// Take every held target, grouped by endpoint.
-pub fn take_unsaved() -> Vec<(String, HashSet<String>)> {
+/// Chrome tab ids a first-tab cleanup saw for targets it could not confirm
+/// gone: `(endpoint, target, tab)`. A tab id belongs to one browser, so it is
+/// only ever used for the same endpoint and target. A later `close` passes it
+/// to the verifier, which can then prove the tab gone (#496 needs the tab id
+/// once the target itself is no longer registered).
+static TAB_IDS: std::sync::Mutex<Vec<(String, String, i64)>> = std::sync::Mutex::new(Vec::new());
+
+fn tab_ids() -> std::sync::MutexGuard<'static, Vec<(String, String, i64)>> {
+    TAB_IDS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Keep the Chrome tab id `tab` the verifier saw for `target` on `endpoint`.
+pub fn remember_tab_id(endpoint: &str, target: &str, tab: i64) {
+    let mut ids = tab_ids();
+    ids.retain(|(e, t, _)| !(e == endpoint && t == target));
+    ids.push((endpoint.to_string(), target.to_string(), tab));
+}
+
+/// The kept tab ids on `endpoint`, by target.
+pub fn tab_ids_for(endpoint: &str) -> std::collections::HashMap<String, i64> {
+    tab_ids()
+        .iter()
+        .filter(|(e, _, _)| e == endpoint)
+        .map(|(_, t, tab)| (t.clone(), *tab))
+        .collect()
+}
+
+/// Drop the kept tab ids of `targets` on `endpoint` (confirmed closed).
+pub fn forget_tab_ids(endpoint: &str, targets: &HashSet<String>) {
+    tab_ids().retain(|(e, t, _)| !(e == endpoint && targets.contains(t)));
+}
+
+/// Every held right, grouped by endpoint, without releasing any: a group is
+/// released only once its close is confirmed ([`close_held`]), so a close
+/// that is cancelled or fails part-way loses nothing.
+pub fn snapshot_unsaved() -> Vec<(String, HashSet<String>)> {
     let mut out: Vec<(String, HashSet<String>)> = Vec::new();
-    for (endpoint, target) in unsaved().drain(..) {
-        match out.iter_mut().find(|(e, _)| *e == endpoint) {
+    for (endpoint, target) in unsaved().iter() {
+        match out.iter_mut().find(|(e, _)| e == endpoint) {
             Some((_, set)) => {
-                set.insert(target);
+                set.insert(target.clone());
             }
-            None => out.push((endpoint, HashSet::from([target]))),
+            None => out.push((endpoint.clone(), HashSet::from([target.clone()]))),
         }
     }
     out
+}
+
+/// Close held `groups` one at a time with `close` (which returns the target
+/// ids it confirmed closed) and release each confirmed right right away. The
+/// first failure stops and reports; whatever was not confirmed, or not tried,
+/// stays held, including when this future is dropped mid-way.
+pub async fn close_held<F, Fut>(
+    groups: Vec<(String, HashSet<String>)>,
+    mut close: F,
+) -> Result<Vec<String>, String>
+where
+    F: FnMut(String, HashSet<String>) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<String>, String>>,
+{
+    let mut closed_all = Vec::new();
+    for (endpoint, held) in groups {
+        match close(endpoint.clone(), held.clone()).await {
+            Ok(closed) => {
+                let confirmed: HashSet<String> = closed
+                    .iter()
+                    .filter(|t| held.contains(*t))
+                    .cloned()
+                    .collect();
+                release_unsaved(&endpoint, &confirmed);
+                closed_all.extend(closed);
+            }
+            Err(error) => {
+                return Err(format!(
+                    "close incomplete: {} tab(s) this session opened but could not record are \
+                     not confirmed closed: {error}. This daemon still holds them; retry `close`.",
+                    held.len()
+                ))
+            }
+        }
+    }
+    Ok(closed_all)
 }
 
 /// The error for a first tab whose setup failed, after cleanup. `recorded`
@@ -345,15 +419,89 @@ mod tests {
     }
 
     #[test]
-    fn an_unsaved_delete_right_is_held_until_saved_or_closed() {
-        hold_unsaved("ws://a", "T9");
-        hold_unsaved("ws://a", "T9");
-        hold_unsaved("ws://b", "T8");
-        assert_eq!(unsaved_for("ws://a"), HashSet::from(["T9".to_string()]));
-        release_unsaved(&HashSet::from(["T9".to_string()]));
-        assert!(unsaved_for("ws://a").is_empty());
-        let taken = take_unsaved();
-        assert!(taken.iter().any(|(e, t)| e == "ws://b" && t.contains("T8")));
-        assert!(unsaved_for("ws://b").is_empty());
+    fn an_unsaved_delete_right_is_held_until_released_exactly() {
+        hold_unsaved("ws://held-a", "T9");
+        hold_unsaved("ws://held-a", "T9");
+        hold_unsaved("ws://held-b", "T9");
+        assert_eq!(
+            unsaved_for("ws://held-a"),
+            HashSet::from(["T9".to_string()])
+        );
+        // The same opaque id on another browser is another tab.
+        release_unsaved("ws://held-a", &HashSet::from(["T9".to_string()]));
+        assert!(unsaved_for("ws://held-a").is_empty());
+        assert_eq!(
+            unsaved_for("ws://held-b"),
+            HashSet::from(["T9".to_string()])
+        );
+        // A snapshot releases nothing.
+        assert!(snapshot_unsaved()
+            .iter()
+            .any(|(e, t)| e == "ws://held-b" && t.contains("T9")));
+        assert_eq!(
+            unsaved_for("ws://held-b"),
+            HashSet::from(["T9".to_string()])
+        );
+        release_unsaved("ws://held-b", &HashSet::from(["T9".to_string()]));
+    }
+
+    #[test]
+    fn a_kept_tab_id_belongs_to_one_endpoint_and_target() {
+        remember_tab_id("ws://tab-a", "T1", 11);
+        remember_tab_id("ws://tab-b", "T1", 22);
+        assert_eq!(tab_ids_for("ws://tab-a").get("T1"), Some(&11));
+        assert_eq!(tab_ids_for("ws://tab-b").get("T1"), Some(&22));
+        forget_tab_ids("ws://tab-a", &HashSet::from(["T1".to_string()]));
+        assert!(tab_ids_for("ws://tab-a").is_empty());
+        assert_eq!(tab_ids_for("ws://tab-b").get("T1"), Some(&22));
+        forget_tab_ids("ws://tab-b", &HashSet::from(["T1".to_string()]));
+    }
+
+    /// A multi-group close cancelled part-way: the confirmed group is
+    /// released, the one in flight and the one not yet tried stay held, and
+    /// nothing is reported closed.
+    #[tokio::test]
+    async fn a_cancelled_close_of_held_rights_loses_nothing() {
+        for (e, t) in [("ws://c-1", "A"), ("ws://c-2", "B"), ("ws://c-3", "C")] {
+            hold_unsaved(e, t);
+        }
+        let groups: Vec<(String, HashSet<String>)> = ["ws://c-1", "ws://c-2", "ws://c-3"]
+            .iter()
+            .map(|e| (e.to_string(), unsaved_for(e)))
+            .collect();
+        let reached = std::sync::Arc::new(tokio::sync::Notify::new());
+        let signal = reached.clone();
+        let close = close_held(groups, move |endpoint, held| {
+            let signal = signal.clone();
+            async move {
+                if endpoint == "ws://c-1" {
+                    return Ok(held.into_iter().collect());
+                }
+                signal.notify_one();
+                std::future::pending::<Result<Vec<String>, String>>().await
+            }
+        });
+        tokio::select! {
+            r = close => panic!("the second group never answers: {r:?}"),
+            _ = reached.notified() => {}
+        }
+        // `close` was dropped while closing ws://c-2.
+        assert!(unsaved_for("ws://c-1").is_empty());
+        assert_eq!(unsaved_for("ws://c-2"), HashSet::from(["B".to_string()]));
+        assert_eq!(unsaved_for("ws://c-3"), HashSet::from(["C".to_string()]));
+
+        // A failing group stops the close and stays held, as does the rest.
+        hold_unsaved("ws://c-4", "D");
+        let groups = vec![
+            ("ws://c-2".to_string(), unsaved_for("ws://c-2")),
+            ("ws://c-4".to_string(), unsaved_for("ws://c-4")),
+        ];
+        let r = close_held(groups, |_, _| async { Err("refused".to_string()) }).await;
+        assert!(r.unwrap_err().starts_with("close incomplete"));
+        assert_eq!(unsaved_for("ws://c-2"), HashSet::from(["B".to_string()]));
+        assert_eq!(unsaved_for("ws://c-4"), HashSet::from(["D".to_string()]));
+        for (e, t) in [("ws://c-2", "B"), ("ws://c-3", "C"), ("ws://c-4", "D")] {
+            release_unsaved(e, &HashSet::from([t.to_string()]));
+        }
     }
 }

@@ -42,6 +42,10 @@ struct Browser {
     close: CloseMode,
     /// `ABExt.tabPresence` gets no versioned answer, like ab-connect 0.5.32.
     old_extension: bool,
+    /// `ABExt.tabPresence` fails for a target whose close went through.
+    presence_fails_after_close: bool,
+    /// Targets a `Target.closeTarget` removed.
+    closed: Vec<String>,
     /// Every `ABExt.call` the daemon made, as `namespace.method`.
     calls: Vec<String>,
     /// `Target.attachToTarget` calls.
@@ -222,6 +226,7 @@ impl Fake {
                 CloseMode::Closes => {
                     let id = params["targetId"].as_str().unwrap_or("").to_string();
                     b.targets.retain(|(t, _)| *t != id);
+                    b.closed.push(id);
                     json!({"success": true})
                 }
                 CloseMode::Refused => json!({"__error": "Target.closeTarget: refused"}),
@@ -233,6 +238,12 @@ impl Fake {
             // is Chrome tab `<n>`: listed means present; absent only when the
             // target is unlisted and the exact tab id given is gone.
             "ABExt.tabPresence" if b.old_extension => json!({}),
+            "ABExt.tabPresence"
+                if b.presence_fails_after_close
+                    && b.closed.iter().any(|t| params["targetId"] == t.as_str()) =>
+            {
+                json!({"__error": "tabPresence: chrome.debugger.getTargets failed"})
+            }
             "ABExt.tabPresence" => {
                 let target = params["targetId"].as_str().unwrap_or("").to_string();
                 let tab_of = |t: &str| t.strip_prefix('T').and_then(|n| n.parse::<i64>().ok());
@@ -1498,4 +1509,34 @@ fn created_by_one(d: &Daemon) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The cleanup close of a first tab goes through, but reading it back fails:
+/// cleanup is not confirmed and the right is kept. The Chrome tab id the
+/// verifier saw before the close is kept with it, so the same session's
+/// `close` proves the tab gone once read-back works, without `--force`.
+#[test]
+fn a_closed_first_tab_whose_read_back_failed_is_confirmed_by_the_next_close() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start("rc-readback-fails", &cdp);
+    publish_profile_endpoint(&d, &cdp);
+    {
+        let mut b = fake.0.lock().unwrap();
+        b.page_enable_fails = true;
+        b.presence_fails_after_close = true;
+    }
+    let r = d.send(json!({"id": "a", "action": "tab_list"}));
+    let error = r["error"].as_str().unwrap_or("");
+    assert!(error.starts_with("first tab cleanup incomplete:"), "{r}");
+    assert!(error.contains("target T1"), "{r}");
+    assert!(open_targets(&fake).is_empty(), "the close did go through");
+    let record = std::fs::read_to_string(created_record(&d)).unwrap_or_default();
+    assert!(record.contains("T1"), "delete right lost: {record}");
+
+    fake.0.lock().unwrap().presence_fails_after_close = false;
+    let r = d.send(json!({"id": "z", "action": "close"}));
+    assert_eq!(r["success"], true, "{r}");
+    assert_eq!(r["data"]["verifiedAbsent"], true, "{r}");
+    assert!(!created_record(&d).exists(), "the right outlived the tab");
+    assert_eq!(fake.0.lock().unwrap().created, 1, "opened another tab");
 }
