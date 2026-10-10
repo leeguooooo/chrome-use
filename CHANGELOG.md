@@ -1,8 +1,28 @@
 # Changelog
 
-## 1.5.183
+## 1.5.184
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.34 (published on the Chrome Web Store; Chrome updates it automatically).
+
+### Features
+
+- **See every tab you have open, and act on one when you ask.** `tab list --all` lists the tabs in all windows of the connected profile without attaching to or activating any of them. Each row says who owns it (this session, another session by name and whether it is live, or you), this session's tabs come first, and rows the session doesn't own say how to act on them. `--tab <handle> --force` runs a command on such a tab in place, in the background; `tab close <handle> --force` closes it and confirms it is gone. Without `--force` those tabs are refused, naming the owner. Ending a session never closes a tab it was forced onto; with 0.5.34 it releases it. (#520)
+
+### Bug Fixes
+
+- **`open` no longer reports a timeout for a page that loaded.** When the load event never arrives but the page is plainly usable (DOM ready, visible content, not an error page), `open` succeeds with a warning and `commit: "unverified"` when it can't prove the page came from this request, giving the real URL. A page that isn't usable fails with a non-retryable `navigation_commit_unknown` / `navigation_incomplete` that says what is still loading; it is never replayed. (#511, fixes #502)
+- **`close` with nothing to close touches nothing.** A second `close`, or one for a session never opened, used to open and close an `about:blank` tab in your Chrome; it now does nothing and says so. (#518, fixes #517)
+- **No phantom tabs over the relay.** Tabs that had closed could stay listed as live attached pages (and could be attached to); the extension now prunes them, and the CLI ignores any it can't confirm open, even with older extensions. (#522, fixes #519)
+- **`douyin/delete` finds the right work.** 19-digit IDs keep every digit, and the work card is matched by title instead of by position, which could have clicked a different video. (#525, fixes #508)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.183
+
 Requires extension ab-connect 0.5.33 (published on the Chrome Web Store; Chrome updates it automatically).
 
 ### Bug Fixes
@@ -22,7 +42,6 @@ Requires extension ab-connect 0.5.33 (published on the Chrome Web Store; Chrome 
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.182
 
