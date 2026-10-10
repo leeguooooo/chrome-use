@@ -6,7 +6,8 @@
 //! `~/.chrome-use/opencli`, and `opencli_runner.mjs` runs an adapter with
 //! OpenCLI's own registry, argument coercion, pipeline executor and `BasePage`
 //! helpers, over a page whose transport is chrome-use. Nothing is converted or
-//! copied into our packs.
+//! copied into our packs; the one exception is `PATCHES`, whole-file fixes to
+//! a few adapter files of the pinned release, written over the installed copy.
 //!
 //! Precedence: a chrome-use adapter (official, configured, then community) with
 //! the same `name/cmd` always wins; OpenCLI only answers names we don't have,
@@ -25,6 +26,30 @@ pub const PACKAGE: &str = "@jackwener/opencli";
 pub const SOURCE_LABEL: &str = "opencli";
 
 const RUNNER_JS: &str = include_str!("opencli_runner.mjs");
+
+/// chrome-use's fixes to files of the pinned OpenCLI release, as
+/// `(path inside the package, full file)`. Each replaces that release's file
+/// whole (the originals were first committed verbatim, so `git log -p` shows
+/// the patch), so they are written only over PINNED_VERSION; an overridden
+/// version runs unpatched. A version bump must re-derive or drop them, and
+/// `cli/src/opencli_patches/douyin.test.mjs` runs them against the package.
+/// - douyin: Douyin sends 64-bit ids (item_id) as bare JSON numbers, which
+///   JSON.parse rounds; `douyin/delete` then reported a rounded item_id and
+///   failed with card_not_found (#508).
+const PATCHES: &[(&str, &str)] = &[
+    (
+        "clis/douyin/_shared/bigint-json.js",
+        include_str!("opencli_patches/clis/douyin/_shared/bigint-json.js"),
+    ),
+    (
+        "clis/douyin/_shared/browser-fetch.js",
+        include_str!("opencli_patches/clis/douyin/_shared/browser-fetch.js"),
+    ),
+    (
+        "clis/douyin/delete.js",
+        include_str!("opencli_patches/clis/douyin/delete.js"),
+    ),
+];
 
 pub fn disabled() -> bool {
     std::env::var_os("AGENT_BROWSER_SITES_NO_OPENCLI").is_some()
@@ -125,8 +150,30 @@ pub fn sync() -> Result<Option<usize>, String> {
             ));
         }
     }
+    apply_patches(&pkg_dir(&root), installed_version(&root).as_deref())?;
     write_runner(&root)?;
     Ok(Some(manifest().len()))
+}
+
+/// Write `PATCHES` over the package in `pkg` when it is the pinned release.
+/// Idempotent; returns how many files were (re)written.
+fn apply_patches(pkg: &Path, installed: Option<&str>) -> Result<usize, String> {
+    if installed != Some(PINNED_VERSION) {
+        return Ok(0);
+    }
+    let mut written = 0;
+    for (rel, body) in PATCHES {
+        let path = pkg.join(rel);
+        if std::fs::read_to_string(&path).ok().as_deref() == Some(*body) {
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("opencli: patch {rel}: {e}"))?;
+        }
+        std::fs::write(&path, body).map_err(|e| format!("opencli: patch {rel}: {e}"))?;
+        written += 1;
+    }
+    Ok(written)
 }
 
 fn write_runner(root: &Path) -> Result<PathBuf, String> {
@@ -320,6 +367,10 @@ pub fn run(spec: &str, entry: &Value, rest: &[String], session: &str) -> Value {
         Ok(p) => p,
         Err(e) => return fail(e),
     };
+    // A package installed by an older chrome-use has no patches yet.
+    if let Err(e) = apply_patches(&pkg_dir(&root), installed_version(&root).as_deref()) {
+        return fail(e);
+    }
     let kwargs = match map_args(entry, rest) {
         Ok(k) => k,
         Err(e) => return fail(e),
@@ -446,6 +497,47 @@ mod tests {
         assert!(pairs.contains(&("--limit", "3")), "{a:?}");
         assert!(pairs.contains(&("--query", "rust")), "{a:?}");
         assert_eq!(pairs.len(), 2, "{a:?}");
+    }
+
+    #[test]
+    fn patches_apply_only_to_the_pinned_release_and_are_idempotent() {
+        let dir =
+            std::env::temp_dir().join(format!("cu-oc-patch-{}", uuid::Uuid::new_v4().simple()));
+        let pkg = dir.join("pkg");
+        std::fs::create_dir_all(pkg.join("clis/douyin")).unwrap();
+        std::fs::write(pkg.join("clis/douyin/delete.js"), "upstream").unwrap();
+
+        assert_eq!(apply_patches(&pkg, Some("0.0.1")).unwrap(), 0);
+        assert_eq!(apply_patches(&pkg, None).unwrap(), 0);
+        assert_eq!(
+            std::fs::read_to_string(pkg.join("clis/douyin/delete.js")).unwrap(),
+            "upstream"
+        );
+
+        assert_eq!(
+            apply_patches(&pkg, Some(PINNED_VERSION)).unwrap(),
+            PATCHES.len()
+        );
+        for (rel, body) in PATCHES {
+            assert_eq!(
+                std::fs::read_to_string(pkg.join(rel)).unwrap(),
+                *body,
+                "{rel}"
+            );
+        }
+        assert_eq!(apply_patches(&pkg, Some(PINNED_VERSION)).unwrap(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn douyin_patches_keep_64_bit_ids_as_strings() {
+        let body = |rel: &str| PATCHES.iter().find(|(r, _)| *r == rel).unwrap().1;
+        assert!(
+            body("clis/douyin/_shared/browser-fetch.js").contains("parseJsonKeepingBigInts(text)")
+        );
+        let delete = body("clis/douyin/delete.js");
+        assert!(delete.contains("parseJsonKeepingBigInts(await res.text())"));
+        assert!(!delete.contains("res.json()"));
     }
 
     #[test]
