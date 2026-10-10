@@ -207,7 +207,9 @@
         error, whether this navigation committed (read only from its own loader id; over the extension relay, which navigates
         through the tab API and has none, it is "unknown"), the URL and readyState the tab reports,
         and the references with no Resource Timing record. Those are candidates only: a missing record does not mean
-        something is still loading, and no cause is inferred. This used to be a bare "Operation timed out".
+        something is still loading, and no cause is inferred. This used to be a bare "Operation timed out". Its JSON code is
+        <code>navigation_commit_unknown</code> when the commit is unknown, else <code>navigation_incomplete</code>; both are
+        <code>retryable: false</code>, even though the message quotes a timeout.
       </p>
       <div class="du-callout tip">
         <div class="du-callout-title">✅ What to do</div>

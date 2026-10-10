@@ -2502,6 +2502,9 @@ early or runs out:
     Timing record, listed only as candidates (a record can be missing for a
     finished resource). No cause is claimed that was not observed. Check
     again with `get url` / `snapshot` rather than repeating the open.
+    JSON code: navigation_commit_unknown when the commit is unknown, else
+    navigation_incomplete; both retryable: false, though the message quotes
+    a timeout.
 
 Global Options:
   --json               Output as JSON

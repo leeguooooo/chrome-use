@@ -196,6 +196,7 @@
         写明实际等了多久和真实的错误、这次导航有没有提交（只认这次导航自己的 loader id；扩展中继走浏览器的标签页接口、没有 loader id，会写「未知」）、标签页报告的 URL 和 readyState，
         以及没有 Resource Timing 记录的引用资源。这些只是候选，记录缺失不代表还在加载，也不推断原因。
         以前这种情况只报一句「Operation timed out」。
+        JSON 里的 code：提交情况未知时是 <code>navigation_commit_unknown</code>，否则是 <code>navigation_incomplete</code>；两者都是 <code>retryable: false</code>，即使消息里引用了超时。
       </p>
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 怎么办</div>

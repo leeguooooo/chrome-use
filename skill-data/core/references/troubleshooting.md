@@ -71,7 +71,10 @@ with a ⚠ warning; use the page. Otherwise it fails with
 this navigation committed (read only from its own loader id; over the
 extension relay, which has none, "unknown"), the URL
 and readyState the tab reports, and references with no Resource Timing record
-as candidates only. It names no cause it did not observe. Do not repeat the
+as candidates only. It names no cause it did not observe. Its JSON code is
+`navigation_commit_unknown` when the commit is unknown, else
+`navigation_incomplete`; both are `retryable: false`, even though the message
+quotes a timeout. Do not repeat the
 `open`: check
 `get url` and `snapshot` a little later, or use `open <url> --wait-until none`
 to return as soon as the navigation commits.

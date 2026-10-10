@@ -1194,6 +1194,12 @@ pub(crate) fn is_stale_target_error(error: &str) -> bool {
 /// A Chrome access decision is not a lost tab and cannot be fixed by reattachment.
 pub(crate) fn is_debugger_access_denied(error: &str) -> bool {
     let lower = error.to_ascii_lowercase();
+    // An unfinished `open` quotes its URL and wait error, which can carry
+    // these words; it is not a denial, and the #373 recovery (hiding the tab)
+    // must not run for it (#502).
+    if lower.contains(NAVIGATION_INCOMPLETE_PREFIX) {
+        return false;
+    }
     lower.contains("debugger_access_denied:")
         || (lower.contains("cannot access a chrome-extension://")
             && lower.contains("different extension"))
@@ -1611,6 +1617,17 @@ pub(crate) fn load_incomplete_warning(
 /// The `navigation_incomplete:` prefix keeps it out of the generic timeout
 /// rewrite in [`to_ai_friendly_error`], which used to turn it into
 /// "Operation timed out".
+/// The prefix of every `open` that ended without a usable page (#502).
+/// `classify_error` gives it its own code with `retryable: false` before any
+/// generic rule, and `to_ai_friendly_error` passes it through verbatim.
+/// Lowercase, as both compare against a lowercased message.
+pub(crate) const NAVIGATION_INCOMPLETE_PREFIX: &str = "navigation_incomplete:";
+
+/// The words a `navigation_incomplete:` error uses when nothing proves this
+/// navigation committed (always the case over the extension relay, whose
+/// `chrome.tabs.update` names no loader). Lowercase, for the same reason.
+pub(crate) const COMMIT_UNKNOWN_PHRASE: &str = "whether this navigation committed is unknown";
+
 pub(crate) fn navigation_incomplete_error(
     target: &str,
     wait_until: WaitUntil,
@@ -1746,7 +1763,7 @@ pub fn to_ai_friendly_error(error: &str) -> String {
     }
     // Already says what the page is still waiting for (#502); the generic
     // timeout rewrite below would replace that with "Operation timed out".
-    if lower.contains("navigation_incomplete:") {
+    if lower.contains(NAVIGATION_INCOMPLETE_PREFIX) {
         return error.to_string();
     }
     if is_debugger_access_denied(error) {
