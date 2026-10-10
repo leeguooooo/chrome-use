@@ -2771,14 +2771,14 @@ chrome-use hover - Hover over an element
 
 Usage: chrome-use hover <selector>
 
-Moves the real mouse pointer onto the element, the way a user does, so CSS
-:hover styles (captions, dropdown menus) and mouseover/mouseenter handlers
-both respond. Useful for triggering hover states or dropdown menus.
+Moves the real mouse pointer onto the element, the way a user does (trusted
+input, not synthetic DOM events). Useful for triggering hover states or
+dropdown menus.
 
 The element is scrolled into view, then hit-tested: the pointer goes to a
 point where the element itself is on top. After the move chrome-use checks
-whether a trusted pointer event reached the element (the same hit test that
-sets :hover) and reports only that:
+whether a trusted pointer event landed on the element and reports only that
+(it does not inspect CSS styles):
   ✓ Hovered <sel> (pointer confirmed on it)   the element received it
   error "hover refused"                 something covers the element (a
                                         banner, a backdrop); nothing is sent

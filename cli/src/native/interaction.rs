@@ -862,9 +862,9 @@ pub struct HoverOutcome {
     pub dispatch: &'static str,
     /// Where the pointer was put, in top-level viewport CSS pixels.
     pub point: Option<(f64, f64)>,
-    /// True only when the target (or, for a `pointer-events: none` target,
-    /// the ancestor the pointer actually lands on) matched `:hover` after the
-    /// move.
+    /// True only when a trusted pointer/mouse event from the move landed on
+    /// the target or a descendant (or, for a `pointer-events: none` target,
+    /// on the ancestor under the pointer).
     pub verified: bool,
     /// Set whenever the hover is not verified, or landed on an ancestor.
     pub warning: Option<String>,
@@ -964,9 +964,10 @@ const HOVER_HIT_POINT_JS: &str = r#"function() {
 /// applies (`.b:hover` turns the box red) and trusted `pointerover` /
 /// `mouseover` / `mousemove` reach the element, yet `el.matches(':hover')`
 /// and `querySelectorAll(':hover')` evaluated over CDP still answer false /
-/// empty. A check built on them would refuse every hover that worked. A
-/// trusted mouse event targeted at the element is produced by the same hit
-/// test that sets the hover state, and a synthetic event can never fake it.
+/// empty. A check built on them would refuse every hover that worked. What
+/// is checked instead is narrower and directly observable: a trusted
+/// pointer/mouse event from the move landed on the element. A synthetic
+/// event can never satisfy it. It does not inspect any CSS effect.
 ///
 /// The recorder is held by a CDP remote-object handle, not stored on the
 /// page, and stops listening after 10s or when read.
@@ -6208,8 +6209,8 @@ mod hover_tests {
         ));
     }
 
-    /// The false success of #500: the move went out, `:hover` did not
-    /// follow. That has to be an error, never a `✓ Done`.
+    /// The false success of #500: the move went out, no trusted event landed
+    /// on the target. That has to be an error, never a `✓ Done`.
     #[test]
     fn contradicted_hover_is_an_error_naming_what_is_under_the_pointer() {
         let err = hover_outcome(

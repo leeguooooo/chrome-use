@@ -82,7 +82,7 @@
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ hover reports only what the page confirms</div>
         <code>hover</code> scrolls the element into view, finds a point where the element itself is on top, moves
-        the real pointer there, then checks that a trusted pointer event reached the element, the same hit test that sets <code>:hover</code>. Only a confirmed hover prints
+        the real pointer there, then checks that a trusted pointer event landed on the element (it does not inspect CSS styles). Only a confirmed hover prints
         <code>✓ Hovered … (pointer confirmed on it)</code>. A target covered by a banner or backdrop is refused
         (<code>hover refused</code>) and nothing is sent; a move whose events miss the element is an error
         (<code>did not take effect</code>). Inside a cross-origin iframe no real pointer can be placed, so only
