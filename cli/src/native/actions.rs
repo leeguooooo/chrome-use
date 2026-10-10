@@ -12297,20 +12297,7 @@ async fn handle_extract(cmd: &Value, state: &DaemonState) -> Result<Value, Strin
     // Normalize each field to {sel, get, all} so the JS template is uniform.
     let mut norm = serde_json::Map::new();
     for (k, v) in fields {
-        let spec = match v {
-            Value::String(s) => json!({ "sel": s, "get": "text", "all": false }),
-            Value::Object(o) => json!({
-                "sel": o.get("sel").and_then(|x| x.as_str()).unwrap_or(""),
-                "get": o.get("get").and_then(|x| x.as_str()).unwrap_or("text"),
-                "all": o.get("all").and_then(|x| x.as_bool()).unwrap_or(false),
-            }),
-            _ => {
-                return Err(format!(
-                    "extract: field '{k}' must be a css string or {{sel,get,all}} object"
-                ))
-            }
-        };
-        norm.insert(k.clone(), spec);
+        norm.insert(k.clone(), normalize_extract_field(k, v)?);
     }
     let fields_json = serde_json::to_string(&Value::Object(norm)).unwrap_or_default();
     let rows_json = serde_json::to_string(&rows).unwrap_or_else(|_| "null".to_string());
@@ -12343,6 +12330,17 @@ async fn handle_extract(cmd: &Value, state: &DaemonState) -> Result<Value, Strin
     for (const k in FIELDS) o[k] = one(root, FIELDS[k]);
     return o;
   }};
+  // A field selector that is not valid CSS fails on every row, so it is a
+  // schema error, not a page that lacks the data (#504). Checked once,
+  // before any row is read.
+  const invalid = {{}};
+  for (const k in FIELDS) {{
+    const sel = FIELDS[k].sel;
+    if (!sel) continue;
+    try {{ document.createDocumentFragment().querySelector(sel); }}
+    catch (e) {{ invalid[k] = sel; }}
+  }}
+  if (Object.keys(invalid).length) return {{ invalidFields: invalid }};
   // Nearest repeating containers, for the auto-detect fallback + a diagnostic
   // when nothing matched (so `extract` never silently returns []). Signature is
   // tag + first class so it stays a valid selector.
@@ -12396,6 +12394,10 @@ async fn handle_extract(cmd: &Value, state: &DaemonState) -> Result<Value, Strin
         None => mgr.evaluate(&script, None).await?,
     };
 
+    if let Some(invalid) = result.get("invalidFields").and_then(|v| v.as_object()) {
+        return Err(invalid_extract_fields_error(invalid));
+    }
+
     // The script returns { rows, meta }. `extracted` stays the rows array for
     // back-compat; `meta` carries which selector was used (auto-detected or not).
     let rows = result.get("rows").cloned().unwrap_or_else(|| json!([]));
@@ -12429,8 +12431,127 @@ async fn handle_extract(cmd: &Value, state: &DaemonState) -> Result<Value, Strin
              Repeating containers on the page: {nearest}. Retry with one of those as \"rows\", \
              or use `snapshot -i` / `eval`."
         ));
+    } else {
+        // A field that is null in every row is almost always a spec that
+        // reads the wrong place, not data the page lacks (#504: `"@href"`
+        // silently gave null). Name it instead of handing back the nulls.
+        let empty = fields_empty_in_every_row(&rows);
+        if !empty.is_empty() {
+            out["meta"]["emptyFields"] = json!(empty);
+            out["warning"] = json!(format!(
+                "extract: field(s) {} came back empty in all {count} row(s): the selector matched \
+                 nothing there, or the element has no such attribute. A css string reads text; \
+                 \"@href\" reads an attribute of the row element itself; \
+                 {{\"sel\":\"a\",\"get\":\"@href\"}} reads one of a descendant.",
+                empty.join(", ")
+            ));
+        }
     }
     Ok(out)
+}
+
+/// Normalize one `extract` field to `{sel, get, all}` (#504).
+///
+/// A string is a css selector read as text, except `"@attr"`, which reads
+/// that attribute of the row element (or of the document root when there
+/// are no rows). It used to be taken as a css selector, which is invalid,
+/// and the field silently came back null. Anything not understood is
+/// refused here with the forms that are, rather than guessed at.
+fn normalize_extract_field(name: &str, v: &Value) -> Result<Value, String> {
+    const FORMS: &str = "a css string (its text), \"@attr\" (an attribute of the row element), \
+         or {\"sel\": css, \"get\": \"text\"|\"html\"|\"value\"|\"@attr\", \"all\": bool}";
+    let check_get = |get: &str| -> Result<(), String> {
+        match get {
+            "text" | "html" | "value" => Ok(()),
+            g if g.len() > 1 && g.starts_with('@') => Ok(()),
+            other => Err(format!(
+                "extract: field '{name}' has get {other:?}, which extract does not understand; \
+                 use \"text\", \"html\", \"value\" or \"@<attribute>\" (e.g. \"@href\")"
+            )),
+        }
+    };
+    match v {
+        Value::String(s) if s.starts_with('@') => {
+            check_get(s)?;
+            Ok(json!({ "sel": "", "get": s, "all": false }))
+        }
+        Value::String(s) => Ok(json!({ "sel": s, "get": "text", "all": false })),
+        Value::Object(o) => {
+            if let Some(unknown) = o
+                .keys()
+                .find(|k| !matches!(k.as_str(), "sel" | "get" | "all"))
+            {
+                return Err(format!(
+                    "extract: field '{name}' has an unknown key {unknown:?}; a field is {FORMS}"
+                ));
+            }
+            let sel = match o.get("sel") {
+                None => "",
+                Some(Value::String(s)) => s.as_str(),
+                Some(_) => {
+                    return Err(format!(
+                        "extract: field '{name}' \"sel\" must be a css string; a field is {FORMS}"
+                    ))
+                }
+            };
+            let get = match o.get("get") {
+                None => "text",
+                Some(Value::String(s)) => s.as_str(),
+                Some(_) => {
+                    return Err(format!(
+                        "extract: field '{name}' \"get\" must be a string; a field is {FORMS}"
+                    ))
+                }
+            };
+            check_get(get)?;
+            let all = match o.get("all") {
+                None => false,
+                Some(Value::Bool(b)) => *b,
+                Some(_) => {
+                    return Err(format!(
+                        "extract: field '{name}' \"all\" must be true or false; a field is {FORMS}"
+                    ))
+                }
+            };
+            Ok(json!({ "sel": sel, "get": get, "all": all }))
+        }
+        _ => Err(format!("extract: field '{name}' must be {FORMS}")),
+    }
+}
+
+/// The error for field selectors the browser rejects as css (#504).
+fn invalid_extract_fields_error(invalid: &serde_json::Map<String, Value>) -> String {
+    let list = invalid
+        .iter()
+        .map(|(k, v)| format!("'{k}' ({})", v))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "extract: field selector(s) {list} are not valid CSS, so they could never match. \
+         Field selectors are CSS, not descriptions. To read an attribute use \"@href\" (the row \
+         element's) or {{\"sel\":\"a\",\"get\":\"@href\"}} (a descendant's)."
+    )
+}
+
+/// Fields that are null, an empty string or an empty list in every row.
+fn fields_empty_in_every_row(rows: &Value) -> Vec<String> {
+    let Some(rows) = rows.as_array().filter(|r| !r.is_empty()) else {
+        return Vec::new();
+    };
+    let Some(first) = rows[0].as_object() else {
+        return Vec::new();
+    };
+    let empty = |v: Option<&Value>| match v {
+        None | Some(Value::Null) => true,
+        Some(Value::String(s)) => s.is_empty(),
+        Some(Value::Array(a)) => a.is_empty(),
+        _ => false,
+    };
+    first
+        .keys()
+        .filter(|k| rows.iter().all(|r| empty(r.get(k.as_str()))))
+        .cloned()
+        .collect()
 }
 
 async fn handle_errors(state: &DaemonState) -> Result<Value, String> {
@@ -25899,6 +26020,72 @@ mod tests {
 
         assert_eq!(dialog.dialog_type, "confirm");
         assert_eq!(dialog.message, "Delete it?");
+    }
+
+    /// #504: `"@href"` used to be taken as a css selector and silently gave
+    /// null. It reads the row element's attribute now.
+    #[test]
+    fn extract_attr_shorthand_reads_the_row_element() {
+        assert_eq!(
+            normalize_extract_field("url", &json!("@href")).unwrap(),
+            json!({ "sel": "", "get": "@href", "all": false })
+        );
+        assert_eq!(
+            normalize_extract_field("t", &json!(".title")).unwrap(),
+            json!({ "sel": ".title", "get": "text", "all": false })
+        );
+        assert_eq!(
+            normalize_extract_field("u", &json!({ "sel": "a", "get": "@href", "all": true }))
+                .unwrap(),
+            json!({ "sel": "a", "get": "@href", "all": true })
+        );
+        // Omitted keys keep their defaults.
+        assert_eq!(
+            normalize_extract_field("r", &json!({})).unwrap(),
+            json!({ "sel": "", "get": "text", "all": false })
+        );
+    }
+
+    /// Specs extract does not understand are refused with the forms it does,
+    /// never run as something adjacent.
+    #[test]
+    fn extract_refuses_specs_it_does_not_understand() {
+        for (spec, needle) in [
+            (json!("@"), "does not understand"),
+            (json!({ "sel": "a", "get": "href" }), "\"@<attribute>\""),
+            (json!({ "selector": "a" }), "unknown key \"selector\""),
+            (
+                json!({ "sel": "a", "all": "yes" }),
+                "\"all\" must be true or false",
+            ),
+            (json!({ "sel": 3 }), "\"sel\" must be a css string"),
+            (json!(42), "must be a css string"),
+        ] {
+            let err = normalize_extract_field("f", &spec).unwrap_err();
+            assert!(err.contains(needle), "{spec}: {err}");
+        }
+    }
+
+    #[test]
+    fn invalid_field_selectors_are_named_with_the_attribute_forms() {
+        let mut m = serde_json::Map::new();
+        m.insert("url".into(), json!("a::href"));
+        let err = invalid_extract_fields_error(&m);
+        assert!(err.contains("'url'"), "{err}");
+        assert!(err.contains("not valid CSS"), "{err}");
+        assert!(err.contains("\"@href\""), "{err}");
+    }
+
+    #[test]
+    fn fields_empty_in_every_row_are_found() {
+        let rows = json!([
+            { "title": "a", "url": null, "tags": [] , "note": "" },
+            { "title": "b", "url": null, "tags": ["x"], "note": "" },
+        ]);
+        let mut empty = fields_empty_in_every_row(&rows);
+        empty.sort();
+        assert_eq!(empty, vec!["note", "url"]);
+        assert!(fields_empty_in_every_row(&json!([])).is_empty());
     }
 
     /// `--observe` routes by action kind: same-page mutations return a delta,
