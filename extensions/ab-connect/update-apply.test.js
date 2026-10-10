@@ -62,6 +62,10 @@ test('nothing is ever applied under a command, however long it has been quiet', 
     assert.equal(plan.appliesInMs, null)
     assert.ok(plan.commandsInFlight >= 1)
   }
+  // A tab command inside a host command is one command, not two.
+  const one = updateApplyPlan(new Map([[7, { attached: true, inflight: 1 }]]).entries(),
+    { now, lastActivityAt: old, commandsInFlight: 1 })
+  assert.equal(one.commandsInFlight, 1)
 })
 
 test('with nothing attached it applies at once, as before', () => {

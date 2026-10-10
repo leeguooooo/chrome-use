@@ -66,21 +66,24 @@ export function updateApplyPlan(
   tabEntries,
   { now, lastActivityAt = 0, commandsInFlight = 0, graceMs = UPDATE_IDLE_GRACE_MS } = {}
 ) {
-  let inFlight = Math.max(0, Number(commandsInFlight) || 0);
+  const hostInFlight = Math.max(0, Number(commandsInFlight) || 0);
+  let tabInFlight = 0;
   let attachedTabs = 0;
   let reattaching = 0;
   let last = Number.isFinite(lastActivityAt) ? lastActivityAt : 0;
   for (const [, entry] of tabEntries) {
     if (!entry) continue;
-    if (entry.inflight > 0) inFlight += entry.inflight;
+    if (entry.inflight > 0) tabInFlight += entry.inflight;
     if (entry.reattaching) reattaching++;
     if (entry.attached === false) continue;
     attachedTabs++;
     if (Number.isFinite(entry.lastActivity) && entry.lastActivity > last) last = entry.lastActivity;
   }
+  // A tab command runs inside a host command: count it once.
+  const inFlight = Math.max(hostInFlight, tabInFlight + reattaching);
   const idleForMs = Math.max(0, now - last);
-  const base = { commandsInFlight: inFlight + reattaching, attachedTabs, idleForMs, graceMs };
-  if (inFlight > 0 || reattaching > 0)
+  const base = { commandsInFlight: inFlight, attachedTabs, idleForMs, graceMs };
+  if (inFlight > 0)
     return { apply: false, reason: 'command_in_flight', appliesInMs: null, ...base };
   if (attachedTabs === 0) return { apply: true, reason: 'nothing_attached', appliesInMs: 0, ...base };
   if (idleForMs >= graceMs) return { apply: true, reason: 'idle', appliesInMs: 0, ...base };
