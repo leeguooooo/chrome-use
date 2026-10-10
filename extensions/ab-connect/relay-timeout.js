@@ -1,6 +1,24 @@
 export const RELAY_COMMAND_TIMEOUT_MS = 8000
 export const RELAY_TIMEOUT_ERROR_NAME = 'RelayTimeoutError'
 
+// On macOS at load ~250, a click hit the 8s relay timeout while the next
+// get-url command answered in 2s. Give input dispatch room to finish on a busy
+// machine. 25s stays below the CLI's 30s per-CDP-call budget, so the relay can
+// report its own error first. A timed-out input is not replayed: waiting longer
+// does not dispatch it twice.
+export const INPUT_COMMAND_TIMEOUT_MS = 25000
+
+const INPUT_COMMANDS = new Set([
+  'Input.dispatchMouseEvent',
+  'Input.dispatchKeyEvent',
+  'Input.dispatchTouchEvent',
+  'Input.dispatchDragEvent',
+  'Input.emulateTouchFromMouseEvent',
+  'Input.synthesizeTapGesture',
+  'Input.synthesizeScrollGesture',
+  'Input.synthesizePinchGesture',
+])
+
 // A few CDP commands carry a payload the renderer must process character by
 // character, so their cost scales with size rather than being a fixed round
 // trip. `Input.insertText` of 34 KB into a rich editor (ProseMirror) measured
@@ -31,10 +49,11 @@ export const PAYLOAD_MAX_TIMEOUT_MS = 300000
 
 /**
  * Budget for one CDP command. Pure: takes the method and its params, returns
- * milliseconds. Everything without a size-proportional payload keeps the flat
- * budget, so this cannot slow down the failure of an ordinary hung command.
+ * milliseconds. Input dispatch gets a longer flat budget; insertText keeps its
+ * payload scaling. Everything else keeps the ordinary flat budget.
  */
 export function relayCommandBudgetMs(method, params) {
+  if (INPUT_COMMANDS.has(method)) return INPUT_COMMAND_TIMEOUT_MS
   const text = method === 'Input.insertText' ? params?.text : null
   if (typeof text !== 'string' || text.length === 0) return RELAY_COMMAND_TIMEOUT_MS
   const scaled = RELAY_COMMAND_TIMEOUT_MS + text.length * PAYLOAD_MS_PER_BYTE
@@ -59,6 +78,7 @@ const workerStartedAt = Date.now()
 // an `oldest` far past the budget, where a genuinely blocked renderer times out
 // alone (#193).
 const inFlight = new Map()
+const unresolved = new Map()
 let nextCommandId = 1
 
 const recordedTimeouts = []
@@ -78,6 +98,12 @@ export function relayInFlightCount() {
   return inFlight.size
 }
 
+export function relayUnresolvedOperations(now = Date.now()) {
+  let oldest = now
+  for (const entry of unresolved.values()) oldest = Math.min(oldest, entry.startedAt)
+  return { count: unresolved.size, oldestAgeMs: Math.max(0, now - oldest) }
+}
+
 function describeContext(id, now) {
   let oldestStartedAt = now
   for (const entry of inFlight.values()) {
@@ -85,6 +111,7 @@ function describeContext(id, now) {
   }
   const self = inFlight.get(id)
   return {
+    unresolvedOperations: relayUnresolvedOperations(now),
     elapsedMs: now - (self ? self.startedAt : now),
     inFlight: inFlight.size,
     oldestInFlightMs: now - oldestStartedAt,
@@ -100,10 +127,15 @@ export async function withRelayTimeout(
 ) {
   const id = nextCommandId++
   inFlight.set(id, { label, startedAt: Date.now() })
+  unresolved.set(id, { label, startedAt: Date.now() })
+  const underlying = Promise.resolve(operation).then(
+    value => { unresolved.delete(id); return value },
+    error => { unresolved.delete(id); throw error },
+  )
   let timer
   try {
     return await Promise.race([
-      Promise.resolve(operation),
+      underlying,
       new Promise((_, reject) => {
         timer = setTimeout(
           () => {

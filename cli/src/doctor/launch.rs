@@ -44,25 +44,15 @@ pub(super) fn check(checks: &mut Vec<Check>) {
     // launches with the relay up in one user's connect-mode.log). Check the
     // path they do take instead: does the relay answer?
     if crate::connect::relay_url().is_some() {
-        if crate::connect::relay_is_responsive() {
+        let (health, profiles) = crate::connect::relay_health_and_profiles();
+        relay_checks(checks, &health);
+        for warning in crate::connect::duplicate_extension_warnings(&profiles) {
             checks.push(Check::new(
-                "launch.relay",
-                category,
-                Status::Pass,
-                "Extension relay answered; chrome-use drives your own Chrome through it \
-                 (no browser launched for this check)",
+                "relay.duplicate",
+                "Launch test",
+                Status::Warn,
+                warning,
             ));
-        } else {
-            checks.push(
-                Check::new(
-                    "launch.relay",
-                    category,
-                    Status::Warn,
-                    "Extension relay is registered but did not answer within 10s \
-                     (no browser launched for this check)",
-                )
-                .with_fix("chrome-use extension connect   # or reload the ab-connect extension"),
-            );
         }
         return;
     }
@@ -236,6 +226,53 @@ pub(super) fn check(checks: &mut Vec<Check>) {
     }
 }
 
+fn relay_checks(checks: &mut Vec<Check>, health: &crate::connect::RelayHealth) {
+    let mut transport = Check::new(
+        "launch.relay",
+        "Launch test",
+        if health.transport_responsive {
+            Status::Pass
+        } else {
+            Status::Warn
+        },
+        if health.transport_responsive {
+            "relay transport responsive (no browser launched)"
+        } else {
+            "relay transport did not answer (no browser launched)"
+        },
+    );
+    if transport.status == Status::Warn {
+        transport = transport
+            .with_fix("chrome-use extension connect   # or reload the ab-connect extension");
+    }
+    checks.push(transport);
+    if let Some(notice) = health.host_notice() {
+        checks.push(Check::new(
+            "relay.hostDiagnostic",
+            "Launch test",
+            Status::Info,
+            notice,
+        ));
+    }
+    let mut debugger = Check::new(
+        "relay.debugger",
+        "Launch test",
+        if health.debugger_warns() {
+            Status::Warn
+        } else if health.debugger_answered() {
+            Status::Pass
+        } else {
+            Status::Info
+        },
+        health.debugger.clone(),
+    );
+    if debugger.status == Status::Warn {
+        debugger = debugger
+            .with_fix("reload the chrome-use extension at chrome://extensions (or restart Chrome)");
+    }
+    checks.push(debugger);
+}
+
 fn launch_failed(checks: &mut Vec<Check>, e: String) {
     checks.push(
         Check::new(
@@ -316,6 +353,52 @@ mod tests {
     use super::*;
     use crate::native::cdp::chrome::{launch_args_for_test, launches_headless, LaunchOptions};
     use crate::test_utils::EnvGuard;
+
+    #[test]
+    fn passive_relay_checks_classify_observations_and_restore_transport_fix() {
+        for (extension_health, expected) in [
+            (None, Status::Info),
+            (Some(json!({"answered":0,"timedOut":0})), Status::Info),
+            (Some(json!({"answered":4,"timedOut":0})), Status::Pass),
+            (Some(json!({"answered":4,"timedOut":2})), Status::Warn),
+        ] {
+            for responsive in [false, true] {
+                let mut checks = vec![];
+                relay_checks(
+                    &mut checks,
+                    &crate::connect::RelayHealth {
+                        transport_responsive: responsive,
+                        extension_health: extension_health.clone(),
+                        ..Default::default()
+                    },
+                );
+                let transport = checks.iter().find(|c| c.id == "launch.relay").unwrap();
+                assert_eq!(
+                    transport.status,
+                    if responsive {
+                        Status::Pass
+                    } else {
+                        Status::Warn
+                    }
+                );
+                assert_eq!(
+                    transport.fix.as_deref(),
+                    if responsive {
+                        None
+                    } else {
+                        Some("chrome-use extension connect   # or reload the ab-connect extension")
+                    }
+                );
+                let debugger = checks.iter().find(|c| c.id == "relay.debugger").unwrap();
+                assert_eq!(debugger.status, expected);
+                assert_eq!(debugger.fix.is_some(), expected == Status::Warn);
+                assert_eq!(
+                    checks.iter().any(|c| c.id == "relay.hostDiagnostic"),
+                    responsive
+                );
+            }
+        }
+    }
 
     /// The launch options the scratch daemon builds for doctor's
     /// `{"action":"launch","headless":true}` (no extensions in the command),

@@ -27,6 +27,7 @@ mod session_title;
 mod silence;
 mod site;
 mod skills;
+mod system_load;
 mod test_runner;
 #[cfg(test)]
 mod test_utils;
@@ -1150,11 +1151,26 @@ fn run_status(session: &str, json_mode: bool) {
     let host_report = connect::native_host_report();
     let host_installed = !host_report.manifests.is_empty();
     let host_healthy = host_report.is_healthy();
-    let relay_up = connect::relay_is_responsive();
+    let (health, connected_profiles) = connect::relay_health_and_profiles();
+    let relay_up = health.transport_responsive;
+    let mut warnings = connect::duplicate_extension_warnings(&connected_profiles);
+    if health.debugger_warns() {
+        warnings.push(health.debugger.clone());
+    }
     // Printed next to the driving profile below, so it must be that profile's
     // version, not the last `hello` writer's (#319).
     let extension_version = relay_up.then(connect::relay_ext_version_driving).flatten();
     let profile = relay_up.then(connect::driving_profile).flatten();
+    if let Some(live) = extension_version.as_deref() {
+        if connect::classify_ext_version(live, env!("AB_CONNECT_VERSION"), None)
+            == connect::ExtVersionVerdict::AheadOfBundled
+        {
+            warnings.push(connect::newer_extension_hint(
+                live,
+                env!("AB_CONNECT_VERSION"),
+            ));
+        }
+    }
     let current = inventory.sessions.iter().find(|item| item.name == session);
 
     if json_mode {
@@ -1198,6 +1214,9 @@ fn run_status(session: &str, json_mode: bool) {
                     "hostInstalled": host_installed,
                     "hostHealthy": host_healthy,
                     "relayUp": relay_up,
+                    "health": health,
+                    "connectedProfiles": connected_profiles,
+                    "warnings": warnings,
                     "expectedVersion": env!("AB_CONNECT_VERSION"),
                     "liveVersion": extension_version,
                     "profileId": profile_id,
@@ -1222,6 +1241,15 @@ fn run_status(session: &str, json_mode: bool) {
             ""
         }
     );
+    if !health.debugger_warns() {
+        println!("  {}", health.debugger);
+    }
+    for warning in &warnings {
+        println!("WARN {warning}");
+    }
+    if let Some(notice) = health.host_notice() {
+        println!("INFO {notice}");
+    }
     println!(
         "  extension: live {}, expected {}",
         extension_version.as_deref().unwrap_or("unknown"),

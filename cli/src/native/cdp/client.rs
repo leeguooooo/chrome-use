@@ -348,16 +348,19 @@ impl CdpClient {
             Ok(Err(_)) => return Err("CDP response channel closed".to_string()),
             Err(_) => {
                 self.pending.lock().await.remove(&id);
-                return Err(format!(
+                return Err(crate::system_load::annotate_timeout(format!(
                     "CDP command timed out after {}s: {}",
                     budget.as_secs(),
                     method
-                ));
+                )));
             }
         };
 
         if let Some(error) = response.error {
-            return Err(format!("CDP error ({}): {}", method, error));
+            return Err(crate::system_load::annotate_timeout(format!(
+                "CDP error ({}): {}",
+                method, error
+            )));
         }
 
         Ok(response.result.unwrap_or(Value::Null))

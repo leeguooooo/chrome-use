@@ -240,7 +240,13 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use session list` · `session stop [name]` | 管理会话 worker |
 | `chrome-use auth login --bwu [--item <id\|name>]` | 从 Bitwarden 填写当前登录页，处理 TOTP 和支持的 passkey 两步验证 |
 | `chrome-use auth login --bwu --passkey` | 在 `--launch` 浏览器中用 passkey 登录（bwu 0.9.0+） |
-| `chrome-use status` | 中继、profile、扩展与会话健康总览；用最长 10 秒的扩展响应探测验证连接 |
+| `chrome-use status` | 中继传输、近期 debugger 超时、重复扩展、版本偏差与会话健康总览 |
+
+`status`、`extension status` 和 doctor 的中继检查使用一个诊断连接读取 `ABExt.state`，总预算为 10 秒；收到错误回复时，在同一连接上回退到 `ABExt.inspectTab`，不发送 debugger 命令。debugger 摘要被动统计最近十分钟的已回答命令（包括非超时错误）和超时次数；完整窗口显示“in the last 10 min”，否则显示“since the extension worker started <age> ago”；不足 120 秒使用整数秒（如“45s”），否则使用整数分钟（如“3 min”）。没有样本时显示“not exercised”，旧扩展没有健康数据时明确说明。计数使用有界的一秒桶，service worker 重启后清空。命令持续失败时，在 `chrome://extensions` 重新加载 chrome-use 扩展或重启 Chrome。
+
+新原生主机会确认诊断连接并跳过 `attachAll`。仍在运行的旧主机会像以前一样执行一次 `attachAll`；诊断提示会建议升级后重新加载扩展以启动新主机。疑似重复扩展检测读取 sidecar 身份，并发执行最多一秒的 TCP 存活检查，不进行 WebSocket 握手。同账号、同浏览器且扩展 id 不同不能证明属于同一 Chrome profile；只有确认同一 profile 安装了两份时才禁用其中一份。
+
+JSON 健康摘要只包含 `transportResponsive`、`hostDiagnostic`、`debugger` 和 `extensionHealth`（`windowMs`、`workerAgeMs`、`answered`、`timedOut`、`lastTimeout`，或 null），保留 `connectedProfiles` 和 `warnings`。`extension status --json` 的 `relayUp` 仍表示存在中继地址，`status --json` 则表示收到扩展传输回复。旧扩展在有已发布新版时更新扩展；当前扩展比 CLI 预期更新时运行 `chrome-use upgrade`。仅 `installType: development` 表示开发版。macOS/Linux 上 doctor 显示一分钟负载和 CPU 数；负载超过 CPU 数两倍时警告，并在 relay/CDP 超时错误中附带负载提示。
 
 输入框里显示了你的文字，不代表页面已经记下。`fill` 发现表单的保存/提交按钮在填写前后都处于禁用时会警告；
 `click` 拒绝点击禁用的控件，退回到不可信的 `element.click()` 时会报告 `dispatch: dom`；
