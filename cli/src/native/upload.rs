@@ -184,6 +184,7 @@ pub fn mb(bytes: u64) -> String {
 /// the browser's endpoint, so it spans all session daemons.
 pub struct UploadQueue {
     file: std::fs::File,
+    holder_path: PathBuf,
 }
 
 /// What the lock file records about its holder, for a waiter's message.
@@ -238,18 +239,23 @@ impl UploadQueue {
                 ))
             }
         }
-        use std::io::{Seek, Write};
-        let mut f = &file;
-        let _ = f.set_len(0);
-        let _ = f.seek(std::io::SeekFrom::Start(0));
-        let _ = f.write_all(serde_json::to_string(holder).unwrap_or_default().as_bytes());
-        let _ = f.flush();
-        Ok(Some(Self { file }))
+        // The holder note lives beside the lock, not in it: Windows locks are
+        // mandatory, so a waiting process could not read a locked file.
+        let holder_path = Self::holder_path(path);
+        let _ = std::fs::write(
+            &holder_path,
+            serde_json::to_string(holder).unwrap_or_default(),
+        );
+        Ok(Some(Self { file, holder_path }))
+    }
+
+    fn holder_path(path: &Path) -> PathBuf {
+        path.with_extension("holder")
     }
 
     /// Who holds the lock at `path`, if it says.
     pub fn holder(path: &Path) -> Option<QueueHolder> {
-        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+        serde_json::from_str(&std::fs::read_to_string(Self::holder_path(path)).ok()?).ok()
     }
 
     /// Wait for the lock, up to `max_wait`, polling. The daemon keeps sending
@@ -289,7 +295,7 @@ impl UploadQueue {
 
 impl Drop for UploadQueue {
     fn drop(&mut self) {
-        let _ = self.file.set_len(0);
+        let _ = std::fs::remove_file(&self.holder_path);
         let _ = self.file.unlock();
     }
 }
