@@ -5670,7 +5670,10 @@ Core Commands:
                              [--raw --require-md --llms <index|full> --outline --filter <t> --timeout <ms>]
                              --links appends a `## Links` list of the page's links
                              as absolute URLs (first 100, unique; --max-links <n>
-                             up to 1000, and the list says how many it left out)
+                             up to 1000, and the list says how many it left out).
+                             URLs over 2048 bytes are omitted and counted, never cut;
+                             scan, dedup and output are bounded, and a cut makes the
+                             count "at least N" (JSON linksTotalExact: false)
   click <sel|x y>            Click element/@ref, or a viewport coordinate
   dblclick <sel>             Double-click element
   type <sel> <text>          Type into element

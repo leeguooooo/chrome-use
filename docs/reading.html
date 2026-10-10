@@ -266,7 +266,8 @@ URL: https://example.com/login
         （读附近 <code>llms.txt</code> 的索引或完整版）、<code>--outline</code>（只要标题大纲）、
         <code>--filter &lt;text&gt;</code>（只保留匹配的小节/标题）、<code>--timeout &lt;ms&gt;</code>、
         <code>--links</code>（在正文后附一段 <code>## Links</code>，列出页面链接的绝对 URL，去重，默认前 100 个，
-        <code>--max-links &lt;n&gt;</code> 最多 1000，超出时写明还剩多少没列）。
+        <code>--max-links &lt;n&gt;</code> 最多 1000，超出时写明还剩多少没列；超过 2048 字节的 URL 直接省略并计数，不会截断成错误地址；
+        扫描、去重和输出都有上限，触到上限时总数写成「至少 N」）。
         <code>--json</code> 会连同元数据一起返回内容。
       </p>
 

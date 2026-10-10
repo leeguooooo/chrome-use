@@ -270,7 +270,8 @@ URL: https://example.com/login
         outline only), <code>--filter &lt;text&gt;</code> (keep only matching sections/headings),
         <code>--timeout &lt;ms&gt;</code>, and <code>--links</code> (append a <code>## Links</code> section with
         the page's links as absolute URLs, unique, the first 100 by default, <code>--max-links &lt;n&gt;</code> up to
-        1000; a cut list says how many it left out). <code>--json</code> returns metadata alongside the content.
+        1000; a cut list says how many it left out; a URL over 2048 bytes is omitted and counted, never truncated into
+        a different address; scanning, de-duplication and output are bounded, and a cut makes the count "at least N"). <code>--json</code> returns metadata alongside the content.
       </p>
 
       <div class="du-callout note">

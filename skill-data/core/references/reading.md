@@ -35,7 +35,9 @@ chrome-use snapshot -i -s "#main"          # scoped controls
 chrome-use snapshot -i -f "Save|Cancel"    # matching lines and ancestors
 chrome-use snapshot -i -u                  # include link URLs (url=..., first 400 links)
 chrome-use read --links                    # text plus a `## Links` list: [text](absolute url),
-                                           # unique, first 100 (--max-links <n>, up to 1000)
+                                           # unique, first 100 (--max-links <n>, up to 1000);
+                                           # URLs over 2048 bytes are omitted and counted, and
+                                           # a budget cut makes the count a lower bound
 chrome-use get text --main                 # omit surrounding boilerplate
 chrome-use get attr @e1 href
 chrome-use frames                          # discover child frames
