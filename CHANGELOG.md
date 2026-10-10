@@ -1,8 +1,31 @@
 # Changelog
 
-## 1.5.182
+## 1.5.183
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.33 (published on the Chrome Web Store; Chrome updates it automatically).
+
+### Bug Fixes
+
+- **`close` only reports closed tabs that are really gone.** After closing, it checks each tab by its exact Chrome tab id (over the relay through the extension's `tabPresence`, needs 0.5.33) and returns `tabsClosed`, `verifiedAbsent` and `verifiedBy`. A tab still open, or one it cannot confirm, makes it fail with `close incomplete`, listing the tab and keeping the session and its ownership record so a retry works; it never reports `closed: true` for a tab it didn't close. The whole close has one 15 s budget. `tab close` on the session's only tab, when the session created it, ends the session instead of refusing. Adopted and user tabs are never closed. (#496)
+- **A profile with no window is reported as such.** `open` and `extension call` on a profile with no open window fail at once with `profile_not_open` (or `profile_window_unavailable` when the window list can't be read), create nothing and open no window, instead of reporting a stuck daemon after 45 s and leaving attached `about:blank` tabs behind. A first tab that can't be set up is closed again and verified; if that can't be confirmed the error says so and keeps the right to close it later. (#499, fixes #486)
+- **`hover` no longer reports Done for a hover that didn't land.** It scrolls the element into view, finds a point where the element is on top, moves the real pointer there, and succeeds only when a trusted pointer event reaches the element. A covered element, or one inside a transformed frame, is refused before any input is sent. `hover` accepts `--observe` like `click`. (#509, fixes #500; #510, fixes #501)
+- **Refs survive a failed post-action capture.** When only the observation after an action fails (`debugger_access_denied`), the previous refs are kept as unverified and used only after a live identity check, with a `kept_ref_unverified` error (not retryable) otherwise, instead of a misleading "Unknown ref". (#497)
+- **`extract` supports the `"@attr"` shorthand** and refuses specs it cannot read instead of returning a silent null. (#512, fixes #504)
+- **Settle names what kept the page busy.** Requests are dated by when the daemon received them, so requests left over from a previous page no longer count as the new page loading, and the warning names up to three pending requests. (#515, fixes #505)
+
+### Improvements
+
+- **Observations carry more of the page.** On small pages `--observe` returns the whole page (`observed.snapshot`) with a compact change list, plus `observed.text` with visible text that appeared or went away across frames (password and editable content excluded), so a receipt like "Page 2 of 3" or an iframe confirmation is visible without another snapshot. `--no-timing` / `AGENT_BROWSER_TIMING=0` drops the timing block. (#498)
+- **`read --links`** appends the page's links as absolute URLs (100 by default, up to 1000 with `--max-links`), bounded in size and honest about what it left out. (#513, fixes #503)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.182
+
 Requires extension ab-connect 0.5.32 (published on the Chrome Web Store; Chrome updates it automatically).
 
 ### Bug Fixes
@@ -22,7 +45,6 @@ Requires extension ab-connect 0.5.32 (published on the Chrome Web Store; Chrome 
 
 - @Sean529
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.181
 
