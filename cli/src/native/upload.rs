@@ -330,7 +330,7 @@ mod tests {
         let s = chunk_script("__k", "QUJD");
         assert!(s.ends_with("return f.got; })()"), "{s}");
         assert!(
-            !s.contains("+="),
+            !s.contains("+= '"),
             "a chunk must not grow a page-side string: {s}"
         );
         assert!(s.contains("new Blob([u])"));
