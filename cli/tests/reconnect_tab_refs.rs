@@ -965,8 +965,8 @@ fn close_after_an_idle_restart_closes_the_tabs() {
 }
 
 /// The browser is still unreachable when `close` runs: it says the close is
-/// incomplete, closes nothing, keeps the ownership record, and a `close` once
-/// the browser is back closes the tabs.
+/// incomplete, closes nothing, keeps the ownership record and the daemon, and
+/// a `close` once the browser is back closes the tabs.
 #[test]
 fn close_while_the_browser_is_unreachable_never_reports_closed() {
     let (fake, cdp) = Fake::start();
@@ -990,6 +990,13 @@ fn close_while_the_browser_is_unreachable_never_reports_closed() {
         assert!(open.contains(t), "{t} gone while the browser was down");
     }
     assert!(created_record(&d).exists(), "ownership record dropped");
+    // The daemon that knows the tabs stays for the retry. (A daemon exits
+    // shortly after a `close`; give it time to, so this does not race it.)
+    std::thread::sleep(Duration::from_millis(1000));
+    assert!(
+        d.sock_path().exists(),
+        "an incomplete close ended the daemon"
+    );
 
     fake.come_back(false);
     let r = d.send(json!({"id": "z2", "action": "close"}));

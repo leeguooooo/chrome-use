@@ -695,6 +695,17 @@ async fn handle_connection<S>(
                 {
                     is_close = true;
                 }
+                // A `close` that did not complete (`close incomplete`: tabs
+                // still open, their ownership kept) leaves the daemon running.
+                // It still holds the session's tabs and how to reach them, and
+                // the reply tells the caller to retry `close`; exiting would
+                // hand that retry to a fresh daemon that knows neither (#485).
+                if is_close
+                    && !is_handoff
+                    && response.get("success").and_then(|v| v.as_bool()) != Some(true)
+                {
+                    is_close = false;
+                }
 
                 let mut resp = serde_json::to_string(&response).unwrap_or_default();
                 resp.push('\n');
