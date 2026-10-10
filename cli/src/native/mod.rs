@@ -20,6 +20,7 @@ pub mod diff;
 pub mod dom_snapshot;
 #[allow(dead_code)]
 pub mod element;
+pub mod first_tab;
 #[allow(dead_code)]
 pub mod humanize;
 #[allow(dead_code)]

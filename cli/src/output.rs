@@ -2424,6 +2424,17 @@ is automatically prepended.
 
 The `goto` and `navigate` aliases still require a URL.
 
+On your own Chrome (the extension relay) the profile must have a window
+open: chrome-use never opens one itself. With no window, `open` stops with
+`profile not open` (code profile_not_open): open a window in that profile
+first, then rerun. If it cannot tell whether a window is open, it stops with
+`profile window unavailable` (code profile_window_unavailable); unknown
+means nothing is created. Neither is retried automatically. If the first
+tab was created but its setup failed: first_tab_setup_failed means Chrome
+confirms the tab gone (rerun is safe); first_tab_cleanup_incomplete means it
+may still be open, so run `close` in the same session before opening again;
+first_tab_outcome_unknown means Chrome never confirmed the tab.
+
 Global Options:
   --json               Output as JSON
   --session <name>     Use specific session

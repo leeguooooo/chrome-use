@@ -129,6 +129,12 @@ The user is working in the same Chrome. Never use `--activate`, `--front` or
 in front of a window and can bring Chrome over whatever the user is doing.
 Never `tab adopt` a tab the user opened unless they asked you to work in it;
 your own tabs live in a background agent window and that is where you work.
+`profile not open` means the user's Chrome profile has no window: chrome-use
+never opens one. Ask the user to open a window in that profile first, then
+rerun. `profile window unavailable` means it could not tell; unknown means
+nothing is created, so do not retry in a loop. After
+`first_tab_cleanup_incomplete`, run `close` in the same session before
+opening again.
 An empty tab list is not a disconnected browser: read the error before
 restarting anything, and do not escape to `open --launch`.
 After a reconnect your tab ids and labels still name the same tabs. If the

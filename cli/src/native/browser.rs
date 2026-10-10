@@ -14,6 +14,7 @@ use super::cdp::discovery::discover_cdp_url;
 use super::cdp::lightpanda::{launch_lightpanda, LightpandaLaunchOptions, LightpandaProcess};
 use super::cdp::types::*;
 use super::element::{resolve_element_object_id, RefMap};
+use super::first_tab;
 
 /// The daemon's session name, set once at daemon start. Names the Chrome tab
 /// group that abs-created tabs land in when driving the user's real Chrome via
@@ -2416,6 +2417,16 @@ impl BrowserManager {
             capture_console: console_capture_enabled(),
         };
 
+        // First tabs a failed connection could not record (#486) are this
+        // session's: count them as created again, and save them if possible.
+        let unsaved = first_tab::unsaved_for(&ws_url);
+        if !unsaved.is_empty() {
+            manager.created_targets.extend(unsaved.iter().cloned());
+            if manager.persist_created_targets().is_ok() {
+                first_tab::release_unsaved(&unsaved);
+            }
+        }
+
         if direct_page {
             manager.adopted_targets.insert("provider-page".to_string());
             let tab_id = manager.assign_tab_id();
@@ -2717,51 +2728,7 @@ impl BrowserManager {
         let page_targets: Vec<TargetInfo> = self.collect_page_targets().await?;
 
         if page_targets.is_empty() {
-            // Create a new tab
-            let agent_group = self.agent_group();
-            let dedicated_window = self.dedicated_window();
-            let result: CreateTargetResult = self
-                .client
-                .send_command_typed(
-                    "Target.createTarget",
-                    &CreateTargetParams {
-                        url: "about:blank".to_string(),
-                        agent_group,
-                        background: None,
-                        dedicated_window,
-                    },
-                    None,
-                )
-                .await?;
-            // We created this tab — own it so close() can clean it up.
-            self.remember_created_target(&result.target_id);
-
-            let attach_result: AttachToTargetResult = self
-                .client
-                .send_command_typed(
-                    "Target.attachToTarget",
-                    &AttachToTargetParams {
-                        target_id: result.target_id.clone(),
-                        flatten: true,
-                    },
-                    None,
-                )
-                .await?;
-
-            let tab_id = self.next_tab_id;
-            self.next_tab_id += 1;
-            self.pages.push(PageInfo {
-                tab_id,
-                label: None,
-                target_id: result.target_id,
-                session_id: attach_result.session_id.clone(),
-                url: "about:blank".to_string(),
-                title: String::new(),
-                target_type: "page".to_string(),
-            });
-            self.active_page_index = 0;
-            self.pin_active_target();
-            self.enable_domains(&attach_result.session_id).await?;
+            self.open_first_tab().await?;
         } else if self.agent_group().is_some() && !scoped {
             // STRICT MULTI-AGENT ISOLATION fallback (relay, but the group announce
             // didn't take — e.g. an older relay). Without relay-side scoping,
@@ -4061,12 +4028,29 @@ impl BrowserManager {
         if !self.pages.is_empty() {
             return Ok(());
         }
+        self.open_first_tab().await
+    }
+
+    /// The first tab of a session that has none (at connect, or
+    /// `ensure_page`): created, its delete right saved, attached and its
+    /// domains enabled, and only then recorded as the session's page (#486).
+    ///
+    /// Everything runs under [`first_tab::FIRST_TAB_TOTAL_BUDGET`], with
+    /// [`first_tab::FIRST_TAB_CLEANUP_RESERVE`] kept for cleanup. On the relay
+    /// nothing is created unless the profile shows an open window. A tab that
+    /// cannot be recorded or set up is closed and read back; one that is not
+    /// confirmed gone keeps its delete right and is reported as such, never as
+    /// "nothing left behind".
+    async fn open_first_tab(&mut self) -> Result<(), String> {
+        let total = tokio::time::Instant::now() + first_tab::FIRST_TAB_TOTAL_BUDGET;
+        let work = total - first_tab::FIRST_TAB_CLEANUP_RESERVE;
+        self.require_open_profile_window_by(work).await?;
 
         let agent_group = self.agent_group();
         let dedicated_window = self.dedicated_window();
-        let result: CreateTargetResult = self
-            .client
-            .send_command_typed(
+        let created = tokio::time::timeout_at(
+            work,
+            self.client.send_command_typed::<_, CreateTargetResult>(
                 "Target.createTarget",
                 &CreateTargetParams {
                     url: "about:blank".to_string(),
@@ -4075,41 +4059,137 @@ impl BrowserManager {
                     dedicated_window,
                 },
                 None,
-            )
-            .await?;
-        // We created this tab — own it so close() can clean it up.
-        self.remember_created_target(&result.target_id);
+            ),
+        )
+        .await;
+        let target_id = match created {
+            Ok(Ok(result)) => result.target_id,
+            Ok(Err(error)) => return Err(first_tab::create_failure(&error)),
+            Err(_) => {
+                return Err(first_tab::create_failure(
+                    "no answer within the first-tab budget",
+                ))
+            }
+        };
 
-        let attach_result: AttachToTargetResult = self
-            .client
-            .send_command_typed(
-                "Target.attachToTarget",
-                &AttachToTargetParams {
-                    target_id: result.target_id.clone(),
-                    flatten: true,
-                },
-                None,
-            )
-            .await?;
+        // The delete right goes to disk before anything else can fail, so a
+        // later `close` can still find the tab if this daemon goes away.
+        if let Err(error) = self.try_remember_created_target(&target_id) {
+            let cleanup = self.clean_up_first_tab(&target_id, total).await;
+            let cause =
+                format!("saving this session's delete right for its new tab failed ({error})");
+            return Err(match cleanup {
+                first_tab::Cleanup::Gone => {
+                    let _ = self.forget_created_target(&target_id);
+                    format!(
+                        "{}: {cause}, so the tab was closed again and Chrome confirms it is \
+                         gone; nothing is left attached. Fix the session directory, then rerun.",
+                        first_tab::FIRST_TAB_SETUP_FAILED
+                    )
+                }
+                first_tab::Cleanup::NotConfirmed { why, close } => {
+                    // One more try at the record before reporting; failing
+                    // that, this daemon holds the right (see `hold_unsaved`).
+                    let recorded = self.persist_created_targets().is_ok();
+                    if !recorded {
+                        first_tab::hold_unsaved(&self.ws_url, &target_id);
+                    }
+                    first_tab::cleanup_incomplete(&target_id, &cause, &why, &close, recorded)
+                }
+            });
+        }
 
-        let tab_id = self.next_tab_id;
-        self.next_tab_id += 1;
-        self.pages.push(PageInfo {
-            tab_id,
-            label: None,
-            target_id: result.target_id,
-            session_id: attach_result.session_id.clone(),
-            url: "about:blank".to_string(),
-            title: String::new(),
-            target_type: "page".to_string(),
-        });
-        self.active_page_index = 0;
-        // Pin this freshly-created tab (matches `add_page`) so it's a stable
-        // anchor from the first command, not a bare index (issue #14).
-        self.pin_active_target();
-        self.enable_domains(&attach_result.session_id).await?;
+        let setup = async {
+            let attach: AttachToTargetResult = self
+                .client
+                .send_command_typed(
+                    "Target.attachToTarget",
+                    &AttachToTargetParams {
+                        target_id: target_id.clone(),
+                        flatten: true,
+                    },
+                    None,
+                )
+                .await?;
+            self.enable_domains(&attach.session_id).await?;
+            Ok::<String, String>(attach.session_id)
+        };
+        let failed = match tokio::time::timeout_at(work, setup).await {
+            Ok(Ok(session_id)) => {
+                let tab_id = self.next_tab_id;
+                self.next_tab_id += 1;
+                self.pages.push(PageInfo {
+                    tab_id,
+                    label: None,
+                    target_id,
+                    session_id,
+                    url: "about:blank".to_string(),
+                    title: String::new(),
+                    target_type: "page".to_string(),
+                });
+                self.active_page_index = 0;
+                // Pin this freshly-created tab (matches `add_page`) so it's a
+                // stable anchor from the first command (issue #14).
+                self.pin_active_target();
+                return Ok(());
+            }
+            Ok(Err(error)) => error,
+            Err(_) => "setting up the new tab did not finish in time".to_string(),
+        };
+        let cleanup = self.clean_up_first_tab(&target_id, total).await;
+        let recorded = match cleanup {
+            first_tab::Cleanup::Gone => {
+                // A stale entry is harmless (a later close finds it gone), so
+                // a failed rewrite does not change what is reported.
+                let _ = self.forget_created_target(&target_id);
+                true
+            }
+            first_tab::Cleanup::NotConfirmed { .. } => true,
+        };
+        Err(first_tab::setup_failure(
+            &target_id, &failed, &cleanup, recorded,
+        ))
+    }
 
-        Ok(())
+    /// Record `target_id` as created by this session and save the record,
+    /// returning the save's failure (the in-memory right is kept either way).
+    /// Used only by [`Self::open_first_tab`].
+    fn try_remember_created_target(&mut self, target_id: &str) -> Result<(), String> {
+        self.created_targets.insert(target_id.to_string());
+        self.persist_created_targets()
+    }
+
+    /// Close a first tab that could not be kept and read back that it is
+    /// gone, by the same authoritative sources as `close` (#496).
+    async fn clean_up_first_tab(
+        &self,
+        target_id: &str,
+        deadline: tokio::time::Instant,
+    ) -> first_tab::Cleanup {
+        first_tab::close_and_verify(&self.client, self.via_relay(), target_id, deadline).await
+    }
+
+    /// On the relay, refuse before creating a tab unless the profile shows an
+    /// open window (#486). Off the relay (a browser we launched, a plain CDP
+    /// endpoint) creating a target never brings the user's Chrome forward.
+    async fn require_open_profile_window_by(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> Result<(), String> {
+        if !self.via_relay() {
+            return Ok(());
+        }
+        let cap = std::cmp::min(
+            deadline,
+            tokio::time::Instant::now() + first_tab::WINDOW_CHECK_TIMEOUT,
+        );
+        let answer = tokio::time::timeout_at(
+            cap,
+            self.chrome_call("windows", "getAll", json!([{ "windowTypes": ["normal"] }])),
+        )
+        .await
+        .unwrap_or_else(|_| Err("the window check got no answer in time".to_string()));
+        first_tab::profile_window_verdict(answer)
     }
 
     // -----------------------------------------------------------------------
@@ -5531,6 +5611,10 @@ impl BrowserManager {
         }
 
         let target_url = url.unwrap_or("about:blank");
+        self.require_open_profile_window_by(
+            tokio::time::Instant::now() + first_tab::WINDOW_CHECK_TIMEOUT,
+        )
+        .await?;
 
         let agent_group = self.agent_group();
         let dedicated_window = self.dedicated_window();

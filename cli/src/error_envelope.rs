@@ -22,6 +22,32 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
             retryable: false,
         };
     }
+    // Before `timeout` and `connection`: these quote what failed, and each
+    // has its own next step (#486). Only a setup failure whose tab Chrome
+    // confirms gone is safe to simply rerun.
+    for (needle, code, retryable) in [
+        ("profile not open", "profile_not_open", false),
+        (
+            "profile window unavailable",
+            "profile_window_unavailable",
+            false,
+        ),
+        (
+            "first tab outcome unknown",
+            "first_tab_outcome_unknown",
+            false,
+        ),
+        (
+            "first tab cleanup incomplete",
+            "first_tab_cleanup_incomplete",
+            false,
+        ),
+        ("first tab setup failed", "first_tab_setup_failed", true),
+    ] {
+        if lower.contains(needle) {
+            return ErrorMetadata { code, retryable };
+        }
+    }
     if lower.contains("action_outcome_unknown:") {
         return ErrorMetadata {
             code: "action_outcome_unknown",
@@ -158,6 +184,52 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn first_tab_failures_have_their_own_codes() {
+        for (message, code, retryable) in [
+            (
+                crate::native::first_tab::PROFILE_NOT_OPEN.to_string(),
+                "profile_not_open",
+                false,
+            ),
+            (
+                "Auto-launch failed: profile not open: no window".to_string(),
+                "profile_not_open",
+                false,
+            ),
+            (
+                crate::native::first_tab::profile_window_verdict(Ok(serde_json::json!([null])))
+                    .unwrap_err(),
+                "profile_window_unavailable",
+                false,
+            ),
+            (
+                crate::native::first_tab::create_failure("CDP command timed out"),
+                "first_tab_outcome_unknown",
+                false,
+            ),
+            (
+                crate::native::first_tab::cleanup_incomplete("T1", "x", "y", "z", true),
+                "first_tab_cleanup_incomplete",
+                false,
+            ),
+            (
+                crate::native::first_tab::setup_failure(
+                    "T1",
+                    "Page.enable timed out",
+                    &crate::native::first_tab::Cleanup::Gone,
+                    true,
+                ),
+                "first_tab_setup_failed",
+                true,
+            ),
+        ] {
+            let metadata = classify_error(&message);
+            assert_eq!(metadata.code, code, "{message}");
+            assert_eq!(metadata.retryable, retryable, "{message}");
+        }
+    }
 
     #[test]
     fn protected_extension_content_is_not_retryable() {

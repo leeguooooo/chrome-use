@@ -468,6 +468,22 @@ EOF</code></pre>
         它们就各自拥有独立的标签页组、互不干扰。详见 <a href="/sessions.html">会话与并发</a>。
       </div>
 
+      <h2>profile not open / profile window unavailable</h2>
+      <p>
+        在你自己的 Chrome 上（扩展中继），会话的第一个标签页只能放进一个<strong>开着窗口</strong>的 profile。chrome-use
+        从不自己开窗口，因为那会把 Chrome 弹到你面前。所以 profile 没有窗口时，它会停下并报 <code>profile not open</code>
+        （JSON 错误码 <code>profile_not_open</code>）：<strong>先在那个 profile 里打开一个窗口</strong>（在 Chrome 的
+        profile 菜单里选它，或在它里面按 Cmd+N / Ctrl+N），再重跑同一条命令。如果 chrome-use 判断不了有没有窗口（回答缺失、
+        读不懂或自相矛盾），它会报 <code>profile window unavailable</code>（<code>profile_window_unavailable</code>）。
+        判断不了就按“没开”处理：<strong>什么都不创建</strong>。这两个错误都不会自动重试。
+      </p>
+      <p>
+        如果第一个标签页已经建了但没设置成功，错误会说明清理的结果。<code>first_tab_setup_failed</code> 表示 Chrome
+        确认那个标签页已经没了，可以放心重跑。<code>first_tab_cleanup_incomplete</code> 表示它可能还开着（光有关闭确认不算数）。
+        会话保留着删除权，所以再次打开前先在同一个会话里跑 <code>chrome-use close</code>。
+        <code>first_tab_outcome_unknown</code> 表示 Chrome 一直没确认那个标签页，重跑前先在那个 profile 里看看有没有多出来的空白标签页。
+      </p>
+
       <h2>中继与 debugger 健康状态</h2>
       <p><code>status</code>、<code>extension status</code> 和 doctor 的中继检查使用一个诊断连接读取 <code>ABExt.state</code>，总预算为 10 秒；收到错误回复时，在同一连接上回退到 <code>ABExt.inspectTab</code>，不发送 debugger 命令。debugger 摘要被动统计最近十分钟的已回答命令（包括非超时错误）和超时次数；完整窗口显示“in the last 10 min”，否则显示“since the extension worker started &lt;age&gt; ago”；不足 120 秒使用整数秒（如“45s”），否则使用整数分钟（如“3 min”）。没有样本时显示“not exercised”，旧扩展没有健康数据时明确说明。计数使用有界的一秒桶，service worker 重启后清空。命令持续失败时，在 <code>chrome://extensions</code> 重新加载 chrome-use 扩展或重启 Chrome。</p>
       <p>新原生主机会确认诊断连接并跳过 <code>attachAll</code>。仍在运行的旧主机会像以前一样执行一次 <code>attachAll</code>；诊断提示会建议升级后重新加载扩展以启动新主机。疑似重复扩展检测读取 sidecar 身份，并发执行最多一秒的 TCP 存活检查，不进行 WebSocket 握手。同账号、同浏览器且扩展 id 不同不能证明属于同一 Chrome profile；只有确认同一 profile 安装了两份时才禁用其中一份。</p>

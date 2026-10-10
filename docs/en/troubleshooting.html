@@ -501,6 +501,26 @@ EOF</code></pre>
         <a href="/en/sessions.html">Sessions &amp; concurrency</a>.
       </div>
 
+      <h2>profile not open / profile window unavailable</h2>
+      <p>
+        On your own Chrome (the extension relay), a session's first tab can only go into a profile that has a window
+        open. chrome-use never opens a window itself, because that would bring Chrome up in front of you. So with no
+        window it stops with <code>profile not open</code> (JSON code <code>profile_not_open</code>):
+        <strong>open a window in that profile first</strong> (pick it in Chrome's profile menu, or press Cmd+N / Ctrl+N
+        in it), then rerun the same command. If chrome-use cannot tell whether a window is open (the answer is missing,
+        unreadable or contradictory), it stops with <code>profile window unavailable</code>
+        (<code>profile_window_unavailable</code>). Unknown is treated as not open: <strong>nothing is created</strong>.
+        Neither error is retried automatically.
+      </p>
+      <p>
+        When a first tab was created but could not be set up, the error says how its cleanup ended. With
+        <code>first_tab_setup_failed</code>, Chrome confirms the tab is gone and rerunning is safe. With
+        <code>first_tab_cleanup_incomplete</code>, the tab may still be open (a close acknowledgement alone is not
+        proof). The session keeps its delete right, so run <code>chrome-use close</code> in the same session before
+        opening again. With <code>first_tab_outcome_unknown</code>, Chrome never confirmed the tab, so look for a stray
+        blank tab in that profile before rerunning.
+      </p>
+
       <h2>Relay and debugger health</h2>
       <p><code>status</code>, <code>extension status</code>, and doctor's relay check read <code>ABExt.state</code> over one diagnostic connection with a total 10-second budget. An error reply falls back to <code>ABExt.inspectTab</code> on that same connection. They send no debugger commands. The debugger summary passively counts answered commands (including non-timeout errors) and timeouts with “in the last 10 min” for a full reporting window, otherwise “since the extension worker started &lt;age&gt; ago” (whole seconds below 120 seconds, such as “45s”; whole minutes otherwise, such as “3 min”). No samples means “not exercised”; an older extension without health data reports that explicitly. Counts use bounded one-second buckets and reset when the service worker restarts. If commands keep failing, reload the chrome-use extension at <code>chrome://extensions</code> or restart Chrome.</p>
       <p>New native hosts acknowledge diagnostic connections and skip <code>attachAll</code>. A still-running older host performs its usual <code>attachAll</code> once; the diagnostic notice recommends reloading the extension after upgrading to start the new host. Possible duplicate extensions are identified from sidecar identities and concurrent TCP liveness checks with a one-second limit and no WebSocket handshake. Matching account/browser with distinct extension ids does not prove a shared Chrome profile: disable one only if both are installed in the same profile.</p>
