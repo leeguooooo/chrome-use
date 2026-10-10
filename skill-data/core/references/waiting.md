@@ -130,6 +130,10 @@ still be true in a partial observation. If the baseline failed but the after-tre
 was captured, that tree is returned instead of a fabricated diff. Incomplete
 observations include errors and `retryAction:false`: inspect current state rather
 than replaying the action. The command keeps its original action success value.
+When only the post-action capture fails, `observed.refs` says what became of the
+session's refs: `kept-unverified` keeps the previous snapshot's refs, but each
+is checked live (same tab, frame, document and element) before it is used and
+refused otherwise, never re-anchored; `dropped` means run `snapshot -i`.
 For `form fill`, unavailable validation is `errors:null`, not an empty error list.
 
 Action observations include at most 20 request summaries, each capped at 256 UTF-8

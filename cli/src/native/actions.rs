@@ -553,6 +553,13 @@ pub struct DaemonState {
     /// and the observation runs the check after its settle.
     defer_click_tab_check: bool,
     deferred_click_tab_check: Option<DeferredClickTabCheck>,
+    /// The documents the page held right before an observed action, read
+    /// with its baseline. When the post-action capture then fails, the refs
+    /// are kept only against this identity (see `RefMap::kept`); with none
+    /// (a navigation, or the read failed) they are dropped.
+    pre_action_document: Option<super::element::DocumentIdentity>,
+    /// What a failed post-action capture did this command, for the reply.
+    capture_outcome: Option<CaptureOutcome>,
     /// Frame id → the `Referrer-Policy` its document's response header set
     /// (`""` for none), from `Network.responseReceived`. The opt-in link
     /// guard (#468) uses it; a frame missing here has an unknown header policy.
@@ -701,6 +708,8 @@ impl DaemonState {
             last_unconfirmed_tab_switch: None,
             defer_click_tab_check: false,
             deferred_click_tab_check: None,
+            pre_action_document: None,
+            capture_outcome: None,
             document_referrer_policies: HashMap::new(),
             stale_popup_guard: None,
             pending_new_tab_setup: std::collections::HashSet::new(),
@@ -1816,6 +1825,9 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     }
     let before = context(state);
     let mut response = Box::pin(execute_command_inner(cmd, state)).await;
+    if let Some(outcome) = state.capture_outcome.take() {
+        annotate_capture_outcome(&mut response, &outcome);
+    }
     if cmd.get("action").and_then(Value::as_str) == Some("dialog") && state.pending_dialog.is_none()
     {
         disarm_stale_popup_guard(state).await;
@@ -2231,6 +2243,15 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         && state.browser.is_some()
         && !matches!(state.backend_type, BackendType::WebDriver);
     let observe = observe_requested && OBSERVABLE_ACTIONS.contains(&action);
+    // Refs kept from before a failed post-action capture are not fresh
+    // capability: each one this command names must be confirmed live first.
+    if state.ref_map.kept().is_some() {
+        if let Err(e) = Box::pin(verify_kept_refs_of(cmd, state)).await {
+            return error_response(&id, &e);
+        }
+    }
+    state.pre_action_document = None;
+    state.capture_outcome = None;
     // `navigate --observe`: a page swap shares no nodes with the previous tree,
     // so a diff would be 100% removals plus 100% additions — strictly worse than
     // the tree itself, and it pays for two snapshots. Return the fresh
@@ -2260,6 +2281,9 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         } else {
             observe_snapshot_registering(state).await
         };
+        // Which documents the live refs belong to, should the capture after
+        // the action fail (then they are kept only against this).
+        state.pre_action_document = Box::pin(read_active_document(state)).await;
         // Last thing before the action: watch for the mutations it makes
         // while being dispatched, which the settle's own observer, installed
         // afterwards, cannot see (see `settle::settle_armed`).
@@ -11237,6 +11261,120 @@ pub(crate) const NAVIGATION_OBSERVABLE_ACTIONS: &[&str] =
 /// came back "Unknown ref", so the flag cost a round trip and then made you
 /// spend another one on `snapshot` anyway.
 async fn observe_snapshot_registering(state: &mut DaemonState) -> Result<String, String> {
+    let (pre, target_before) = mark_refs_before_capture(state);
+    let result = capture_registering(state).await;
+    let (recaptures, recovery_note) = (0, None);
+    let error = match &result {
+        Ok(_) => return result,
+        Err(e) => e.clone(),
+    };
+    let cause = capture_cause(&error);
+    let target_now = state
+        .browser
+        .as_ref()
+        .and_then(|m| m.active_target_id().ok())
+        .map(ToString::to_string);
+    let keep = keep_refs_after_failed_capture(
+        state.ref_map.has_snapshot(),
+        pre.as_ref(),
+        target_before.as_deref(),
+        target_now.as_deref(),
+    );
+    match keep {
+        Ok(identity) => {
+            state.ref_map.keep_after_failed_capture(identity, &cause);
+            state.capture_outcome = Some(CaptureOutcome::Kept {
+                cause,
+                recaptures,
+                note: recovery_note,
+            });
+        }
+        Err(_) if !state.ref_map.has_snapshot() => state.ref_map.clear(),
+        Err(why) => {
+            state.ref_map.drop_after_failed_capture(&cause, why);
+            state.capture_outcome = Some(CaptureOutcome::Dropped {
+                cause,
+                recaptures,
+                note: recovery_note,
+            });
+        }
+    }
+    result
+}
+
+/// Before a post-action capture: take the pre-action identity (only an
+/// observed same-page action has one, so a navigation's capture never keeps
+/// refs) and mark the live refs unverified now, not after the capture fails:
+/// a command cancelled mid-capture must not leave them looking fresh.
+fn mark_refs_before_capture(
+    state: &mut DaemonState,
+) -> (Option<super::element::DocumentIdentity>, Option<String>) {
+    let pre = state.pre_action_document.take();
+    let target_before = state
+        .browser
+        .as_ref()
+        .and_then(|m| m.active_target_id().ok())
+        .map(ToString::to_string);
+    if let Some(identity) = pre.clone().filter(|_| state.ref_map.has_snapshot()) {
+        state
+            .ref_map
+            .keep_after_failed_capture(identity, "the post-action capture did not finish");
+    }
+    (pre, target_before)
+}
+
+/// Whether the refs survive a failed post-action capture, and against which
+/// document identity. Only for an observed same-page action (`pre` is the
+/// identity read with its baseline) that left the session on the same tab;
+/// a navigation's capture has no `pre`, so its refs are always dropped.
+fn keep_refs_after_failed_capture(
+    has_snapshot: bool,
+    pre: Option<&super::element::DocumentIdentity>,
+    target_before: Option<&str>,
+    target_now: Option<&str>,
+) -> Result<super::element::DocumentIdentity, &'static str> {
+    if !has_snapshot {
+        return Err("no snapshot had run");
+    }
+    let Some(pre) = pre else {
+        return Err("the command may have replaced the document");
+    };
+    if target_before.is_none() || target_before != target_now {
+        return Err("the session is on another tab now");
+    }
+    Ok(pre.clone())
+}
+
+/// What a failed post-action capture did with the refs, for the reply.
+#[derive(Debug, Clone, PartialEq)]
+enum CaptureOutcome {
+    /// Failed; refs kept, unverified.
+    Kept {
+        cause: String,
+        recaptures: u32,
+        note: Option<String>,
+    },
+    /// Failed; refs dropped.
+    Dropped {
+        cause: String,
+        recaptures: u32,
+        note: Option<String>,
+    },
+}
+
+/// A short cause for a failed capture: the error code when it has one.
+fn capture_cause(error: &str) -> String {
+    if super::browser::is_debugger_access_denied(error) {
+        return "post-action capture denied (debugger_access_denied)".to_string();
+    }
+    let first = error.lines().next().unwrap_or(error);
+    let short: String = first.chars().take(160).collect();
+    format!("post-action capture failed: {short}")
+}
+
+/// One interactive snapshot into a copy of the live map, committed only
+/// when it completes: a failed or partial capture never leaves half a map.
+async fn capture_registering(state: &mut DaemonState) -> Result<String, String> {
     let session_id = match state.browser.as_ref().map(|m| m.active_session_id()) {
         Some(Ok(sid)) => sid.to_string(),
         _ => return Err("No active page for observation".into()),
@@ -11262,10 +11400,276 @@ async fn observe_snapshot_registering(state: &mut DaemonState) -> Result<String,
     .await;
     if result.is_ok() {
         state.ref_map = refs;
-    } else {
-        state.ref_map.clear();
     }
     result
+}
+
+/// The documents the active page holds now, with the frames its refs live
+/// in. `None` when it cannot be read.
+async fn read_active_document(state: &DaemonState) -> Option<super::element::DocumentIdentity> {
+    let mgr = state.browser.as_ref()?;
+    let session_id = mgr.active_session_id().ok()?.to_string();
+    super::element::read_document_identity(
+        &mgr.client,
+        &session_id,
+        &state.iframe_sessions,
+        &state.ref_map.ref_frames(),
+    )
+    .await
+    .ok()
+}
+
+/// Refs a command names, in the fields that carry an element.
+fn refs_named_by(cmd: &Value) -> Vec<String> {
+    const FIELDS: &[&str] = &["selector", "ref", "target", "source", "element"];
+    let Some(obj) = cmd.as_object() else {
+        return Vec::new();
+    };
+    let mut refs: Vec<String> = obj
+        .iter()
+        .filter_map(|(k, v)| {
+            let v = v.as_str()?;
+            let t = v.trim();
+            // A bare `e5` only where an element is expected; `@e5` / `ref=e5`
+            // anywhere at the top level.
+            if FIELDS.contains(&k.as_str()) || t.starts_with('@') || t.starts_with("ref=") {
+                super::element::parse_ref(t)
+            } else {
+                None
+            }
+        })
+        .collect();
+    refs.sort();
+    refs.dedup();
+    refs
+}
+
+/// [`super::element::verify_kept_ref`] for every ref `cmd` names.
+async fn verify_kept_refs_of(cmd: &Value, state: &DaemonState) -> Result<(), String> {
+    let refs = refs_named_by(cmd);
+    if refs.is_empty() {
+        return Ok(());
+    }
+    let Some(mgr) = state.browser.as_ref() else {
+        return Ok(());
+    };
+    let session_id = mgr.active_session_id()?.to_string();
+    for r in refs {
+        super::element::verify_kept_ref(
+            &mgr.client,
+            &session_id,
+            &state.iframe_sessions,
+            &state.ref_map,
+            &r,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Say on the reply what a failed post-action capture did: refs kept (and
+/// how they are guarded), dropped, or captured again after a recovery.
+fn annotate_capture_outcome(resp: &mut Value, outcome: &CaptureOutcome) {
+    let (refs, warning) = match outcome {
+        CaptureOutcome::Kept {
+            cause,
+            recaptures,
+            note,
+        } => {
+            let mut w = format!(
+                "{cause}. The action ran once; do not repeat it. Refs from the previous \
+                 snapshot are kept but unverified: each is checked live (same tab, frame, \
+                 document and element) before use and refused otherwise. `snapshot -i` gives \
+                 current refs."
+            );
+            if let Some(n) = note {
+                w.push_str(&format!(" ({n})"));
+            }
+            (
+                json!({"status": "kept-unverified", "from": "previous-snapshot",
+                       "recaptures": recaptures, "cause": cause}),
+                w,
+            )
+        }
+        CaptureOutcome::Dropped {
+            cause,
+            recaptures,
+            note,
+        } => {
+            let mut w = format!(
+                "{cause}. The action ran once; do not repeat it. The previous snapshot's refs \
+                 were dropped because the document could not be shown to be the same. Run \
+                 `snapshot -i`."
+            );
+            if let Some(n) = note {
+                w.push_str(&format!(" ({n})"));
+            }
+            (
+                json!({"status": "dropped", "recaptures": recaptures, "cause": cause}),
+                w,
+            )
+        }
+    };
+    let Some(obj) = resp.as_object_mut() else {
+        return;
+    };
+    if let Some(observed) = obj
+        .get_mut("data")
+        .and_then(|d| d.get_mut("observed"))
+        .and_then(Value::as_object_mut)
+    {
+        observed.insert("refs".into(), refs);
+    }
+    let merged = match obj.get("warning").and_then(Value::as_str) {
+        Some(existing) if !existing.is_empty() => format!("{warning}\n{existing}"),
+        _ => warning,
+    };
+    obj.insert("warning".into(), json!(merged));
+}
+
+#[cfg(test)]
+mod capture_failure_tests {
+    use super::*;
+    use crate::native::element::DocumentIdentity;
+
+    fn doc(loader: &str) -> DocumentIdentity {
+        DocumentIdentity {
+            frames: [("T1".to_string(), loader.to_string())]
+                .into_iter()
+                .collect(),
+            main_frame: "T1".into(),
+        }
+    }
+
+    fn form_refs() -> RefMap {
+        let mut m = RefMap::new();
+        m.begin_snapshot();
+        m.add("e5".into(), Some(55), "textbox", "Email", None);
+        m
+    }
+
+    #[test]
+    fn a_failed_capture_keeps_refs_on_the_same_document_only() {
+        let pre = doc("L1");
+        // Same-page action, same tab: kept, against the pre-action identity.
+        let kept = keep_refs_after_failed_capture(true, Some(&pre), Some("T1"), Some("T1"));
+        assert_eq!(kept, Ok(pre.clone()));
+        // A navigation's capture carries no pre-action identity: dropped.
+        assert!(keep_refs_after_failed_capture(true, None, Some("T1"), Some("T1")).is_err());
+        // The action moved the session to another tab: dropped.
+        assert!(keep_refs_after_failed_capture(true, Some(&pre), Some("T1"), Some("T2")).is_err());
+        assert!(keep_refs_after_failed_capture(true, Some(&pre), None, None).is_err());
+        // Nothing to keep.
+        assert!(keep_refs_after_failed_capture(false, Some(&pre), Some("T1"), Some("T1")).is_err());
+    }
+
+    #[test]
+    fn kept_refs_resolve_on_the_same_document_and_are_cleared_after_a_navigation() {
+        let mut m = form_refs();
+        m.keep_after_failed_capture(doc("L1"), &capture_cause("debugger_access_denied: x"));
+        assert!(m.get("e5").is_some());
+        assert!(m
+            .kept()
+            .unwrap()
+            .identity
+            .check_same(&doc("L1"), None)
+            .is_ok());
+        // The page navigated since: the identity no longer matches.
+        assert!(m
+            .kept()
+            .unwrap()
+            .identity
+            .check_same(&doc("L2"), None)
+            .is_err());
+        // A navigation command clears the map, mark included.
+        m.clear();
+        assert!(m.get("e5").is_none() && m.kept().is_none());
+    }
+
+    /// The live map is marked unverified before the capture starts, so a
+    /// command cancelled (dropped) mid-capture leaves no fresh-looking refs.
+    #[test]
+    fn refs_are_marked_before_the_capture_so_cancellation_leaves_them_unverified() {
+        let mut state = DaemonState::new();
+        state.ref_map = form_refs();
+        state.pre_action_document = Some(doc("L1"));
+        let (pre, _) = mark_refs_before_capture(&mut state);
+        assert_eq!(pre, Some(doc("L1")));
+        // ...the capture would run here; cancelled, it never finishes.
+        let kept = state.ref_map.kept().expect("unverified before the capture");
+        assert!(kept.cause.contains("did not finish"), "{}", kept.cause);
+        assert!(state.ref_map.get("e5").is_some());
+        // A navigation's capture has no pre-action identity: nothing marked.
+        let mut state = DaemonState::new();
+        state.ref_map = form_refs();
+        let (pre, _) = mark_refs_before_capture(&mut state);
+        assert!(pre.is_none() && state.ref_map.kept().is_none());
+    }
+
+    /// No browser, so no tab to confirm: a failed capture drops the refs and
+    /// says why, never keeps them as fresh.
+    #[tokio::test]
+    async fn a_capture_that_cannot_confirm_the_tab_drops_the_refs() {
+        let mut state = DaemonState::new();
+        state.ref_map = form_refs();
+        state.pre_action_document = Some(doc("L1"));
+        assert!(observe_snapshot_registering(&mut state).await.is_err());
+        assert!(state.ref_map.get("e5").is_none());
+        assert!(state.ref_map.kept().is_none());
+        assert!(state
+            .ref_map
+            .unknown_ref_error("e5")
+            .contains("post-action capture failed"));
+        assert!(matches!(
+            state.capture_outcome,
+            Some(CaptureOutcome::Dropped { .. })
+        ));
+    }
+
+    #[test]
+    fn refs_named_by_reads_element_fields_and_explicit_refs_only() {
+        let cmd = json!({"action": "fill", "selector": "e5", "value": "e7"});
+        assert_eq!(refs_named_by(&cmd), vec!["e5".to_string()]);
+        let cmd = json!({"action": "drag", "source": "@e3", "target": "ref=e4", "note": "@e9"});
+        assert_eq!(refs_named_by(&cmd), vec!["e3", "e4", "e9"]);
+        assert!(refs_named_by(&json!({"action": "snapshot"})).is_empty());
+    }
+
+    #[test]
+    fn the_cause_names_the_denial_without_guessing_its_source() {
+        let c = capture_cause("debugger_access_denied: Chrome blocked debugger access");
+        assert_eq!(c, "post-action capture denied (debugger_access_denied)");
+        let c = capture_cause("CDP timeout\nmore");
+        assert_eq!(c, "post-action capture failed: CDP timeout");
+    }
+
+    #[test]
+    fn the_reply_marks_kept_refs_and_says_the_action_ran_once() {
+        let mut resp = json!({"success": true, "data": {"observed": {"status": "unavailable"}}});
+        annotate_capture_outcome(
+            &mut resp,
+            &CaptureOutcome::Kept {
+                cause: capture_cause("debugger_access_denied: x"),
+                recaptures: 0,
+                note: None,
+            },
+        );
+        assert_eq!(
+            resp["data"]["observed"]["refs"]["status"],
+            "kept-unverified"
+        );
+        assert_eq!(
+            resp["data"]["observed"]["refs"]["from"],
+            "previous-snapshot"
+        );
+        let w = resp["warning"].as_str().unwrap();
+        assert!(
+            w.contains("post-action capture denied (debugger_access_denied)"),
+            "{w}"
+        );
+        assert!(w.contains("ran once"), "{w}");
+        assert!(!w.to_lowercase().contains("password"), "{w}");
+    }
 }
 
 /// Capture a baseline without changing refs; preserve failures for the caller.
