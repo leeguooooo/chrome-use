@@ -4356,33 +4356,20 @@ async fn e2e_open_reports_commit_and_candidates_from_evidence() {
     let resp = open_for_e2e(&mut state, "3", &format!("{base}/old")).await;
     assert_success(&resp);
     let resp = open_for_e2e(&mut state, "4", &format!("{base}/hang")).await;
-    // Chrome may hold `Page.navigate` itself until response headers arrive;
-    // either way the old document must not be taken as the new one. With a
-    // loader, the frame tree shows another one: "not committed", an error.
-    // Without one (`Page.navigate` timed out), the commit is unknown and the
-    // old page is usable, so option C reports it as success with
-    // `commit: "unverified"`, naming /old as not the requested page.
-    let err = if resp["success"] == true {
-        let data = get_data(&resp);
-        assert_eq!(data["commit"], "unverified", "{resp}");
-        let w = data["warning"].as_str().unwrap_or("").to_string();
-        assert!(
-            w.contains(&format!(
-                "The tab is on {base}/old, not the requested {base}/hang"
-            )),
-            "{w}"
-        );
-        assert!(!w.contains("this navigation committed"), "{w}");
-        w
-    } else {
-        let err = resp["error"].as_str().unwrap_or("").to_string();
-        assert!(
-            err.contains("has not committed") || err.contains("committed is unknown"),
-            "{err}"
-        );
-        assert!(!err.contains("This navigation committed"), "{err}");
-        err
-    };
+    // Direct CDP: the old document must not be taken as the new one, and it
+    // is not option C either. Chrome may hold `Page.navigate` until response
+    // headers arrive: with a loader, the frame tree shows another one ("not
+    // committed"); if `Page.navigate` timed out, the frame still holds the
+    // loader it had before the open, so the page is provably the previous
+    // document. Both are a non-retryable `navigation_incomplete` error.
+    assert_eq!(resp["success"], false, "{resp}");
+    assert_eq!(resp["code"], "navigation_incomplete", "{resp}");
+    assert_eq!(resp["retryable"], false, "{resp}");
+    let err = resp["error"].as_str().unwrap_or("").to_string();
+    assert!(err.contains("has not committed"), "{err}");
+    assert!(err.contains(&format!("{base}/old")), "{err}");
+    assert!(!err.contains("This navigation committed"), "{err}");
+    assert!(!err.contains("unverified"), "{err}");
     // The tab's address is reported (the browser may already show the
     // pending one), and the elapsed time is the navigation's own, not
     // inflated by the follow-up checks.

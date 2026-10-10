@@ -212,7 +212,9 @@
         page), it also succeeds, with <code>commit: "unverified"</code> and a ⚠ warning. The warning says the
         <code>load</code> event never arrived and that the page could not be confirmed as this request's, and gives
         the tab's real URL and readyState. It may be a redirect, another navigation's page or the previous page, so
-        check <code>get url</code> before relying on it being the page you asked for.
+        check <code>get url</code> before relying on it being the page you asked for. Over a direct CDP connection, a
+        frame that still holds the loader it had before the <code>open</code> is provably the previous document, and
+        that is an error, not a success.
       </p>
       <p>
         Otherwise it fails with <code>navigation_incomplete:</code>, which gives the real elapsed time and

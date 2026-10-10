@@ -2504,7 +2504,8 @@ early or runs out:
     an error page): success with `commit: "unverified"` and a ⚠ warning
     naming the tab's real URL and readyState. It may be another
     navigation's page or the previous one: check `get url` before relying
-    on it being the requested page;
+    on it being the requested page. Over direct CDP, a frame that still
+    holds its pre-navigation loader is the previous document: an error;
   - anything else: error `navigation_incomplete:` with the real elapsed time
     and error, whether this navigation committed (read only from its own
     loader id; over the extension relay, which navigates through the tab API

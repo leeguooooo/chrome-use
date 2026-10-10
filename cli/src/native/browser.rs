@@ -1570,6 +1570,10 @@ pub(crate) enum CommitEvidence {
     Committed { url: String },
     /// The frame still shows another document (the previous one).
     NotCommitted { url: String },
+    /// `Page.navigate` gave no loader, but the frame still holds the very
+    /// loader it had before the navigation: provably the previous document,
+    /// so this navigation never replaced it (direct CDP only).
+    StillPrevious { url: String },
     /// No evidence either way; `url` is what the tab reports, if anything.
     Unknown { url: Option<String> },
 }
@@ -1639,6 +1643,30 @@ fn main_frame_commit(
         }
     }
     committed
+}
+
+/// Whether any main-frame `Page.frameNavigated` for `session_id` (of any
+/// loader) arrived on `rx`, read without waiting; `None` when the receiver
+/// lagged and events were lost, so nothing can be concluded.
+fn main_frame_commit_seen(
+    rx: &mut broadcast::Receiver<CdpEvent>,
+    session_id: &str,
+) -> Option<bool> {
+    let mut seen = false;
+    loop {
+        match rx.try_recv() {
+            Ok(ev) => {
+                if ev.method == "Page.frameNavigated"
+                    && ev.session_id.as_deref() == Some(session_id)
+                    && ev.params.pointer("/frame/parentId").is_none()
+                {
+                    seen = true;
+                }
+            }
+            Err(broadcast::error::TryRecvError::Lagged(_)) => return None,
+            Err(_) => return Some(seen),
+        }
+    }
 }
 
 /// A tab address that is no page: none, an `about:` document (blank,
@@ -1720,6 +1748,10 @@ pub(crate) fn navigation_incomplete_error(
         CommitEvidence::Committed { url } => {
             format!("This navigation committed; the tab is on {url}.")
         }
+        CommitEvidence::StillPrevious { url } => format!(
+            "This navigation has not committed: the page is still the previous document \
+             ({url}); the frame holds the same loader it had before the open."
+        ),
         CommitEvidence::NotCommitted { url } => format!(
             "This navigation has not committed: the frame still shows another document \
              ({url})."
@@ -1845,6 +1877,43 @@ where
     P: std::future::Future<Output = Result<Value, String>>,
     F: std::future::Future<Output = Result<Value, String>>,
 {
+    resolve_incomplete_navigation_after(
+        target,
+        wait_until,
+        budget_ms,
+        elapsed_ms,
+        wait_error,
+        loader_id,
+        None,
+        commit_event,
+        probe,
+        frame_tree,
+    )
+    .await
+}
+
+/// [`resolve_incomplete_navigation`], also given the main frame's loader
+/// from before the navigation (direct CDP only; the relay has no loader
+/// evidence). When this navigation has no loader of its own (its
+/// `Page.navigate` timed out) and the frame still holds that loader, the
+/// document is provably the previous one: an error, never option C.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn resolve_incomplete_navigation_after<P, F>(
+    target: &str,
+    wait_until: WaitUntil,
+    budget_ms: u64,
+    elapsed_ms: u64,
+    wait_error: &str,
+    loader_id: Option<&str>,
+    previous_loader: Option<&str>,
+    commit_event: Option<String>,
+    probe: P,
+    frame_tree: F,
+) -> Result<NavigationContinued, String>
+where
+    P: std::future::Future<Output = Result<Value, String>>,
+    F: std::future::Future<Output = Result<Value, String>>,
+{
     let bound = Duration::from_millis(LOAD_PROGRESS_PROBE_MS);
     let mut unreachable: Option<String> = None;
     let commit = match tokio::time::timeout(bound, frame_tree).await {
@@ -1856,7 +1925,21 @@ where
                 .and_then(Value::as_str)
                 .filter(|u| !u.is_empty())
                 .map(String::from);
-            CommitEvidence::from_frame_tree(&tree, loader_id)
+            let frame = tree.pointer("/frameTree/frame");
+            let current = frame
+                .and_then(|f| f.get("loaderId"))
+                .and_then(Value::as_str);
+            let previous = previous_loader.filter(|l| !l.is_empty());
+            match (loader_id, previous, current) {
+                (None, Some(before), Some(now)) if before == now => CommitEvidence::StillPrevious {
+                    url: frame
+                        .and_then(|f| f.get("url"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                },
+                _ => CommitEvidence::from_frame_tree(&tree, loader_id),
+            }
         }
         _ => CommitEvidence::Unknown { url: None },
     };
@@ -3787,6 +3870,29 @@ impl BrowserManager {
         // `false` when that page is usable but nothing ties it to this
         // navigation; reported as `commit: "unverified"` (#502, option C).
         let mut commit_verified = true;
+        // Direct CDP: the main frame's loader before this navigation, so a
+        // `Page.navigate` that times out can tell a frame still holding the
+        // previous document (an error) from one whose commit is merely
+        // unknown. The relay has no loader evidence, so none is read there.
+        let previous: Option<(String, String)> = if self.on_relay() {
+            None
+        } else {
+            tokio::time::timeout(
+                Duration::from_millis(2_000),
+                self.client
+                    .send_command("Page.getFrameTree", None, Some(&session_id)),
+            )
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .and_then(|t| {
+                let frame = t.pointer("/frameTree/frame")?;
+                let loader = frame.get("loaderId").and_then(Value::as_str)?;
+                let url = frame.get("url").and_then(Value::as_str).unwrap_or("");
+                Some((loader.to_string(), url.to_string()))
+            })
+        };
+        let previous_loader = previous.as_ref().map(|(l, _)| l.clone());
         let nav_started = std::time::Instant::now();
 
         let nav_result: PageNavigateResult = match self
@@ -3844,11 +3950,30 @@ impl BrowserManager {
                 // Elapsed is the navigate call itself; the follow-up checks
                 // are bounded and not counted in it.
                 let elapsed_ms = nav_started.elapsed().as_millis() as u64;
-                // The browser's own record of the tab's address, which needs
-                // no answer from the page, standing in for the frame tree.
+                // Direct CDP: Chrome holds the page's protocol messages while
+                // a navigation is pending, so the frame tree cannot be read
+                // now. But the Page domain reports every main-frame commit,
+                // whichever navigation made it: if none arrived since the
+                // open, the frame still holds the loader read before it, so
+                // the page is provably the previous document (an error, never
+                // option C). A lagged receiver proves nothing.
+                let still_previous = match &previous {
+                    Some((loader, prev_url))
+                        if main_frame_commit_seen(&mut commit_rx, &session_id) == Some(false) =>
+                    {
+                        Some(json!({ "frameTree": { "frame": {
+                            "loaderId": loader, "url": prev_url } } }))
+                    }
+                    _ => None,
+                };
+                // Otherwise the browser's own record of the tab's address,
+                // which needs no answer from the page.
                 let target_id = self.active_target_id().ok();
                 let client = &self.client;
                 let address = async move {
+                    if let Some(tree) = still_previous {
+                        return Ok(tree);
+                    }
                     let tid = target_id.ok_or_else(|| "no active target".to_string())?;
                     let info = client
                         .send_command(
@@ -3863,13 +3988,14 @@ impl BrowserManager {
                         .filter(|u| !u.is_empty());
                     Ok::<Value, String>(json!({ "frameTree": { "frame": { "url": url } } }))
                 };
-                let continued = resolve_incomplete_navigation(
+                let continued = resolve_incomplete_navigation_after(
                     url,
                     wait_until,
                     super::cdp::client::CDP_COMMAND_TIMEOUT.as_millis() as u64,
                     elapsed_ms,
                     &e,
                     None,
+                    previous_loader.as_deref(),
                     None,
                     self.evaluate_simple(LOAD_PROGRESS_JS),
                     address,
@@ -9614,6 +9740,75 @@ mod tests {
         .unwrap();
         assert!(ok.commit_verified);
         assert!(!ok.warning.contains("unverified"), "{ok:?}");
+    }
+
+    /// Any main-frame commit of this session, whatever its loader, means the
+    /// previous document may be gone; none means it is still there; a lagged
+    /// receiver proves nothing (previous_loader evidence after a
+    /// `Page.navigate` timeout).
+    #[test]
+    fn previous_loader_evidence_needs_no_main_frame_commit_since_the_open() {
+        let (tx, _) = broadcast::channel(4);
+        let mut rx = tx.subscribe();
+        assert_eq!(main_frame_commit_seen(&mut rx, "S"), Some(false));
+        let mut child = frame_navigated("S", "L-X", "https://a.example/ad");
+        child.params["frame"]["parentId"] = json!("F");
+        tx.send(child).unwrap();
+        tx.send(frame_navigated("OTHER", "L-Y", "https://b.example/"))
+            .unwrap();
+        assert_eq!(main_frame_commit_seen(&mut rx, "S"), Some(false));
+        tx.send(frame_navigated("S", "L-B", "https://b.example/"))
+            .unwrap();
+        assert_eq!(main_frame_commit_seen(&mut rx, "S"), Some(true));
+        for _ in 0..6 {
+            tx.send(frame_navigated("OTHER", "L", "https://c.example/"))
+                .unwrap();
+        }
+        assert_eq!(main_frame_commit_seen(&mut rx, "S"), None);
+    }
+
+    /// Direct CDP, `Page.navigate` timed out (no loader of its own): a frame
+    /// still holding the loader it had before the open is provably the
+    /// previous document, so even a usable page is an error, never option
+    /// C. A different loader leaves the commit unknown, and option C applies.
+    #[tokio::test]
+    async fn a_frame_still_on_the_previous_loader_is_never_option_c() {
+        let decide_prev = |frame_loader: &'static str, previous: Option<&'static str>| async move {
+            resolve_incomplete_navigation_after(
+                "https://a.example/new",
+                WaitUntil::Load,
+                30_000,
+                30_000,
+                "CDP command timed out: Page.navigate",
+                None,
+                previous,
+                None,
+                async { Ok(shown("complete", "https://a.example/old", 30, 1, &[])) },
+                async move { Ok(tree(frame_loader, "https://a.example/old")) },
+            )
+            .await
+        };
+        let err = decide_prev("L-OLD", Some("L-OLD")).await.unwrap_err();
+        assert!(
+            err.contains("the page is still the previous document (https://a.example/old)"),
+            "{err}"
+        );
+        assert!(!err.contains("unverified"), "{err}");
+        let m = crate::error_envelope::classify_error(&err);
+        assert_eq!(m.code, "navigation_incomplete", "{err}");
+        assert!(!m.retryable);
+
+        // Another loader, or no pre-navigation loader (the relay): unknown.
+        for (frame, previous) in [("L-NEW", Some("L-OLD")), ("L-OLD", None)] {
+            let ok = decide_prev(frame, previous).await.unwrap();
+            assert!(!ok.commit_verified, "{frame} {previous:?}");
+            assert!(
+                ok.warning
+                    .contains("not the requested https://a.example/new"),
+                "{}",
+                ok.warning
+            );
+        }
     }
 
     /// The #373 guard: a denial from either probe is returned as itself,

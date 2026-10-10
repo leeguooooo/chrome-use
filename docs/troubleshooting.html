@@ -200,6 +200,7 @@
         <code>about:blank</code> 或错误页），同样算成功，返回带 <code>commit: "unverified"</code> 和一条 ⚠ 警告。
         警告写明 <code>load</code> 事件没到、无法确认页面来自这次请求，并给出标签页的真实 URL 和 readyState。
         它可能是重定向后的页面、别的导航打开的页面，或者原来的页面，所以要先用 <code>get url</code> 核对，再当成你要的页面用。
+        直接 CDP 连接时，如果框架还是 <code>open</code> 之前的那个 loader，就能证明仍是原来的页面，这时报错，不算成功。
       </p>
       <p>
         其他情况报 <code>navigation_incomplete:</code>，
