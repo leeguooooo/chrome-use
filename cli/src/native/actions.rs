@@ -2086,6 +2086,16 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                 .get("requireMd")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false)));
+    // `adopt` found no tab (#507): the session has no current tab. Refuse
+    // whatever would act on one before anything connects, so nothing is
+    // opened, attached or evaluated on the caller's behalf.
+    if !skip_launch {
+        if let Some(spec) = super::browser::no_current_tab() {
+            if !runs_without_current_tab(action, cmd) {
+                return error_response(&id, &no_current_tab_refusal(action, &spec));
+            }
+        }
+    }
     if !skip_launch {
         // Check if existing connection is stale and needs re-launch.
         // First do a fast, non-blocking check: did the browser process crash/exit?
@@ -2140,7 +2150,8 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             if let Err(e) = auto_launch(state).await {
                 // Nothing was launched: the first tab was refused or failed and
                 // the error says exactly how (#486). Say only that.
-                if super::first_tab::is_first_tab_refusal(&e) {
+                if super::first_tab::is_first_tab_refusal(&e) || super::browser::is_failed_adopt(&e)
+                {
                     return error_response(&id, &e);
                 }
                 return error_response(&id, &format!("Auto-launch failed: {}", e));
@@ -2187,7 +2198,9 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         }
 
         if let Some(ref mut mgr) = state.browser {
-            if mgr.page_count() == 0 {
+            // With no current tab (#507) nothing is opened behind the
+            // caller's back: only `tab new` opens a tab.
+            if mgr.page_count() == 0 && super::browser::no_current_tab().is_none() {
                 let _ = mgr.ensure_page().await;
             }
         }
@@ -2261,6 +2274,8 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             Ok(v) => v,
             Err(e) => return error_response(&id, &e),
         };
+        // An exact handle with --force names the tab: the session has one.
+        super::browser::clear_no_current_tab();
         if note.is_some() {
             if let Ok(new_target) = mgr.active_target_id().map(ToString::to_string) {
                 state.switch_tab_context(old_target.as_deref(), &new_target);
@@ -3307,6 +3322,11 @@ fn should_create_fresh_tab_after_connect(page_count: usize) -> bool {
 /// creating a duplicate. Keep a zero-page fallback for defensive recovery.
 async fn connect_auto_with_fresh_tab() -> Result<BrowserManager, String> {
     let mut mgr = BrowserManager::connect_auto().await?;
+    // No current tab (#507): connect, but open nothing and probe nothing; the
+    // command that follows either opens a tab or is refused.
+    if super::browser::no_current_tab().is_some() {
+        return Ok(mgr);
+    }
     if should_create_fresh_tab_after_connect(mgr.page_count()) {
         // tab_new creates the tab in the background (CreateTargetParams.background),
         // so attaching to the user's Chrome never steals their foreground tab.
@@ -3362,6 +3382,7 @@ async fn connect_auto_with_fresh_tab() -> Result<BrowserManager, String> {
 fn is_final_relay_refusal(error: &str) -> bool {
     error.contains("could not open the background agent window")
         || super::first_tab::is_first_tab_refusal(error)
+        || super::browser::is_failed_adopt(error)
 }
 
 async fn retry_relay_connect_after_wait(mut last_err: String) -> Result<BrowserManager, String> {
@@ -6617,6 +6638,7 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     state.ref_map.clear();
     state.tab_states.clear();
     state.lost_driving_tab = None;
+    super::browser::clear_no_current_tab();
     state.carried_tabs = None;
     // The session ends here, so its carried tab ids must not come back. If
     // their record cannot be removed, say so rather than report a clean close.
@@ -15617,8 +15639,32 @@ fn end_lost_tab_refusal_on_ok(
 ) -> Result<Value, String> {
     if result.is_ok() {
         state.lost_driving_tab = None;
+        super::browser::clear_no_current_tab();
     }
     result
+}
+
+/// Whether `action` may run while the session has no current tab (#507):
+/// it lists tabs, opens one, names one explicitly (`tab <id>`, `adopt`,
+/// `--tab <handle> --force`) or closes one it names. Anything that would act
+/// on "the current tab" may not.
+fn runs_without_current_tab(action: &str, cmd: &Value) -> bool {
+    match action {
+        "tab_list" | "tab_new" | "tab_adopt" | "tab_switch" | "tab_inspect" => true,
+        "tab_close" => cmd
+            .get("tabId")
+            .and_then(Value::as_str)
+            .is_some_and(|t| !t.is_empty()),
+        _ => cmd.get("forceTab").and_then(Value::as_bool) == Some(true),
+    }
+}
+
+fn no_current_tab_refusal(action: &str, spec: &str) -> String {
+    format!(
+        "no current tab: `adopt {spec}` found no matching tab, so `{action}` was not run on any \
+         tab. {}",
+        super::browser::NO_CURRENT_TAB_NEXT
+    )
 }
 
 /// Put `note` in front of a reply's warning.
@@ -23873,6 +23919,58 @@ fn error_response(id: &str, error: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
+    /// #507: with no current tab only listing, opening, naming or closing a
+    /// named tab runs; everything that acts on "the current tab" is refused.
+    #[test]
+    fn no_current_tab_lets_through_only_what_names_or_opens_a_tab() {
+        use serde_json::json;
+        for action in [
+            "tab_list",
+            "tab_new",
+            "tab_adopt",
+            "tab_switch",
+            "tab_inspect",
+        ] {
+            assert!(
+                super::runs_without_current_tab(action, &json!({})),
+                "{action}"
+            );
+        }
+        assert!(super::runs_without_current_tab(
+            "tab_close",
+            &json!({"tabId": "t2"})
+        ));
+        assert!(!super::runs_without_current_tab("tab_close", &json!({})));
+        for action in [
+            "eval",
+            "click",
+            "snapshot",
+            "navigate",
+            "url",
+            "title",
+            "fill",
+            "screenshot",
+        ] {
+            assert!(
+                !super::runs_without_current_tab(action, &json!({})),
+                "{action}"
+            );
+        }
+        assert!(super::runs_without_current_tab(
+            "eval",
+            &json!({"tab": "chrome-tab:7", "forceTab": true})
+        ));
+        let msg = super::no_current_tab_refusal("eval", "x.example");
+        assert!(
+            msg.starts_with("no current tab: `adopt x.example`"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("tab new <url>") && msg.contains("--force"),
+            "{msg}"
+        );
+    }
+
     /// #373: the pre-check covers the commands the recovery will not repeat,
     /// and the commands that act at the current focus keep it.
     #[test]

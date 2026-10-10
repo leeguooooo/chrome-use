@@ -1,3 +1,6 @@
+// The daemon's command future nests deeply enough (connect -> discovery ->
+// reqwest) that proving it `Send` passes the default limit of 128.
+#![recursion_limit = "256"]
 mod account;
 mod autologin;
 mod bwu_login;
