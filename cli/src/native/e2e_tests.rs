@@ -4356,7 +4356,18 @@ async fn e2e_open_reports_commit_and_candidates_from_evidence() {
         "{err}"
     );
     assert!(!err.contains("This navigation committed"), "{err}");
-    assert!(err.contains(&format!("{base}/old")), "{err}");
+    // The tab's address is reported (the browser may already show the
+    // pending one), and the elapsed time is the navigation's own, not
+    // inflated by the follow-up checks.
+    assert!(err.contains(&format!("{base}/")), "{err}");
+    let after = err.split("ended after ").nth(1).unwrap_or("");
+    let secs: f64 = after
+        .split('s')
+        .next()
+        .unwrap_or("0")
+        .parse()
+        .unwrap_or(999.0);
+    assert!(secs < 35.0, "{err}");
 
     // 3. A cleared timing buffer: the stylesheet that finished has no record
     //    and is listed only as a candidate; the page itself is usable.

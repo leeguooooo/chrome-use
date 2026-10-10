@@ -3646,14 +3646,50 @@ impl BrowserManager {
                         relay_fallback: None,
                     }
                 } else {
-                    let tab = self.get_url().await.ok().filter(|u| !u.is_empty());
+                    // Elapsed is the navigate call itself; the follow-up
+                    // checks are bounded and not counted in it.
+                    let elapsed_ms = nav_started.elapsed().as_millis() as u64;
+                    let bound = Duration::from_millis(LOAD_PROGRESS_PROBE_MS);
+                    let progress =
+                        match tokio::time::timeout(bound, self.evaluate_simple(LOAD_PROGRESS_JS))
+                            .await
+                        {
+                            Ok(Ok(v)) => Some(LoadProgress::from_value(&v)),
+                            _ => None,
+                        };
+                    // The browser's own record of the tab's address, which
+                    // needs no answer from the page.
+                    let target_url = match self.active_target_id() {
+                        Ok(tid) => tokio::time::timeout(
+                            bound,
+                            self.client.send_command(
+                                "Target.getTargetInfo",
+                                Some(json!({ "targetId": tid })),
+                                None,
+                            ),
+                        )
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok())
+                        .and_then(|v| {
+                            v.pointer("/targetInfo/url")
+                                .and_then(Value::as_str)
+                                .map(String::from)
+                        }),
+                        Err(_) => None,
+                    };
+                    let tab = progress
+                        .as_ref()
+                        .map(|p| p.url.clone())
+                        .filter(|u| !u.is_empty())
+                        .or(target_url);
                     return Err(navigation_incomplete_error(
                         url,
                         wait_until,
-                        nav_started.elapsed().as_millis() as u64,
+                        elapsed_ms,
                         super::cdp::client::CDP_COMMAND_TIMEOUT.as_millis() as u64,
                         &e,
-                        None,
+                        progress.as_ref(),
                         &CommitEvidence::Unknown { url: tab },
                     ));
                 }
