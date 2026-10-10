@@ -363,6 +363,19 @@ test('no onUpdateAvailable at all: the periodic check finds the update and it ap
   assert.deepEqual(w.calls.disturbing, [])
 })
 
+test('the state says when the running version arrived, and from which', async () => {
+  const w = worker({ storage: { ab_installed: { version: '0.5.35', at: 10_000_000 - 3_600_000, reason: 'update', previousVersion: '0.5.34' } } })
+  await w.advance(0)
+  const s = w.state()
+  assert.equal(s.installed.version, '0.5.35')
+  assert.equal(s.installed.previousVersion, '0.5.34')
+  assert.equal(s.installed.ageMs, 3_600_000)
+  // A record left by another version says nothing about this one.
+  const old = worker({ storage: { ab_installed: { version: '0.5.34', at: 1, reason: 'update' } } })
+  await old.advance(0)
+  assert.equal(old.state().installed, null)
+})
+
 test('a failing update check is reported, not hidden', async () => {
   const w = worker()
   w.context.chrome.runtime.requestUpdateCheck = async () => { throw new Error('no update url') }

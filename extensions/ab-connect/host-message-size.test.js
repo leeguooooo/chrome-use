@@ -16,7 +16,9 @@ import {
   utf8Length,
 } from './host-message-size.js'
 
-const CHROME_ERROR = 'Message length exceeded maximum allowed length.'
+// What Chrome for Testing 155 throws, measured on the 190 rig with a 70 MiB
+// postMessage (63 MiB went through).
+const CHROME_ERROR = 'Message exceeded maximum allowed size of 64MiB.'
 
 test('the limit is Chrome\'s 64 MiB', () => {
   assert.equal(NATIVE_MESSAGE_LIMIT_BYTES, 67108864)
@@ -24,6 +26,7 @@ test('the limit is Chrome\'s 64 MiB', () => {
 
 test('only Chrome\'s size refusal counts as too large', () => {
   assert.equal(isMessageTooLargeError(new Error(CHROME_ERROR)), true)
+  assert.equal(isMessageTooLargeError(new Error('Message length exceeded maximum allowed length.')), true)
   assert.equal(isMessageTooLargeError('Message too large'), true)
   assert.equal(isMessageTooLargeError(new Error('Attempting to use a disconnected port object')), false)
   assert.equal(isMessageTooLargeError(undefined), false)

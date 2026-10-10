@@ -2129,6 +2129,17 @@ chrome.runtime.onInstalled.addListener((details) => {
   // tabs are live agent tabs of a session that continues, so they stay owned.
   if (details && (details.reason === 'update' || details.reason === 'install')) {
     void settleOwnershipAfterInstall(details.reason);
+    // When this version arrived, for `doctor` (#524): "updated 3 h ago from
+    // 0.5.34" tells a stuck update from one that never came.
+    installRecord = {
+      version: chrome.runtime.getManifest().version,
+      at: Date.now(),
+      reason: details.reason,
+      previousVersion: details.previousVersion ?? null,
+    };
+    try {
+      void chrome.storage.local.set({ [INSTALL_RECORD_KEY]: installRecord }).catch(() => {});
+    } catch {}
   }
   void whenReady(connectHost);
 });
@@ -2170,6 +2181,19 @@ chrome.runtime.onStartup.addListener(() => void whenReady(connectHost));
 let lastUpdateCheckAt = 0;
 // The last chrome.runtime.requestUpdateCheck: {at, status, version?, error?}.
 let lastUpdateCheck = null;
+// When the running version was installed or updated to (0.5.35+ records it).
+const INSTALL_RECORD_KEY = 'ab_installed';
+let installRecord = null;
+try {
+  chrome.storage.local
+    .get(INSTALL_RECORD_KEY)
+    .then((g) => {
+      const r = g?.[INSTALL_RECORD_KEY];
+      // onInstalled may already have written a newer one.
+      if (!installRecord && r && r.version === chrome.runtime.getManifest().version) installRecord = r;
+    })
+    .catch(() => {});
+} catch {}
 let updatePending = false;
 let updateVersion = null;
 let updatePendingSince = 0;
@@ -2209,6 +2233,10 @@ function updateStateSnapshot() {
     lastCheck: lastUpdateCheck && {
       ...lastUpdateCheck,
       ageMs: Date.now() - lastUpdateCheck.at,
+    },
+    installed: installRecord && {
+      ...installRecord,
+      ageMs: Date.now() - installRecord.at,
     },
   };
 }

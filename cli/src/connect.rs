@@ -2789,6 +2789,13 @@ fn extension_update_from_state(state: &serde_json::Value) -> Option<serde_json::
                 "error": c.get("error").cloned().unwrap_or(serde_json::Value::Null),
                 "ageMs": c.get("ageMs").cloned().unwrap_or(serde_json::Value::Null),
             })),
+            // When the running version arrived, and from which (0.5.35+).
+            "installed": update.get("installed").filter(|v| v.is_object()).map(|c| json!({
+                "version": c.get("version").cloned().unwrap_or(serde_json::Value::Null),
+                "reason": c.get("reason").cloned().unwrap_or(serde_json::Value::Null),
+                "previousVersion": c.get("previousVersion").cloned().unwrap_or(serde_json::Value::Null),
+                "ageMs": c.get("ageMs").cloned().unwrap_or(serde_json::Value::Null),
+            })),
         }));
     }
     let pending = state.get("updatePending")?.as_bool()?;
@@ -2807,18 +2814,36 @@ fn seconds(ms: u64) -> String {
 /// tells "Chrome never found an update" from "one is waiting". `None` when
 /// the extension predates reporting it.
 pub fn update_check_summary(update: Option<&serde_json::Value>) -> Option<String> {
-    let check = update?.get("lastCheck").filter(|v| v.is_object())?;
-    let ago = check
-        .get("ageMs")
-        .and_then(|v| v.as_u64())
-        .map(|ms| {
-            if ms < 120_000 {
-                format!("{}s ago", ms / 1000)
-            } else {
-                format!("{} min ago", ms / 60_000)
-            }
-        })
-        .unwrap_or_else(|| "at an unknown time".into());
+    let update = update?;
+    let ago = |v: Option<&serde_json::Value>| {
+        v.and_then(|v| v.as_u64())
+            .map(|ms| match ms {
+                ms if ms < 120_000 => format!("{}s ago", ms / 1000),
+                ms if ms < 120 * 60_000 => format!("{} min ago", ms / 60_000),
+                ms if ms < 48 * 3_600_000 => format!("{} h ago", ms / 3_600_000),
+                ms => format!("{} days ago", ms / 86_400_000),
+            })
+            .unwrap_or_else(|| "at an unknown time".into())
+    };
+    // When the running version arrived: a Chrome that has sat on it for days
+    // while a newer one is published is the case #524 is about.
+    let installed = update.get("installed").filter(|v| v.is_object()).map(|i| {
+        let s = |k: &str| i.get(k).and_then(|v| v.as_str());
+        let from = match (s("reason"), s("previousVersion")) {
+            (Some("update"), Some(prev)) => format!(" (updated from {prev})"),
+            (Some("install"), _) => " (installed fresh)".to_string(),
+            _ => String::new(),
+        };
+        format!(
+            "extension {} arrived {}{from}",
+            s("version").unwrap_or("?"),
+            ago(i.get("ageMs"))
+        )
+    });
+    let Some(check) = update.get("lastCheck").filter(|v| v.is_object()) else {
+        return installed;
+    };
+    let ago = ago(check.get("ageMs"));
     let status = check
         .get("status")
         .and_then(|v| v.as_str())
@@ -2843,9 +2868,11 @@ pub fn update_check_summary(update: Option<&serde_json::Value>) -> Option<String
         ),
         other => other.to_string(),
     };
-    Some(format!(
-        "extension update check: last asked Chrome {ago}: {detail}"
-    ))
+    let check = format!("extension update check: last asked Chrome {ago}: {detail}");
+    Some(match installed {
+        Some(installed) => format!("{installed}; {check}"),
+        None => check,
+    })
 }
 
 /// What to say about a pending update, or `None` when there is none.
@@ -4465,6 +4492,21 @@ mod tests {
                 .as_ref()
         )
         .is_none());
+        // With the time the running version arrived.
+        let both = extension_update_from_state(&json!({"update": {"pending": false,
+            "installed": {"version": "0.5.35", "reason": "update", "previousVersion": "0.5.34",
+                          "at": 1, "ageMs": 3 * 3_600_000},
+            "lastCheck": {"status": "no_update", "ageMs": 1_200_000}}}));
+        assert_eq!(
+            update_check_summary(both.as_ref()).as_deref(),
+            Some("extension 0.5.35 arrived 3 h ago (updated from 0.5.34); extension update check: last asked Chrome 20 min ago: no update published beyond the installed version")
+        );
+        let only = extension_update_from_state(&json!({"update": {"pending": false,
+            "installed": {"version": "0.5.35", "reason": "install", "ageMs": 3 * 86_400_000}}}));
+        assert_eq!(
+            update_check_summary(only.as_ref()).as_deref(),
+            Some("extension 0.5.35 arrived 3 days ago (installed fresh)")
+        );
         assert!(update_check_summary(
             extension_update_from_state(&json!({"updatePending": false})).as_ref()
         )

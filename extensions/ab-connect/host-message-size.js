@@ -1,7 +1,9 @@
 // A reply too large for the native-messaging port (#530).
 //
 // Chrome refuses one extension message over 64 MiB: `port.postMessage` throws
-// ("Message length exceeded maximum allowed length."). The worker used to
+// ("Message exceeded maximum allowed size of 64MiB." on Chrome for Testing
+// 155, measured on the 190 rig; older builds said "Message length exceeded
+// maximum allowed length."). The worker used to
 // swallow that as "the port died", so the reply never arrived and the CLI
 // waited out its command timeout with no explanation. Instead, the caller now
 // gets an error reply that names the limit, at once.
@@ -17,7 +19,9 @@ export const REPLY_TOO_LARGE = 'reply_too_large';
 /** Whether a postMessage failure is Chrome refusing the message's size. */
 export function isMessageTooLargeError(error) {
   const text = String((error && error.message) || error || '');
-  return /exceeded maximum allowed length|message (?:is )?too (?:large|long)/i.test(text);
+  return /exceeded (?:the )?maximum allowed (?:length|size)|message (?:is )?too (?:large|long|big)/i.test(
+    text
+  );
 }
 
 /** UTF-8 byte length of a string, without allocating its encoding. */
