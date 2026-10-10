@@ -44,7 +44,10 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
 
 1. Copy refs exactly from the latest snapshot or observation; never guess or
    renumber them. Navigation and tab switches reset refs. When a ref errors
-   or a control is newly rendered, discover it again.
+   or a control is newly rendered, discover it again. If an action's
+   post-action capture failed, `observed.refs: kept-unverified` means its old
+   refs are checked live before use and refused if anything changed: run
+   `snapshot -i`, and do not repeat the action.
 2. Pair actions with `--observe` and read `observed.status`. A separate
    snapshot after every click is unnecessary. Inside `batch`, write it on the
    step: `batch "fill @e1 Ada" "click @e2 --observe"`. `status: complete`

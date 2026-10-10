@@ -5238,7 +5238,9 @@ Per-step flags:
   line, and they apply to that step only: --observe, --no-settle,
   --settle-ms <ms>, --with-screenshot <path>, --if-present/--optional,
   --new-tab, --tab <t>, --tab-label <l>. With --json, an observed step's
-  "result" carries its "observed" payload.
+  "result" carries its "observed" payload. A step whose post-action capture
+  failed carries observed.refs (kept-unverified or dropped); a later step
+  using a kept ref is refused unless it is confirmed live, never re-anchored.
     chrome-use batch "fill @e1 Ada" "click @e2 --observe" "get text body"
   Flags that configure the whole session (--headed, --profile, --session, ...)
   cannot change mid-batch; a step carrying one is refused. Put them before
@@ -6056,6 +6058,10 @@ Options:
                              reload, back, forward (fresh tree); also per batch step.
                              Observation status is separate from action success;
                              partial/unavailable results must not trigger action replay.
+                             If only the post-action capture failed, observed.refs
+                             says kept-unverified (old refs checked live for the same
+                             tab/frame/document/element before use, refused otherwise,
+                             never re-anchored) or dropped; run snapshot -i.
                              status=complete means the capture is complete, not that
                              the task is: wait for the page's own final signal.
                              Successful same-context connection reuse preserves the
