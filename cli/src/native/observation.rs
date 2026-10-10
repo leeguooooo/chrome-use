@@ -636,22 +636,26 @@ pub(super) fn changes(
 /// (`isContentEditable`: the editable host, everything inside it, and the
 /// whole document under `designMode`) are skipped with their subtrees. Open
 /// shadow roots are walked through their slots; frames are read separately.
-/// Lines that contain the current value of a password field anywhere in this
-/// document (open shadow roots included) are dropped as well, so a page that
-/// reflects a password into its own text does not leak it. A password from
-/// another frame is not known to this frame's reader.
 ///
-/// Errors are not caught: an exception reaches the caller as one, never as an
-/// empty page. Output is capped (`truncated` says so).
-pub(super) const OBSERVE_TEXT_JS: &str = r#"(function(){
-var LIMIT=131072,MAX_NODES=60000,out=[],len=0,nodes=0,truncated=false,pw=[];
+/// It also reports whether any password field in the document (open shadow
+/// roots included) holds a value, and whether that scan finished. The values
+/// themselves never leave the page: when any frame on either side of the
+/// action has one, or could not be scanned, no text lines are returned at all
+/// (see [`text_diff`]), since a page may copy a password into any frame's text.
+///
+/// The scan and the walk share one node budget and one deadline
+/// (`__DEADLINE_MS__`, filled in per read). Errors are not caught: an
+/// exception reaches the caller as one, never as an empty page.
+const OBSERVE_TEXT_JS: &str = r#"(function(){
+var DEADLINE=Date.now()+__DEADLINE_MS__,LIMIT=131072,MAX_NODES=100000,out=[],len=0,nodes=0,truncated=false,scanned=true,pw=[];
 var SKIP={SCRIPT:1,STYLE:1,NOSCRIPT:1,TEMPLATE:1,TEXTAREA:1,INPUT:1,SELECT:1,OPTION:1,OPTGROUP:1,DATALIST:1,IFRAME:1,FRAME:1,OBJECT:1,EMBED:1,HEAD:1};
+function spent(){nodes++;return nodes>MAX_NODES||((nodes&255)===0&&Date.now()>DEADLINE)}
 function push(s){if(truncated)return;if(len+s.length>LIMIT){truncated=true;return}out.push(s);len+=s.length}
-function scan(root){var w=document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT),n;while((n=w.nextNode())){if(n.tagName==='INPUT'&&n.type==='password'&&n.value)pw.push(n.value);if(n.shadowRoot)scan(n.shadowRoot)}}
+function scan(root){var w=document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT),n;while((n=w.nextNode())){if(spent()){scanned=false;return}if(n.tagName==='INPUT'&&n.type==='password'&&n.value)pw.push(n.value);if(n.shadowRoot){scan(n.shadowRoot);if(!scanned)return}}}
 function kids(list,vis){for(var i=0;i<list.length&&!truncated;i++)walk(list[i],vis)}
 function walk(node,vis){
 if(truncated)return;
-if(++nodes>MAX_NODES){truncated=true;return}
+if(spent()){truncated=true;return}
 if(node.nodeType===3){if(vis){var t=node.data.replace(/\s+/g,' ');if(t.trim())push(t)}return}
 if(node.nodeType===11){kids(node.childNodes,vis);return}
 if(node.nodeType!==1)return;
@@ -667,17 +671,24 @@ else kids((el.shadowRoot||el).childNodes,v);
 if(block)push(sep)}
 scan(document);
 var root=document.body||document.documentElement;
-if(root&&!(document.designMode==='on'))walk(root,true);
+if(scanned&&root&&!(document.designMode==='on'))walk(root,true);
 var lines=out.join('').split('\n').map(function(l){return l.replace(/\s+/g,' ').trim()}).filter(function(l){
 if(!l)return false;for(var k=0;k<pw.length;k++){if(l.indexOf(pw[k])>=0)return false}return true});
-return {text:lines.join('\n'),href:String(location.href),truncated:truncated}})()"#;
+return {text:lines.join('\n'),href:String(location.href),truncated:truncated||!scanned,password:pw.length>0,scanned:scanned}})()"#;
+
+fn observe_text_js(deadline_ms: u64) -> String {
+    OBSERVE_TEXT_JS.replace("__DEADLINE_MS__", &deadline_ms.to_string())
+}
 
 /// Bounds on `observed.text`: lines, total UTF-8 bytes, bytes per line.
 pub(super) const MAX_TEXT_LINES: usize = 20;
 pub(super) const MAX_TEXT_BYTES: usize = 1024;
 const MAX_TEXT_LINE_BYTES: usize = 200;
-/// At most this many frames are read per side; more is reported, not read.
-const MAX_TEXT_FRAMES: usize = 32;
+/// At most this many frames are read per capture, across every session.
+pub(super) const MAX_TEXT_FRAMES: usize = 32;
+/// Wall-clock budget for one capture (before, or after, the action): every
+/// CDP call in it gets only what is left of this.
+pub(super) const TEXT_CAPTURE_BUDGET_MS: u64 = 2500;
 /// Per-frame problems listed in `observed.textFrames`.
 const MAX_TEXT_FRAME_NOTES: usize = 10;
 
@@ -685,23 +696,52 @@ const MAX_TEXT_FRAME_NOTES: usize = 10;
 #[derive(Clone, Debug)]
 pub(super) struct FrameText {
     pub lines: Vec<String>,
-    /// The reader hit its size or node cap: the text is a prefix.
+    /// The reader hit its size, node or time budget: the text is a prefix.
     pub truncated: bool,
+    /// A password field in this document holds a value.
+    pub password: bool,
+    /// The password scan covered the whole document.
+    pub scanned: bool,
+}
+
+/// Why a frame has no comparable text. `partial` means it was not read (a
+/// budget, or it appeared during the read); `unavailable` that reading it
+/// failed or gave something other than the frame the tree names.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct FrameProblem {
+    pub status: &'static str,
+    pub reason: String,
+}
+
+impl FrameProblem {
+    fn partial(reason: impl Into<String>) -> Self {
+        Self {
+            status: "partial",
+            reason: reason.into(),
+        }
+    }
+    fn unavailable(reason: impl Into<String>) -> Self {
+        Self {
+            status: "unavailable",
+            reason: reason.into(),
+        }
+    }
 }
 
 /// One frame of a visible-text read: which frame (id and the document it
-/// held, `loaderId`), and its text or why it could not be read.
+/// held, `loaderId`), and its text or why there is none.
 #[derive(Clone, Debug)]
 pub(super) struct FrameRead {
     pub id: String,
     pub loader: String,
     /// `None` for the top frame; otherwise a short name for the frame.
     pub label: Option<String>,
-    pub text: Result<FrameText, String>,
+    pub text: Result<FrameText, FrameProblem>,
 }
 
-/// A whole visible-text read. `Err` when the frame tree itself could not be
-/// read or validated: then nothing about any frame is known.
+/// A whole visible-text read: every frame of the page's final inventory,
+/// read or not. `Err` when the top frame tree itself could not be read or
+/// validated: then nothing about any frame is known.
 pub(super) type TextRead = Result<Vec<FrameRead>, String>;
 
 fn visible_lines(text: &str) -> Vec<String> {
@@ -792,8 +832,8 @@ pub(super) fn validate_frame_tree(result: &serde_json::Value) -> Result<Vec<Tree
 }
 
 /// Check one reader result: no exception, an object with string `text` and
-/// `href`, a boolean `truncated`, and an `href` that is the document the frame
-/// tree names (fragment aside). Anything else is an error for that frame.
+/// `href` and boolean `truncated`, `password` and `scanned`, and an `href`
+/// that is the document the frame tree names (fragment aside).
 pub(super) fn parse_frame_read(
     response: &serde_json::Value,
     expected_url: &str,
@@ -818,10 +858,15 @@ pub(super) fn parse_frame_read(
         .get("href")
         .and_then(|v| v.as_str())
         .ok_or("text reader returned no string href")?;
-    let truncated = value
-        .get("truncated")
-        .and_then(|v| v.as_bool())
-        .ok_or("text reader returned no truncated flag")?;
+    let flag = |name: &str| {
+        value
+            .get(name)
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| format!("text reader returned no {name} flag"))
+    };
+    let truncated = flag("truncated")?;
+    let password = flag("password")?;
+    let scanned = flag("scanned")?;
     if without_fragment(href) != without_fragment(expected_url) {
         return Err(format!(
             "read {} but the frame tree names {}",
@@ -832,29 +877,84 @@ pub(super) fn parse_frame_read(
     Ok(FrameText {
         lines: visible_lines(text),
         truncated,
+        password,
+        scanned,
     })
 }
 
-/// Test hook: each set bit, lowest first, makes one visible-text read fail at
-/// the CDP level (the reader is sent to a context that does not exist).
+/// Test hooks. Each set bit, lowest first, applies to one capture:
+/// `FAIL_TEXT_READS` sends the reader to a context that does not exist (a
+/// CDP error), `HANG_TEXT_READS` makes the reader wait on a promise that
+/// never settles, `INJECT_TEXT_FRAME` adds a frame to the top document after
+/// the frame reads and before the final frame tree.
 #[cfg(test)]
 pub(crate) static FAIL_TEXT_READS: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
+#[cfg(test)]
+pub(crate) static HANG_TEXT_READS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+#[cfg(test)]
+pub(crate) static INJECT_TEXT_FRAME: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
 
-fn take_text_fault() -> bool {
+#[derive(Clone, Copy, Default)]
+struct TextFaults {
+    fail: bool,
+    hang: bool,
+    inject: bool,
+}
+
+fn take_text_faults() -> TextFaults {
     #[cfg(test)]
     {
-        use std::sync::atomic::Ordering;
-        let mut fail = false;
-        let _ = FAIL_TEXT_READS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
-            fail = v & 1 == 1;
-            Some(v >> 1)
-        });
-        fail
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let pop = |hook: &AtomicU32| {
+            let mut set = false;
+            let _ = hook.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+                set = v & 1 == 1;
+                Some(v >> 1)
+            });
+            set
+        };
+        TextFaults {
+            fail: pop(&FAIL_TEXT_READS),
+            hang: pop(&HANG_TEXT_READS),
+            inject: pop(&INJECT_TEXT_FRAME),
+        }
     }
     #[cfg(not(test))]
     {
-        false
+        TextFaults::default()
+    }
+}
+
+const BUDGET_SPENT: &str = "not read: the capture's time budget was spent";
+
+/// One capture's shared budget: a deadline every CDP call is held to, and
+/// a count of frames read across every session.
+struct CaptureBudget {
+    deadline: std::time::Instant,
+    frames: usize,
+}
+
+impl CaptureBudget {
+    fn left(&self) -> std::time::Duration {
+        self.deadline
+            .saturating_duration_since(std::time::Instant::now())
+    }
+
+    /// Run one CDP call with only the time left.
+    async fn call<T>(
+        &self,
+        fut: impl std::future::Future<Output = Result<T, String>>,
+    ) -> Result<T, String> {
+        let left = self.left();
+        if left.is_zero() {
+            return Err(BUDGET_SPENT.into());
+        }
+        tokio::time::timeout(left, fut)
+            .await
+            .map_err(|_| BUDGET_SPENT.to_string())?
     }
 }
 
@@ -862,56 +962,84 @@ async fn eval_reader(
     client: &super::cdp::client::CdpClient,
     session: &str,
     frame_id: &str,
-    fault: bool,
+    budget: &CaptureBudget,
+    faults: TextFaults,
 ) -> Result<serde_json::Value, String> {
-    let world = client
-        .send_command(
+    let world = budget
+        .call(client.send_command(
             "Page.createIsolatedWorld",
             Some(serde_json::json!({ "frameId": frame_id, "worldName": "chrome_use_observe" })),
             Some(session),
-        )
+        ))
         .await?;
     let context = world
         .get("executionContextId")
         .and_then(|c| c.as_i64())
         .ok_or("no execution context for the frame")?;
-    let context = if fault { i64::from(i32::MAX) } else { context };
-    client
-        .send_command(
+    let context = if faults.fail {
+        i64::from(i32::MAX)
+    } else {
+        context
+    };
+    let (expression, await_promise) = if faults.hang {
+        ("new Promise(function(){})".to_string(), true)
+    } else {
+        (observe_text_js(budget.left().as_millis() as u64), false)
+    };
+    budget
+        .call(client.send_command(
             "Runtime.evaluate",
             Some(serde_json::json!({
-                "expression": OBSERVE_TEXT_JS,
+                "expression": expression,
                 "returnByValue": true,
+                "awaitPromise": await_promise,
                 "contextId": context,
             })),
             Some(session),
-        )
+        ))
         .await
 }
 
-/// Read every frame one session hosts, except `skip`: the tree before, each
-/// frame in its own isolated world, the tree again. A frame whose document
-/// changed (or that left) between the two trees is unknown, not read.
+fn problem_for(error: String) -> FrameProblem {
+    if error == BUDGET_SPENT {
+        FrameProblem::partial(error)
+    } else {
+        FrameProblem::unavailable(error)
+    }
+}
+
+/// Read every frame one session hosts, except `skip`: the tree, each frame
+/// in its own isolated world, then the tree again, which is the inventory
+/// returned. A frame whose document changed or that left between the two
+/// trees is unknown; a frame that is in the final tree but was not read
+/// (over budget, or it appeared during the read) is listed as `partial`.
 async fn read_session(
     client: &super::cdp::client::CdpClient,
     session: &str,
     skip: &std::collections::HashMap<String, String>,
-    fault: bool,
+    budget: &mut CaptureBudget,
+    faults: TextFaults,
+    inject: bool,
 ) -> Result<Vec<FrameRead>, String> {
     let tree = validate_frame_tree(
-        &client
-            .send_command_no_params("Page.getFrameTree", Some(session))
+        &budget
+            .call(client.send_command_no_params("Page.getFrameTree", Some(session)))
             .await?,
     )?;
     let mut reads = Vec::new();
     for frame in tree.iter().filter(|f| f.top || !skip.contains_key(&f.id)) {
         let label = (!frame.top).then(|| frame_label(&frame.url));
-        let text = if reads.len() == MAX_TEXT_FRAMES {
-            Err("frame not read: over the frame budget".to_string())
+        let text = if budget.frames >= MAX_TEXT_FRAMES {
+            Err(FrameProblem::partial("not read: over the frame budget"))
+        } else if budget.left().is_zero() {
+            Err(FrameProblem::partial(BUDGET_SPENT))
         } else {
-            match eval_reader(client, session, &frame.id, fault).await {
-                Ok(response) => parse_frame_read(&response, &frame.url),
-                Err(e) => Err(e),
+            budget.frames += 1;
+            match eval_reader(client, session, &frame.id, budget, faults).await {
+                Ok(response) => {
+                    parse_frame_read(&response, &frame.url).map_err(FrameProblem::unavailable)
+                }
+                Err(e) => Err(problem_for(e)),
             }
         };
         reads.push(FrameRead {
@@ -921,32 +1049,73 @@ async fn read_session(
             text,
         });
     }
-    let after = client
-        .send_command_no_params("Page.getFrameTree", Some(session))
+    if inject {
+        let _ = budget
+            .call(client.send_command(
+                "Runtime.evaluate",
+                Some(serde_json::json!({
+                    "expression": "new Promise(function(r){var f=document.createElement('iframe');\
+                        f.srcdoc='<p>late frame</p>';f.onload=function(){r(true)};\
+                        document.body.appendChild(f)})",
+                    "awaitPromise": true,
+                })),
+                Some(session),
+            ))
+            .await;
+    }
+    let after = budget
+        .call(client.send_command_no_params("Page.getFrameTree", Some(session)))
         .await
         .and_then(|t| validate_frame_tree(&t));
-    for read in &mut reads {
-        let same = match &after {
-            Ok(frames) => frames
-                .iter()
-                .any(|f| f.id == read.id && f.loader == read.loader),
-            Err(_) => false,
-        };
-        if !same && read.text.is_ok() {
-            read.text = Err(match &after {
-                Ok(_) => "frame navigated or was replaced during the read".into(),
-                Err(e) => format!("frame tree unreadable after the read: {e}"),
-            });
+    match &after {
+        Ok(frames) => {
+            for read in &mut reads {
+                let same = frames
+                    .iter()
+                    .any(|f| f.id == read.id && f.loader == read.loader);
+                if !same && read.text.is_ok() {
+                    read.text = Err(FrameProblem::unavailable(
+                        "frame navigated, was replaced or left during the read",
+                    ));
+                }
+            }
+            for frame in frames.iter().filter(|f| f.top || !skip.contains_key(&f.id)) {
+                if !reads.iter().any(|r| r.id == frame.id) {
+                    reads.push(FrameRead {
+                        id: frame.id.clone(),
+                        loader: frame.loader.clone(),
+                        label: (!frame.top).then(|| frame_label(&frame.url)),
+                        text: Err(FrameProblem::partial(
+                            "not read: the frame appeared during the read",
+                        )),
+                    });
+                }
+            }
+        }
+        Err(e) => {
+            for read in &mut reads {
+                read.text = Err(problem_for(if e.as_str() == BUDGET_SPENT {
+                    e.clone()
+                } else {
+                    format!("frame tree unreadable after the read: {e}")
+                }));
+            }
         }
     }
     Ok(reads)
 }
 
-/// Read the visible text of every frame in the active page, strictly: the
-/// top session's frames, then each out-of-process frame through its own
-/// session, which must be attached to that frame.
+/// Read the visible text of every frame in the active page, strictly and
+/// within [`TEXT_CAPTURE_BUDGET_MS`] and [`MAX_TEXT_FRAMES`] in total: the top
+/// session's frames, then each out-of-process frame through its own session,
+/// which must be attached to that frame.
 pub(super) async fn capture_text(state: &super::actions::DaemonState) -> TextRead {
-    let fault = take_text_fault();
+    let faults = take_text_faults();
+    let mut budget = CaptureBudget {
+        deadline: std::time::Instant::now()
+            + std::time::Duration::from_millis(TEXT_CAPTURE_BUDGET_MS),
+        frames: 0,
+    };
     let mgr = state
         .browser
         .as_ref()
@@ -956,24 +1125,43 @@ pub(super) async fn capture_text(state: &super::actions::DaemonState) -> TextRea
         .map_err(|_| "No active page for observation".to_string())?
         .to_string();
     let client = &mgr.client;
-    let mut reads = read_session(client, &top, &state.iframe_sessions, fault).await?;
+    let mut reads = read_session(
+        client,
+        &top,
+        &state.iframe_sessions,
+        &mut budget,
+        faults,
+        faults.inject,
+    )
+    .await?;
     let mut oopifs: Vec<(&String, &String)> = state.iframe_sessions.iter().collect();
     oopifs.sort();
     for (frame_id, session) in oopifs {
         if reads.iter().any(|r| &r.id == frame_id) {
             continue;
         }
-        let unknown = |reason: String| FrameRead {
+        let unknown = |problem: FrameProblem| FrameRead {
             id: frame_id.clone(),
             loader: String::new(),
             label: Some(format!("frame {}", head(frame_id, 8))),
-            text: Err(reason),
+            text: Err(problem),
         };
-        if reads.len() >= MAX_TEXT_FRAMES {
-            reads.push(unknown("frame not read: over the frame budget".into()));
+        if budget.frames >= MAX_TEXT_FRAMES {
+            reads.push(unknown(FrameProblem::partial(
+                "not read: over the frame budget",
+            )));
             continue;
         }
-        match read_session(client, session, &std::collections::HashMap::new(), fault).await {
+        match read_session(
+            client,
+            session,
+            &std::collections::HashMap::new(),
+            &mut budget,
+            faults,
+            false,
+        )
+        .await
+        {
             Ok(frames) if frames.first().is_some_and(|f| &f.id == frame_id) => {
                 for frame in frames {
                     if !reads.iter().any(|r| r.id == frame.id) {
@@ -981,10 +1169,10 @@ pub(super) async fn capture_text(state: &super::actions::DaemonState) -> TextRea
                     }
                 }
             }
-            Ok(_) => reads.push(unknown(
-                "the frame's session holds a different frame".into(),
-            )),
-            Err(e) => reads.push(unknown(e)),
+            Ok(_) => reads.push(unknown(FrameProblem::unavailable(
+                "the frame's session holds a different frame",
+            ))),
+            Err(e) => reads.push(unknown(problem_for(e))),
         }
     }
     Ok(reads)
@@ -1026,57 +1214,95 @@ pub(super) struct TextComparison {
     pub omitted: usize,
     /// Frames that could not be compared: (frame, status, reason).
     pub problems: Vec<(String, &'static str, String)>,
-    /// Frames in the before read that the (valid) after tree no longer has.
+    /// Frames of the before read that the after inventory confirms are gone.
     pub gone: Vec<String>,
-    pub compared: usize,
+    /// Frames whose document changed (another `loaderId`): a reload or a
+    /// navigation, a change even when the text is the same.
+    pub reloaded: Vec<String>,
+    /// A password field held a value (or could not be scanned) in some frame
+    /// on either side: no lines are returned.
+    pub redacted: bool,
 }
 
 fn frame_name(label: &Option<String>) -> String {
     label.clone().unwrap_or_else(|| "top".into())
 }
 
-/// Compare two reads frame by frame. Only a frame read successfully on both
-/// sides (or new, and read after) contributes lines; a frame with a failed or
-/// truncated read on either side is a problem, never a removal or "no change".
+/// Compare two reads frame by frame. A frame with no comparable text on
+/// either side is a problem, never a removal or "no change". Lines are
+/// returned only when every frame on both sides was read and scanned with
+/// no password value in it: a frame that could not be read might hold a
+/// password the page copied elsewhere, so any problem withholds them all.
+/// `gone` is only what the after inventory confirms; `reloaded` is a frame
+/// whose document changed.
 pub(super) fn text_diff(before: &[FrameRead], after: &[FrameRead]) -> TextComparison {
     use similar::{capture_diff_slices_deadline, Algorithm, DiffOp};
     let mut out = TextComparison::default();
+    let empty = FrameText {
+        lines: Vec::new(),
+        truncated: false,
+        password: false,
+        scanned: true,
+    };
+    let mut pairs = Vec::new();
+    for frame in after {
+        let old = before.iter().find(|b| b.id == frame.id);
+        if let Some(old) = old {
+            if !old.loader.is_empty() && !frame.loader.is_empty() && old.loader != frame.loader {
+                out.reloaded.push(frame_name(&frame.label));
+            }
+        }
+        let pair = match (old.map(|b| &b.text), &frame.text) {
+            (None, Ok(new)) => Ok((&empty, new)),
+            (Some(Ok(old)), Ok(new)) => Ok((old, new)),
+            (Some(Err(p)), _) | (_, Err(p)) => Err(p.clone()),
+        };
+        match pair {
+            Ok((old, new)) if old.truncated || new.truncated => out.problems.push((
+                frame_name(&frame.label),
+                "partial",
+                "text over the reader's size, node or time budget".into(),
+            )),
+            Ok((old, new)) => {
+                if old.password || new.password || !old.scanned || !new.scanned {
+                    out.redacted = true;
+                }
+                pairs.push((&frame.label, old, new));
+            }
+            Err(p) => out
+                .problems
+                .push((frame_name(&frame.label), p.status, p.reason)),
+        }
+    }
+    for frame in before
+        .iter()
+        .filter(|b| !after.iter().any(|a| a.id == b.id))
+    {
+        match &frame.text {
+            Ok(t) if t.password || !t.scanned => out.redacted = true,
+            Ok(_) => {}
+            // Gone now, but what it held before is unknown: it may have had
+            // a password the page copied elsewhere.
+            Err(p) => out.problems.push((
+                frame_name(&frame.label),
+                "partial",
+                format!("gone; its earlier read failed: {}", p.reason),
+            )),
+        }
+        out.gone.push(frame_name(&frame.label));
+    }
+    if !out.problems.is_empty() || out.redacted {
+        return out;
+    }
     let mut budget = TextBudget {
         lines: Vec::new(),
         bytes: 0,
         omitted: 0,
     };
-    let empty = FrameText {
-        lines: Vec::new(),
-        truncated: false,
-    };
     // A text-heavy page diffs in well under this; the deadline only keeps a
     // pathological one from holding the reply.
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
-    for frame in after {
-        let old = before.iter().find(|b| b.id == frame.id);
-        let pair = match (old.map(|b| &b.text), &frame.text) {
-            (None, Ok(new)) => Ok((&empty, new)),
-            (Some(Ok(old)), Ok(new)) => Ok((old, new)),
-            (Some(Err(e)), _) | (_, Err(e)) => Err(e.clone()),
-        };
-        let (old, new) = match pair {
-            Ok(pair) => pair,
-            Err(reason) => {
-                out.problems
-                    .push((frame_name(&frame.label), "unavailable", reason));
-                continue;
-            }
-        };
-        if old.truncated || new.truncated {
-            out.problems.push((
-                frame_name(&frame.label),
-                "partial",
-                "text over the reader's size budget".into(),
-            ));
-            continue;
-        }
-        out.compared += 1;
+    for (label, old, new) in pairs {
         for op in
             capture_diff_slices_deadline(Algorithm::Myers, &old.lines, &new.lines, Some(deadline))
         {
@@ -1099,29 +1325,24 @@ pub(super) fn text_diff(before: &[FrameRead], after: &[FrameRead]) -> TextCompar
                 ),
             };
             for i in removed {
-                budget.push('-', &frame.label, &old.lines[i]);
+                budget.push('-', label, &old.lines[i]);
             }
             for i in added {
-                budget.push('+', &frame.label, &new.lines[i]);
+                budget.push('+', label, &new.lines[i]);
             }
         }
-    }
-    for frame in before
-        .iter()
-        .filter(|b| !after.iter().any(|a| a.id == b.id))
-    {
-        out.gone.push(frame_name(&frame.label));
     }
     out.lines = budget.lines;
     out.omitted = budget.omitted;
     out
 }
 
-/// Add the visible-text comparison to an observation. A text change is a
-/// change. Missing text evidence is missing evidence: the observation is no
-/// longer complete, and an unchanged tree no longer proves "no change", so
-/// nothing downstream (the no-progress hint, the no-change probe) can read
-/// an unknown as a stall.
+/// Add the visible-text comparison to an observation. A text change, a
+/// confirmed frame removal and a frame whose document changed are changes.
+/// Missing or withheld text evidence is missing evidence: the observation is
+/// no longer complete, and an unchanged tree no longer proves "no change", so
+/// nothing downstream (the no-progress hint, the no-change probe) can read an
+/// unknown as a stall.
 pub(super) fn apply_text(
     observed: &mut serde_json::Map<String, serde_json::Value>,
     before: &TextRead,
@@ -1150,11 +1371,24 @@ pub(super) fn apply_text(
             observed.insert("textOmitted".into(), json!(diff.omitted));
             observed.insert("textTruncated".into(), json!(true));
         }
+    }
+    if !diff.reloaded.is_empty() {
+        observed.insert("frameDocumentChanged".into(), json!(diff.reloaded));
+    }
+    if !diff.lines.is_empty() || !diff.reloaded.is_empty() || !diff.gone.is_empty() {
         observed.insert("changed".into(), json!(true));
     }
+    let redaction = diff.redacted.then(|| {
+        (
+            "page".to_string(),
+            "redacted",
+            "a password field holds a value (or could not be scanned); text withheld".to_string(),
+        )
+    });
     let mut notes: Vec<serde_json::Value> = diff
         .problems
         .iter()
+        .chain(redaction.iter())
         .map(|(frame, status, reason)| {
             json!({"frame": frame, "status": status, "reason": shorten(reason, 160)})
         })
@@ -1175,18 +1409,17 @@ pub(super) fn apply_text(
             );
         }
     }
-    if diff.problems.is_empty() {
+    let Some((frame, _, reason)) = diff.problems.first().or(redaction.as_ref()) else {
         return;
-    }
+    };
     observed.insert(
         "textStatus".into(),
-        json!(if diff.compared > 0 {
-            "partial"
+        json!(if diff.problems.is_empty() {
+            "redacted"
         } else {
             "unavailable"
         }),
     );
-    let (frame, _, reason) = &diff.problems[0];
     let error = capture_error("visibleText", &format!("{frame}: {reason}"));
     match observed.get_mut("errors").and_then(|e| e.as_array_mut()) {
         Some(errors) => errors.push(error),
@@ -1484,8 +1717,17 @@ mod capture_tests {
             text: Ok(FrameText {
                 lines: visible_lines(text),
                 truncated: false,
+                password: false,
+                scanned: true,
             }),
         }
+    }
+
+    fn with_password(mut frame: FrameRead) -> FrameRead {
+        if let Ok(t) = &mut frame.text {
+            t.password = true;
+        }
+        frame
     }
 
     fn failed(id: &str, label: Option<&str>) -> FrameRead {
@@ -1493,7 +1735,9 @@ mod capture_tests {
             id: id.into(),
             loader: format!("L-{id}"),
             label: label.map(str::to_string),
-            text: Err("Cannot find context with specified id".into()),
+            text: Err(FrameProblem::unavailable(
+                "Cannot find context with specified id",
+            )),
         }
     }
 
@@ -1544,7 +1788,7 @@ mod capture_tests {
         assert!(!observed.contains_key("text"), "{observed:?}");
         assert_eq!(observed["status"], "partial");
         assert!(observed["changed"].is_null());
-        assert_eq!(observed["textStatus"], "partial");
+        assert_eq!(observed["textStatus"], "unavailable");
         assert_eq!(observed["textFrames"][0]["frame"], "child.html");
         assert_eq!(observed["textFrames"][0]["status"], "unavailable");
         assert_eq!(observed["errors"][0]["stage"], "visibleText");
@@ -1579,6 +1823,112 @@ mod capture_tests {
         assert_eq!(observed["changed"], true);
         assert_eq!(observed["status"], "partial");
         assert_eq!(observed["textStatus"], "unavailable");
+    }
+
+    #[test]
+    fn any_password_value_on_either_side_withholds_all_text() {
+        // Child holds a password; the parent's text changed. The parent's
+        // line could be the password, copied: nothing is returned.
+        for (before, after) in [
+            (
+                vec![
+                    read("T", None, "a"),
+                    with_password(read("C", Some("c"), "x")),
+                ],
+                vec![
+                    read("T", None, "a\nb"),
+                    with_password(read("C", Some("c"), "x")),
+                ],
+            ),
+            // The field was cleared after, but its old value may be on show.
+            (
+                vec![
+                    read("T", None, "a"),
+                    with_password(read("C", Some("c"), "x")),
+                ],
+                vec![read("T", None, "a\nb"), read("C", Some("c"), "x")],
+            ),
+            // A frame with a password value that is gone after.
+            (
+                vec![
+                    read("T", None, "a"),
+                    with_password(read("C", Some("c"), "x")),
+                ],
+                vec![read("T", None, "a\nb")],
+            ),
+        ] {
+            let mut observed = unchanged_tree();
+            apply_text(&mut observed, &Ok(before), &Ok(after));
+            assert!(!observed.contains_key("text"), "{observed:?}");
+            assert_eq!(observed["textStatus"], "redacted");
+            assert_eq!(observed["status"], "partial");
+            assert!(!observed.contains_key("text"));
+        }
+    }
+
+    #[test]
+    fn an_unreadable_frame_withholds_every_other_frames_lines() {
+        let mut observed = unchanged_tree();
+        apply_text(
+            &mut observed,
+            &Ok(vec![read("T", None, "a"), read("C", Some("c"), "x")]),
+            &Ok(vec![read("T", None, "a\nb"), failed("C", Some("c"))]),
+        );
+        assert!(!observed.contains_key("text"), "{observed:?}");
+        assert_eq!(observed["status"], "partial");
+        assert!(observed["changed"].is_null());
+    }
+
+    #[test]
+    fn a_frame_removed_alone_is_a_change() {
+        // Only a child frame went away; the top frame and tree are the same.
+        let mut observed = unchanged_tree();
+        apply_text(
+            &mut observed,
+            &Ok(vec![
+                read("T", None, "Embedded notes"),
+                read("C", Some("receipt.html"), "Saved receipt 42"),
+            ]),
+            &Ok(vec![read("T", None, "Embedded notes")]),
+        );
+        assert_eq!(observed["changed"], true);
+        assert_eq!(observed["status"], "complete");
+        assert_eq!(observed["textFrames"][0]["status"], "gone");
+        assert!(!observed.contains_key("text"));
+    }
+
+    #[test]
+    fn a_new_document_with_the_same_text_is_a_change() {
+        // A same-URL reload: same text, another loaderId.
+        let before = read("T", None, "Report ready");
+        let mut after = read("T", None, "Report ready");
+        after.loader = "L-reloaded".into();
+        let mut observed = unchanged_tree();
+        apply_text(&mut observed, &Ok(vec![before]), &Ok(vec![after]));
+        assert_eq!(observed["changed"], true);
+        assert_eq!(observed["frameDocumentChanged"], json!(["top"]));
+        assert!(!observed.contains_key("text"));
+    }
+
+    #[test]
+    fn a_frame_not_read_is_partial_never_gone() {
+        let skipped = FrameRead {
+            id: "C".into(),
+            loader: "L-C".into(),
+            label: Some("c".into()),
+            text: Err(FrameProblem::partial("not read: over the frame budget")),
+        };
+        let mut observed = unchanged_tree();
+        apply_text(
+            &mut observed,
+            &Ok(vec![read("T", None, "a"), read("C", Some("c"), "x")]),
+            &Ok(vec![read("T", None, "a"), skipped]),
+        );
+        let notes = observed["textFrames"].to_string();
+        assert!(notes.contains("\"partial\""), "{notes}");
+        assert!(!notes.contains("gone"), "{notes}");
+        assert_eq!(observed["status"], "partial");
+        assert!(observed["changed"].is_null());
     }
 
     #[test]
@@ -1685,7 +2035,8 @@ mod capture_tests {
     #[test]
     fn a_reader_result_is_checked_not_defaulted() {
         let good = json!({"result": {"type": "object",
-            "value": {"text": "a\nb", "href": "http://x/c.html#top", "truncated": false}}});
+            "value": {"text": "a\nb", "href": "http://x/c.html#top", "truncated": false,
+                      "password": false, "scanned": true}}});
         assert_eq!(
             parse_frame_read(&good, "http://x/c.html").unwrap().lines,
             ["a", "b"]
@@ -1701,6 +2052,8 @@ mod capture_tests {
             json!({"result": {"value": {"text": 3, "href": "u", "truncated": false}}}),
             json!({"result": {"value": {"text": "a", "truncated": false}}}),
             json!({"result": {"value": {"text": "a", "href": "u"}}}),
+            json!({"result": {"value": {"text": "a", "href": "u", "truncated": false,
+                                        "scanned": true}}}),
         ] {
             assert!(parse_frame_read(&bad, "u").is_err(), "{bad}");
         }

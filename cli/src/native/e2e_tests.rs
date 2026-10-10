@@ -11207,7 +11207,7 @@ async fn e2e_observe_reports_an_iframe_receipt_in_visible_text() {
     use std::sync::atomic::Ordering;
     let page = r##"<!doctype html><meta charset="utf-8"><title>Embedded notes</title>
 <main><h1>Embedded notes</h1><p>Complete the embedded note form.</p>
-<iframe title="Embedded form" srcdoc="<form><label>Note <input name='note'></label><label>Pin <input type='password' name='pin'></label><button>Save note</button></form><p id='receipt'>No note</p><script>document.querySelector('form').onsubmit=e=>{e.preventDefault();document.querySelector('#receipt').textContent='Note saved: '+document.querySelector('input').value;}</script>"></iframe></main>"##
+<iframe title="Embedded form" srcdoc="<form><label>Note <input name='note'></label><button>Save note</button></form><p id='receipt'>No note</p><script>document.querySelector('form').onsubmit=e=>{e.preventDefault();document.querySelector('#receipt').textContent='Note saved: '+document.querySelector('input').value;}</script>"></iframe></main>"##
         .to_string();
     let (port, server) = spawn_html_server(page).await;
     let mut state = DaemonState::new();
@@ -11236,20 +11236,14 @@ async fn e2e_observe_reports_an_iframe_receipt_in_visible_text() {
         format!("@{}", &rest[..end])
     };
     let note = ref_for("textbox \"Note\"");
-    let pin = ref_for("textbox \"Pin\"");
     let save = ref_for("button \"Save note\"");
 
-    for (id, sel, value) in [
-        ("4", &note, "Synthetic benchmark note"),
-        ("5", &pin, "pin-secret-7731"),
-    ] {
-        let resp = run_cmd(
-            &mut state,
-            json!({ "id": id, "action": "fill", "selector": sel, "value": value }),
-        )
-        .await;
-        assert_success(&resp);
-    }
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "4", "action": "fill", "selector": note, "value": "Synthetic benchmark note" }),
+    )
+    .await;
+    assert_success(&resp);
 
     let resp = run_cmd(
         &mut state,
@@ -11280,11 +11274,6 @@ async fn e2e_observe_reports_an_iframe_receipt_in_visible_text() {
         text.iter()
             .any(|l| l.ends_with("No note") && l.starts_with("- ")),
         "{text:?}"
-    );
-    let all = observed.to_string();
-    assert!(
-        !all.contains("pin-secret-7731"),
-        "a password value must never be observed: {all}"
     );
     // Every machine-JSON observation names its target.
     assert!(observed["target"]["targetId"].is_string(), "{observed}");
@@ -11356,9 +11345,8 @@ async fn e2e_observe_reports_an_iframe_receipt_in_visible_text() {
 
 /// What a person typed never reaches `observed.text`: inline and nested
 /// contenteditable (with a non-editable island inside), a textarea's text,
-/// an editable region inside an open shadow root, and password values the
-/// page reflects into its own text, in the top frame and in a child frame.
-/// All values are synthetic.
+/// and an editable region inside an open shadow root. All values are
+/// synthetic. Password values have their own test.
 #[tokio::test]
 #[ignore]
 async fn e2e_observe_text_never_carries_typed_or_editable_content() {
@@ -11368,12 +11356,9 @@ async fn e2e_observe_text_never_carries_typed_or_editable_content() {
 <div contenteditable="true"><p>Nested <b id="nested">SYNPRIV-NESTED</b> <span contenteditable="false">SYNPRIV-ISLAND</span></p></div>
 <label>Remarks <textarea>SYNPRIV-TEXTAREA</textarea></label>
 <label>Plain <input id="plain"></label>
-<label>PIN <input id="pw" type="password"></label>
 <div id="host"></div>
 <p id="status">Idle</p>
-<p id="refl">nothing reflected</p>
 <button id="go">Go</button>
-<iframe title="Child" srcdoc="<label>Child PIN <input id='cpw' type='password'></label><p id='crefl'>child idle</p>"></iframe>
 </main>
 <script>
 const shadow = document.getElementById('host').attachShadow({mode: 'open'});
@@ -11383,9 +11368,6 @@ document.getElementById('go').onclick = () => {
   document.getElementById('nested').textContent = 'SYNPRIV-NESTED-2';
   shadow.getElementById('sce').textContent = 'SYNPRIV-SHADOW-2';
   document.getElementById('status').textContent = 'Done: ' + document.getElementById('plain').value.length + ' chars';
-  document.getElementById('refl').textContent = 'Reflected ' + document.getElementById('pw').value + ' here';
-  const child = frames[0].document;
-  child.getElementById('crefl').textContent = 'Child reflected ' + child.getElementById('cpw').value;
 };
 </script>"##
         .to_string();
@@ -11395,38 +11377,10 @@ document.getElementById('go').onclick = () => {
 
     let resp = run_cmd(
         &mut state,
-        json!({ "id": "3", "action": "snapshot", "interactive": true }),
+        json!({ "id": "4", "action": "fill", "selector": "#plain", "value": "SYNPRIV-TYPED" }),
     )
     .await;
     assert_success(&resp);
-    let tree = get_data(&resp)["snapshot"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let line = tree
-        .lines()
-        .find(|l| l.contains("Child PIN"))
-        .unwrap_or_else(|| panic!("no child PIN field in:\n{tree}"));
-    let start = line.find("ref=").expect("ref") + 4;
-    let rest = &line[start..];
-    let child_pin = format!(
-        "@{}",
-        &rest[..rest
-            .find(|c: char| !c.is_alphanumeric())
-            .unwrap_or(rest.len())]
-    );
-    for (id, sel, value) in [
-        ("4", "#plain".to_string(), "SYNPRIV-TYPED"),
-        ("5", "#pw".to_string(), "SYNPRIV-PW-77"),
-        ("6", child_pin, "SYNPRIV-CPW-5"),
-    ] {
-        let resp = run_cmd(
-            &mut state,
-            json!({ "id": id, "action": "fill", "selector": sel, "value": value }),
-        )
-        .await;
-        assert_success(&resp);
-    }
 
     let resp = run_cmd(
         &mut state,
@@ -11456,6 +11410,321 @@ document.getElementById('go').onclick = () => {
         .map(|v| v.to_string())
         .unwrap_or_default();
     assert!(!notes.contains("SYNPRIV"), "{notes}");
+    server.abort();
+}
+
+/// Read the ref of the first snapshot line containing `marker`.
+fn ref_in(tree: &str, marker: &str) -> String {
+    let line = tree
+        .lines()
+        .find(|l| l.contains(marker))
+        .unwrap_or_else(|| panic!("no `{marker}` in snapshot:\n{tree}"));
+    let start = line.find("ref=").expect("line has a ref") + 4;
+    let rest = &line[start..];
+    let end = rest
+        .find(|c: char| !c.is_alphanumeric())
+        .unwrap_or(rest.len());
+    format!("@{}", &rest[..end])
+}
+
+async fn interactive_tree(state: &mut DaemonState, id: &str) -> String {
+    let resp = run_cmd(
+        state,
+        json!({ "id": id, "action": "snapshot", "interactive": true }),
+    )
+    .await;
+    assert_success(&resp);
+    get_data(&resp)["snapshot"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// A known password value never reaches `observed.text`, wherever the page
+/// copies it: a parent password into a child frame, a child password into
+/// the parent, a field cleared by the action whose old value is on show, and
+/// a password field inside an open shadow root. All values are synthetic.
+#[tokio::test]
+#[ignore]
+async fn e2e_observe_text_withholds_every_known_password_value() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>Passwords</title>
+<main><h1>Passwords</h1>
+<label>Top PIN <input id="pw" type="password"></label>
+<p id="topRefl">top idle</p>
+<div id="host"></div>
+<button id="a">Parent to child</button>
+<button id="b">Child to parent</button>
+<button id="c">Clear and show</button>
+<button id="d">Shadow show</button>
+<button id="e" onclick="document.getElementById('ctl').textContent='control done'">Control</button>
+<p id="ctl">control idle</p>
+<iframe title="Child" srcdoc="<label>Child PIN <input id='cpw' type='password'></label><p id='crefl'>child idle</p>"></iframe>
+</main>
+<script>
+const shadow = document.getElementById('host').attachShadow({mode: 'open'});
+shadow.innerHTML = '<label>Shadow PIN <input id="spw" type="password"></label>';
+const child = () => frames[0].document;
+const pw = () => document.getElementById('pw');
+document.getElementById('a').onclick = () => {
+  child().getElementById('crefl').textContent = 'Got ' + pw().value; };
+document.getElementById('b').onclick = () => {
+  document.getElementById('topRefl').textContent = 'Got ' + child().getElementById('cpw').value; };
+document.getElementById('c').onclick = () => {
+  document.getElementById('topRefl').textContent = 'Was ' + pw().value; pw().value = ''; };
+document.getElementById('d').onclick = () => {
+  document.getElementById('topRefl').textContent = 'Shadow ' + shadow.getElementById('spw').value; };
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let tree = interactive_tree(&mut state, "3").await;
+    let top_pin = ref_in(&tree, "textbox \"Top PIN\"");
+    let child_pin = ref_in(&tree, "textbox \"Child PIN\"");
+    let shadow_pin = ref_in(&tree, "textbox \"Shadow PIN\"");
+
+    let mut n = 10;
+    let mut step = |action: Value| {
+        n += 1;
+        let mut action = action;
+        action["id"] = json!(n.to_string());
+        action
+    };
+    let scenarios: [(&str, Vec<(String, &str)>, &str); 4] = [
+        (
+            "parent password into a child <p>",
+            vec![(top_pin.clone(), "SYNPW-PARENT-1")],
+            "#a",
+        ),
+        (
+            "child password into the parent",
+            vec![(top_pin.clone(), ""), (child_pin.clone(), "SYNPW-CHILD-2")],
+            "#b",
+        ),
+        (
+            "field cleared after, old value shown",
+            vec![(child_pin.clone(), ""), (top_pin.clone(), "SYNPW-CLEAR-3")],
+            "#c",
+        ),
+        (
+            "shadow-DOM password",
+            vec![(shadow_pin.clone(), "SYNPW-SHADOW-4")],
+            "#d",
+        ),
+    ];
+    for (name, fills, button) in scenarios {
+        for (sel, value) in fills {
+            let resp = run_cmd(
+                &mut state,
+                step(json!({ "action": "fill", "selector": sel, "value": value })),
+            )
+            .await;
+            assert_success(&resp);
+        }
+        let resp = run_cmd(
+            &mut state,
+            step(json!({ "action": "click", "selector": button, "observe": true })),
+        )
+        .await;
+        assert_success(&resp);
+        let observed = &get_data(&resp)["observed"];
+        let text = observed
+            .get("text")
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        let notes = observed
+            .get("textFrames")
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        assert!(!text.contains("SYNPW"), "{name}: {text}");
+        assert!(!notes.contains("SYNPW"), "{name}: {notes}");
+        assert!(observed.get("text").is_none(), "{name}: {observed}");
+        assert_eq!(
+            observed["textStatus"],
+            json!("redacted"),
+            "{name}: {observed}"
+        );
+        assert_ne!(observed["status"], json!("complete"), "{name}: {observed}");
+    }
+
+    // Control: with every password field empty the same page returns text.
+    let resp = run_cmd(
+        &mut state,
+        step(json!({ "action": "fill", "selector": shadow_pin, "value": "" })),
+    )
+    .await;
+    assert_success(&resp);
+    let resp = run_cmd(
+        &mut state,
+        step(json!({ "action": "click", "selector": "#e", "observe": true })),
+    )
+    .await;
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    assert_eq!(observed["status"], json!("complete"), "{observed}");
+    assert_eq!(
+        observed["text"],
+        json!(["- control idle", "+ control done"]),
+        "{observed}"
+    );
+    server.abort();
+}
+
+/// One capture is bounded in frames (across every session) and in time:
+/// more than 32 frames plus out-of-process frames, then reads that hang.
+/// Frames not read are `partial`, never `gone` or unchanged.
+#[tokio::test]
+#[ignore]
+async fn e2e_observe_text_capture_is_bounded_in_frames_and_time() {
+    use std::sync::atomic::Ordering;
+    let (oopif_port, oopif_server) =
+        spawn_html_server("<!doctype html><p>out of process</p>".to_string()).await;
+    let inline: String = (0..40)
+        .map(|i| format!("<iframe srcdoc=\"<p>inline frame {i}</p>\"></iframe>"))
+        .collect();
+    let oopifs: String = (0..3)
+        .map(|i| format!("<iframe src=\"http://localhost:{oopif_port}/o{i}\"></iframe>"))
+        .collect();
+    let page = format!(
+        r##"<!doctype html><meta charset="utf-8"><title>Many frames</title>
+<main><h1>Many frames</h1><button id="go" onclick="this.textContent='Went'">Go</button>
+{inline}{oopifs}</main>"##
+    );
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    wait_for_evaluation(
+        &mut state,
+        "document.readyState === 'complete' && document.querySelectorAll('iframe').length === 43",
+        "frames should load",
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    eprintln!(
+        "out-of-process frame sessions: {}",
+        state.iframe_sessions.len()
+    );
+
+    let started = std::time::Instant::now();
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "4", "action": "click", "selector": "#go", "observe": true }),
+    )
+    .await;
+    let elapsed = started.elapsed();
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    let notes = observed["textFrames"].to_string();
+    assert_ne!(observed["status"], json!("complete"), "{observed}");
+    assert!(notes.contains("over the frame budget"), "{notes}");
+    assert!(notes.contains("\"partial\""), "{notes}");
+    assert!(!notes.contains("\"gone\""), "{notes}");
+    assert!(observed.get("text").is_none(), "{observed}");
+    assert!(
+        elapsed < std::time::Duration::from_secs(15),
+        "a 43-frame observation took {elapsed:?}"
+    );
+
+    // Every read hangs: each capture stops at its budget.
+    for (mask, bound) in [(0b10u32, 9u64), (0b11, 12)] {
+        super::observation::HANG_TEXT_READS.store(mask, Ordering::SeqCst);
+        let started = std::time::Instant::now();
+        let resp = run_cmd(
+            &mut state,
+            json!({ "id": format!("hang-{mask}"), "action": "click", "selector": "#go",
+                    "observe": true }),
+        )
+        .await;
+        let elapsed = started.elapsed();
+        super::observation::HANG_TEXT_READS.store(0, Ordering::SeqCst);
+        assert_success(&resp);
+        let observed = &get_data(&resp)["observed"];
+        assert_ne!(observed["status"], json!("complete"), "{observed}");
+        assert_ne!(observed["changed"], json!(false), "{observed}");
+        assert!(
+            observed["textFrames"].to_string().contains("budget"),
+            "{observed}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(bound),
+            "hanging reads (mask {mask:#b}) took {elapsed:?}"
+        );
+    }
+    server.abort();
+    oopif_server.abort();
+}
+
+/// A frame that appears between the frame reads and the final frame tree is
+/// in the inventory, unread: the observation is not complete and nothing is
+/// reported gone.
+#[tokio::test]
+#[ignore]
+async fn e2e_observe_text_frame_appearing_mid_read_is_not_complete() {
+    use std::sync::atomic::Ordering;
+    let page = r##"<!doctype html><meta charset="utf-8"><title>Late frame</title>
+<main><h1>Late frame</h1><button id="go">Go</button><p>steady</p></main>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    super::observation::INJECT_TEXT_FRAME.store(0b10, Ordering::SeqCst);
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "4", "action": "click", "selector": "#go", "observe": true }),
+    )
+    .await;
+    super::observation::INJECT_TEXT_FRAME.store(0, Ordering::SeqCst);
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    let notes = observed["textFrames"].to_string();
+    assert_ne!(observed["status"], json!("complete"), "{observed}");
+    assert!(notes.contains("appeared during the read"), "{notes}");
+    assert!(!notes.contains("\"gone\""), "{notes}");
+    assert_ne!(observed["changed"], json!(false), "{observed}");
+    server.abort();
+}
+
+/// A same-URL reload with the same text is a new document: a change, never
+/// "no change", and the click is not sent again.
+#[tokio::test]
+#[ignore]
+async fn e2e_observe_same_url_reload_is_a_change() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>Reload</title>
+<main><h1>Report</h1><p>Report ready</p><button id="go" onclick="location.reload()">Reload</button></main>
+<script>sessionStorage.loads = String(Number(sessionStorage.loads || 0) + 1);</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "4", "action": "click", "selector": "#go", "observe": true,
+                "settleMs": 3000 }),
+    )
+    .await;
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    assert_ne!(observed["changed"], json!(false), "{observed}");
+    assert!(observed.get("noProgress").is_none(), "{observed}");
+    if observed["status"] == json!("complete") {
+        assert_eq!(
+            observed["frameDocumentChanged"],
+            json!(["top"]),
+            "{observed}"
+        );
+        assert_eq!(observed["changed"], json!(true), "{observed}");
+    }
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "5", "action": "evaluate", "script": "sessionStorage.loads" }),
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        json!("2"),
+        "one reload, no resend: {resp}"
+    );
     server.abort();
 }
 

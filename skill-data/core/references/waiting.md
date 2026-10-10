@@ -184,18 +184,24 @@ counts the rest and `textTruncated: true` says so.
 The text is read from the rendered DOM, not from `innerText`: `<input>`,
 `<textarea>`, `<select>` and every editable element (the editable host, all
 of its content, any document in `designMode`) are skipped with their
-subtrees, including inside open shadow roots. A line that contains the current
-value of a password field in the same document is dropped. A password value
-that a page copies into another frame's text is not filtered.
+subtrees, including inside open shadow roots. When any password field in any
+frame (open shadow roots included) holds a value before or after the action,
+no text lines are returned at all and `textStatus` is `redacted`: a page can
+copy a password into any frame's text, so no line is treated as safe. The
+password values themselves never leave the page.
 
 Each frame is read in its own isolated world and checked against the frame
-tree. A frame whose read failed, or whose document changed during the read,
-is unknown: it is listed in `textFrames` with its status and reason, contributes
-no lines, and makes the observation incomplete. `textStatus` is `partial`
-(some frames compared) or `unavailable` (none); `status` is then no better
-than `partial`, an unchanged tree no longer reads as `changed: false`, and no
-`noProgress` hint is given. `textFrames` also lists frames that are `gone`
-from a valid frame tree. The small-page `changes` list is capped at 60 lines
+tree, and the inventory is the frame tree read again after the reads. One
+capture reads at most 32 frames across all sessions within 2.5 s; a frame
+not read (over budget, or one that appeared during the read) is `partial`,
+and a frame whose read failed or whose document changed during the read is
+`unavailable`. Any such frame withholds every text line (it might hold a
+password), is listed in `textFrames` with its reason, and makes the
+observation incomplete: `textStatus` is `unavailable`, `status` is at best
+`partial`, an unchanged tree no longer reads as `changed: false`, and no
+`noProgress` hint is given. A frame the final inventory confirms is `gone`,
+and a frame whose document changed (`frameDocumentChanged`, e.g. a same-URL
+reload), count as changes. The small-page `changes` list is capped at 60 lines
 and 4 KB, 240 bytes a line (`changesOmitted`, `changesShortened`).
 
 `navigate`/`reload`/`back`/`forward` take `--observe` too, and return the

@@ -6059,11 +6059,14 @@ Options:
                              live) plus observed.changes (+/- lines only).
                              observed.text: visible text lines that changed in any
                              frame (receipts, counters); ≤20 lines/1 KB. Inputs,
-                             textareas, selects and editable regions are skipped;
-                             lines holding a same-document password value dropped.
-                             A text change sets changed=true; a frame that could not
-                             be read is listed in textFrames and makes the
-                             observation partial (never "no change").
+                             textareas, selects and editable regions are skipped.
+                             Any password field holding a value (any frame, before
+                             or after) withholds all text: textStatus=redacted.
+                             ≤32 frames and 2.5 s per capture; a frame not read or
+                             unreadable withholds all text, is listed in textFrames
+                             and makes the observation partial (never "no change").
+                             A gone frame or a new document (frameDocumentChanged)
+                             is a change.
                              Requests: at most 20 summaries, 256 UTF-8 bytes each;
                              data URL payloads omitted. Full capture: network requests --json
                              Applies to click, dblclick, fill, type, press, select,

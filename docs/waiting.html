@@ -272,9 +272,11 @@
         <code>observed.text</code> 按帧列出新出现（<code>+</code>）和消失（<code>-</code>）的可见文字行，子帧的行以 <code>[frame 名称]</code> 开头；
         只有文字变了也算 <code>changed: true</code>。最多 20 行、1 KB、每行 200 字节，多出的计入 <code>textOmitted</code> 并标 <code>textTruncated: true</code>。
         文字直接从渲染后的 DOM 读取，不用 <code>innerText</code>：<code>&lt;input&gt;</code>、<code>&lt;textarea&gt;</code>、<code>&lt;select&gt;</code> 和所有可编辑元素（可编辑宿主及其全部内容、<code>designMode</code> 下的整个文档）连同子树一起跳过，open shadow root 里也一样。
-        含有同一文档中密码框当前值的行会被丢弃；页面把密码复制到另一个帧的文字里时不会被过滤。
-        每个帧在自己的隔离环境中读取，并与帧树核对。读失败或读的过程中文档变了的帧算未知：列在 <code>textFrames</code> 里（带状态和原因），不贡献任何行，整个观察也不再完整——
-        <code>textStatus</code> 为 <code>partial</code> 或 <code>unavailable</code>，<code>status</code> 最多是 <code>partial</code>，树没变也不会再报 <code>changed: false</code>，不会给出 <code>noProgress</code>。
+        动作前后只要任一帧（含 open shadow root）里有密码框带值，就一行文字都不返回，<code>textStatus</code> 为 <code>redacted</code>：页面可能把密码复制到任何帧的文字里，所以没有哪一行算安全。密码值本身不会离开页面。
+        每个帧在自己的隔离环境中读取并与帧树核对，读完再取一次帧树作为最终清单。一次采集在所有会话里最多读 32 个帧、最多 2.5 秒；没读到的帧（超出预算，或读的过程中才出现）记为 <code>partial</code>，读失败或读的过程中文档变了的帧记为 <code>unavailable</code>。
+        只要有这样的帧，所有文字行都不返回（它可能藏着密码），它会带原因列在 <code>textFrames</code> 里，整个观察也不再完整——
+        <code>textStatus</code> 为 <code>unavailable</code>，<code>status</code> 最多是 <code>partial</code>，树没变也不会再报 <code>changed: false</code>，不会给出 <code>noProgress</code>。
+        最终清单确认已经消失的帧（<code>gone</code>）和文档换了的帧（<code>frameDocumentChanged</code>，比如同一 URL 重新加载）都算变化。
         小页面的 <code>changes</code> 最多 60 行、4 KB、每行 240 字节（<code>changesOmitted</code>、<code>changesShortened</code>）。
       </div>
 
