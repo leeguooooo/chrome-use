@@ -2579,6 +2579,17 @@ fn main() {
         };
     let nav_urls = navigation_urls(&clean, &flags, batch_steps.as_deref());
     let first_attach = !connection::daemon_ready(&flags.session);
+    // `close` ends what the session has; it never needs a page (#517). It
+    // chooses no profile, heals no relay and sends no `launch`: any of those
+    // connects, and a connection with no tab of the session's own opens one
+    // (the first-tab path) in the user's Chrome, only for `close` to close it.
+    // With no daemon and nothing recorded, there is nothing to close; tabs
+    // whose ownership was saved are closed by the daemon over the endpoint
+    // their record names, without creating anything.
+    let is_close = matches!(
+        clean.first().map(String::as_str),
+        Some("close") | Some("quit") | Some("exit")
+    );
     // `--profile` / AGENT_BROWSER_PROFILE doubles as a profile selector when it
     // names a Chrome profile (display name, directory, email, id). A path or
     // an unknown name keeps its launch-mode meaning.
@@ -2647,7 +2658,7 @@ fn main() {
             None
         };
     if let Some(id) = pinned_profile.as_deref() {
-        if first_attach && flags.auto_connect && flags.cdp.is_none() {
+        if first_attach && flags.auto_connect && flags.cdp.is_none() && !is_close {
             match connect::relay_endpoint_for_profile(id) {
                 Ok(ws) => {
                     profile_choice = Some((ws.clone(), "this session is bound to it".to_string()));
@@ -2664,7 +2675,9 @@ fn main() {
         }
     }
 
-    if let Some(sel) = browser_selector.as_ref() {
+    if is_close {
+        // Nothing to choose: see `is_close`.
+    } else if let Some(sel) = browser_selector.as_ref() {
         match connect::relay_profile_for_browser(sel) {
             Ok((_, email, url)) => {
                 browser_email = email;
@@ -2818,7 +2831,7 @@ fn main() {
         clean.first().map(|s| s.as_str()),
         Some("open") | Some("goto") | Some("navigate")
     );
-    if flags.provider.is_none() && !flags.force_launch {
+    if flags.provider.is_none() && !flags.force_launch && !is_close {
         let previous = profiles::session_profile(&flags.session);
         if let Some((ws, why)) = &profile_choice {
             if let Some(row) = profiles::row_for_ws(ws) {
@@ -3065,7 +3078,9 @@ fn main() {
     } else {
         None
     };
-    if let Some(id) = bound_relay_profile.as_deref() {
+    // A `close` with no daemon has no connection to heal (#517).
+    let heal_relay = !(is_close && first_attach);
+    if let Some(id) = bound_relay_profile.as_deref().filter(|_| heal_relay) {
         recover_pinned_relay(&mut flags, id);
     }
     let target_browser = flags.browser.as_deref().or(flags.profile.as_deref());
@@ -3074,6 +3089,7 @@ fn main() {
         .flatten()
         .is_some();
     if bound_relay_profile.is_none()
+        && heal_relay
         && flags.auto_connect
         && flags.cdp.is_none()
         && !flags.force_launch
@@ -3340,7 +3356,7 @@ fn main() {
     // made the fresh daemon hold a different endpoint the instant before the
     // explicit one was requested.
     let command_is_connect = clean.first().map(|s| s.as_str()) == Some("connect");
-    if flags.auto_connect && !daemon_result.already_running && !command_is_connect {
+    if flags.auto_connect && !daemon_result.already_running && !command_is_connect && !is_close {
         let mut launch_cmd = json!({
             "id": gen_id(),
             "action": "launch",
@@ -3380,7 +3396,7 @@ fn main() {
 
     // Connect via CDP if --cdp flag is set
     // Accepts either a port number (e.g., "9222") or a full URL (e.g., "ws://..." or "wss://...")
-    if let Some(ref cdp_value) = flags.cdp {
+    if let Some(cdp_value) = flags.cdp.as_ref().filter(|_| !is_close) {
         // Validate CDP value eagerly (even when daemon is already running) so
         // the user gets an immediate error for bad input instead of a silent no-op.
         let launch_cmd = if cdp_value.starts_with("ws://")
@@ -3480,7 +3496,7 @@ fn main() {
 
     // Launch with cloud provider if -p flag is set
     // Skip when daemon already running — it already holds the provider connection.
-    if let Some(ref provider) = flags.provider {
+    if let Some(provider) = flags.provider.as_ref().filter(|_| !is_close) {
         if !daemon_result.already_running {
             let mut launch_cmd = json!({
                 "id": gen_id(),
@@ -3533,6 +3549,7 @@ fn main() {
         && flags.cdp.is_none()
         && flags.provider.is_none()
         && (flags.force_launch || !flags.auto_connect)
+        && !is_close
     {
         // Launching a debug-port Chrome pops Chrome's "Allow remote debugging?"
         // consent modal (Chrome 136+). When the ab-connect relay is already up,

@@ -1848,6 +1848,11 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                         tab
                     }
                 }
+                // #517: no connection, no tabs of its own: nothing was touched.
+                _ if data.get("nothingToClose").and_then(|v| v.as_bool()) == Some(true) => {
+                    "Nothing to close: this session has no browser connection and no tabs of its own"
+                        .to_string()
+                }
                 _ => format!("Browser closed{verified}"),
             };
             println!("{} {}", color::success_indicator(), label);

@@ -48,6 +48,12 @@ struct Browser {
     close_requests: Vec<String>,
     /// CDP events sent before the next reply.
     events: Vec<Value>,
+    /// Every `ABExt.call`, as `namespace.method` (#517).
+    abext_calls: Vec<String>,
+    /// WebSocket connections accepted (#517).
+    connections: u32,
+    /// `Target.createTarget` calls since the counts were last reset (#517).
+    created_since_reset: u32,
 }
 
 #[derive(Clone)]
@@ -160,6 +166,14 @@ impl Fake {
         let mut b = self.0.lock().unwrap();
         let method = req["method"].as_str().unwrap_or("");
         let params = &req["params"];
+        if method == "ABExt.call" {
+            let call = format!(
+                "{}.{}",
+                params["namespace"].as_str().unwrap_or(""),
+                params["method"].as_str().unwrap_or("")
+            );
+            b.abext_calls.push(call);
+        }
         Ok(match method {
             // The profile has a window (#486 checks before a first tab).
             "ABExt.call" if params["namespace"] == "windows" && params["method"] == "getAll" => {
@@ -179,6 +193,7 @@ impl Fake {
             }
             "Target.createTarget" => {
                 b.created += 1;
+                b.created_since_reset += 1;
                 let id = format!("T{}", b.created);
                 let tab = 500 + b.created as i64;
                 let url = params["url"].as_str().unwrap_or("about:blank").to_string();
@@ -284,6 +299,7 @@ async fn serve(fake: Fake, stream: tokio::net::TcpStream) {
     let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
         return;
     };
+    fake.0.lock().unwrap().connections += 1;
     while let Some(Ok(msg)) = ws.next().await {
         let Ok(text) = msg.into_text() else { continue };
         let Ok(req) = serde_json::from_str::<Value>(&text) else {
@@ -1028,4 +1044,420 @@ fn a_malformed_absence_reply_keeps_the_rights() {
         assert!(d.alive(), "{fields}: daemon exited");
         assert!(d.sock_path().exists());
     }
+}
+
+// ---------------------------------------------------------------------------
+// #517: `close` with no browser connection creates nothing.
+//
+// Here the real CLI starts the daemon itself, the way an agent's commands do:
+// nothing is started by the test. The fake is the extension relay (its url in
+// the private relay dir) or, with `relay: false`, the endpoint named by a
+// config file (AGENT_BROWSER_CONFIG). The host manifest is absent from the
+// private HOME and AGENT_BROWSER_NO_AUTO_OPEN is set, so no Web Store page is
+// opened and no Chrome is launched on the machine running the tests.
+// ---------------------------------------------------------------------------
+
+struct Cli {
+    home: tempfile::TempDir,
+    sock: tempfile::TempDir,
+    relay: tempfile::TempDir,
+    config: PathBuf,
+    session: String,
+}
+
+impl Cli {
+    fn new(session: &str, endpoint: &str, relay: bool) -> Self {
+        let home = tempfile::tempdir().unwrap();
+        let sock = tempfile::Builder::new()
+            .prefix("cun")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let relay_dir = tempfile::tempdir().unwrap();
+        let config = home.path().join("cu-test-config.json");
+        if relay {
+            std::fs::write(relay_dir.path().join("relay-cdp-url"), endpoint).unwrap();
+            std::fs::write(&config, "{}").unwrap();
+        } else {
+            std::fs::write(&config, json!({ "cdp": endpoint }).to_string()).unwrap();
+        }
+        Cli {
+            home,
+            sock,
+            relay: relay_dir,
+            config,
+            session: session.to_string(),
+        }
+    }
+
+    fn command(&self, extra_env: &[(&str, &str)]) -> Command {
+        let mut c = Command::new(BIN);
+        c.env("HOME", self.home.path())
+            .env_remove("XDG_CONFIG_HOME")
+            .env("AGENT_BROWSER_SOCKET_DIR", self.sock.path())
+            .env("CHROME_USE_RELAY_DIR", self.relay.path())
+            .env("AGENT_BROWSER_CONFIG", &self.config)
+            .env("AGENT_BROWSER_NO_AUTO_OPEN", "1")
+            .env("AGENT_BROWSER_NO_AUTO_RECONNECT", "1")
+            .env_remove("AGENT_BROWSER_CDP")
+            .env_remove("AGENT_BROWSER_AUTO_CONNECT")
+            .env_remove("AGENT_BROWSER_NO_AUTO_CONNECT")
+            .env_remove("AGENT_BROWSER_PROVIDER")
+            .env_remove("AGENT_BROWSER_SESSION")
+            .env_remove("AGENT_BROWSER_IDLE_TIMEOUT_MS")
+            .env("NO_COLOR", "1")
+            .stdin(Stdio::null());
+        for (k, v) in extra_env {
+            c.env(k, v);
+        }
+        c
+    }
+
+    /// The real CLI, `--json`, starting the daemon when there is none.
+    fn run(&self, args: &[&str], extra_env: &[(&str, &str)]) -> Value {
+        let out = self
+            .command(extra_env)
+            .args(["--json", "--session", &self.session])
+            .args(args)
+            .output()
+            .expect("run chrome-use");
+        serde_json::from_slice(&out.stdout)
+            .unwrap_or_else(|e| panic!("{args:?}: {e}: {}", text(&out)))
+    }
+
+    fn sock_path(&self) -> PathBuf {
+        self.sock.path().join(format!("{}.sock", self.session))
+    }
+
+    fn record_path(&self) -> PathBuf {
+        self.sock
+            .path()
+            .join(format!("{}.created-targets.json", self.session))
+    }
+
+    /// The pid of the daemon the CLI started for this session, if any.
+    fn daemon_pid(&self) -> Option<i32> {
+        std::fs::read_to_string(self.sock.path().join(format!("{}.pid", self.session)))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
+    }
+
+    fn daemon_alive(&self) -> bool {
+        self.daemon_pid().is_some_and(|pid| {
+            Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        })
+    }
+
+    /// The session's daemon is gone: no socket, no live process.
+    fn wait_no_daemon(&self, budget: Duration) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < budget {
+            if !self.sock_path().exists() && !self.daemon_alive() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    }
+}
+
+impl Drop for Cli {
+    /// Stop the daemon this test's CLI started, and only that one.
+    fn drop(&mut self) {
+        if self.daemon_alive() {
+            if let Some(pid) = self.daemon_pid() {
+                let _ = Command::new("kill").arg(pid.to_string()).status();
+            }
+        }
+    }
+}
+
+/// What a command did to the browser: tabs created by CDP, `tabs.create` and
+/// `windows.create` over the extension, and connections opened.
+#[derive(Debug, PartialEq)]
+struct Touched {
+    create_target: u32,
+    tabs_create: usize,
+    windows_create: usize,
+    connections: u32,
+}
+
+impl Fake {
+    fn touched(&self) -> Touched {
+        let b = self.0.lock().unwrap();
+        Touched {
+            create_target: b.created_since_reset,
+            tabs_create: b.abext_calls.iter().filter(|c| *c == "tabs.create").count(),
+            windows_create: b
+                .abext_calls
+                .iter()
+                .filter(|c| *c == "windows.create")
+                .count(),
+            connections: b.connections,
+        }
+    }
+
+    fn reset_counts(&self) {
+        let mut b = self.0.lock().unwrap();
+        b.created_since_reset = 0;
+        b.abext_calls.clear();
+        b.connections = 0;
+        b.close_requests.clear();
+    }
+}
+
+const NOTHING: Touched = Touched {
+    create_target: 0,
+    tabs_create: 0,
+    windows_create: 0,
+    connections: 0,
+};
+
+fn assert_nothing_to_close(r: &Value) {
+    assert_eq!(r["success"], true, "{r}");
+    assert_eq!(r["data"]["closed"], true, "{r}");
+    assert_eq!(r["data"]["tabsClosed"], json!([]), "{r}");
+    assert_eq!(r["data"]["nothingToClose"], true, "{r}");
+}
+
+/// The second `close` of a session, after the first one closed its tab and
+/// ended the daemon: the CLI starts a new daemon for it, and that close must
+/// not connect, let alone open a tab to close it again.
+fn second_close_case(relay: bool) {
+    let (fake, url) = Fake::start(relay);
+    let cli = Cli::new(&format!("hc517-second-{}", relay as u8), &url, relay);
+    let r = cli.run(&["tab", "list"], &[]);
+    assert_eq!(r["success"], true, "{r}");
+    let t1 = fake.open_targets();
+    assert_eq!(t1.len(), 1, "the first command opens the session's tab");
+    let r = cli.run(&["close"], &[]);
+    assert_eq!(r["success"], true, "{r}");
+    assert_eq!(closed_targets(&r), t1, "{r}");
+    assert_ne!(r["data"]["nothingToClose"], true, "{r}");
+    assert!(
+        cli.wait_no_daemon(Duration::from_secs(30)),
+        "first close kept the daemon"
+    );
+    assert!(
+        !cli.record_path().exists(),
+        "record left after a complete close"
+    );
+
+    fake.reset_counts();
+    let r = cli.run(&["close"], &[]);
+    assert_nothing_to_close(&r);
+    assert_eq!(
+        fake.touched(),
+        NOTHING,
+        "the second close touched the browser"
+    );
+    assert!(fake.open_targets().is_empty(), "{:?}", fake.open_targets());
+    assert!(
+        fake.close_requests().is_empty(),
+        "{:?}",
+        fake.close_requests()
+    );
+    assert!(cli.wait_no_daemon(Duration::from_secs(30)));
+
+    // The plain-text reply says the same, without claiming a closed browser.
+    let out = cli
+        .command(&[])
+        .args(["--session", &cli.session, "close"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("Nothing to close"), "{}", text(&out));
+    assert_eq!(
+        fake.touched(),
+        NOTHING,
+        "the third close touched the browser"
+    );
+}
+
+#[test]
+fn second_close_creates_nothing_over_the_relay() {
+    second_close_case(true);
+}
+
+#[test]
+fn second_close_creates_nothing_on_a_configured_endpoint() {
+    second_close_case(false);
+}
+
+/// A session name that was never opened.
+fn never_opened_case(relay: bool) {
+    let (fake, url) = Fake::start(relay);
+    fake.0
+        .lock()
+        .unwrap()
+        .tabs
+        .push(("USER".to_string(), 7, "https://example.com/mine".into()));
+    let cli = Cli::new(&format!("hc517-never-{}", relay as u8), &url, relay);
+    let r = cli.run(&["close"], &[]);
+    assert_nothing_to_close(&r);
+    assert_eq!(
+        fake.touched(),
+        NOTHING,
+        "close of a never-opened session touched the browser"
+    );
+    assert_eq!(fake.open_targets(), vec!["USER".to_string()]);
+    assert!(fake.close_requests().is_empty());
+    assert!(cli.wait_no_daemon(Duration::from_secs(30)));
+}
+
+#[test]
+fn close_of_a_never_opened_session_creates_nothing_over_the_relay() {
+    never_opened_case(true);
+}
+
+#[test]
+fn close_of_a_never_opened_session_creates_nothing_on_a_configured_endpoint() {
+    never_opened_case(false);
+}
+
+/// Held rights with no daemon: the session's daemon exited on its idle
+/// timeout, which leaves the user's Chrome tabs open and their ownership
+/// saved. `close` closes exactly those, verified, over a new connection, and
+/// creates nothing. `bound`: the session is pinned to relay profile P1 while
+/// another profile (P2) is the relay's last-connected default; the close goes
+/// to P1 only.
+fn held_rights_case(bound: bool) {
+    let (fake, url) = Fake::start(true);
+    fake.0
+        .lock()
+        .unwrap()
+        .tabs
+        .push(("USER".to_string(), 7, "https://example.com/mine".into()));
+    let cli = Cli::new(&format!("hc517-held-{}", bound as u8), &url, true);
+    let other = if bound {
+        let (other, other_url) = Fake::start(true);
+        let dir = cli.relay.path();
+        std::fs::write(
+            dir.join("relay-ext-profile-P1"),
+            r#"{"id": "P1", "email": "p1@example.test"}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("relay-cdp-url-P1"), &url).unwrap();
+        std::fs::write(
+            dir.join("relay-ext-profile-P2"),
+            r#"{"id": "P2", "email": "p2@example.test"}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("relay-cdp-url-P2"), &other_url).unwrap();
+        // The generic endpoint is P2's: the host that connected last.
+        std::fs::write(dir.join("relay-cdp-url"), &other_url).unwrap();
+        std::fs::write(
+            cli.sock
+                .path()
+                .join(format!("{}.relay-profile", cli.session)),
+            "P1",
+        )
+        .unwrap();
+        Some(other)
+    } else {
+        None
+    };
+
+    let idle = [("AGENT_BROWSER_IDLE_TIMEOUT_MS", "1500")];
+    let r = cli.run(&["tab", "list"], &idle);
+    assert_eq!(r["success"], true, "{r}");
+    let r = cli.run(&["tab", "new"], &idle);
+    assert_eq!(r["success"], true, "{r}");
+    let mut owned: Vec<String> = fake
+        .open_targets()
+        .into_iter()
+        .filter(|t| t != "USER")
+        .collect();
+    owned.sort();
+    assert_eq!(owned.len(), 2, "{owned:?}");
+    if let Some(other) = &other {
+        assert!(other.open_targets().is_empty(), "the session left P1");
+    }
+    // The idle timeout ends the daemon; the tabs and their record stay.
+    assert!(
+        cli.wait_no_daemon(Duration::from_secs(30)),
+        "daemon did not idle out"
+    );
+    let saved = std::fs::read_to_string(cli.record_path()).expect("ownership saved");
+    assert!(owned.iter().all(|t| saved.contains(t)), "{saved}");
+
+    fake.reset_counts();
+    if let Some(other) = &other {
+        other.reset_counts();
+    }
+    let r = cli.run(&["close"], &[]);
+    assert_eq!(r["success"], true, "{r}");
+    assert_eq!(r["data"]["verifiedAbsent"], true, "{r}");
+    assert_ne!(r["data"]["nothingToClose"], true, "{r}");
+    assert_eq!(closed_targets(&r), owned, "{r}");
+    let touched = fake.touched();
+    assert_eq!(
+        (
+            touched.create_target,
+            touched.tabs_create,
+            touched.windows_create
+        ),
+        (0, 0, 0),
+        "close created something: {touched:?}"
+    );
+    assert_eq!(fake.open_targets(), vec!["USER".to_string()]);
+    assert!(!fake.close_requests().contains(&"USER".to_string()));
+    if let Some(other) = &other {
+        assert_eq!(other.touched(), NOTHING, "close went to another profile");
+    }
+    assert!(
+        !cli.record_path().exists(),
+        "record left after a complete close"
+    );
+    assert!(cli.wait_no_daemon(Duration::from_secs(30)));
+}
+
+#[test]
+fn close_with_saved_rights_and_no_daemon_closes_them_and_creates_nothing() {
+    held_rights_case(false);
+}
+
+#[test]
+fn close_with_saved_rights_closes_them_in_the_bound_profile_only() {
+    held_rights_case(true);
+}
+
+/// `close incomplete` with no daemon: a saved tab whose close is refused
+/// keeps its record (and the daemon, which holds the retry), and nothing is
+/// created. The retry once Chrome behaves closes it.
+#[test]
+fn incomplete_close_of_saved_rights_keeps_them() {
+    let (fake, url) = Fake::start(true);
+    let cli = Cli::new("hc517-incomplete", &url, true);
+    let idle = [("AGENT_BROWSER_IDLE_TIMEOUT_MS", "1500")];
+    let r = cli.run(&["tab", "list"], &idle);
+    assert_eq!(r["success"], true, "{r}");
+    let owned = fake.open_targets();
+    assert_eq!(owned.len(), 1);
+    assert!(
+        cli.wait_no_daemon(Duration::from_secs(30)),
+        "daemon did not idle out"
+    );
+    fake.refuse(&owned[0]);
+    fake.reset_counts();
+    let r = cli.run(&["close"], &[]);
+    assert_eq!(r["success"], false, "{r}");
+    let error = r["error"].as_str().unwrap_or_default();
+    assert!(error.contains("close incomplete"), "{error}");
+    assert_eq!(fake.touched().create_target, 0);
+    assert_eq!(fake.open_targets(), owned);
+    let saved = std::fs::read_to_string(cli.record_path()).expect("ownership kept");
+    assert!(saved.contains(&owned[0]), "{saved}");
+    fake.behave();
+    let r = cli.run(&["close"], &[]);
+    assert_eq!(r["success"], true, "{r}");
+    assert_eq!(closed_targets(&r), owned, "{r}");
+    assert_eq!(fake.touched().create_target, 0);
+    assert!(fake.open_targets().is_empty());
+    assert!(cli.wait_no_daemon(Duration::from_secs(30)));
 }

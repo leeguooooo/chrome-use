@@ -6292,6 +6292,15 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     // A closed session is no longer a launched one; the next command picks its
     // browser from its own flags again.
     crate::connection::clear_session_launched(&state.session_id);
+    // A marker the previous daemon left for this session's next command (an
+    // idle reap, another session's `close --all`) was taken by the `launch`
+    // that used to precede every `close`. `close` sends no `launch` any more
+    // (#517) and ends the session, so the marker ends with it.
+    let _ = super::daemon::take_reaped_marker(&state.session_id);
+    // Whether this session had anything to close at all: a connection, saved
+    // tab ownership, or first tabs held by this daemon. With none of them,
+    // `close` touches no browser and says so (#517).
+    let mut had_something = state.browser.is_some();
     // `close --all` from another session: this session's agent did not ask for
     // it and is probably mid-task. Leave a marker so its next command says its
     // tabs were closed, instead of quietly answering from a fresh about:blank.
@@ -6330,7 +6339,8 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     if state.browser.is_none() {
         if let Some(session) = super::browser::DAEMON_SESSION.get() {
             if crate::connection::has_created_targets(session) {
-                let closed = super::browser::close_persisted_session_tabs(session).await.map_err(|error| {
+                had_something = true;
+                let closed = close_saved_tabs(session).await.map_err(|error| {
                     format!("close incomplete: {error}. Reconnect with the original browser options and retry; saved tab ownership was retained.")
                 })?;
                 report = report.with_closed_ids(closed, "saved-record");
@@ -6380,6 +6390,7 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     {
         let session = state.session_id.clone();
         let groups = super::first_tab::snapshot_unsaved();
+        had_something |= !groups.is_empty();
         let closed = super::first_tab::close_held(groups, |endpoint, held| {
             let session = session.clone();
             async move {
@@ -6440,7 +6451,33 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     })?;
     state.carried_tabs_unknown = None;
     state.carried_tabs_cleanup = None;
-    Ok(report.to_json())
+    let mut out = report.to_json();
+    if !had_something {
+        out["nothingToClose"] = json!(true);
+    }
+    Ok(out)
+}
+
+/// Close the tabs a saved ownership record grants, with no connection of the
+/// daemon's own (#517): over the endpoint of the profile the session is bound
+/// to, else of the connected relay profile the record was written under,
+/// else the endpoint auto-connect finds. Only recorded targets are closed;
+/// nothing is created, attached to or discovered, and a browser the record
+/// does not match closes nothing and keeps the record.
+async fn close_saved_tabs(session: &str) -> Result<Vec<String>, String> {
+    if let Some(id) = crate::connection::session_relay_profile(session)? {
+        let endpoint = crate::connect::relay_endpoint_for_profile(&id).map_err(|e| {
+            format!(
+                "this session's tabs are in Chrome profile {id}, but that profile's relay \
+                 endpoint can't be determined: {e}"
+            )
+        })?;
+        return super::browser::close_persisted_session_tabs_at(session, &endpoint).await;
+    }
+    if let Some(endpoint) = endpoint_matching_created_record(session, "") {
+        return super::browser::close_persisted_session_tabs_at(session, &endpoint).await;
+    }
+    super::browser::close_persisted_session_tabs(session).await
 }
 
 /// Close the session's tabs after the connection that held them died (#485).
