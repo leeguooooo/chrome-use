@@ -1173,10 +1173,16 @@ impl RecorderGuard {
             .await;
     }
 
+    /// Stop and release, then disarm. The id stays in the guard until both
+    /// calls have completed: if this future is dropped while they are
+    /// pending (the command was cancelled mid-cleanup), Drop still finds the
+    /// id and runs the backstop release. A second stop/release of the same
+    /// object is harmless; a missing one leaks the RemoteObject.
     async fn finish(mut self) {
-        if let Some(id) = self.object_id.take() {
+        if let Some(id) = self.object_id.clone() {
             Self::release(&self.client, &self.session, &id).await;
         }
+        self.object_id = None;
     }
 }
 
@@ -6312,6 +6318,127 @@ mod stale_fill_tests {
 mod hover_tests {
     //! Issue #500: a hover is reported done only when the page confirms it.
     use super::{hover_outcome, hover_refusal, order_hover_points, parse_hover_check, HoverCheck};
+
+    /// A fake CDP endpoint that records every method (with its objectId) and
+    /// can hold the reply to the first `Runtime.callFunctionOn` forever.
+    async fn recorder_cleanup_fake(
+        hold_first_call: bool,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use futures_util::{SinkExt, StreamExt};
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log = seen.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+                return;
+            };
+            let mut held = !hold_first_call;
+            while let Some(Ok(msg)) = ws.next().await {
+                let Ok(text) = msg.into_text() else { continue };
+                let Ok(req) = serde_json::from_str::<serde_json::Value>(&text) else {
+                    continue;
+                };
+                let method = req["method"].as_str().unwrap_or("").to_string();
+                let obj = req["params"]["objectId"].as_str().unwrap_or("").to_string();
+                log.lock().unwrap().push(format!("{method} {obj}"));
+                if method == "Runtime.callFunctionOn" && !held {
+                    // Never answered: the cleanup await is pending here.
+                    held = true;
+                    continue;
+                }
+                let mut reply = serde_json::json!({ "id": req["id"], "result": {} });
+                if let Some(sid) = req.get("sessionId") {
+                    reply["sessionId"] = sid.clone();
+                }
+                let msg = tokio_tungstenite::tungstenite::Message::Text(reply.to_string());
+                if ws.send(msg).await.is_err() {
+                    return;
+                }
+            }
+        });
+        (format!("ws://127.0.0.1:{port}/devtools/browser/fake"), seen)
+    }
+
+    async fn released(seen: &std::sync::Mutex<Vec<String>>, id: &str) -> bool {
+        for _ in 0..100 {
+            if seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|l| l == &format!("Runtime.releaseObject {id}"))
+            {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        false
+    }
+
+    /// #509 review: cancelled *during* the cleanup await (the stop call is
+    /// pending when the command future is dropped), the RemoteObject must
+    /// still be released by the guard's Drop backstop. With the id taken
+    /// before the await, Drop found nothing and the object leaked.
+    #[tokio::test]
+    async fn a_cancelled_cleanup_still_releases_the_recorder() {
+        let (url, seen) = recorder_cleanup_fake(true).await;
+        let client = std::sync::Arc::new(super::CdpClient::connect(&url).await.unwrap());
+        let guard = super::RecorderGuard {
+            client: client.clone(),
+            session: "S1".to_string(),
+            object_id: Some("rec-1".to_string()),
+        };
+        let cancelled =
+            tokio::time::timeout(std::time::Duration::from_millis(200), guard.finish()).await;
+        assert!(
+            cancelled.is_err(),
+            "the held stop call should keep finish pending"
+        );
+        assert!(
+            released(&seen, "rec-1").await,
+            "no backstop release after cancelling mid-cleanup: {:?}",
+            seen.lock().unwrap()
+        );
+    }
+
+    /// The counterpart: cancelled before cleanup started (while the move was
+    /// pending), the guard is simply dropped and Drop releases.
+    #[tokio::test]
+    async fn a_guard_dropped_before_cleanup_releases_the_recorder() {
+        let (url, seen) = recorder_cleanup_fake(false).await;
+        let client = std::sync::Arc::new(super::CdpClient::connect(&url).await.unwrap());
+        let guard = super::RecorderGuard {
+            client: client.clone(),
+            session: "S1".to_string(),
+            object_id: Some("rec-2".to_string()),
+        };
+        drop(guard);
+        assert!(released(&seen, "rec-2").await, "{:?}", seen.lock().unwrap());
+    }
+
+    /// A normal finish releases exactly once and leaves nothing for Drop.
+    #[tokio::test]
+    async fn a_finished_cleanup_releases_once() {
+        let (url, seen) = recorder_cleanup_fake(false).await;
+        let client = std::sync::Arc::new(super::CdpClient::connect(&url).await.unwrap());
+        let guard = super::RecorderGuard {
+            client: client.clone(),
+            session: "S1".to_string(),
+            object_id: Some("rec-3".to_string()),
+        };
+        guard.finish().await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let n = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| *l == "Runtime.releaseObject rec-3")
+            .count();
+        assert_eq!(n, 1, "{:?}", seen.lock().unwrap());
+    }
 
     /// A pointer resting on the first hit point gets no event from a move
     /// there, so the second hit point (inside the target) goes first. With a
