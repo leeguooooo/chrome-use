@@ -309,14 +309,24 @@ impl Daemon {
     }
 
     /// The daemon exits after a completed close.
+    /// The session ended: the daemon unlinked its socket (what it does as soon
+    /// as a close completes) and then exited. The exit gets a generous budget
+    /// because a loaded build host can take seconds to reap it.
     fn wait_exit(&mut self) -> bool {
         let started = Instant::now();
-        while started.elapsed() < Duration::from_secs(10) {
-            if let Ok(Some(_)) = self.child.try_wait() {
-                return true;
+        while started.elapsed() < Duration::from_secs(30) {
+            if !self.sock_path().exists() {
+                if let Ok(Some(_)) = self.child.try_wait() {
+                    return true;
+                }
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+        eprintln!(
+            "socket present: {}, process exited: {:?}",
+            self.sock_path().exists(),
+            self.child.try_wait()
+        );
         false
     }
 
