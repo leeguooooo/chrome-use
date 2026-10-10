@@ -12306,7 +12306,12 @@ async fn handle_extract(cmd: &Value, state: &DaemonState) -> Result<Value, Strin
         r#"(() => {{
   const FIELDS = {fields_json};
   const ROWSEL = {rows_json};
-  const pick = (el, get) => {{
+  // Without `rows` the row root is the Document, which has no attributes,
+  // no innerHTML and no innerText: read those from its <html> element, so
+  // `"lang": "@lang"` reads `<html lang>` instead of throwing into a null.
+  const pick = (node, get) => {{
+    if (!node) return null;
+    const el = node.nodeType === 9 ? node.documentElement : node;
     if (!el) return null;
     if (get && get[0] === '@') return el.getAttribute(get.slice(1));
     if (get === 'html') return el.innerHTML;
