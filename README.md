@@ -249,6 +249,7 @@ For an authorized task, the bundled skill tells the agent to inspect and attempt
 | `chrome-use download @e2 ./video.mp4` | Download with the same cookies as the logged-in browser, without navigating the current tab |
 | `chrome-use network route "*/api/me" --body '{"vip":true}'` | Mock a response, rewrite an outgoing request, or block one |
 | `chrome-use site github/issues epiral/bb-browser --json` | Run a site adapter and get clean JSON from the site's own API |
+| `chrome-use tab close t2` · `close` | Close a tab, or end the session and close every tab it created. Both read the tabs back before reporting them closed (`tabsClosed`, `verifiedAbsent: true`); a tab still open or not confirmed gone fails with `close incomplete` and keeps the session and its tab ownership for a retry. `tab close` on the session's last tab ends the session (`sessionClosed: true`). Tabs the session did not create are never closed. Confirming over the relay needs ab-connect 0.5.33+ |
 | `chrome-use session list` · `session stop [name]` | Manage session workers |
 | `chrome-use auth login --bwu [--item <id\|name>]` | Fill the current login page from Bitwarden; handles TOTP and supported passkey second factors |
 | `chrome-use auth login --bwu --passkey` | Sign in with a vault passkey in `--launch` mode (bwu 0.9.0+) |

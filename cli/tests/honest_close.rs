@@ -1,8 +1,10 @@
-//! `close` and the last-tab `tab close` read the session's tabs back before
-//! calling them closed, through the real daemon process. The browser is a fake
-//! CDP endpoint that can lie about a close (acknowledge it and keep the tab) or
-//! refuse it. In relay mode it stands in for the ab-connect relay: sessions are
-//! `cb-tab-<id>`, `ABExt.inspectTab` answers from the tab record, and its
+//! `close`, the last-tab `tab close` and `tab close` of one tab read the
+//! session's tabs back before calling them closed, through the real daemon
+//! process (and the real CLI). The browser is a fake CDP endpoint that can lie
+//! about a close (acknowledge it and keep the tab), refuse it, hang, or fail
+//! to report a tab. In relay mode it stands in for the ab-connect relay:
+//! sessions are `cb-tab-<id>`, `ABExt.tabPresence` answers the 0.5.33
+//! contract (or, as an older extension, not at all), and its
 //! `Target.getTargets` drops a tab it was asked to close even when the tab is
 //! still open, the way the relay's cached list can. No Chrome runs.
 #![cfg(unix)]
@@ -12,11 +14,14 @@ use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const BIN: &str = env!("CARGO_BIN_EXE_chrome-use");
+
+/// The product's whole close-and-verify deadline (`CLOSE_TOTAL_BUDGET`).
+const CLOSE_TOTAL_BUDGET: Duration = Duration::from_secs(15);
 
 #[derive(Default)]
 struct Browser {
@@ -28,6 +33,13 @@ struct Browser {
     lie: HashSet<String>,
     /// A close of one of these is refused (`success: false`).
     refuse: HashSet<String>,
+    /// `ABExt.tabPresence` cannot read these (a chrome.tabs API error):
+    /// the extension answers `unknown`.
+    api_error: HashSet<String>,
+    /// The extension predates `ABExt.tabPresence` (ab-connect 0.5.32).
+    old_extension: bool,
+    /// Methods never answered.
+    hang: HashSet<String>,
     /// Targets the relay's cached list no longer shows (still open).
     unlisted: HashSet<String>,
     /// Every `Target.closeTarget` received.
@@ -87,10 +99,37 @@ impl Fake {
         self.0.lock().unwrap().refuse.insert(target.to_string());
     }
 
+    fn fail_presence(&self, target: &str) {
+        self.0.lock().unwrap().api_error.insert(target.to_string());
+    }
+
+    fn hang(&self, method: &str) {
+        self.0.lock().unwrap().hang.insert(method.to_string());
+    }
+
+    fn hangs(&self, method: &str) -> bool {
+        self.0.lock().unwrap().hang.contains(method)
+    }
+
+    /// Chrome replaces the tab holding `target` (a discard or prerender
+    /// swap): the same target, under a new Chrome tab id; the old id is gone.
+    fn replace_tab(&self, target: &str) -> i64 {
+        let mut b = self.0.lock().unwrap();
+        let entry = b.tabs.iter_mut().find(|(t, _, _)| t == target).unwrap();
+        entry.1 += 1000;
+        entry.1
+    }
+
+    /// The user closes a tab, outside the session.
+    fn remove(&self, target: &str) {
+        self.0.lock().unwrap().tabs.retain(|(t, _, _)| t != target);
+    }
+
     fn behave(&self) {
         let mut b = self.0.lock().unwrap();
         b.lie.clear();
         b.refuse.clear();
+        b.api_error.clear();
     }
 
     fn close_requests(&self) -> Vec<String> {
@@ -158,26 +197,33 @@ impl Fake {
                     json!({"success": existed})
                 }
             }
-            "ABExt.inspectTab" if b.relay => {
-                let session = params["sessionId"].as_str().unwrap_or("");
-                let target = params["targetId"].as_str().unwrap_or("");
-                let wanted: Option<i64> =
-                    session.strip_prefix("cb-tab-").and_then(|n| n.parse().ok());
-                let found = b.tabs.iter().find(|(t, tab, _)| {
-                    Some(*tab) == wanted || (!target.is_empty() && t == target)
-                });
-                match (found, wanted) {
-                    (Some((t, tab, url)), _) => {
-                        json!({"chromeTabId": tab, "targetId": t, "url": url})
-                    }
-                    (None, Some(tab)) => {
-                        return Err(format!("inspectTab: Chrome tab {tab} no longer exists"))
-                    }
-                    (None, None) => {
-                        return Err(
-                            "inspectTab: no tab matches the requested session or target".into()
-                        )
-                    }
+            // ab-connect 0.5.33's contract: listed in Chrome's registry means
+            // present (at its current tab); absent only when the target is
+            // gone AND the exact tab id given is gone; an API error is unknown.
+            "ABExt.tabPresence" if b.relay => {
+                if b.old_extension {
+                    return Err("'ABExt.tabPresence' wasn't found".to_string());
+                }
+                let target = params["targetId"].as_str().unwrap_or("").to_string();
+                let asked = params["tabId"].as_i64();
+                if b.api_error.contains(&target) {
+                    json!({"tabPresenceVersion": 1, "targetId": target, "tabId": asked,
+                           "presence": "unknown",
+                           "error": "Tabs cannot be edited right now (user may be dragging a tab)."})
+                } else if let Some((_, tab, url)) = b.tabs.iter().find(|(t, _, _)| *t == target) {
+                    json!({"tabPresenceVersion": 1, "targetId": target, "tabId": tab,
+                           "presence": "present", "url": url})
+                } else if let Some(tab) = asked {
+                    let presence = if b.tabs.iter().any(|(_, id, _)| *id == tab) {
+                        "unknown"
+                    } else {
+                        "absent"
+                    };
+                    json!({"tabPresenceVersion": 1, "targetId": target, "tabId": tab,
+                           "presence": presence})
+                } else {
+                    json!({"tabPresenceVersion": 1, "targetId": target, "tabId": null,
+                           "presence": "unknown", "error": "no tab id to confirm"})
                 }
             }
             "Target.getTargetInfo" => {
@@ -214,6 +260,9 @@ async fn serve(fake: Fake, stream: tokio::net::TcpStream) {
         let Ok(req) = serde_json::from_str::<Value>(&text) else {
             continue;
         };
+        if fake.hangs(req["method"].as_str().unwrap_or("")) {
+            continue; // never answered
+        }
         let mut reply = match fake.reply(&req) {
             Ok(result) => json!({"id": req["id"], "result": result}),
             Err(message) => json!({"id": req["id"], "error": {"code": -32000, "message": message}}),
@@ -235,10 +284,11 @@ async fn serve(fake: Fake, stream: tokio::net::TcpStream) {
 
 struct Daemon {
     child: Child,
-    _home: tempfile::TempDir,
+    home: tempfile::TempDir,
     sock: tempfile::TempDir,
-    _relay: tempfile::TempDir,
+    relay: tempfile::TempDir,
     session: String,
+    cdp: String,
 }
 
 impl Daemon {
@@ -271,10 +321,11 @@ impl Daemon {
             .unwrap();
         let d = Daemon {
             child,
-            _home: home,
+            home,
             sock,
-            _relay: relay,
+            relay,
             session: session.to_string(),
+            cdp: cdp.to_string(),
         };
         let started = Instant::now();
         while !d.sock_path().exists() {
@@ -286,6 +337,24 @@ impl Daemon {
         }
         std::thread::sleep(Duration::from_millis(300));
         d
+    }
+
+    /// The real CLI against this daemon, with `--json`.
+    fn cli(&self, args: &[&str]) -> Output {
+        Command::new(BIN)
+            .env("AGENT_BROWSER_SOCKET_DIR", self.sock.path())
+            .env("HOME", self.home.path())
+            .env("CHROME_USE_RELAY_DIR", self.relay.path())
+            .env("AGENT_BROWSER_CDP", &self.cdp)
+            .env("AGENT_BROWSER_NO_AUTO_RECONNECT", "1")
+            .env_remove("AGENT_BROWSER_AUTO_CONNECT")
+            .env_remove("AGENT_BROWSER_PROVIDER")
+            .env_remove("AGENT_BROWSER_SESSION")
+            .env("NO_COLOR", "1")
+            .args(["--json", "--session", &self.session])
+            .args(args)
+            .output()
+            .expect("run chrome-use")
     }
 
     fn sock_path(&self) -> PathBuf {
@@ -308,7 +377,6 @@ impl Daemon {
         serde_json::from_str(&line).unwrap_or_else(|e| panic!("{e}: {line:?}"))
     }
 
-    /// The daemon exits after a completed close.
     /// The session ended: the daemon unlinked its socket (what it does as soon
     /// as a close completes) and then exited. The exit gets a generous budget
     /// because a loaded build host can take seconds to reap it.
@@ -544,4 +612,292 @@ fn tab_close_never_closes_a_tab_the_session_did_not_create() {
     assert_eq!(r["success"], true, "{r}");
     assert!(fake.open_targets().contains(&"USER".to_string()));
     assert!(!fake.close_requests().contains(&"USER".to_string()));
+}
+
+fn record(d: &Daemon) -> String {
+    std::fs::read_to_string(d.record_path()).expect("ownership record kept")
+}
+
+/// A relay session with two tabs of its own: (t1 target, t2 target).
+fn two_relay_tabs(fake: &Fake, d: &Daemon) -> (String, String) {
+    let _ = fake;
+    one_tab(d);
+    let r = d.send(json!({"id": "n", "action": "tab_new", "label": "docs"}));
+    assert_eq!(r["success"], true, "{r}");
+    let tabs = d.tabs();
+    let of = |id: &str| tabs.iter().find(|(t, _)| t == id).unwrap().1.clone();
+    (of("t1"), of("t2"))
+}
+
+/// #496 review: an API error reading the tab is not a missing tab. The tab
+/// really was closed here, but the extension cannot confirm it: close stays
+/// incomplete, the ownership record keeps the tab, and the daemon stays.
+#[test]
+fn an_extension_api_error_is_unverified_not_closed() {
+    let (fake, url) = Fake::start(true);
+    let mut d = Daemon::start("hc-apierr", &url, true);
+    let (_, t2) = two_relay_tabs(&fake, &d);
+    fake.fail_presence(&t2);
+    let r = d.send(json!({"id": "x", "action": "close"}));
+    assert_eq!(r["success"], false, "{r}");
+    let error = r["error"].as_str().unwrap_or_default();
+    assert!(error.contains("close incomplete"), "{error}");
+    assert!(
+        error.contains("unverified") && error.contains(&t2),
+        "{error}"
+    );
+    assert!(error.contains("dragging a tab"), "{error}");
+    assert!(d.alive(), "daemon exited after an unverified close");
+    assert!(d.sock_path().exists());
+    assert!(record(&d).contains(&t2), "ownership of {t2} dropped");
+    // Once the extension can read it again, the retry confirms it gone.
+    fake.behave();
+    let r = d.send(json!({"id": "y", "action": "close"}));
+    assert_eq!(r["success"], true, "{r}");
+    assert_eq!(closed_targets(&r), vec![t2.clone()], "{r}");
+    assert!(d.wait_exit());
+}
+
+/// An extension without the `ABExt.tabPresence` contract (0.5.32) can never
+/// have a tab counted as closed: unverified, with the update named.
+#[test]
+fn an_extension_without_tab_presence_is_unverified() {
+    let (fake, url) = Fake::start(true);
+    fake.0.lock().unwrap().old_extension = true;
+    let mut d = Daemon::start("hc-oldext", &url, true);
+    let (t1, t2) = two_relay_tabs(&fake, &d);
+    let r = d.send(json!({"id": "x", "action": "close"}));
+    assert_eq!(r["success"], false, "{r}");
+    let error = r["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("2 of the 2 tab(s) could not be confirmed closed"),
+        "{error}"
+    );
+    assert!(error.contains("update it to 0.5.33 or newer"), "{error}");
+    assert!(d.alive());
+    let kept = record(&d);
+    assert!(kept.contains(&t1) && kept.contains(&t2), "{kept}");
+    // The tab close of one tab keeps it too.
+    let r = d.send(json!({"id": "c", "action": "tab_close", "tabId": "t1"}));
+    assert_eq!(r["success"], false, "{r}");
+}
+
+/// #496 review: the same target under a new Chrome tab id (a replacement),
+/// with a close acknowledged and the tab still open. The recorded tab id no
+/// longer exists, which must not read as the tab being gone.
+#[test]
+fn a_replaced_tab_whose_close_was_only_acknowledged_is_still_open() {
+    let (fake, url) = Fake::start(true);
+    let mut d = Daemon::start("hc-replaced", &url, true);
+    let (_, t2) = two_relay_tabs(&fake, &d);
+    let new_tab = fake.replace_tab(&t2);
+    fake.lie_about(&t2);
+    let r = d.send(json!({"id": "x", "action": "close"}));
+    assert_eq!(r["success"], false, "{r}");
+    assert_ne!(r["data"]["verifiedAbsent"], true, "{r}");
+    let error = r["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("still open") && error.contains(&t2),
+        "{error}"
+    );
+    assert!(fake.open_targets().contains(&t2));
+    assert!(d.alive());
+    assert!(record(&d).contains(&t2));
+    // The tab the target lives in now is the one closed on the retry.
+    fake.behave();
+    let r = d.send(json!({"id": "y", "action": "close"}));
+    assert_eq!(r["success"], true, "{r}");
+    assert_eq!(closed_targets(&r), vec![t2.clone()], "{r}");
+    assert!(
+        !fake.open_targets().contains(&t2),
+        "tab {new_tab} still open"
+    );
+    assert!(d.wait_exit());
+}
+
+/// #496 review: one deadline for the whole close. Sixteen tabs whose
+/// presence reads and closes never answer: `close` still answers within
+/// the budget (far under the CLI's 45 s), every tab unverified, every
+/// ownership kept, the daemon still up.
+#[test]
+fn close_of_many_hanging_tabs_stays_within_one_budget() {
+    let (fake, url) = Fake::start(true);
+    let mut d = Daemon::start("hc-hang", &url, true);
+    one_tab(&d);
+    for i in 0..15 {
+        let r = d.send(json!({"id": format!("n{i}"), "action": "tab_new"}));
+        assert_eq!(r["success"], true, "{r}");
+    }
+    let tabs = d.tabs();
+    assert_eq!(tabs.len(), 16, "{tabs:?}");
+    fake.hang("ABExt.tabPresence");
+    fake.hang("Target.closeTarget");
+    let started = Instant::now();
+    let r = d.send(json!({"id": "x", "action": "close"}));
+    let took = started.elapsed();
+    assert_eq!(r["success"], false, "{r}");
+    assert!(
+        took < CLOSE_TOTAL_BUDGET + Duration::from_secs(5),
+        "close took {took:?}, over its {CLOSE_TOTAL_BUDGET:?} budget"
+    );
+    let error = r["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("16 of the 16 tab(s) could not be confirmed closed"),
+        "{error}"
+    );
+    assert!(d.alive());
+    let kept = record(&d);
+    for (_, target) in &tabs {
+        assert!(kept.contains(target), "{target} dropped: {kept}");
+    }
+    eprintln!("close of 16 hanging tabs answered in {took:?}");
+}
+
+/// #496 review: `tab close` of one of several tabs is read back too. Two
+/// tabs of the session's own and one of the user's; the session's second tab
+/// acknowledges its close and stays open. The real CLI reports the failure,
+/// the tab keeps its close right, and a later `close` closes it. The user's
+/// tab is never asked to close and stays open throughout.
+fn multi_tab_case(relay: bool) {
+    let (fake, url) = Fake::start(relay);
+    fake.0
+        .lock()
+        .unwrap()
+        .tabs
+        .push(("USER".to_string(), 7, "https://example.com/mine".into()));
+    let mut d = Daemon::start(&format!("hc-multi-{}", relay as u8), &url, relay);
+    let out = d.cli(&["open", "about:blank"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let out = d.cli(&["tab", "new", "about:blank"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let out = d.cli(&["tab", "list"]);
+    let list: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let created: Vec<(String, String)> = list["data"]["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["ownership"] == "created" || (!relay && t["targetId"] != "USER"))
+        .map(|t| {
+            (
+                t["tabId"].as_str().unwrap().to_string(),
+                t["targetId"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert!(created.len() >= 2, "{list}");
+    assert!(created.iter().all(|(_, t)| t != "USER"), "{list}");
+    let (stuck_ref, stuck) = created.last().unwrap().clone();
+    fake.lie_about(&stuck);
+
+    let out = d.cli(&["tab", "close", &stuck_ref]);
+    assert!(
+        !out.status.success(),
+        "tab close reported success: {}",
+        text(&out)
+    );
+    let said = text(&out);
+    assert!(
+        said.contains("was not closed") && said.contains(&stuck),
+        "{said}"
+    );
+    assert!(said.contains("keeps its close right"), "{said}");
+    assert!(fake.open_targets().contains(&stuck));
+    assert!(record(&d).contains(&stuck), "close right lost");
+    let out = d.cli(&["tab", "list"]);
+    let list: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let row = list["data"]["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["targetId"] == stuck.as_str())
+        .unwrap_or_else(|| panic!("{stuck} left the tab list: {list}"))
+        .clone();
+    if relay {
+        assert_eq!(row["ownership"], "created", "{row}");
+    }
+
+    fake.behave();
+    let out = d.cli(&["close"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let r: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(r["data"]["verifiedAbsent"], true, "{r}");
+    assert!(closed_targets(&r).contains(&stuck), "{r}");
+    assert!(d.wait_exit());
+    assert!(fake.open_targets().contains(&"USER".to_string()));
+    assert!(!fake.close_requests().contains(&"USER".to_string()));
+}
+
+#[test]
+fn tab_close_of_a_tab_left_open_keeps_its_right_and_close_recovers_it() {
+    multi_tab_case(false);
+}
+
+#[test]
+fn tab_close_of_a_tab_left_open_keeps_its_right_over_the_relay() {
+    multi_tab_case(true);
+}
+
+/// #496 review: an omitted `tabId` resolves the active tab strictly. The
+/// pinned tab is gone and the session's other tab is all `pages` holds:
+/// `tab close` refuses instead of taking the last-tab branch and ending the
+/// session with that other tab.
+#[test]
+fn tab_close_without_a_tab_refuses_when_the_pinned_tab_is_gone() {
+    let (fake, url) = Fake::start(false);
+    let mut d = Daemon::start("hc-dangling", &url, false);
+    let t1 = one_tab(&d);
+    let r = d.send(json!({"id": "n", "action": "tab_new", "label": "docs"}));
+    assert_eq!(r["success"], true, "{r}");
+    let t2 = d.tabs().into_iter().find(|(id, _)| id == "t2").unwrap().1;
+    // The user closes the pinned tab; the session has only t1 left.
+    fake.remove(&t2);
+    for i in 0..3 {
+        let _ = d.send(json!({"id": format!("l{i}"), "action": "tab_list"}));
+    }
+    let r = d.send(json!({"id": "c", "action": "tab_close"}));
+    assert_eq!(r["success"], false, "{r}");
+    assert_ne!(r["data"]["sessionClosed"], true, "{r}");
+    assert!(fake.open_targets().contains(&t1), "t1 was closed");
+    assert!(
+        !fake.close_requests().contains(&t1),
+        "{:?}",
+        fake.close_requests()
+    );
+    assert!(d.alive());
+    assert!(record(&d).contains(&t1));
+}
+
+/// A `tabId` that is not a string is refused, never read as omitted (which
+/// would close the session's last tab).
+#[test]
+fn tab_close_refuses_a_tab_id_that_is_not_a_string() {
+    let (fake, url) = Fake::start(false);
+    let mut d = Daemon::start("hc-rawid", &url, false);
+    let t1 = one_tab(&d);
+    for raw in [json!(1), json!(true), json!({"tab": "t1"}), json!(["t1"])] {
+        let r = d.send(json!({"id": "c", "action": "tab_close", "tabId": raw}));
+        assert_eq!(r["success"], false, "tabId {raw}: {r}");
+        assert!(
+            r["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("tabId must be a tab id or label string")),
+            "{r}"
+        );
+    }
+    assert!(fake.open_targets().contains(&t1));
+    assert!(
+        fake.close_requests().is_empty(),
+        "{:?}",
+        fake.close_requests()
+    );
+    assert!(d.alive());
+    assert!(record(&d).contains(&t1));
+}
+
+fn text(out: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
 }

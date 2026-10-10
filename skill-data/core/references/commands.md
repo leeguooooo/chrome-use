@@ -417,14 +417,22 @@ chrome-use tab close docs                   # Close by label
 chrome-use window new                       # New window
 ```
 
+`tab close` of one of several tabs reports `verifiedAbsent: true`; a tab still
+open or unconfirmed fails, stays in `tab list` and keeps its close right.
+`tab close` with no tab closes the active tab only when it resolves: if the
+tab the session was driving is gone it refuses rather than pick another.
 `tab close` on the session's only tab, when the session created it, ends the
 session the way `close` does (`sessionClosed: true`): no separate `close`
 needed. A tab the session did not create (adopted, or the user's) is never
 closed; the refusal says to leave it open and run `close`.
 
-`close` reads every tab it closed back before reporting it: from the
-extension's tab record by exact Chrome tab id over the relay, or from Chrome's
-target list on a direct CDP connection. It returns `tabsClosed` (the tabs
+`close` (and `tab close` of one tab) reads every tab it closed back before
+reporting it: over the relay from the extension's `ABExt.tabPresence`
+(ab-connect 0.5.33+: Chrome's target registry for that exact target, then the
+exact tab id), or from Chrome's target list on a direct CDP connection. An
+older extension cannot confirm a tab is gone, so its tabs stay `unverified`.
+The whole close has one 15 s budget; a tab not confirmed by then stays
+`unverified` and keeps its ownership. It returns `tabsClosed` (the tabs
 confirmed gone) and `verifiedAbsent: true`. If any tab the session created is
 still open, or cannot be confirmed gone (`unverified`), it fails with
 `close incomplete` and names those tabs; the session, its daemon and its tab

@@ -48,6 +48,7 @@ import {
   RELOAD_LOOP_WINDOW_MS,
 } from './reload-loop.js';
 import { targetInfoForTab } from './target-info.js';
+import { targetPresence } from './tab-presence.js';
 import { createAgentTabQueue } from './agent-tab-queue.js';
 import { createAttachmentHealth, sendTabCommand } from './tab-command.js';
 import { HostConnectionState } from './host-connection.js';
@@ -1079,6 +1080,26 @@ async function handleForwardCdpCommand(msg) {
   // a permissions bug (issue #217).
   if (method === 'ABExt.attachedTargets') {
     return { targets: attachedTargetsFrom(tabs.entries()) };
+  }
+
+  // Whether the tab holding a target is still open (#496), for `close` to
+  // confirm a tab is gone before the CLI drops its right to close it. A
+  // structured answer (`tabPresenceVersion`): `absent` only when Chrome's own
+  // target registry no longer lists the target AND chrome.tabs reports the
+  // exact tab id missing; any API error is `unknown`.
+  if (method === 'ABExt.tabPresence') {
+    const rawTabId = params?.tabId;
+    return targetPresence(
+      {
+        targetId: params?.targetId,
+        tabId: rawTabId == null ? null : Number(rawTabId),
+      },
+      {
+        getTargets: () =>
+          withRelayTimeout(chrome.debugger.getTargets(), 'chrome.debugger.getTargets'),
+        getTab: (id) => chrome.tabs.get(id),
+      },
+    );
   }
 
   if (method === 'ABExt.inspectTab') {

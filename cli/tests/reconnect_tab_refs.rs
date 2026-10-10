@@ -179,30 +179,28 @@ impl Fake {
                 b.targets.retain(|(t, _)| *t != id);
                 json!({"success": true})
             }
-            // The extension's tab record, which `close` reads tabs back from
-            // over a relay endpoint. Target `T<n>` is Chrome tab `<n>`.
-            "ABExt.inspectTab" => {
+            // The extension's `ABExt.tabPresence` (ab-connect 0.5.33), which
+            // `close` reads tabs back with over a relay endpoint. Target `T<n>`
+            // is Chrome tab `<n>`: listed means present; absent only when the
+            // target is unlisted and the exact tab id given is gone.
+            "ABExt.tabPresence" => {
+                let target = params["targetId"].as_str().unwrap_or("").to_string();
                 let tab_of = |t: &str| t.strip_prefix('T').and_then(|n| n.parse::<i64>().ok());
-                let wanted = params["sessionId"]
-                    .as_str()
-                    .and_then(|s| s.strip_prefix("cb-tab-"))
-                    .and_then(|n| n.parse::<i64>().ok())
-                    .or_else(|| params["targetId"].as_str().and_then(tab_of));
-                let open = b
-                    .targets
-                    .iter()
-                    .find(|(t, _)| wanted.is_some() && tab_of(t) == wanted);
-                return match (open, wanted) {
-                    (Some((t, url)), Some(tab)) => {
-                        json!({"chromeTabId": tab, "targetId": t, "url": url})
+                let listed = b.targets.iter().any(|(t, _)| *t == target);
+                let asked = params["tabId"].as_i64();
+                let (presence, tab) = if listed {
+                    ("present", tab_of(&target))
+                } else if let Some(tab) = asked {
+                    if b.targets.iter().any(|(t, _)| tab_of(t) == Some(tab)) {
+                        ("unknown", Some(tab))
+                    } else {
+                        ("absent", Some(tab))
                     }
-                    (_, Some(tab)) => json!({"__error": format!(
-                        "inspectTab: Chrome tab {tab} no longer exists"
-                    )}),
-                    _ => {
-                        json!({"__error": "inspectTab: no tab matches the requested session or target"})
-                    }
+                } else {
+                    ("unknown", None)
                 };
+                json!({"tabPresenceVersion": 1, "targetId": target, "tabId": tab,
+                       "presence": presence})
             }
             "Target.getTargetInfo" => {
                 let id = params["targetId"].as_str().unwrap_or("");

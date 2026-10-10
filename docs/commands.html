@@ -459,8 +459,10 @@
         （adopt 来的、用户自己的）永远不会被关，拒绝信息会告诉你保持它打开并运行 <code>close</code>。
       </p>
       <p>
-        <code>close</code> 关完之后会逐个读回：走 relay 时按确切的 Chrome tab id 查扩展的标签记录，直连 CDP 时查
-        Chrome 自己的 target 列表。返回 <code>tabsClosed</code>（确认已关的标签）和 <code>verifiedAbsent: true</code>。
+        <code>close</code> 关完之后会逐个读回：走 relay 时用扩展的 <code>ABExt.tabPresence</code>（ab-connect 0.5.33+：先查 Chrome 自己的 target 注册表里这个确切的 target，
+        再查确切的 tab id；任何 API 错误都算无法确认），直连 CDP 时查 Chrome 自己的 target 列表。旧版扩展无法确认标签已关，结果一律是
+        <code>unverified</code>。整个关闭过程共用 15 秒预算，到时还没确认的标签保持 <code>unverified</code> 并保留归属。
+        关闭多个标签中的一个（<code>tab close t2</code>）也会读回；没确认关掉就报错，标签和关闭权都保留。返回 <code>tabsClosed</code>（确认已关的标签）和 <code>verifiedAbsent: true</code>。
         只要有本会话创建的标签还开着，或无法确认已关（<code>unverified</code>），就返回 <code>close incomplete</code>
         并列出这些标签；会话、daemon 和标签归属记录都保留，重试 <code>close</code> 即可。
       </p>

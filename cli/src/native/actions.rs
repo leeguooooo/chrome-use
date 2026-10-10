@@ -13301,12 +13301,21 @@ fn tab_inspect_error_message(
 
 async fn handle_tab_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
-    let tab_id = match cmd.get("tabId").and_then(|v| v.as_str()) {
-        Some(s) => {
+    // Only an absent (or null) `tabId` means "the active tab". Any other
+    // non-string (1, true, an object) is refused, never read as omitted: that
+    // would close the active tab, or end the session on its last tab.
+    let tab_id = match cmd.get("tabId") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => {
             let tab_ref = super::browser::TabRef::parse(s)?;
             Some(mgr.resolve_tab_ref(&tab_ref)?)
         }
-        None => None,
+        Some(other) => {
+            return Err(format!(
+                "tab close: tabId must be a tab id or label string such as \"t2\", not {other}; \
+                 nothing was closed. Run `chrome-use tab list` for the session's tabs"
+            ))
+        }
     };
     // The session's only tab, created by it: closing it is ending the
     // session. Run the session close path (verified, ownership kept on
