@@ -6319,20 +6319,28 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     if state.browser.is_none() {
         let groups = super::first_tab::take_unsaved();
         for (i, (endpoint, held)) in groups.iter().enumerate() {
-            if let Err(error) =
-                close_tabs_after_lost_connection(&state.session_id, endpoint, held).await
-            {
-                // Keep this group and every one not tried yet.
-                for (endpoint, held) in &groups[i..] {
-                    for target in held {
-                        super::first_tab::hold_unsaved(endpoint, target);
+            let result = close_tabs_after_lost_connection(
+                &state.session_id,
+                endpoint,
+                held,
+                &HashMap::new(),
+            )
+            .await;
+            match result {
+                Ok(closed) => report = report.with_closed_ids(closed, "reconnect"),
+                Err(error) => {
+                    // Keep this group and every one not tried yet.
+                    for (endpoint, held) in &groups[i..] {
+                        for target in held {
+                            super::first_tab::hold_unsaved(endpoint, target);
+                        }
                     }
-                }
-                return Err(format!(
-                    "close incomplete: {} tab(s) this session opened but could not record are \
+                    return Err(format!(
+                        "close incomplete: {} tab(s) this session opened but could not record are \
                      not confirmed closed: {error}. This daemon still holds them; retry `close`.",
-                    held.len()
-                ));
+                        held.len()
+                    ));
+                }
             }
         }
     }
