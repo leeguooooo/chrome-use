@@ -66,7 +66,12 @@ import {
   rememberReplayable as rememberReplayableIn,
   selectIdleTabs,
 } from './idle-detach.js';
-import { shouldCheckForUpdate, canApplyUpdateNow } from './update-check.js';
+import {
+  shouldCheckForUpdate,
+  updateApplyPlan,
+  keepsOwnershipAcrossUpdate,
+  UPDATE_HANDOFF_KEY,
+} from './update-check.js';
 import { attachedTargetsFrom } from './attached-targets.js';
 import { executeCall, policySummary, POLICY_VERSION } from './api-passthrough.js';
 import {
@@ -717,11 +722,25 @@ async function onHostMessage(msg) {
     return;
   }
   if (typeof msg.id !== 'undefined' && msg.method === 'forwardCDPCommand') {
+    // A pending update never reloads under a running command, tab-bound or
+    // not (Target.createTarget, ABExt.*), nor right after one (#524). A state
+    // read (`status`, `doctor`) is not a session working and does not count.
+    const counts = msg?.params?.method !== 'ABExt.state';
+    if (counts) {
+      hostCommandsInFlight++;
+      lastHostCommandAt = Date.now();
+    }
     try {
       const result = await handleForwardCdpCommand(msg);
       postToHost({ id: msg.id, result });
     } catch (err) {
       postToHost({ id: msg.id, error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      if (counts) {
+        hostCommandsInFlight = Math.max(0, hostCommandsInFlight - 1);
+        lastHostCommandAt = Date.now();
+        if (updatePending) scheduleUpdateApply();
+      }
     }
   }
 }
@@ -1270,6 +1289,9 @@ async function handleForwardCdpCommand(msg) {
       // hold it back now (#519: records of closed tabs never do).
       updatePending,
       updateBlockedBy: attachedTargetsFrom(tabs.entries()).filter((t) => t.attached).length,
+      // 0.5.35 (#524): attached tabs no longer hold an update back for good;
+      // it waits for a quiet relay. What it waits for, and how long.
+      update: updateStateSnapshot(),
       agentWindowId,
       agentWindowError,
       agentWindowRejected,
@@ -2091,39 +2113,166 @@ chrome.runtime.onInstalled.addListener((details) => {
   // which then re-attached them on every restart and left the debugger banner
   // stuck on the user's pages. Clear the persisted set on install/update — agent
   // tabs from a previous SW are dead anyway, and createTarget re-marks new ones.
+  // An update this extension applied itself (#524) left a handoff note: its
+  // tabs are live agent tabs of a session that continues, so they stay owned.
   if (details && (details.reason === 'update' || details.reason === 'install')) {
-    try {
-      chrome.storage.local.remove('ab_owned_tabs');
-    } catch {}
-    ownedTabs.clear();
+    void settleOwnershipAfterInstall(details.reason);
   }
   void whenReady(connectHost);
 });
+
+async function settleOwnershipAfterInstall(reason) {
+  let handoff = null;
+  try {
+    handoff = (await chrome.storage.local.get(UPDATE_HANDOFF_KEY))?.[UPDATE_HANDOFF_KEY] ?? null;
+    await chrome.storage.local.remove(UPDATE_HANDOFF_KEY);
+  } catch {}
+  // Kept: the connect path re-announces them (reattachOwnedTabs waits for
+  // the persisted set to load), without attaching the debugger.
+  if (keepsOwnershipAcrossUpdate(reason, handoff, Date.now())) return;
+  // Wait for the startup load so it cannot re-add what is purged here.
+  await loadOwnedTabs();
+  try {
+    await chrome.storage.local.remove('ab_owned_tabs');
+  } catch {}
+  ownedTabs.clear();
+}
 chrome.runtime.onStartup.addListener(() => void whenReady(connectHost));
 
 // ---- self-update ----------------------------------------------------------
 //
 // Users who never open chrome://extensions can sit on an old build for a long
 // time, because Chrome checks the store on its own slow schedule and only while
-// the browser runs. Ask it to look now, and apply a downloaded update the
-// moment nothing is being driven. `requestUpdateCheck` needs no permission.
+// the browser runs. Ask it to look now, and apply a downloaded update once
+// nothing is being driven. `requestUpdateCheck` needs no permission.
+//
+// "Nothing is being driven" used to mean "no tab attached", but a tab the agent
+// drove stays attached (idle-detach defaults to off) and the keepalive keeps
+// this worker alive while paired, so one long-lived session held every update
+// back for good (#524). Now: no command in flight, and the relay quiet for
+// UPDATE_IDLE_GRACE_MS. Then the attached tabs are released and the worker
+// reloads; the tabs it created keep their ownership (a handoff record read by
+// onInstalled), are re-announced without attaching, and the CLI re-attaches
+// on its next command. Nothing is activated or focused, and a user's own tab
+// the agent held is only released, never touched.
 let lastUpdateCheckAt = 0;
 let updatePending = false;
+let updateVersion = null;
+let updatePendingSince = 0;
+let applyingUpdate = false;
+let updateApplyTimer = null;
+// Host commands being handled now, and when the last one started or ended.
+// The worker's start counts as activity: tabs re-announced at startup belong
+// to a session that may be about to continue.
+let hostCommandsInFlight = 0;
+let lastHostCommandAt = Date.now();
+
+function currentUpdatePlan() {
+  return updateApplyPlan(tabs.entries(), {
+    now: Date.now(),
+    lastActivityAt: lastHostCommandAt,
+    commandsInFlight: hostCommandsInFlight,
+  });
+}
+
+// What `ABExt.state` reports under `update` (0.5.35+): whether an update
+// waits, for which version, and what holds it back right now.
+function updateStateSnapshot() {
+  const plan = currentUpdatePlan();
+  return {
+    pending: updatePending,
+    version: updateVersion,
+    pendingForMs: updatePending && updatePendingSince ? Date.now() - updatePendingSince : null,
+    appliesAfterIdleMs: plan.graceMs,
+    reason: updatePending ? (applyingUpdate ? 'applying' : plan.reason) : null,
+    commandsInFlight: plan.commandsInFlight,
+    attachedTabs: plan.attachedTabs,
+    idleForMs: plan.idleForMs,
+    appliesInMs: updatePending ? plan.appliesInMs : null,
+  };
+}
+
+function markUpdatePending(version) {
+  if (!updatePending) updatePendingSince = Date.now();
+  updatePending = true;
+  if (typeof version === 'string' && version) updateVersion = version;
+  void applyUpdateWhenIdle();
+}
+
+// Re-check exactly when the quiet period would end (the keepalive alarm is a
+// coarse backstop). Re-armed after every command, so it tracks the latest.
+function scheduleUpdateApply() {
+  if (!updatePending) return;
+  const plan = currentUpdatePlan();
+  if (updateApplyTimer) clearTimeout(updateApplyTimer);
+  updateApplyTimer = null;
+  if (plan.apply) {
+    void applyUpdateWhenIdle();
+    return;
+  }
+  if (plan.appliesInMs == null) return; // a command is running; its end re-arms
+  updateApplyTimer = setTimeout(() => {
+    updateApplyTimer = null;
+    void applyUpdateWhenIdle();
+  }, plan.appliesInMs + 250);
+}
 
 async function applyUpdateWhenIdle() {
-  if (!updatePending) return;
+  if (!updatePending || applyingUpdate) return;
   // Records of closed tabs are not "being driven": prune them first so they
   // never hold the update back (#519).
   await pruneDeadTabRecords();
-  if (!updatePending || !canApplyUpdateNow(tabs.entries())) return;
-  updatePending = false;
-  // Everything this worker holds is either persisted (owned tabs) or already
-  // released, so the restart re-establishes it. A pending update that never
-  // gets a quiet moment is applied by Chrome itself once the worker stops.
+  if (!updatePending || applyingUpdate) return;
+  if (!currentUpdatePlan().apply) {
+    scheduleUpdateApply();
+    return;
+  }
+  applyingUpdate = true;
   try {
+    // Leave a note for the worker that starts after the reload: this update
+    // was applied on purpose, so the tabs this extension created stay owned.
+    await withRelayTimeout(
+      chrome.storage.local.set({
+        [UPDATE_HANDOFF_KEY]: {
+          at: Date.now(),
+          from: chrome.runtime.getManifest().version,
+          to: updateVersion,
+        },
+      }),
+      'chrome.storage.local.set'
+    ).catch(() => {});
+    // A command may have arrived while the note was written.
+    if (!currentUpdatePlan().apply) return;
+    // Release every attached tab (idle agent tabs; a user tab a session
+    // forced is released, not closed). The relay records stay, so nothing
+    // tells the host the tabs are gone; the reload drops the port and the
+    // daemon reconnects to the new worker, which re-announces its own tabs.
+    const releases = [];
+    for (const [tabId, entry] of tabs.entries()) {
+      if (!entry || entry.attached === false) continue;
+      entry.attached = false;
+      for (const [sid, tid] of childSessionToTab.entries())
+        if (tid === tabId) childSessionToTab.delete(sid);
+      releases.push(chrome.debugger.detach({ tabId }).catch(() => {}));
+    }
+    await Promise.race([Promise.allSettled(releases), new Promise((r) => setTimeout(r, 2000))]);
+    // Last check, in the same task as the reload: nothing can arrive between.
+    // A command that came in during the releases re-attached its tab (and
+    // reset the quiet period), so the update waits for the next one.
+    if (!updatePending || !currentUpdatePlan().apply) return;
+    updatePending = false;
     chrome.runtime.reload();
-  } catch {}
+  } catch {
+  } finally {
+    applyingUpdate = false;
+    if (updatePending) scheduleUpdateApply();
+  }
 }
+
+// Test hook for the live check (#524): there is no way to make Chrome fire
+// onUpdateAvailable on demand. Reachable only from this extension's own
+// worker (e.g. DevTools / the debugging protocol on a test browser).
+globalThis.__abConnectSimulateUpdateAvailable = (version) => markUpdatePending(version || null);
 
 // Drop every entry whose tab Chrome confirms gone, here and at the host.
 async function pruneDeadTabRecords() {
@@ -2138,9 +2287,8 @@ async function pruneDeadTabRecords() {
   });
 }
 
-chrome.runtime.onUpdateAvailable.addListener(() => {
-  updatePending = true;
-  void applyUpdateWhenIdle();
+chrome.runtime.onUpdateAvailable.addListener((details) => {
+  markUpdatePending(details?.version);
 });
 
 function maybeCheckForUpdate() {
@@ -2153,10 +2301,7 @@ function maybeCheckForUpdate() {
     const p = chrome.runtime.requestUpdateCheck?.();
     if (p && typeof p.then === 'function') {
       p.then((r) => {
-        if (r?.status === 'update_available') {
-          updatePending = true;
-          void applyUpdateWhenIdle();
-        }
+        if (r?.status === 'update_available') markUpdatePending(r?.version);
       }).catch(() => {});
     }
   } catch {}

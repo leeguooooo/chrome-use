@@ -1172,6 +1172,11 @@ fn run_status(session: &str, json_mode: bool) {
         }
     }
     let current = inventory.sessions.iter().find(|item| item.name == session);
+    // A downloaded extension update, and what holds it back (#524).
+    let update = health.update_notice();
+    if let Some(notice) = update.as_ref().filter(|n| n.blocked) {
+        warnings.push(notice.message.clone());
+    }
 
     if json_mode {
         let sessions: Vec<_> = inventory
@@ -1221,6 +1226,12 @@ fn run_status(session: &str, json_mode: bool) {
                     "liveVersion": extension_version,
                     "profileId": profile_id,
                     "profileEmail": profile_email,
+                    "update": update.as_ref().map(|n| json!({
+                        "pending": true,
+                        "blocked": n.blocked,
+                        "message": n.message,
+                        "fix": n.fix,
+                    })),
                 },
                 "currentSession": current_session,
                 "sessions": sessions,
@@ -1249,6 +1260,14 @@ fn run_status(session: &str, json_mode: bool) {
     }
     if let Some(notice) = health.host_notice() {
         println!("INFO {notice}");
+    }
+    if let Some(notice) = &update {
+        if !notice.blocked {
+            println!("INFO {}", notice.message);
+        }
+        if let Some(fix) = &notice.fix {
+            println!("  fix: {fix}");
+        }
     }
     println!(
         "  extension: live {}, expected {}",
