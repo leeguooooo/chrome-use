@@ -515,9 +515,10 @@ fn read_json_from_content(
     };
     if let Some(max) = options.links {
         match (source, Url::parse(&fetch.final_url)) {
-            ("html-fallback", Ok(page)) => {
-                attach_links(&mut value, &collect_links(&fetch.body, &page, max))
-            }
+            ("html-fallback", Ok(page)) => attach_links(
+                &mut value,
+                &collect_links(&fetch.body, &page, max, fetch.truncated),
+            ),
             _ => note_links_unavailable(&mut value, source),
         }
     }
@@ -559,9 +560,10 @@ pub fn read_json_from_active_html(active_url: &str, html: String, options: &Read
     });
     if let Some(max) = options.links {
         match (options.raw, Url::parse(active_url)) {
-            (false, Ok(page)) => {
-                attach_links(&mut value, &collect_links(&html_for_links, &page, max))
-            }
+            (false, Ok(page)) => attach_links(
+                &mut value,
+                &collect_links(&html_for_links, &page, max, false),
+            ),
             _ => note_links_unavailable(&mut value, &source),
         }
     }
@@ -1212,11 +1214,16 @@ const VOID: &[&str] = &[
 /// Skipped: no href, a same-page `#fragment` and `javascript:`
 /// pseudo-links. Every step is bounded (see the `LINK_*` budgets) and says
 /// so in the result: an overlong URL is omitted, never truncated.
-pub fn collect_links(html: &str, page_url: &Url, max: usize) -> PageLinks {
+pub fn collect_links(html: &str, page_url: &Url, max: usize, input_truncated: bool) -> PageLinks {
     let mut out = PageLinks {
         total_exact: true,
         ..Default::default()
     };
+    // The page itself was cut before it got here (the HTTP body limit): the
+    // links after the cut are unknown, and the cut may fall inside a tag.
+    if input_truncated {
+        out.budgets_hit.push("input");
+    }
     let scan = if html.len() > LINK_SCAN_MAX_BYTES {
         out.budgets_hit.push("scan");
         let mut end = LINK_SCAN_MAX_BYTES;
@@ -1232,7 +1239,9 @@ pub fn collect_links(html: &str, page_url: &Url, max: usize) -> PageLinks {
         out.budgets_hit.push("anchors");
     }
 
-    let base = match base_href {
+    // The base is entity-decoded like every href, and the length budget
+    // applies to the decoded value.
+    let base = match base_href.map(|h| decode_html_entities(h.trim())) {
         Some(h) if h.len() <= LINK_URL_MAX_BYTES => page_url.join(&h).ok(),
         Some(_) => None,
         None => Some(page_url.clone()),
@@ -1304,7 +1313,7 @@ pub fn collect_links(html: &str, page_url: &Url, max: usize) -> PageLinks {
     out.total_exact = !out
         .budgets_hit
         .iter()
-        .any(|b| matches!(*b, "scan" | "anchors" | "dedup"));
+        .any(|b| matches!(*b, "input" | "scan" | "anchors" | "dedup"));
     out
 }
 
@@ -1413,7 +1422,11 @@ fn tokenize_links(html: &str) -> (Vec<RawLink>, Option<String>, bool) {
         }
         let name = lower[name_start..j].to_string();
         // Attributes, quote-aware: a `>` inside quotes does not end the tag.
-        let (attrs, end, self_closing) = parse_attributes(html, j);
+        // A tag the input ends inside (a budget or body cut) is dropped and
+        // the scan stops: a cut href is not a destination.
+        let Some((attrs, end)) = parse_attributes(html, j) else {
+            break;
+        };
         i = end;
         let attr = |n: &str| attrs.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone());
         match name.as_str() {
@@ -1441,17 +1454,13 @@ fn tokenize_links(html: &str) -> (Vec<RawLink>, Option<String>, bool) {
                     }
                 }
             }
+            // Raw text runs to its exact end tag. A self-closing flag on a
+            // non-void element is ignored, as in HTML: `<script/>` still opens
+            // a script.
             n if RAW_TEXT.contains(&n) => {
-                if self_closing {
-                    continue;
-                }
-                let close = format!("</{n}");
-                i = lower[i..]
-                    .find(&close)
-                    .map(|p| i + p)
-                    .unwrap_or(bytes.len());
+                i = raw_text_end(&lower, i, n);
             }
-            n if VOID.contains(&n) || self_closing => {}
+            n if VOID.contains(&n) => {}
             _ => stack.push(name),
         }
     }
@@ -1459,19 +1468,36 @@ fn tokenize_links(html: &str) -> (Vec<RawLink>, Option<String>, bool) {
     (links, base, cut)
 }
 
+/// The index of the end tag `</name` that closes a raw-text element opened
+/// before `from` (the name followed by whitespace, `/` or `>`), or the end of
+/// the input. `</scriptx>` does not end a script.
+fn raw_text_end(lower: &str, from: usize, name: &str) -> usize {
+    let close = format!("</{name}");
+    let mut at = from;
+    while let Some(p) = lower[at..].find(&close) {
+        let start = at + p;
+        let after = start + close.len();
+        match lower.as_bytes().get(after) {
+            None => return start,
+            Some(b) if b.is_ascii_whitespace() || *b == b'/' || *b == b'>' => return start,
+            _ => at = after,
+        }
+    }
+    lower.len()
+}
+
 /// Parse attributes from `html[from..]` up to the end of the start tag.
-/// Returns `(name, value)` pairs (names lowercased, values raw), the index
-/// just past the closing `>`, and whether the tag ended with `/>`.
-fn parse_attributes(html: &str, from: usize) -> (Vec<(String, String)>, usize, bool) {
+/// Returns `(name, value)` pairs (names lowercased, values raw) and the index
+/// just past the closing `>`; `None` when the input ends inside the tag or
+/// inside a quoted value, so a cut fragment is never taken as complete.
+fn parse_attributes(html: &str, from: usize) -> Option<(Vec<(String, String)>, usize)> {
     let bytes = html.as_bytes();
     let mut attrs = Vec::new();
     let mut i = from;
-    let mut self_closing = false;
     while i < bytes.len() {
         match bytes[i] {
-            b'>' => return (attrs, i + 1, self_closing),
+            b'>' => return Some((attrs, i + 1)),
             b'/' => {
-                self_closing = true;
                 i += 1;
                 continue;
             }
@@ -1481,7 +1507,6 @@ fn parse_attributes(html: &str, from: usize) -> (Vec<(String, String)>, usize, b
             }
             _ => {}
         }
-        self_closing = false;
         let name_start = i;
         while i < bytes.len()
             && !bytes[i].is_ascii_whitespace()
@@ -1505,10 +1530,9 @@ fn parse_attributes(html: &str, from: usize) -> (Vec<(String, String)>, usize, b
                 let v_end = html[v_start..]
                     .bytes()
                     .position(|b| b == q)
-                    .map(|p| v_start + p)
-                    .unwrap_or(bytes.len());
+                    .map(|p| v_start + p)?;
                 value = html[v_start..v_end].to_string();
-                i = (v_end + 1).min(bytes.len());
+                i = v_end + 1;
             } else {
                 let v_start = i;
                 while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'>' {
@@ -1521,7 +1545,7 @@ fn parse_attributes(html: &str, from: usize) -> (Vec<(String, String)>, usize, b
             attrs.push((name, value));
         }
     }
-    (attrs, bytes.len(), self_closing)
+    None
 }
 
 /// A one-line label for a link: its text, else `aria-label` / `title`, else
@@ -1589,7 +1613,7 @@ fn attach_links(value: &mut Value, links: &PageLinks) {
     }
     if !links.budgets_hit.is_empty() {
         section.push_str(&format!(
-            "(link scan stopped by its budget: {}; the count is {})\n",
+            "(link scan cut by a budget: {}; the count is {})\n",
             links.budgets_hit.join(", "),
             if links.total_exact {
                 "exact"
@@ -1900,7 +1924,7 @@ mod tests {
           <script>document.write('<a href="/hidden">x</a>')</script>
         </body></html>"##;
         let page = Url::parse("https://news.example.org/news/").unwrap();
-        let links = collect_links(html, &page, 100);
+        let links = collect_links(html, &page, 100, false);
         assert_eq!(
             links.shown,
             vec![
@@ -1935,7 +1959,7 @@ mod tests {
         let html = r#"<html><head><base href="https://cdn.example.com/docs/"></head><body>
           <a href="a">A</a><a href="b">B</a><a href="c">C</a></body></html>"#;
         let page = Url::parse("https://example.com/page").unwrap();
-        let links = collect_links(html, &page, 2);
+        let links = collect_links(html, &page, 2, false);
         assert_eq!(links.total, 3);
         assert_eq!(links.shown.len(), 2);
         assert_eq!(links.shown[0].1, "https://cdn.example.com/docs/a");
@@ -1982,7 +2006,7 @@ mod tests {
     fn a_quoted_gt_does_not_end_the_tag() {
         let html = r#"<a title="1 > 0" href="/x">X</a><a data-x='a>b' href=/y>Y</a>"#;
         let page = Url::parse("https://a.example/").unwrap();
-        let links = collect_links(html, &page, 10);
+        let links = collect_links(html, &page, 10, false);
         assert_eq!(
             urls(&links),
             vec!["https://a.example/x", "https://a.example/y"]
@@ -2000,7 +2024,7 @@ mod tests {
           <style>a::after { content: "<a href='/in-style'>"; }</style>
           </head><body><a href="real">Real</a></body></html>"#;
         let page = Url::parse("https://a.example/dir/").unwrap();
-        let links = collect_links(html, &page, 10);
+        let links = collect_links(html, &page, 10, false);
         assert_eq!(urls(&links), vec!["https://a.example/dir/real"]);
         assert_eq!(links.total, 1);
     }
@@ -2013,7 +2037,7 @@ mod tests {
           <base href="https://cdn.example/one/"><base href="https://cdn.example/two/">
           <a href="after">A</a></body>"#;
         let page = Url::parse("https://a.example/").unwrap();
-        let links = collect_links(html, &page, 10);
+        let links = collect_links(html, &page, 10, false);
         assert_eq!(
             urls(&links),
             vec![
@@ -2030,7 +2054,7 @@ mod tests {
         let html = r#"<div><a href="/x">Alpha</div><p>after the block</p>
           <a href="/y">One<a href="/z">Two</a>"#;
         let page = Url::parse("https://a.example/").unwrap();
-        let links = collect_links(html, &page, 10);
+        let links = collect_links(html, &page, 10, false);
         let texts: Vec<&str> = links.shown.iter().map(|(t, _)| t.as_str()).collect();
         assert_eq!(texts, vec!["Alpha", "One", "Two"]);
     }
@@ -2044,7 +2068,7 @@ mod tests {
             r#"<a href="/a">A</a><a href="/b">B</a><a href="/a">dup</a><a href="{long}">L</a>"#
         );
         let page = Url::parse("https://a.example/").unwrap();
-        let links = collect_links(&html, &page, 1);
+        let links = collect_links(&html, &page, 1, false);
         assert_eq!(links.total, 2);
         assert!(links.total_exact);
         assert_eq!(links.shown.len(), 1);
@@ -2072,7 +2096,7 @@ mod tests {
         }
         let page = Url::parse("https://a.example/").unwrap();
         let started = std::time::Instant::now();
-        let links = collect_links(&html, &page, 100);
+        let links = collect_links(&html, &page, 100, false);
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
         assert!(links.shown.is_empty());
         assert_eq!(links.total, 0);
@@ -2088,7 +2112,7 @@ mod tests {
             html.push_str(&format!(r#"<a href="https://h.example/{i}">{i}</a>"#));
         }
         let page = Url::parse("https://a.example/").unwrap();
-        let links = collect_links(&html, &page, 10);
+        let links = collect_links(&html, &page, 10, false);
         assert!(!links.total_exact);
         assert!(
             links.budgets_hit.contains(&"dedup"),
@@ -2113,13 +2137,60 @@ mod tests {
                 "q".repeat(1900)
             ));
         }
-        let links = collect_links(&html, &page, MAX_MAX_LINKS);
+        let links = collect_links(&html, &page, MAX_MAX_LINKS, false);
         let bytes: usize = links.shown.iter().map(|(t, u)| t.len() + u.len() + 8).sum();
         assert!(bytes <= LINK_OUTPUT_MAX_BYTES, "{bytes}");
         assert!(links.shown.len() < 1000);
         assert!(links.budgets_hit.contains(&"output"));
         assert_eq!(links.total, 1000);
         assert!(links.total_exact);
+    }
+
+    /// #503 review 3: the base href is entity-decoded like every href.
+    #[test]
+    fn the_base_href_is_entity_decoded() {
+        let html = r#"<base href="https://a.example/a&amp;b/"><a href="x">X</a>"#;
+        let page = Url::parse("https://p.example/").unwrap();
+        let links = collect_links(html, &page, 10, false);
+        assert_eq!(urls(&links), vec!["https://a.example/a&b/x"]);
+    }
+
+    /// #503 review 3: `</scriptx>` does not end a script, and `<script/>` /
+    /// `<style/>` still open raw text (HTML ignores the self-closing flag on
+    /// non-void elements). A fake base or anchor inside must not count.
+    #[test]
+    fn raw_text_ends_only_at_its_exact_end_tag() {
+        let html = r#"<script>var a = '</scriptx><base href="https://evil.example/"><a href="/fake1">f</a>';</script>
+          <script/><base href="https://evil2.example/"><a href="/fake2">f</a></script >
+          <style/>a::before{content:'<a href="/fake3">'}</style>
+          <style>x{}</stylex><a href="/fake4">f</a></style>
+          <a href="real">Real</a>"#;
+        let page = Url::parse("https://a.example/d/").unwrap();
+        let links = collect_links(html, &page, 10, false);
+        assert_eq!(urls(&links), vec!["https://a.example/d/real"]);
+    }
+
+    /// #503 review 3: a cut inside a quoted href (a budget or body limit) is
+    /// never taken as a complete destination, and an input cut makes the
+    /// count a lower bound.
+    #[test]
+    fn a_cut_inside_an_href_is_dropped_and_the_count_is_a_lower_bound() {
+        let html = r#"<a href="/ok">OK</a><a href="/target-full"#;
+        let page = Url::parse("https://a.example/").unwrap();
+        let links = collect_links(html, &page, 10, false);
+        assert_eq!(urls(&links), vec!["https://a.example/ok"]);
+        let cut = collect_links(html, &page, 10, true);
+        assert_eq!(urls(&cut), vec!["https://a.example/ok"]);
+        assert!(!cut.total_exact);
+        assert!(cut.budgets_hit.contains(&"input"));
+        // An unquoted value cut at the end, and a tag cut before its `>`.
+        for html in [
+            r#"<a href=/ok>OK</a><a href=/targ"#,
+            r#"<a href="/ok">OK</a><a href="/x" "#,
+        ] {
+            let links = collect_links(html, &page, 10, false);
+            assert_eq!(urls(&links), vec!["https://a.example/ok"], "{html}");
+        }
     }
 
     #[test]

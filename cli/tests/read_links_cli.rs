@@ -42,6 +42,30 @@ fn serve(pages: Vec<(&'static str, String)>) -> u16 {
     port
 }
 
+/// Fake bases and anchors hidden in raw text: a `</scriptx>` inside a
+/// script, a `<script/>` and a `<style/>` (both still open raw text), and a
+/// `</stylex>`. Only the real link may come out, resolved against the page.
+fn raw_text_page() -> String {
+    r#"<!doctype html><html><head>
+<script>var a = '</scriptx><base href="https://evil.example/"><a href="/fake1">f</a>';</script>
+<script/><base href="https://evil2.example/"><a href="/fake2">f</a></script>
+<style/>a::before{content:'<a href="/fake3">'}</style>
+<style>x{}</stylex><a href="/fake4">f</a></style>
+</head><body><a href="real">Real</a></body></html>"#
+        .to_string()
+}
+
+/// A page cut by the 2 MiB HTTP body limit exactly inside a quoted href.
+fn cut_inside_href_page() -> String {
+    const BODY_LIMIT: usize = 2 * 1024 * 1024;
+    let head = r#"<!doctype html><html><body><a href="/ok">OK</a><p>"#;
+    let tail = r#"</p><a href="/target-full-destination">T</a></body></html>"#;
+    // Pad so the cut falls 8 bytes into the second href's value.
+    let cut_at = tail.find("/target").unwrap() + 8;
+    let pad = BODY_LIMIT - head.len() - cut_at;
+    format!("{head}{}{tail}", "x".repeat(pad))
+}
+
 fn long_base_page() -> String {
     let mut html = format!(
         r#"<!doctype html><html><head><base href="http://127.0.0.1/{}/"></head><body>"#,
@@ -228,4 +252,68 @@ fn read_links_budgets_and_argument_checks_through_stdio_mcp() {
         "url": format!("http://127.0.0.1:{port}/wide"), "maxLinks": 5, "links": "bad"
     }));
     assert!(r.to_string().contains("links must be a boolean"), "{r}");
+}
+
+#[test]
+fn read_links_ignores_fake_links_in_raw_text_and_cut_hrefs_through_cli_and_mcp() {
+    let port = serve(vec![
+        ("/raw/", raw_text_page()),
+        ("/cut", cut_inside_href_page()),
+    ]);
+    let env = Env::new("raw");
+
+    let (v, out) = env.read(&[&format!("http://127.0.0.1:{port}/raw/"), "--links"]);
+    assert!(out.status.success(), "{v}");
+    let urls: Vec<String> = v["data"]["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["url"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        urls,
+        vec![format!("http://127.0.0.1:{port}/raw/real")],
+        "{v}"
+    );
+    assert!(!v.to_string().contains("evil"), "{v}");
+
+    let (v, out) = env.read(&[&format!("http://127.0.0.1:{port}/cut"), "--links"]);
+    assert!(out.status.success(), "{v}");
+    let d = &v["data"];
+    let urls: Vec<String> = d["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["url"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(urls, vec![format!("http://127.0.0.1:{port}/ok")], "{d}");
+    assert!(
+        !v.to_string().contains("/target"),
+        "a cut href was listed: {d}"
+    );
+    assert_eq!(d["linksTotalExact"], false, "{d}");
+    assert!(d["linksBudgetsHit"].to_string().contains("input"), "{d}");
+
+    for (path, expect) in [("/raw/", "/raw/real"), ("/cut", "/ok")] {
+        let r = env.mcp_read(json!({
+            "url": format!("http://127.0.0.1:{port}{path}"), "links": true, "session": env.session
+        }));
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        let d = &r["result"]["structuredContent"]["response"]["data"];
+        let urls: Vec<String> = d["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["url"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            urls,
+            vec![format!("http://127.0.0.1:{port}{expect}")],
+            "{d}"
+        );
+        assert!(
+            !r.to_string().contains("evil") && !r.to_string().contains("/target"),
+            "{r}"
+        );
+    }
 }
