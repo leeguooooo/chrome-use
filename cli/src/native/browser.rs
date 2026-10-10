@@ -462,6 +462,11 @@ async fn close_and_verify_targets_tracking(
             for (target, (presence, tab)) in reads {
                 // Follow the target to its current tab (a replacement).
                 if let Some(tab) = tab {
+                    // A confirmed new home goes to the caller now, before the
+                    // next read-back is awaited (#486).
+                    if presence == TabPresence::Present {
+                        learned(&target, tab);
+                    }
                     chrome_tabs.insert(target.clone(), tab);
                 }
                 verdicts.insert(target, presence);
@@ -9699,6 +9704,14 @@ mod first_tab_custody_tests {
         /// close went through.
         hang_read_back: bool,
         closed: Vec<String>,
+        /// Tab ids that differ from the default `10 + n`.
+        moved: HashMap<String, i64>,
+        /// Relay mode: on its close, T1 is not closed but moves to tab 22,
+        /// and tab 11 now holds another target, T9.
+        t1_moves_on_close: bool,
+        /// Relay mode: answer this many read-backs of T1 after its close,
+        /// then never answer again.
+        t1_read_backs_answered: Option<u32>,
     }
     type Shared = Arc<(std::sync::Mutex<Chrome>, tokio::sync::Notify)>;
 
@@ -9728,10 +9741,22 @@ mod first_tab_custody_tests {
                     chrome.1.notify_one();
                     return None;
                 }
+                if target == "T1" && c.closed.contains(&target) {
+                    if let Some(left) = c.t1_read_backs_answered {
+                        if left == 0 {
+                            chrome.1.notify_one();
+                            return None;
+                        }
+                        c.t1_read_backs_answered = Some(left - 1);
+                    }
+                }
+                let moved = c.moved.clone();
                 let tab_of = |t: &str| {
-                    t.strip_prefix('T')
-                        .and_then(|n| n.parse::<i64>().ok())
-                        .map(|n| 10 + n)
+                    moved.get(t).copied().or_else(|| {
+                        t.strip_prefix('T')
+                            .and_then(|n| n.parse::<i64>().ok())
+                            .map(|n| 10 + n)
+                    })
                 };
                 let listed = c.targets.contains(&target);
                 let (presence, tab) = match (listed, params["tabId"].as_i64()) {
@@ -9747,6 +9772,13 @@ mod first_tab_custody_tests {
             "Target.closeTarget" if c.hang_close => {
                 chrome.1.notify_one();
                 return None;
+            }
+            "Target.closeTarget" if c.t1_moves_on_close && params["targetId"] == "T1" => {
+                c.closed.push("T1".to_string());
+                c.moved.insert("T1".to_string(), 22);
+                c.moved.insert("T9".to_string(), 11);
+                c.targets.push("T9".to_string());
+                json!({"success": false})
             }
             "Target.closeTarget" => {
                 let id = params["targetId"].as_str().unwrap_or("").to_string();
@@ -9879,6 +9911,69 @@ mod first_tab_custody_tests {
         let known = first_tab::tab_ids_for(&url);
         let verdicts =
             close_and_verify_targets(&client, &held, known, true, Duration::from_secs(5)).await;
+        assert_eq!(
+            verdicts.get("T1"),
+            Some(&TabPresence::Absent),
+            "{verdicts:?}"
+        );
+        assert_eq!(chrome.0.lock().unwrap().created, 1, "a tab was opened");
+        first_tab::release_unsaved(&url, &held);
+        first_tab::forget_tab_ids(&url, &held);
+    }
+
+    /// Protocol counter-example, relay mode (not a claim about real Chrome):
+    /// the lookup learns T1 → tab 11; the close is not confirmed; a read-back
+    /// returns Present(T1, 22) while tab 11 now holds another target (T9);
+    /// the next read-back never answers and the connect future is dropped
+    /// there (a dropped future, not a socket disconnect). The kept id must be
+    /// 22: once T1 disappears, only (T1, 22) can prove it gone, while
+    /// (T1, 11) stays unknown because tab 11 still exists.
+    #[tokio::test]
+    async fn a_dropped_relay_cleanup_keeps_the_tab_id_a_read_back_moved_it_to() {
+        let (chrome, url) = start().await;
+        {
+            let mut c = chrome.0.lock().unwrap();
+            c.t1_moves_on_close = true;
+            c.t1_read_backs_answered = Some(1);
+        }
+        relay_for_test(true);
+        first_tab_save_fails_for_test(true);
+        {
+            let connect = BrowserManager::connect_cdp(&url);
+            tokio::select! {
+                r = connect => panic!("the second read-back never answers: {:?}", r.err()),
+                _ = chrome.1.notified() => {}
+            }
+            // Leaving the block drops the connect future in the second read-back.
+        }
+        first_tab_save_fails_for_test(false);
+        relay_for_test(false);
+        assert_eq!(
+            first_tab::unsaved_for(&url),
+            HashSet::from(["T1".to_string()])
+        );
+        assert_eq!(
+            first_tab::tab_ids_for(&url).get("T1"),
+            Some(&22),
+            "the read-back's Present(T1, 22) was not kept"
+        );
+
+        // Later T1 (tab 22) disappears; T9 keeps tab 11.
+        {
+            let mut c = chrome.0.lock().unwrap();
+            c.targets.retain(|t| t != "T1");
+            c.t1_read_backs_answered = None;
+            c.t1_moves_on_close = false;
+        }
+        let client = Arc::new(CdpClient::connect(&url).await.unwrap());
+        let held = HashSet::from(["T1".to_string()]);
+        let stale = HashMap::from([("T1".to_string(), 11)]);
+        let stale =
+            close_and_verify_targets(&client, &held, stale, true, Duration::from_secs(5)).await;
+        assert_ne!(stale.get("T1"), Some(&TabPresence::Absent), "{stale:?}");
+        let kept = first_tab::tab_ids_for(&url);
+        let verdicts =
+            close_and_verify_targets(&client, &held, kept, true, Duration::from_secs(5)).await;
         assert_eq!(
             verdicts.get("T1"),
             Some(&TabPresence::Absent),
