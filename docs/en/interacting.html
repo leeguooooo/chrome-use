@@ -396,9 +396,13 @@
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Why upload works in relay mode too</div>
-        <code>chrome.debugger</code> forbids <code>setFileInputFiles</code>, so the file bytes are streamed into the page
-        and reconstructed there into a <code>File</code> (chunked to native-messaging's 1 MiB cap). That's why both file
-        <code>&lt;input&gt;</code> elements and drop/paste editors receive it.
+        <code>chrome.debugger</code> forbids <code>setFileInputFiles</code> unless the extension has
+        <em>Allow access to file URLs</em> (off for a Web Store install), so the file bytes are streamed into the page
+        and reconstructed there into a <code>File</code>, in chunks well under native-messaging's 1 MiB cap. Every chunk
+        costs the same whatever the file size (a 200 MB video takes about 15 s), and uploads to one browser run one at a
+        time: a second one waits its turn and the reply's <code>delivery.queuedMs</code> says how long. That's why both
+        file <code>&lt;input&gt;</code> elements and drop/paste editors receive it. Turning on <em>Allow access to file
+        URLs</em> for the chrome-use extension lets Chrome read the file directly instead.
       </div>
 
       <hr class="du-divider" />

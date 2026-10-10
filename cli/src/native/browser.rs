@@ -8880,7 +8880,6 @@ impl BrowserManager {
     ) -> Result<(), String> {
         use super::upload;
         use base64::Engine;
-        use std::io::Read;
 
         let budget = upload::stream_budget(total);
         self.upload_eval(&upload::begin_script(key), session_id)
