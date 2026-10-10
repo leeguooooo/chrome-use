@@ -51,6 +51,9 @@ struct Page {
     /// with `tabs.update` (what the #373 recovery does).
     stay_blocked: bool,
     blocked: bool,
+    /// After the denial, `Page.getFrameTree` fails with this message, so the
+    /// kept-ref check cannot read the page and refuses with it as the cause.
+    frame_tree_error: Option<String>,
     /// The #373 recovery's footprint since the denial: `tabs.update` calls,
     /// blank temp tabs created, and blur scripts sent to the page.
     tab_updates: u32,
@@ -128,6 +131,10 @@ impl Fake {
 
     fn dom_payload_after_denial(&self, payload: Value) {
         self.0.lock().unwrap().dom_payload = Some(payload);
+    }
+
+    fn frame_tree_fails_after_denial(&self, message: &str) {
+        self.0.lock().unwrap().frame_tree_error = Some(message.to_string());
     }
 
     fn stay_blocked(&self) {
@@ -235,6 +242,9 @@ impl Fake {
                 "title": "Form", "url": "https://form.test/", "attached": true}}),
             "Browser.getVersion" => json!({"protocolVersion": "1.3", "product": "Chrome/1",
                 "revision": "1", "userAgent": "fake", "jsVersion": "1"}),
+            "Page.getFrameTree" if p.denials > 0 && p.frame_tree_error.is_some() => {
+                return Err(p.frame_tree_error.clone().unwrap_or_default());
+            }
             "Page.getFrameTree" => json!({"frameTree": {"frame": {
                 "id": "T1", "loaderId": p.loader, "url": "https://form.test/",
                 "securityOrigin": "https://form.test", "mimeType": "text/html"}}}),
@@ -733,4 +743,62 @@ fn on_the_relay_a_resolver_refusal_triggers_no_recovery() {
     assert!(all.contains("kept_ref_unverified:"), "{all}");
     assert_eq!(fake.recovery_footprint(), (0, 0, 0), "{all}");
     assert_eq!(fake.typed(), vec!["me@example.test"], "{all}");
+}
+
+/// The refusal's machine contract, through the real daemon and the real CLI
+/// on the relay: whatever its cause reads like — a timeout, a lost
+/// connection, a denial — a kept-ref refusal is `code: kept_ref_unverified`,
+/// `retryable: false`. Nothing is written and no recovery runs; the cause
+/// stays in the message.
+#[test]
+fn a_kept_ref_refusal_has_its_own_non_retryable_code_whatever_the_cause() {
+    for (label, cause) in [
+        ("timeout", "Request timed out waiting for Page.getFrameTree"),
+        ("connection", "WebSocket connection closed by the relay"),
+        (
+            "denied",
+            "debugger_access_denied: Chrome blocked debugger access (fixture)",
+        ),
+    ] {
+        let (fake, cdp) = Fake::start();
+        let d = Daemon::start_full(&format!("capfail-code-{label}"), &cdp, &[], true);
+        let snap = d.snapshot();
+        let email = ref_for(&snap, "Email");
+        let name = ref_for(&snap, "Name");
+        fake.arm(false);
+        fake.frame_tree_fails_after_denial(cause);
+
+        let r = d.send(
+            json!({"id": "f", "action": "fill", "selector": format!("@{email}"),
+                              "value": "me@example.test", "observe": true}),
+        );
+        assert_eq!(r["success"], true, "{label}: {r}");
+        assert_eq!(
+            r["data"]["observed"]["refs"]["status"], "kept-unverified",
+            "{label}: {r}"
+        );
+
+        // The daemon's JSON.
+        let r = d.send(
+            json!({"id": "n", "action": "fill", "selector": format!("@{name}"),
+                              "value": "Ada"}),
+        );
+        assert_eq!(r["success"], false, "{label}: {r}");
+        assert_eq!(r["code"], "kept_ref_unverified", "{label}: {r}");
+        assert_eq!(r["retryable"], false, "{label}: {r}");
+        let e = r["error"].as_str().unwrap_or("");
+        assert!(e.contains(cause), "{label}: the cause is kept: {e}");
+
+        // The CLI's JSON.
+        let out = d.cli(&["fill", &format!("@{name}"), "Ada"]);
+        let all = text(&out);
+        assert!(!out.status.success(), "{label}: {all}");
+        let v: Value = serde_json::from_str(all.trim().lines().next().unwrap_or(""))
+            .unwrap_or_else(|_| json!({"raw": all}));
+        assert_eq!(v["code"], "kept_ref_unverified", "{label}: {all}");
+        assert_eq!(v["retryable"], false, "{label}: {all}");
+
+        assert_eq!(fake.recovery_footprint(), (0, 0, 0), "{label}");
+        assert_eq!(fake.typed(), vec!["me@example.test"], "{label}");
+    }
 }

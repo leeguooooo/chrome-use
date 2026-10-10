@@ -11395,8 +11395,12 @@ fn names_kept_refs(cmd: &Value, state: &DaemonState) -> bool {
 /// A kept-ref refusal (preflight or resolver), by its error code. It came
 /// before any action and is not a blocked command: never recovered.
 fn is_kept_ref_refusal(resp: &Value) -> bool {
-    resp.get("success").and_then(Value::as_bool) == Some(false)
-        && resp
+    if resp.get("success").and_then(Value::as_bool) != Some(false) {
+        return false;
+    }
+    // The machine code first; the message prefix for a reply built without it.
+    resp.get("code").and_then(Value::as_str) == Some("kept_ref_unverified")
+        || resp
             .get("error")
             .and_then(Value::as_str)
             .is_some_and(|e| e.contains(super::element::KEPT_REF_UNVERIFIED))
