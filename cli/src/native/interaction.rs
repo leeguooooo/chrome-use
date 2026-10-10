@@ -818,23 +818,16 @@ pub async fn dblclick(
 }
 
 /// DOM-dispatch a hover (pointer/mouse enter+move) on the element in its own
-/// session — reaches OOPIF elements and never drifts to the foreground tab over
-/// the relay, unlike a coordinate `mouseMoved` (issues #31/#36).
+/// session. Only for a target no real pointer can be placed on (inside a
+/// cross-origin frame whose position the page cannot see): the events are
+/// `isTrusted: false`, so JS `mouseover`/`mouseenter` handlers run but CSS
+/// `:hover` is never applied. The caller reports that, it never reads as a
+/// verified hover (#500).
 async fn dom_hover(
     client: &CdpClient,
-    session_id: &str,
-    ref_map: &RefMap,
-    selector_or_ref: &str,
-    iframe_sessions: &HashMap<String, String>,
+    object_id: &str,
+    effective_session_id: &str,
 ) -> Result<(), String> {
-    let (object_id, effective_session_id) = resolve_element_object_id(
-        client,
-        session_id,
-        ref_map,
-        selector_or_ref,
-        iframe_sessions,
-    )
-    .await?;
     client
         .send_command_typed::<_, Value>(
             "Runtime.callFunctionOn",
@@ -850,37 +843,238 @@ async fn dom_hover(
                     this.dispatchEvent(new MouseEvent('mousemove', base));
                 }"#
                 .to_string(),
-                object_id: Some(object_id),
+                object_id: Some(object_id.to_string()),
                 arguments: None,
                 return_by_value: Some(true),
                 await_promise: Some(false),
             },
-            Some(&effective_session_id),
+            Some(effective_session_id),
         )
         .await?;
     Ok(())
 }
 
-pub async fn hover(
+/// What a `hover` did, and whether the page agrees it happened (#500).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HoverOutcome {
+    /// `pointer` (a trusted `Input.dispatchMouseEvent` move at the element's
+    /// hit point) or `dom` (synthetic events, `isTrusted: false`).
+    pub dispatch: &'static str,
+    /// Where the pointer was put, in top-level viewport CSS pixels.
+    pub point: Option<(f64, f64)>,
+    /// True only when the target (or, for a `pointer-events: none` target,
+    /// the ancestor the pointer actually lands on) matched `:hover` after the
+    /// move.
+    pub verified: bool,
+    /// Set whenever the hover is not verified, or landed on an ancestor.
+    pub warning: Option<String>,
+}
+
+/// Scroll the target into view and find a viewport point where a real
+/// pointer would land on it (#500).
+///
+/// The centre is tried first, then a grid inside each of the element's
+/// visible boxes, because a sticky header or a cookie banner commonly
+/// covers part of an element and not all of it. Each candidate is
+/// hit-tested with `elementFromPoint` in the element's own tree scope (a
+/// shadow root has its own), so a point counts only when the pointer there
+/// would be over the element or one of its descendants.
+///
+/// The point is returned twice: frame-local (`x`, `y`, for the
+/// verification probe, which runs in the element's own document) and
+/// top-level (`gx`, `gy`, for `Input.dispatchMouseEvent`), composed through
+/// every same-origin `frameElement`. A frame the page cannot see out of
+/// (cross-origin) reports `error: "cross-origin-frame"`.
+///
+/// A target with `pointer-events: none` can never be under the pointer: the
+/// hit goes to whatever is beneath it, usually its own container, which is
+/// also where a page that styles `.card:hover .caption` expects the hover.
+/// That case returns the point with `ancestor` set, so the caller can verify
+/// the ancestor instead and say so.
+const HOVER_HIT_POINT_JS: &str = r#"function() {
+  const el = this;
+  const doc = el.ownerDocument;
+  const win = doc && doc.defaultView;
+  if (!win) return { error: 'detached' };
+  if (!el.isConnected) return { error: 'detached' };
+  try {
+    if (typeof el.scrollIntoViewIfNeeded === 'function') el.scrollIntoViewIfNeeded(true);
+    else el.scrollIntoView({ block: 'center', inline: 'center' });
+  } catch (e) {}
+  const describe = (n) => {
+    if (!n || !n.tagName) return 'nothing';
+    let d = '<' + n.tagName.toLowerCase();
+    if (n.id) d += ' id="' + n.id + '"';
+    const cls = typeof n.className === 'string' ? n.className.trim().split(/\s+/).slice(0, 2).join(' ') : '';
+    if (cls) d += ' class="' + cls + '"';
+    d += '>';
+    const t = (n.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+    return t ? d + ' "' + t + '"' : d;
+  };
+  const rects = Array.from(el.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+  if (!rects.length) return { error: 'no-box' };
+  let ox = 0, oy = 0;
+  try {
+    let w = win;
+    while (w !== w.top) {
+      const fe = w.frameElement;
+      if (!fe) return { error: 'cross-origin-frame' };
+      const fr = fe.getBoundingClientRect();
+      ox += fr.left + fe.clientLeft;
+      oy += fr.top + fe.clientTop;
+      w = w.parent;
+    }
+  } catch (e) { return { error: 'cross-origin-frame' }; }
+  const root = el.getRootNode ? el.getRootNode() : doc;
+  const scope = root && typeof root.elementFromPoint === 'function' ? root : doc;
+  const vw = win.innerWidth, vh = win.innerHeight;
+  const grid = [[0.5, 0.5], [0.3, 0.3], [0.7, 0.3], [0.3, 0.7], [0.7, 0.7],
+                [0.5, 0.2], [0.5, 0.8], [0.2, 0.5], [0.8, 0.5]];
+  let pe = 'auto';
+  try { pe = win.getComputedStyle(el).pointerEvents; } catch (e) {}
+  let firstMiss = null;
+  for (const r of rects) {
+    const l = Math.max(r.left, 0), t = Math.max(r.top, 0);
+    const rr = Math.min(r.right, vw), b = Math.min(r.bottom, vh);
+    if (rr - l < 1 || b - t < 1) continue;
+    for (const [fx, fy] of grid) {
+      const x = l + (rr - l) * fx, y = t + (b - t) * fy;
+      const hit = scope.elementFromPoint(x, y);
+      if (hit && (hit === el || el.contains(hit))) {
+        return { x, y, gx: x + ox, gy: y + oy };
+      }
+      if (!firstMiss) firstMiss = { x, y, hit };
+    }
+  }
+  if (!firstMiss) return { error: 'offscreen' };
+  const hit = firstMiss.hit;
+  if (pe === 'none' && hit && hit !== doc.documentElement && hit !== doc.body && hit.contains(el)) {
+    return { x: firstMiss.x, y: firstMiss.y, gx: firstMiss.x + ox, gy: firstMiss.y + oy,
+             ancestor: describe(hit) };
+  }
+  return { error: 'covered', cover: describe(hit) };
+}"#;
+
+/// After the move: does the page agree the pointer is over the target?
+/// `this` is the target; `x`, `y` are the frame-local point the pointer was
+/// put at. For a `pointer-events: none` target (`ancestorMode`) the element
+/// actually under the pointer must be hovered and contain the target.
+const HOVER_VERIFY_JS: &str = r#"function(x, y, ancestorMode) {
+  const el = this;
+  if (!el.isConnected) return { hovered: false, under: 'the target was removed from the page' };
+  let hovered = false;
+  try { hovered = el.matches(':hover'); } catch (e) {}
+  const doc = el.ownerDocument;
+  const root = el.getRootNode ? el.getRootNode() : doc;
+  const scope = root && typeof root.elementFromPoint === 'function' ? root : doc;
+  const hit = scope.elementFromPoint(x, y);
+  if (!hovered && ancestorMode && hit && hit.contains(el)) {
+    try { hovered = hit.matches(':hover'); } catch (e) {}
+  }
+  let under = 'nothing';
+  if (hit && hit.tagName) {
+    under = '<' + hit.tagName.toLowerCase() + (hit.id ? ' id="' + hit.id + '"' : '') + '>';
+  }
+  return { hovered, under };
+}"#;
+
+/// How long to keep re-reading `:hover` after the move. Chrome normally
+/// applies hover while handling the move itself; the retries cover a page
+/// that is busy or a hover update deferred to the next frame.
+const HOVER_VERIFY_ATTEMPTS: u32 = 6;
+const HOVER_VERIFY_INTERVAL_MS: u64 = 50;
+
+/// What the verification probe found.
+#[derive(Debug, Clone, PartialEq)]
+enum HoverCheck {
+    Hovered,
+    NotHovered {
+        under: String,
+    },
+    /// The probe itself failed: nothing is known either way.
+    Unknown(String),
+}
+
+fn parse_hover_check(reply: Result<Value, String>) -> HoverCheck {
+    let value = match reply {
+        Ok(v) => v,
+        Err(e) => return HoverCheck::Unknown(e),
+    };
+    if let Some(ex) = value.get("exceptionDetails") {
+        return HoverCheck::Unknown(
+            ex.get("text")
+                .and_then(Value::as_str)
+                .unwrap_or("the probe threw")
+                .to_string(),
+        );
+    }
+    let v = value.get("result").and_then(|r| r.get("value"));
+    match v.and_then(|v| v.get("hovered")).and_then(Value::as_bool) {
+        Some(true) => HoverCheck::Hovered,
+        Some(false) => HoverCheck::NotHovered {
+            under: v
+                .and_then(|v| v.get("under"))
+                .and_then(Value::as_str)
+                .unwrap_or("nothing")
+                .to_string(),
+        },
+        None => HoverCheck::Unknown("the probe returned no answer".to_string()),
+    }
+}
+
+/// The message for a hover the hit test refused before anything was
+/// dispatched. `None` for a reply that carries a point.
+fn hover_refusal(selector_or_ref: &str, reply: &Value) -> Option<String> {
+    let error = reply.get("error").and_then(Value::as_str)?;
+    Some(match error {
+        "no-box" => format!(
+            "hover failed: {selector_or_ref} has no visible box (display:none, zero size, or \
+             not rendered), so there is no point to put the pointer on. If it appears only \
+             after another hover, hover its trigger first"
+        ),
+        "offscreen" => format!(
+            "hover failed: {selector_or_ref} is still outside the viewport after scrolling it \
+             into view (a clipped scroll container or a transform), so a pointer cannot reach it"
+        ),
+        "covered" => format!(
+            "hover refused: {selector_or_ref} is covered by {} at every point tried, so the \
+             pointer would hover that instead. Dismiss the overlay (a cookie banner, a modal \
+             backdrop, a sticky header) and hover again",
+            reply
+                .get("cover")
+                .and_then(Value::as_str)
+                .unwrap_or("another element")
+        ),
+        "detached" => format!(
+            "hover failed: {selector_or_ref} is no longer in the page. Take a fresh snapshot"
+        ),
+        other => format!("hover failed: {selector_or_ref}: {other}"),
+    })
+}
+
+/// Hover an element the way a user does, and report only what the page
+/// confirms (#500).
+///
+/// The old relay path dispatched synthetic `mouseover`/`mouseenter` events
+/// and returned success. Those events are `isTrusted: false`, and Chrome
+/// never applies CSS `:hover` for them, so a caption styled
+/// `.figure:hover .figcaption { display: block }` stayed hidden while the
+/// command printed `✓ Done`. A real `Input.dispatchMouseEvent` move at the
+/// element's hit point does apply it, over the relay too.
+///
+/// Steps: scroll into view, find a point where the pointer is over the
+/// element (refusing when something covers it), move the real pointer there,
+/// then read `:hover` back. A move the page does not confirm is an error. A
+/// target no real pointer can reach (inside a cross-origin frame) gets the
+/// synthetic events and a warning saying `:hover` is unverified.
+pub async fn hover_reporting(
     client: &CdpClient,
     session_id: &str,
     ref_map: &RefMap,
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
-) -> Result<(), String> {
-    // Coordinate `mouseMoved` drifts to the foreground tab over the relay and
-    // can't reach an OOPIF — DOM-dispatch the hover there (issues #31/#36).
-    if prefer_dom_dispatch(ref_map, selector_or_ref) {
-        return dom_hover(
-            client,
-            session_id,
-            ref_map,
-            selector_or_ref,
-            iframe_sessions,
-        )
-        .await;
-    }
-    let (x, y, _w, _h, effective_session_id) = resolve_element_center(
+) -> Result<HoverOutcome, String> {
+    let (object_id, effective_session_id) = resolve_element_object_id(
         client,
         session_id,
         ref_map,
@@ -888,14 +1082,83 @@ pub async fn hover(
         iframe_sessions,
     )
     .await?;
-    restore_rendering_if_hidden(client, &effective_session_id).await;
+    let reply = client
+        .send_command_typed::<_, Value>(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: HOVER_HIT_POINT_JS.to_string(),
+                object_id: Some(object_id.clone()),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(&effective_session_id),
+        )
+        .await?;
+    let point = reply
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .cloned()
+        .unwrap_or(Value::Null);
+
+    if point.get("error").and_then(Value::as_str) == Some("cross-origin-frame") {
+        dom_hover(client, &object_id, &effective_session_id).await?;
+        let check = parse_hover_check(
+            client
+                .send_command(
+                    "Runtime.callFunctionOn",
+                    Some(json!({
+                        "objectId": object_id,
+                        "functionDeclaration": HOVER_VERIFY_JS,
+                        "arguments": [{ "value": -1 }, { "value": -1 }, { "value": false }],
+                        "returnByValue": true,
+                    })),
+                    Some(&effective_session_id),
+                )
+                .await,
+        );
+        let verified = check == HoverCheck::Hovered;
+        return Ok(HoverOutcome {
+            dispatch: "dom",
+            point: None,
+            verified,
+            warning: (!verified).then(|| {
+                format!(
+                    "hover unverified: {selector_or_ref} is inside a cross-origin frame, where \
+                     chrome-use cannot place a real pointer, so it dispatched synthetic \
+                     mouseover/mouseenter events (isTrusted=false). JS hover handlers ran, but \
+                     CSS :hover cannot be applied this way and the element does not match \
+                     :hover. Check the effect with `snapshot` before relying on it"
+                )
+            }),
+        });
+    }
+    if let Some(refusal) = hover_refusal(selector_or_ref, &point) {
+        return Err(refusal);
+    }
+    let coord = |k: &str| point.get(k).and_then(Value::as_f64);
+    let (Some(x), Some(y), Some(gx), Some(gy)) = (coord("x"), coord("y"), coord("gx"), coord("gy"))
+    else {
+        return Err(format!(
+            "hover failed: could not compute a point on {selector_or_ref} (the page returned \
+             {point})"
+        ));
+    };
+    let ancestor = point
+        .get("ancestor")
+        .and_then(Value::as_str)
+        .map(String::from);
+
+    restore_rendering_if_hidden(client, session_id).await;
+    // Top-level coordinates go to the page session: Chrome hit-tests them
+    // through every frame, the same as a user's pointer.
     client
         .send_command_typed::<_, Value>(
             "Input.dispatchMouseEvent",
             &DispatchMouseEventParams {
                 event_type: "mouseMoved".to_string(),
-                x,
-                y,
+                x: gx,
+                y: gy,
                 button: None,
                 buttons: None,
                 click_count: None,
@@ -903,10 +1166,75 @@ pub async fn hover(
                 delta_y: None,
                 modifiers: None,
             },
-            Some(&effective_session_id),
+            Some(session_id),
         )
         .await?;
-    Ok(())
+
+    let mut check = HoverCheck::Unknown("not checked".to_string());
+    for attempt in 0..HOVER_VERIFY_ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(HOVER_VERIFY_INTERVAL_MS)).await;
+        }
+        check = parse_hover_check(
+            client
+                .send_command(
+                    "Runtime.callFunctionOn",
+                    Some(json!({
+                        "objectId": object_id,
+                        "functionDeclaration": HOVER_VERIFY_JS,
+                        "arguments": [{ "value": x }, { "value": y }, { "value": ancestor.is_some() }],
+                        "returnByValue": true,
+                    })),
+                    Some(&effective_session_id),
+                )
+                .await,
+        );
+        if check == HoverCheck::Hovered {
+            break;
+        }
+    }
+    hover_outcome(selector_or_ref, (gx, gy), ancestor.as_deref(), check)
+}
+
+/// Turn the verification result into the reply: confirmed is success,
+/// contradicted is an error, unknown is success with a warning that says so.
+fn hover_outcome(
+    selector_or_ref: &str,
+    (gx, gy): (f64, f64),
+    ancestor: Option<&str>,
+    check: HoverCheck,
+) -> Result<HoverOutcome, String> {
+    let point = Some((gx, gy));
+    match check {
+        HoverCheck::Hovered => Ok(HoverOutcome {
+            dispatch: "pointer",
+            point,
+            verified: true,
+            warning: ancestor.map(|a| {
+                format!(
+                    "{selector_or_ref} has pointer-events:none, so no pointer can be over it; \
+                     the pointer is over its ancestor {a}, which matches :hover"
+                )
+            }),
+        }),
+        HoverCheck::NotHovered { under } => Err(format!(
+            "hover did not take effect: a real mouse move was dispatched at ({gx:.0}, {gy:.0}), \
+             but {} does not match :hover afterwards (under the pointer now: {under}). The page \
+             may have moved or re-rendered the element, or this tab is not receiving input. Take \
+             a fresh snapshot and hover again; `mouse move <x> <y>` places the pointer by hand",
+            ancestor.unwrap_or(selector_or_ref)
+        )),
+        HoverCheck::Unknown(why) => Ok(HoverOutcome {
+            dispatch: "pointer",
+            point,
+            verified: false,
+            warning: Some(format!(
+                "hover unverified: a real mouse move was dispatched at ({gx:.0}, {gy:.0}), but \
+                 reading :hover back failed ({why}). Check the effect with `snapshot` before \
+                 relying on it"
+            )),
+        }),
+    }
 }
 
 /// DOM-dispatch an HTML5 drag-and-drop from `source` to `target` in their shared
@@ -5775,5 +6103,103 @@ mod stale_fill_tests {
                 assert!(err.contains("get value #email"), "{read:?}: {err}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod hover_tests {
+    //! Issue #500: a hover is reported done only when the page confirms it.
+    use super::{hover_outcome, hover_refusal, parse_hover_check, HoverCheck};
+    use serde_json::json;
+
+    #[test]
+    fn hover_probe_reply_is_read_three_ways() {
+        let ok = json!({ "result": { "value": { "hovered": true, "under": "<img>" } } });
+        assert_eq!(parse_hover_check(Ok(ok)), HoverCheck::Hovered);
+        let no =
+            json!({ "result": { "value": { "hovered": false, "under": "<div id=\"cover\">" } } });
+        assert_eq!(
+            parse_hover_check(Ok(no)),
+            HoverCheck::NotHovered {
+                under: "<div id=\"cover\">".to_string()
+            }
+        );
+        // A probe that threw or never answered proves nothing either way.
+        let threw = json!({ "exceptionDetails": { "text": "Uncaught" } });
+        assert!(matches!(
+            parse_hover_check(Ok(threw)),
+            HoverCheck::Unknown(_)
+        ));
+        assert!(matches!(
+            parse_hover_check(Err("Session closed".into())),
+            HoverCheck::Unknown(_)
+        ));
+        assert!(matches!(
+            parse_hover_check(Ok(json!({ "result": {} }))),
+            HoverCheck::Unknown(_)
+        ));
+    }
+
+    /// The false success of #500: the move went out, `:hover` did not
+    /// follow. That has to be an error, never a `✓ Done`.
+    #[test]
+    fn contradicted_hover_is_an_error_naming_what_is_under_the_pointer() {
+        let err = hover_outcome(
+            ".figure img",
+            (60.0, 120.0),
+            None,
+            HoverCheck::NotHovered {
+                under: "<div id=\"cover\">".to_string(),
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("did not take effect"), "{err}");
+        assert!(err.contains(".figure img"), "{err}");
+        assert!(err.contains("<div id=\"cover\">"), "{err}");
+    }
+
+    #[test]
+    fn confirmed_hover_is_verified_without_a_warning() {
+        let out = hover_outcome("#a", (1.0, 2.0), None, HoverCheck::Hovered).unwrap();
+        assert!(out.verified);
+        assert_eq!(out.dispatch, "pointer");
+        assert_eq!(out.point, Some((1.0, 2.0)));
+        assert!(out.warning.is_none());
+    }
+
+    #[test]
+    fn unreadable_probe_is_success_marked_unverified() {
+        let out = hover_outcome("#a", (1.0, 2.0), None, HoverCheck::Unknown("x".into())).unwrap();
+        assert!(!out.verified);
+        assert!(out.warning.unwrap().contains("unverified"));
+    }
+
+    #[test]
+    fn pointer_events_none_target_says_the_ancestor_was_hovered() {
+        let out = hover_outcome(
+            "#f2 img",
+            (1.0, 2.0),
+            Some("<div class=\"figure\">"),
+            HoverCheck::Hovered,
+        )
+        .unwrap();
+        assert!(out.verified);
+        let w = out.warning.unwrap();
+        assert!(w.contains("pointer-events:none"), "{w}");
+        assert!(w.contains("<div class=\"figure\">"), "{w}");
+    }
+
+    #[test]
+    fn hit_test_refusals_name_the_reason() {
+        let covered = hover_refusal(
+            "#f1",
+            &json!({ "error": "covered", "cover": "<div id=\"cover\">" }),
+        )
+        .unwrap();
+        assert!(covered.starts_with("hover refused"), "{covered}");
+        assert!(covered.contains("<div id=\"cover\">"), "{covered}");
+        let hidden = hover_refusal("#f1", &json!({ "error": "no-box" })).unwrap();
+        assert!(hidden.contains("no visible box"), "{hidden}");
+        assert!(hover_refusal("#f1", &json!({ "x": 1, "y": 2, "gx": 1, "gy": 2 })).is_none());
     }
 }

@@ -75,8 +75,19 @@
 <pre><code><span class="du-prompt">$</span> chrome-use click @e1                   <span class="du-cmt"># click</span>
 <span class="du-prompt">$</span> chrome-use click @e1 <span class="du-flag">--new-tab</span>         <span class="du-cmt"># open the link in a new tab instead of navigating the current one</span>
 <span class="du-prompt">$</span> chrome-use dblclick @e1                <span class="du-cmt"># double-click</span>
-<span class="du-prompt">$</span> chrome-use hover @e1                   <span class="du-cmt"># hover</span>
+<span class="du-prompt">$</span> chrome-use hover @e1                   <span class="du-cmt"># hover (a real pointer move, confirmed by reading :hover back)</span>
 <span class="du-prompt">$</span> chrome-use focus @e1                   <span class="du-cmt"># focus (often used before keyboard input)</span></code></pre>
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ hover reports only what the page confirms</div>
+        <code>hover</code> scrolls the element into view, finds a point where the element itself is on top, moves
+        the real pointer there, then reads <code>:hover</code> back. Only a confirmed hover prints
+        <code>✓ Hovered … (:hover confirmed)</code>. A target covered by a banner or backdrop is refused
+        (<code>hover refused</code>) and nothing is sent; a move that <code>:hover</code> does not follow is an error
+        (<code>did not take effect</code>). Inside a cross-origin iframe no real pointer can be placed, so only
+        synthetic events (<code>isTrusted=false</code>) go out, CSS <code>:hover</code> never applies, and the output
+        says the hover is unconfirmed.
       </div>
 
       <div class="du-callout tip">
@@ -514,7 +525,7 @@
 <pre><code><span class="du-cmt"># snapshot -i lists elements inside cross-origin iframes, then:</span>
 <span class="du-prompt">$</span> chrome-use click @e
 <span class="du-prompt">$</span> chrome-use type @e <span class="du-str">"…"</span>
-<span class="du-prompt">$</span> chrome-use hover @e
+<span class="du-prompt">$</span> chrome-use hover @e          <span class="du-cmt"># synthetic events only in the frame: CSS :hover does not apply, reported unconfirmed</span>
 <span class="du-prompt">$</span> chrome-use dblclick @e
 <span class="du-prompt">$</span> chrome-use drag @a @b
 

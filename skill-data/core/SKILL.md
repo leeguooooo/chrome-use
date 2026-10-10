@@ -73,7 +73,8 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
 5. `action_outcome_unknown` or a missing observation does not prove failure.
    Inspect state; never blindly replay a send, submit, purchase or delete.
 6. One authoritative page signal (receipt, selected option) ends verification;
-   dispatch alone does not. Stop when the task is done.
+   dispatch alone does not. Stop when the task is done. `hover` moves the real
+   pointer and confirms `:hover` itself; a refused or unconfirmed hover says so.
 7. Do not `open` the URL already in the tab; use `reload --observe` on purpose.
    Wait on a condition (`wait --text`, `wait <sel>`, `wait --url`), not a sleep.
 8. Before writing `eval`, use the command that already does it; it keeps

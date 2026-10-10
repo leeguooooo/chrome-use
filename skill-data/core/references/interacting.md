@@ -81,7 +81,11 @@ you parse once.
 chrome-use click @e1                   # click
 chrome-use click @e1 --new-tab         # open link in new tab instead of navigating
 chrome-use dblclick @e1                # double-click
-chrome-use hover @e1                   # hover
+chrome-use hover @e1                   # hover: real pointer move at a point where the
+                                          # element is on top, then :hover is read back.
+                                          # ✓ only when confirmed; a covered target is
+                                          # refused ("hover refused"), a move :hover did not
+                                          # follow is an error ("did not take effect")
 chrome-use focus @e1                   # focus (useful before keyboard input)
 chrome-use fill @e2 "hello"            # clear then type (verified by read-back;
                                           # a mismatch error quotes both values and
@@ -212,7 +216,9 @@ Payments, Stripe, etc.) — drive them by ref, never by screenshot.** `snapshot 
 pierces these out-of-process iframes and lists their elements by `@ref`
 (including input values); `get text --all-frames` reads their text. Then just act
 on the refs: `click @e`, `type @e`, `hover @e`, `dblclick @e`, `drag @a @b` all
-work into the iframe. Over the extension relay these are dispatched through the
+work into the iframe. `hover` there can only send synthetic events
+(`isTrusted=false`): JS hover handlers run, CSS `:hover` does not, and the
+reply says the hover is unconfirmed. Over the extension relay these are dispatched through the
 DOM (in the element's own frame), so they hit the right element in the right tab
 — a coordinate click/scroll there can drift onto whatever tab is in the
 foreground, so prefer refs. For below-the-fold content in such a frame, scroll it

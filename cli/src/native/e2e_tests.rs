@@ -3878,6 +3878,124 @@ async fn e2e_hover_scroll_press() {
     assert_success(&resp);
 }
 
+/// Issue #500: `hover` reported `✓ Done` while CSS `:hover` never applied.
+/// A real pointer move applies it; the command must confirm that, scroll a
+/// target below the fold into view first, and refuse a covered target
+/// instead of hovering the cover.
+#[tokio::test]
+#[ignore]
+async fn e2e_hover_applies_css_hover_and_refuses_covered_target() {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let html = concat!(
+        "data:text/html,<html><head><style>",
+        ".fig{display:inline-block;margin:10px}",
+        ".fig img{width:100px;height:100px;background:gray;display:block}",
+        ".cap{display:none} .fig:hover .cap{display:block}",
+        ".pe img{pointer-events:none}",
+        ".far{margin-top:2500px}",
+        ".cover{position:fixed;left:0;top:0;width:100%;height:100%;z-index:9}",
+        "</style></head><body>",
+        "<div class='fig one'><img alt='a'><div class='cap'>name: one</div></div>",
+        "<div class='fig pe'><img alt='b'><div class='cap'>name: pe</div></div>",
+        "<div class='fig far'><img alt='c'><div class='cap'>name: far</div></div>",
+        "</body></html>"
+    );
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": html }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let caption = |cls: &str| {
+        format!(
+            "getComputedStyle(document.querySelector('.{cls} .cap')).display + '/' + \
+             document.querySelector('.{cls}').matches(':hover')"
+        )
+    };
+
+    // The caption under CSS :hover appears, and the reply says it was checked.
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "hover", "selector": ".one img" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["verified"], true, "{resp}");
+    assert_eq!(get_data(&resp)["dispatch"], "pointer", "{resp}");
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": caption("one") }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(get_data(&resp)["result"], "block/true", "{resp}");
+
+    // Below the fold: scrolled into view, then hovered.
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "hover", "selector": ".far img" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["verified"], true, "{resp}");
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "evaluate", "script": caption("far") }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(get_data(&resp)["result"], "block/true", "{resp}");
+
+    // pointer-events:none: the pointer lands on the container, and the reply
+    // says so rather than claiming the image itself is hovered.
+    let resp = execute_command(
+        &json!({ "id": "7", "action": "hover", "selector": ".pe img" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["verified"], true, "{resp}");
+    assert!(
+        get_data(&resp)["warning"]
+            .as_str()
+            .unwrap_or("")
+            .contains("pointer-events:none"),
+        "{resp}"
+    );
+
+    // A full-page overlay covers the target: refused, nothing claimed.
+    let resp = execute_command(
+        &json!({ "id": "8", "action": "evaluate", "script":
+            "(() => { const c = document.createElement('div'); c.className = 'cover'; \
+              document.body.appendChild(c); return true; })()" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "9", "action": "hover", "selector": ".one img" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(resp["success"], false, "{resp}");
+    assert!(
+        resp["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("hover refused"),
+        "{resp}"
+    );
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
 /// Issue #358: in a dialog whose state is fed only by trusted input (LinkedIn's
 /// edit-intro pattern), `fill` showed the new text, printed success, and Save
 /// never enabled. Assert the page's own model sees fill, type --clear and the

@@ -642,6 +642,31 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             return;
         }
 
+        // `hover` says whether the page confirmed it (#500): a bare `✓ Done`
+        // is what hid a hover that never applied `:hover`.
+        if action == Some("hover") {
+            if let Some(target) = data.get("hovered").and_then(|v| v.as_str()) {
+                let warning = data.get("warning").and_then(|v| v.as_str());
+                if data.get("verified").and_then(|v| v.as_bool()) == Some(true) {
+                    let indicator = if warning.is_some() {
+                        color::warning_indicator()
+                    } else {
+                        color::success_indicator()
+                    };
+                    println!("{indicator} Hovered {target} (:hover confirmed)");
+                } else {
+                    println!(
+                        "{} Hover sent to {target}, not confirmed",
+                        color::warning_indicator()
+                    );
+                }
+                if let Some(w) = warning {
+                    eprintln!("{} {}", color::warning_indicator(), w);
+                }
+                return;
+            }
+        }
+
         // `read` prints only the extracted document content (markdown / text /
         // outline), optionally wrapped in content boundaries. Action-gated + early
         // so the generic `✓ <url>` renderer doesn't swallow the body.
@@ -2746,8 +2771,25 @@ chrome-use hover - Hover over an element
 
 Usage: chrome-use hover <selector>
 
-Moves the mouse to hover over the specified element. Useful for
-triggering hover states or dropdown menus.
+Moves the real mouse pointer onto the element, the way a user does, so CSS
+:hover styles (captions, dropdown menus) and mouseover/mouseenter handlers
+both respond. Useful for triggering hover states or dropdown menus.
+
+The element is scrolled into view, then hit-tested: the pointer goes to a
+point where the element itself is on top. After the move chrome-use reads
+:hover back and reports only what the page confirms:
+  ✓ Hovered <sel> (:hover confirmed)   the element matches :hover
+  error "hover refused"                 something covers the element (a
+                                        banner, a backdrop); nothing is sent
+  error "did not take effect"           the move was sent but :hover did not
+                                        follow (the page moved or re-rendered)
+  ⚠ ... not confirmed                   the check could not run, or the target
+                                        is in a cross-origin frame, where only
+                                        synthetic events (isTrusted=false) can
+                                        reach it and CSS :hover never applies
+A target with pointer-events:none cannot be under a pointer; the hover then
+lands on the ancestor beneath it and says so. --json carries `verified`,
+`dispatch` (pointer | dom) and `point`.
 
 Global Options:
   --json               Output as JSON

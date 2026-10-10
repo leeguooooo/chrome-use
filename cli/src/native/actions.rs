@@ -9449,7 +9449,7 @@ async fn handle_hover(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         .and_then(|v| v.as_str())
         .ok_or("Missing 'selector' parameter")?;
 
-    interaction::hover(
+    let outcome = interaction::hover_reporting(
         &mgr.client,
         &session_id,
         &state.ref_map,
@@ -9457,7 +9457,30 @@ async fn handle_hover(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         &state.iframe_sessions,
     )
     .await?;
-    Ok(json!({ "hovered": selector }))
+    // Keep `mouse down` / `mouse up` after a hover at the same place the
+    // pointer really is.
+    if let Some((x, y)) = outcome.point {
+        state.mouse_state.x = x;
+        state.mouse_state.y = y;
+    }
+    Ok(hover_json(selector, &outcome))
+}
+
+/// The reply for a hover: what was hovered, how, and whether the page
+/// confirmed it (#500).
+fn hover_json(selector: &str, outcome: &interaction::HoverOutcome) -> Value {
+    let mut out = json!({
+        "hovered": selector,
+        "dispatch": outcome.dispatch,
+        "verified": outcome.verified,
+    });
+    if let Some((x, y)) = outcome.point {
+        out["point"] = json!({ "x": x.round(), "y": y.round() });
+    }
+    if let Some(w) = &outcome.warning {
+        out["warning"] = json!(w);
+    }
+    out
 }
 
 async fn handle_scroll(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -17424,7 +17447,7 @@ async fn execute_subaction(
             Ok(json!({ "checked": selector }))
         }
         "hover" => {
-            interaction::hover(
+            let outcome = interaction::hover_reporting(
                 &mgr.client,
                 &session_id,
                 &state.ref_map,
@@ -17432,7 +17455,7 @@ async fn execute_subaction(
                 &state.iframe_sessions,
             )
             .await?;
-            Ok(json!({ "hovered": selector }))
+            Ok(hover_json(selector, &outcome))
         }
         "text" => {
             let text = super::element::get_element_text(
