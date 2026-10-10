@@ -125,7 +125,7 @@
           <tr><td><code>chrome_use_screenshot</code></td><td>截图；结果里除了文件路径还会带一个 MCP image 块（读页面仍然用 <code>snapshot</code>，截图只用来确认视觉）。设 <code>CHROME_USE_MCP_MAX_INLINE_IMAGE_BYTES</code> 可调整内联上限，设 <code>0</code> 则只返回路径</td></tr>
           <tr><td><code>chrome_use_a11y</code></td><td>对当前页面或指定 URL 运行内嵌的 axe-core 无障碍审计</td></tr>
           <tr><td><code>chrome_use_scroll</code></td><td>滚动页面或某个容器</td></tr>
-          <tr><td><code>chrome_use_tabs</code></td><td>列出、新建、原生复制、无导航接管、浏览器级检查、关闭或切换本会话的标签</td></tr>
+          <tr><td><code>chrome_use_tabs</code></td><td>列出、新建、原生复制、无导航接管、浏览器级检查、关闭或切换本会话的标签。<code>action: "list", all: true</code> 只读地列出 profile 里全部标签及其归属；<code>action: "close", force: true</code> 关闭不是本会话创建的标签，只在用户要求时使用。带 <code>tabId</code> 的工具也接受 <code>force</code>，原地操作这类标签（<code>--tab &lt;handle&gt; --force</code>）</td></tr>
           <tr><td><code>chrome_use_extract</code></td><td>按 schema 把页面抓成结构化 JSON</td></tr>
           <tr><td><code>chrome_use_expect</code></td><td>断言某个条件，不满足即报错</td></tr>
           <tr><td><code>chrome_use_find</code></td><td>按文本 / URL 定位元素或标签</td></tr>
