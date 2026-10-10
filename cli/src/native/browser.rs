@@ -1348,6 +1348,12 @@ pub(crate) fn navigation_committed(landed: &str, target: &str) -> bool {
 
 /// Converts common error messages into AI-friendly, actionable descriptions.
 pub fn to_ai_friendly_error(error: &str) -> String {
+    // A first-tab refusal (#486) already says what happened to the tab and
+    // what to do; it quotes causes ("no attached tab", "timed out") that the
+    // rewrites below would turn into unrelated advice.
+    if first_tab::is_first_tab_refusal(error) {
+        return error.to_string();
+    }
     let lower = error.to_lowercase();
     if lower.contains("tab_initialization_incomplete:") {
         return error.to_string();

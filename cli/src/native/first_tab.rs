@@ -484,6 +484,32 @@ mod tests {
         assert!(!is_first_tab_refusal("CDP WebSocket connect failed"));
     }
 
+    /// The friendly-error rewrite keeps every first-tab error as written:
+    /// the cleanup error quotes "no attached tab", which would otherwise be
+    /// turned into "the tab this command was driving is gone".
+    #[test]
+    fn first_tab_errors_survive_the_friendly_rewrite() {
+        let not = Cleanup::NotConfirmed {
+            why: "the extension did not answer ABExt.tabPresence: CDP error \
+                  (ABExt.tabPresence): no attached tab for targetId T1"
+                .into(),
+            close: "the close was acknowledged".into(),
+        };
+        for e in [
+            setup_failure(
+                "T1",
+                "setting up the new tab did not finish in time",
+                &not,
+                true,
+            ),
+            create_failure("CDP command timed out: Target.createTarget"),
+            profile_window_verdict(Err("Request timed out".into())).unwrap_err(),
+            PROFILE_NOT_OPEN.to_string(),
+        ] {
+            assert_eq!(crate::native::browser::to_ai_friendly_error(&e), e);
+        }
+    }
+
     #[test]
     fn an_unsaved_delete_right_is_held_until_saved_or_closed() {
         hold_unsaved("ws://a", "T9");
