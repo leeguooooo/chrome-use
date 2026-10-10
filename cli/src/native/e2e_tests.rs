@@ -4159,6 +4159,38 @@ async fn e2e_hover_refuses_covered_or_scaled_iframes() {
     assert!(err.contains("hover refused"), "{resp}");
     assert!(err.contains("veil"), "{resp}");
 
+    // Size-preserving rotations (a 180deg rotation, a square rotated 90deg)
+    // with the target off the frame's centre: refused, and no input reaches
+    // the inner page.
+    for (i, rot) in ["rotate(180deg)", "rotate(90deg)"].iter().enumerate() {
+        let url = format!(
+            "data:text/html,<html><body style='margin:0;padding:40px'>\
+             <iframe style='border:0;width:300px;height:300px;transform:{rot}' \
+             srcdoc=\"<body style='margin:0'><button style='width:80px;height:40px'>Inner target</button>\
+             <script>window.addEventListener('mousemove',()=>parent.innerMoves=(parent.innerMoves||0)+1)</script>\"></iframe>\
+             </body></html>"
+        );
+        let resp = hover_inner(&mut state, url, &format!("r{i}")).await;
+        assert_eq!(resp["success"], false, "{rot}: {resp}");
+        assert!(
+            resp["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("scaled, rotated or zoomed"),
+            "{rot}: {resp}"
+        );
+        let moves = execute_command(
+            &json!({ "id": format!("m{i}"), "action": "evaluate", "script": "String(window.innerMoves||0)" }),
+            &mut state,
+        )
+        .await;
+        assert_eq!(
+            get_data(&moves)["result"],
+            "0",
+            "{rot}: input reached the frame: {moves}"
+        );
+    }
+
     // A scaled iframe: refused instead of a guessed point.
     let resp = hover_inner(&mut state, frame("transform:scale(0.5)", false), "c").await;
     assert_eq!(resp["success"], false, "{resp}");

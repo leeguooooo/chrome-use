@@ -923,6 +923,21 @@ const HOVER_HIT_POINT_JS: &str = r#"function() {
   };
   const rects = Array.from(el.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
   if (!rects.length) return { error: 'no-box' };
+  // True when `n` or any ancestor in its document (across shadow roots) has
+  // a transform, an individual rotate/scale/translate, or a zoom.
+  const transformedChain = (n) => {
+    for (let x = n; x; x = x.parentElement || (x.getRootNode && x.getRootNode().host) || null) {
+      let cs = null;
+      try { cs = x.ownerDocument.defaultView.getComputedStyle(x); } catch (e) { return true; }
+      if (!cs) continue;
+      if (cs.transform && cs.transform !== 'none') return true;
+      for (const k of ['rotate', 'scale', 'translate']) {
+        if (cs[k] && cs[k] !== 'none') return true;
+      }
+      if (cs.zoom && cs.zoom !== '1' && cs.zoom !== 'normal') return true;
+    }
+    return false;
+  };
   // The chain of frame elements from this document up to the top one. Each
   // must be same-origin (readable) and untransformed: a scaled, rotated or
   // zoomed frame cannot be mapped to a top-level point without guessing, so
@@ -934,7 +949,12 @@ const HOVER_HIT_POINT_JS: &str = r#"function() {
       const fe = w.frameElement;
       if (!fe) return { error: 'cross-origin-frame' };
       const fr = fe.getBoundingClientRect();
-      if (Math.abs(fr.width - fe.offsetWidth) > 0.5 || Math.abs(fr.height - fe.offsetHeight) > 0.5
+      // Any transform, rotate, scale, translate or zoom on the frame element
+      // or an ancestor in its document changes the mapping in ways a
+      // bounding rect cannot show (a 180deg rotation keeps width and
+      // height), so it is refused rather than mapped.
+      if (transformedChain(fe)
+          || Math.abs(fr.width - fe.offsetWidth) > 0.5 || Math.abs(fr.height - fe.offsetHeight) > 0.5
           || Math.abs(w.innerWidth - fe.clientWidth) > 0.5 || Math.abs(w.innerHeight - fe.clientHeight) > 0.5) {
         return { error: 'transformed-frame', frame: describe(fe) };
       }
