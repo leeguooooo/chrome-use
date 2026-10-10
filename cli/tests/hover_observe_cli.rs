@@ -469,7 +469,9 @@ fn a_denied_capture_after_hover_sends_the_input_once_and_never_says_no_change() 
         all_moves.len(),
         "a move went elsewhere: {all_moves:?}"
     );
-    assert!(all_moves.len() <= 2, "the hover was resent: {all_moves:?}");
+    // Exactly one pointer move: the fake confirms the hover on the first
+    // move, so a second one could only be a resend.
+    assert_eq!(all_moves.len(), 1, "the hover was resent: {all_moves:?}");
     let v: Value = serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim())
         .unwrap_or_else(|e| panic!("{e}: {all}"));
     let observed = &v["data"]["observed"];
@@ -479,4 +481,21 @@ fn a_denied_capture_after_hover_sends_the_input_once_and_never_says_no_change() 
         "a failed capture must not read as no change: {v}"
     );
     assert!(!all.contains("no change"), "{all}");
+}
+
+/// The counter-example for the test above: the same fixture, with the hover
+/// genuinely sent twice (two commands), counts two moves. So "exactly one
+/// move" there is a real check, not a fixture that can only ever see one.
+#[test]
+fn the_fixture_counts_every_hover_gesture() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start("hover-observe-count", &cdp);
+    let snap = d.snapshot();
+    let menu = ref_for(&snap, "Menu");
+    for _ in 0..2 {
+        let out = d.cli(&["hover", &format!("@{menu}")]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    let moves = fake.page(|p| p.moves.len());
+    assert_eq!(moves, 2, "two hovers must be two moves");
 }
