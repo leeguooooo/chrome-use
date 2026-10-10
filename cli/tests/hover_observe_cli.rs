@@ -191,7 +191,7 @@ impl Fake {
                 };
                 let q = json!([x, y, x + w, y, x + w, y + h, x, y + h]);
                 json!({"model": {"content": q, "padding": q, "border": q, "margin": q,
-                                 "width": w, "height": h}})
+                                 "width": w as i64, "height": h as i64}})
             }
             "Input.dispatchMouseEvent" => {
                 let (x, y) = (
