@@ -1,8 +1,31 @@
 # Changelog
 
-## 1.5.181
+## 1.5.182
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.32 (published on the Chrome Web Store; Chrome updates it automatically).
+
+### Bug Fixes
+
+- **A relay restart no longer breaks a `--browser` session or `close`.**
+  - A session bound with `--browser <profile>` waits for that profile's new endpoint instead of failing on the old one, and keeps its tab ids and refs, under the same rules as other sessions. It only ever reconnects to its own profile. (#491, fixes #484)
+  - `close` after the relay restarted while the session was idle reconnects first and really closes the session's tabs. If any tab is left open, it says `close incomplete`, keeps the session so the retry works, and never reports `closed: true`. (#492, fixes #485)
+- **A busy session is no longer killed.** A command that takes more than 45 s (a slow click, a long `eval`) is kept alive with keepalives instead of being killed. A second command queued behind it no longer times out or takes the daemon down, and a queued command whose caller has gone away is never run late. (#488, #494)
+- **Input over the relay gets 25 s instead of 8 s,** so a click on a page that blocks for a while completes once instead of leaving a half-click. (#489)
+- **A tab recovers after a debugger timeout,** and concurrent sessions opening tabs no longer race; agent tabs stay in one background window, and a service-worker restart no longer opens a second agent window. (#478, #493)
+
+### Improvements
+
+- **`doctor` and `status` report relay health:** whether the debugger has been exercised, is healthy or timed out (reported, never repaired), duplicate copies of the extension, a version skew between the extension and the CLI, and machine load. They never launch a browser or touch a tab. (#490)
+
+### Contributors
+
+- @Sean529
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.181
+
 ### Bug Fixes
 
 - **`auth login --bwu` no longer reports a login the site never got.** On your own Chrome (extension relay), on a background tab, the Enter that submits the form could be accepted by Chrome and never reach the page: nothing was submitted, yet the command said `submitted: true` and auto-login said `ok: true` while the site stayed signed out. The Enter is now checked; one that did not arrive is replaced by a click on the form's sign-in button. And a login is reported only once the sign-in form is gone from the page (`signedIn: true` with the `evidence`); a form still there after about 12 s, or a page that cannot be read, fails with `the sign-in was not confirmed: …` and what the page shows. A tab that detaches under the Enter is judged by the page afterwards instead of failing with `action_outcome_unknown`, and `alreadySignedIn` needs a loaded page without a sign-in form. The login wall tries once more when the outcome is unknown or the page gave no reason. (#487, fixes #482)
@@ -10,7 +33,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.180
 
