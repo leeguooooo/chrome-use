@@ -4681,7 +4681,9 @@ impl BrowserManager {
             if let Err(e) = self.adopt_existing_target(&spec).await {
                 set_no_current_tab(&spec);
                 if scoped {
-                    self.let_go_of_earlier_adoptions().await;
+                    // Boxed: inlining this future into connect's overflows
+                    // the compiler's Send check of the daemon's future.
+                    Box::pin(self.let_go_of_earlier_adoptions()).await;
                 }
                 return Err(format!("{e}\n{NO_CURRENT_TAB_NEXT}"));
             }
