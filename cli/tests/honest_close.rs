@@ -146,8 +146,11 @@ impl Fake {
                 if b.refuse.contains(&id) {
                     json!({"success": false})
                 } else if b.lie.contains(&id) {
-                    // Acknowledged, still open, and gone from the relay's list.
-                    b.unlisted.insert(id);
+                    // Acknowledged and still open. The relay's cached list
+                    // drops it anyway; Chrome's own list (direct CDP) does not.
+                    if b.relay {
+                        b.unlisted.insert(id);
+                    }
                     json!({"success": true})
                 } else {
                     let existed = b.tabs.iter().any(|(t, _, _)| *t == id);
