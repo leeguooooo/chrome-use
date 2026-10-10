@@ -274,6 +274,8 @@
         输入框和文本域里填的值、可编辑区域的内容、含有密码值的行都不会出现。<code>textStatus: "unavailable"</code> 表示文字没读到，只有文字的变化属于未知，而不是没有。
       </div>
 
+      <p><code>observed.target</code>（<code>session</code>、<code>tabId</code>、<code>targetId</code>、<code>url</code>）只在有新信息时出现：会话里的第一次观察、标签页／target／URL 与上一次报告的不同，或者动作本身把会话带到了别的标签页。没有这个字段时，观察对象就是上一次报告的那个 target。</p>
+
       <div class="du-callout tip">
         <div class="du-callout-title">✅ expect 还是 --observe？</div>
         想要一个<strong>硬性 pass/fail 门禁</strong>（配合退出码、<code>&amp;&amp;</code>、批处理）用

@@ -774,6 +774,18 @@ pub(super) fn apply_text(
     }
 }
 
+/// Whether an observation must name its target (#237): the first one in the
+/// session, a target or url other than the one the last observation reported,
+/// or an action that itself moved the session. Leaving an unchanged target out
+/// never hides a switch: every change since the last report is news here.
+pub(super) fn target_is_news(
+    last: Option<&(String, String, String)>,
+    current: &(String, String, String),
+    moved_during_action: bool,
+) -> bool {
+    moved_during_action || last != Some(current)
+}
+
 /// Preserve the action result and report its separate observation quality.
 /// Diagnostic failure must not turn a returned action into an invitation to retry.
 pub(super) fn annotate_incomplete(response: &mut serde_json::Value) {
@@ -1192,6 +1204,38 @@ mod capture_tests {
         // Page text that echoes an ordinary field is the page's receipt.
         assert!(out.contains("Note saved: hello"), "{out}");
         assert!(out.contains("Sign in"), "{out}");
+    }
+
+    #[test]
+    fn the_target_is_named_whenever_it_is_news() {
+        let t = |tab: &str, target: &str, url: &str| {
+            (tab.to_string(), target.to_string(), url.to_string())
+        };
+        let a = t("t1", "AAA", "http://x/a");
+        // First observation in the session.
+        assert!(target_is_news(None, &a, false));
+        // Same tab, target and url as last reported: left out.
+        assert!(!target_is_news(Some(&a), &a, false));
+        // A rebinding (new targetId), another tab, a new url: named.
+        assert!(target_is_news(
+            Some(&a),
+            &t("t1", "BBB", "http://x/a"),
+            false
+        ));
+        assert!(target_is_news(
+            Some(&a),
+            &t("t2", "AAA", "http://x/a"),
+            false
+        ));
+        assert!(target_is_news(
+            Some(&a),
+            &t("t1", "AAA", "http://x/b"),
+            false
+        ));
+        // The action moved the session (e.g. a followed popup) back onto the
+        // tab last reported: still named, since the caller's baseline was
+        // another tab.
+        assert!(target_is_news(Some(&a), &a, true));
     }
 
     #[test]

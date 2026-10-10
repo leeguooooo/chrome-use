@@ -184,6 +184,12 @@ editable-region content and any line holding a password value are left out.
 `textStatus: "unavailable"` means the text could not be read, so a text-only
 change is unknown, not absent.
 
+`observed.target` (`session`, `tabId`, `targetId`, `url`) names the page the
+observation came from when that is news: the first observation in the session,
+a tab, target or url other than the one the last observation reported, or an
+action that moved the session to another tab. When it is absent, the
+observation is about the same target as the last one that named it.
+
 `navigate`/`reload`/`back`/`forward` take `--observe` too, and return the
 post-navigation **snapshot** instead of a delta — across a page swap a diff
 shares no nodes with the old tree, so it would be 100% removals plus 100%

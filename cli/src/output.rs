@@ -6098,6 +6098,8 @@ Options:
   -q, --quiet                Show only AI text responses (hide tool calls)
   --config <path>            Use a custom config file (or AGENT_BROWSER_CONFIG env)
   --debug                    Debug output
+  --no-timing                Leave the `timing` object out of replies (or
+                             AGENT_BROWSER_TIMING=0); timing.jsonl is still written
   --version, -V              Show version
 
 Configuration:

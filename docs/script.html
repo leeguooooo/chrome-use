@@ -144,7 +144,7 @@ JS</code></pre>
         直接返回页面里的值；其余失败即抛异常，脚本快速失败。程序的返回值就是命令的返回值，<code>cu.log(...)</code> 收集进度行。
       </p>
 
-      <p>普通 CLI <code>--json</code> 返回 <code>success</code>/<code>data</code>/<code>timing</code> envelope。<code>batch --json</code> 打印 <code>{command,success,result,error}</code> 条目的数组；<code>script --json</code> 打印程序结果本身（<code>ok</code>、<code>return</code>、<code>logs</code>、<code>error</code>、<code>advisories</code> 等）。batch 和 script 的 CLI 输出没有顶层 <code>timing</code>。</p>
+      <p>普通 CLI <code>--json</code> 返回 <code>success</code>/<code>data</code>/<code>timing</code> envelope；加 <code>--no-timing</code>（或 <code>AGENT_BROWSER_TIMING=0</code>）时回复不带 <code>timing</code>，<code>timing.jsonl</code> 照常记录。<code>batch --json</code> 打印 <code>{command,success,result,error}</code> 条目的数组；<code>script --json</code> 打印程序结果本身（<code>ok</code>、<code>return</code>、<code>logs</code>、<code>error</code>、<code>advisories</code> 等）。batch 和 script 的 CLI 输出没有顶层 <code>timing</code>。</p>
       <p>程序结果与传输成功分开判断：daemon envelope 中嵌套 <code>script</code> 的 <code>data.ok:false</code> 会使父脚本失败，即使 <code>success:true</code>。JS 失败仍保留 <code>ok:false</code>、<code>return:null</code>、<code>error</code> 和 <code>logs</code>。两种脚本都在 <code>advisories</code>（CLI <code>script --json</code> 顶层；daemon envelope 中为 <code>data.advisories</code>） 中保留观察提示，最多 20 条，嵌套和失败运行也保留；JSON op-list 的 <code>steps</code> 另带对应动作的 <code>noProgress</code>。文字输出只打印汇总提示一次。这些提示不改变动作 success，也不重试动作。</p>
 
       <h2>引擎跑在守护进程里</h2>

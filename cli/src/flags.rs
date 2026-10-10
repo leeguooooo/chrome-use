@@ -38,6 +38,9 @@ pub(crate) const GLOBAL_BOOL_FLAGS: &[&str] = &[
     // same reason: they are global, and a command's positional parsing must not
     // see them.
     "--no-settle",
+    // Compact replies: leave the per-reply `timing` object out (the
+    // timing.jsonl log is unaffected). Surfaced as AGENT_BROWSER_TIMING=0.
+    "--no-timing",
     "--as-strict",
     "-v",
     "--verbose",
@@ -1451,6 +1454,18 @@ pub fn parse_flags(args: &[String]) -> Flags {
             }
             "--no-settle" => {
                 flags.settle_ms = Some(0);
+            }
+            "--no-timing" => {
+                // Forwarded per command as `_timing:false` (see
+                // `connection::send_command`), so it applies to an
+                // already-running daemon too.
+                let (val, consumed) = parse_bool_arg(args, i);
+                if val {
+                    std::env::set_var("AGENT_BROWSER_TIMING", "0");
+                }
+                if consumed {
+                    i += 1;
+                }
             }
             "--settle-ms" => {
                 if let Some(s) = args.get(i + 1) {

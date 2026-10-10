@@ -11285,6 +11285,17 @@ async fn e2e_observe_reports_an_iframe_receipt_in_visible_text() {
         !all.contains("pin-secret-7731"),
         "a password value must never be observed: {all}"
     );
+    // The session's first observation names its target; the next one, on
+    // the same target, leaves it out.
+    assert!(observed["target"]["targetId"].is_string(), "{observed}");
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "7", "action": "click", "selector": save, "observe": true }),
+    )
+    .await;
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    assert!(observed.get("target").is_none(), "{observed}");
     server.abort();
 }
 

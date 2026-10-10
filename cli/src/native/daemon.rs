@@ -611,6 +611,12 @@ where
     }
 }
 
+/// Whether a reply should carry the `timing` object: yes unless the command
+/// says `_timing: false`.
+fn wants_timing(cmd: &Value) -> bool {
+    cmd.get("_timing").and_then(Value::as_bool) != Some(false)
+}
+
 async fn handle_connection<S>(
     stream: S,
     state: std::sync::Arc<tokio::sync::Mutex<DaemonState>>,
@@ -682,8 +688,13 @@ async fn handle_connection<S>(
                     let ok = response.get("success").and_then(|v| v.as_bool()) == Some(true);
                     let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
                     super::timing::log_command(&s.session_id, action, ok, &timing);
-                    if let Some(obj) = response.as_object_mut() {
-                        obj.insert("timing".to_string(), timing);
+                    // The reply carries `timing` unless the caller asked for a
+                    // compact one (`--no-timing`, AGENT_BROWSER_TIMING=0); the
+                    // timing.jsonl line above is written either way.
+                    if wants_timing(&cmd) {
+                        if let Some(obj) = response.as_object_mut() {
+                            obj.insert("timing".to_string(), timing);
+                        }
                     }
                     response
                 };
@@ -892,6 +903,17 @@ mod idle_tests {
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+
+    #[test]
+    fn replies_keep_timing_unless_the_command_asks_for_a_compact_one() {
+        assert!(wants_timing(&serde_json::json!({"action": "click"})));
+        assert!(wants_timing(
+            &serde_json::json!({"action": "click", "_timing": true})
+        ));
+        assert!(!wants_timing(
+            &serde_json::json!({"action": "click", "_timing": false})
+        ));
+    }
 
     async fn slow_reply_output(enabled: bool) -> Vec<u8> {
         use tokio::io::AsyncReadExt;

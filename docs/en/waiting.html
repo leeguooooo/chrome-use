@@ -296,6 +296,8 @@
         so a text-only change is unknown, not absent.
       </div>
 
+      <p><code>observed.target</code> (<code>session</code>, <code>tabId</code>, <code>targetId</code>, <code>url</code>) appears when it is news: the first observation in the session, a tab, target or url other than the one the last observation reported, or an action that moved the session to another tab. When it is absent, the observation is about the same target the last one named.</p>
+
       <div class="du-callout tip">
         <div class="du-callout-title">✅ expect or --observe?</div>
         For a <strong>hard pass/fail gate</strong> (with exit codes, <code>&amp;&amp;</code>, batches) use
