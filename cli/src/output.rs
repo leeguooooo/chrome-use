@@ -632,6 +632,13 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                     serde_json::to_string_pretty(ex).unwrap_or_else(|_| ex.to_string())
                 );
             }
+            // A field empty in every row (#504) or a 0-row diagnostic must
+            // not hide behind well-formed JSON.
+            for key in ["warning", "diagnostic"] {
+                if let Some(w) = data.get(key).and_then(|v| v.as_str()) {
+                    eprintln!("{} {}", color::warning_indicator(), w);
+                }
+            }
             return;
         }
 
@@ -3325,6 +3332,7 @@ Schema:
     "rows": "<css>",        // optional: repeating container → array; omit → one object on the document
     "fields": {
       "name": ".title",                          // shorthand: css → trimmed text
+      "link": "@href",                           // shorthand: attribute of the row element
       "price": { "sel": ".price", "get": "text" },
       "href":  { "sel": "a", "get": "@href" },   // @attr
       "html":  { "sel": ".body", "get": "html" },
@@ -3333,6 +3341,10 @@ Schema:
     }
   }
   get = text (default) | @<attr> | html | value.  sel "" or omitted = the row root itself.
+  A spec extract does not understand (an unknown key, get "href" without @, a
+  field selector that is not valid CSS) is an error, never a silent null. A
+  field that comes back empty in every row is named in a ⚠ warning
+  (`meta.emptyFields` in --json).
 
 Examples:
   chrome-use extract --schema '{"rows":".product","fields":{"name":".name","price":".price"}}'

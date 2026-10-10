@@ -196,7 +196,7 @@ EOF</code></pre>
           <span class="du-code-name">bash</span>
         </div>
 <pre><code><span class="du-cmt"># rows = 重复容器的选择器；fields = 每行要取的字段</span>
-<span class="du-cmt"># 字段可简写成 CSS（默认取文本），或写成 { "sel": "…", "get": "text|@attr|html|value" }</span>
+<span class="du-cmt"># 字段可简写成 CSS（默认取文本）、"@href"（取这一行元素自己的属性），或写成 { "sel": "…", "get": "text|@attr|html|value" }</span>
 <span class="du-prompt">$</span> chrome-use extract <span class="du-flag">--schema</span> <span class="du-str">'{"rows":".product","fields":{"name":".name","price":".price","href":{"sel":"a","get":"@href"}}}'</span></code></pre>
       </div>
 
@@ -226,6 +226,14 @@ EOF</code></pre>
         真的一个都没有时，返回 <code>diagnostic</code> 列出页面上有哪些重复容器（<code>li×3, a[href*=pulls]×3</code>），
         而不是一个没信息的 <code>[]</code>。也接受数组形状的 schema：
         <code>{"items":[{"title":"…","url":"@href"}]}</code>。
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 看不懂的写法直接报错，不再静默返回 null</div>
+        <code>"@href"</code> 这种简写读这一行元素（没有 <code>rows</code> 时是整个文档根元素）自己的属性；
+        要读子元素的属性，写 <code>{"sel":"a","get":"@href"}</code>。未知的键（比如 <code>selector</code>）、
+        不带 <code>@</code> 的 <code>"get":"href"</code>、不是合法 CSS 的字段选择器，都会报错并列出支持的写法。
+        某个字段在每一行都是空的，会用 ⚠ 警告点名（<code>--json</code> 里是 <code>meta.emptyFields</code>）。
       </div>
 
       <div class="du-callout note">

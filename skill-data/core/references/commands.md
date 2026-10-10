@@ -167,6 +167,9 @@ chrome-use extract --schema '{"rows":".product","fields":{"name":".name","price"
                                # Scrape structured JSON in one call: rows = repeating
                                # container (omit for one object), get = text|@attr|html|value,
                                # "all": true for arrays. --schema-file / --stdin for long schemas.
+                               # "url":"@href" = attribute of the row element itself. Unknown
+                               # keys, get without @, invalid CSS: an error, never a silent null;
+                               # a field empty in every row is named in a ⚠ warning.
 chrome-use get text @e1        # Get element text
 chrome-use get html @e1        # Get innerHTML
 chrome-use get value @e1       # Get input value

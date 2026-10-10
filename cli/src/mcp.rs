@@ -518,7 +518,7 @@ fn extended_tools() -> Vec<Value> {
             "inputSchema": build_schema(obj(&[
                 ("schema", json!({
                     "type": "object",
-                    "description": "{ rows?: <css selector for repeating containers>, fields: { name: <css> | { sel, get: 'text'|'@attr'|'html'|'value', all? } } }. Omitting rows returns one object for the whole document.",
+                    "description": "{ rows?: <css selector for repeating containers>, fields: { name: <css> | '@attr' (an attribute of the row element) | { sel, get: 'text'|'@attr'|'html'|'value', all? } } }. Omitting rows returns one object for the whole document. Unknown keys or invalid CSS are errors, never silent nulls.",
                     "properties": { "fields": { "type": "object" } },
                     "required": ["fields"],
                 })),

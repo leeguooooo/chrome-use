@@ -202,7 +202,7 @@ EOF</code></pre>
           <span class="du-code-name">bash</span>
         </div>
 <pre><code><span class="du-cmt"># rows = selector for the repeating container; fields = what to pull per row</span>
-<span class="du-cmt"># a field is either shorthand CSS (text by default) or { "sel": "…", "get": "text|@attr|html|value" }</span>
+<span class="du-cmt"># a field is shorthand CSS (text by default), "@href" (an attribute of the row element itself), or { "sel": "…", "get": "text|@attr|html|value" }</span>
 <span class="du-prompt">$</span> chrome-use extract <span class="du-flag">--schema</span> <span class="du-str">'{"rows":".product","fields":{"name":".name","price":".price","href":{"sel":"a","get":"@href"}}}'</span></code></pre>
       </div>
 
@@ -234,6 +234,15 @@ EOF</code></pre>
         <code>diagnostic</code> listing the repeating containers that ARE present
         (<code>li×3, a[href*=pulls]×3</code>) instead of a signal-less <code>[]</code>. An array-shaped schema
         works too: <code>{"items":[{"title":"…","url":"@href"}]}</code>.
+      </div>
+
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ A spec extract does not understand is an error, not a silent null</div>
+        The <code>"@href"</code> shorthand reads an attribute of the row element itself (of the document root when
+        there are no <code>rows</code>); to read a descendant's attribute write <code>{"sel":"a","get":"@href"}</code>.
+        An unknown key (such as <code>selector</code>), <code>"get":"href"</code> without the <code>@</code>, or a field
+        selector that is not valid CSS is refused with the forms that work. A field that comes back empty in every
+        row is named in a ⚠ warning (<code>meta.emptyFields</code> with <code>--json</code>).
       </div>
 
       <div class="du-callout note">
