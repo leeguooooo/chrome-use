@@ -44,6 +44,8 @@ struct Browser {
     unlisted: HashSet<String>,
     /// Every `Target.closeTarget` received.
     close_requests: Vec<String>,
+    /// CDP events sent before the next reply.
+    events: Vec<Value>,
 }
 
 #[derive(Clone)]
@@ -120,9 +122,17 @@ impl Fake {
         entry.1
     }
 
-    /// The user closes a tab, outside the session.
+    /// The user closes a tab, outside the session: Chrome reports it
+    /// destroyed.
     fn remove(&self, target: &str) {
-        self.0.lock().unwrap().tabs.retain(|(t, _, _)| t != target);
+        let mut b = self.0.lock().unwrap();
+        b.tabs.retain(|(t, _, _)| t != target);
+        b.events.push(json!({"method": "Target.targetDestroyed",
+                             "params": {"targetId": target}}));
+    }
+
+    fn take_events(&self) -> Vec<Value> {
+        std::mem::take(&mut self.0.lock().unwrap().events)
     }
 
     fn behave(&self) {
@@ -262,6 +272,12 @@ async fn serve(fake: Fake, stream: tokio::net::TcpStream) {
         };
         if fake.hangs(req["method"].as_str().unwrap_or("")) {
             continue; // never answered
+        }
+        for event in fake.take_events() {
+            let frame = tokio_tungstenite::tungstenite::Message::Text(event.to_string());
+            if ws.send(frame).await.is_err() {
+                return;
+            }
         }
         let mut reply = match fake.reply(&req) {
             Ok(result) => json!({"id": req["id"], "result": result}),
@@ -766,10 +782,10 @@ fn multi_tab_case(relay: bool) {
         .tabs
         .push(("USER".to_string(), 7, "https://example.com/mine".into()));
     let mut d = Daemon::start(&format!("hc-multi-{}", relay as u8), &url, relay);
-    let out = d.cli(&["open", "about:blank"]);
-    assert!(out.status.success(), "{}", text(&out));
-    let out = d.cli(&["tab", "new", "about:blank"]);
-    assert!(out.status.success(), "{}", text(&out));
+    for _ in 0..2 {
+        let out = d.cli(&["tab", "new"]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
     let out = d.cli(&["tab", "list"]);
     let list: Value = serde_json::from_slice(&out.stdout).unwrap();
     let created: Vec<(String, String)> = list["data"]["tabs"]
@@ -837,23 +853,26 @@ fn tab_close_of_a_tab_left_open_keeps_its_right_over_the_relay() {
     multi_tab_case(true);
 }
 
-/// #496 review: an omitted `tabId` resolves the active tab strictly. The
-/// pinned tab is gone and the session's other tab is all `pages` holds:
-/// `tab close` refuses instead of taking the last-tab branch and ending the
-/// session with that other tab.
+/// #496 review: an omitted `tabId` resolves the active tab strictly. Over the
+/// relay, the pinned tab is destroyed (the pin stays as a tombstone) and the
+/// session's other tab is all `pages` holds: `tab close` refuses instead of
+/// taking the last-tab branch and ending the session with that other tab.
 #[test]
 fn tab_close_without_a_tab_refuses_when_the_pinned_tab_is_gone() {
-    let (fake, url) = Fake::start(false);
-    let mut d = Daemon::start("hc-dangling", &url, false);
+    let (fake, url) = Fake::start(true);
+    let mut d = Daemon::start("hc-dangling", &url, true);
     let t1 = one_tab(&d);
     let r = d.send(json!({"id": "n", "action": "tab_new", "label": "docs"}));
     assert_eq!(r["success"], true, "{r}");
     let t2 = d.tabs().into_iter().find(|(id, _)| id == "t2").unwrap().1;
     // The user closes the pinned tab; the session has only t1 left.
     fake.remove(&t2);
-    for i in 0..3 {
-        let _ = d.send(json!({"id": format!("l{i}"), "action": "tab_list"}));
-    }
+    let r = d.send(json!({"id": "l", "action": "tab_list"}));
+    let listed: Vec<&str> = r["data"]["tabs"]
+        .as_array()
+        .map(|tabs| tabs.iter().filter_map(|t| t["targetId"].as_str()).collect())
+        .unwrap_or_default();
+    assert!(!listed.contains(&t2.as_str()), "{t2} still tracked: {r}");
     let r = d.send(json!({"id": "c", "action": "tab_close"}));
     assert_eq!(r["success"], false, "{r}");
     assert_ne!(r["data"]["sessionClosed"], true, "{r}");
