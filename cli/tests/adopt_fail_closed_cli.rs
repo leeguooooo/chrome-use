@@ -536,10 +536,9 @@ fn user_touches(
             let target = params["targetId"].as_str().unwrap_or("");
             let on_user_target = user_targets.iter().any(|u| u == target);
             match method.as_str() {
-                "Target.attachToTarget"
-                | "Target.activateTarget"
-                | "Target.closeTarget"
-                | "ABExt.releaseTab" => on_user_target,
+                "Target.attachToTarget" | "Target.activateTarget" | "Target.closeTarget" => {
+                    on_user_target
+                }
                 "ABExt.attachTabById" => params["chromeTabId"]
                     .as_i64()
                     .is_some_and(|id| user_chrome_ids.contains(&id)),
@@ -691,6 +690,16 @@ fn failed_adopt_after_an_adopted_user_tab_drops_the_current_tab() {
         .collect();
     assert!(evals.is_empty(), "something was evaluated: {evals:?}");
     assert_eq!(fake.created(), 0, "a tab was created before `tab new`");
+
+    // The earlier adopted tab was let go of, not taken back.
+    {
+        let b = fake.0.lock().unwrap();
+        let uc = b.tabs.iter().find(|t| t.target == "UC").unwrap();
+        assert!(
+            !uc.held,
+            "the earlier adopted user tab is still held: {uc:?}"
+        );
+    }
 
     let (v, ctx) = env.json(&["tab", "new", "https://fresh.example/b"]);
     assert_eq!(v["success"], true, "tab new failed: {ctx}");

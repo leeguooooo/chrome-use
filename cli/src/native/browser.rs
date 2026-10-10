@@ -1254,8 +1254,30 @@ fn register_scoped_target_ownership(
         target_ids
             .iter()
             .filter(|target_id| !created_targets.contains(*target_id))
+            .filter(|target_id| !is_disowned(target_id))
             .cloned(),
     );
+}
+
+/// Tabs this daemon let go of when an `adopt` found nothing (#507): tabs an
+/// earlier adopt had tagged into the session's group. They are never taken
+/// back as adopted by a later reconnect or resync of this daemon, even when an
+/// extension too old to release them keeps them in the group.
+static DISOWNED: std::sync::Mutex<Option<HashSet<String>>> = std::sync::Mutex::new(None);
+
+fn disown(target_id: &str) {
+    if let Ok(mut g) = DISOWNED.lock() {
+        g.get_or_insert_with(HashSet::new)
+            .insert(target_id.to_string());
+    }
+}
+
+fn is_disowned(target_id: &str) -> bool {
+    DISOWNED
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|d| d.contains(target_id)))
+        .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -4430,6 +4452,46 @@ impl BrowserManager {
         Ok(out)
     }
 
+    /// After an `adopt` found nothing (#507): tabs an earlier `adopt` of this
+    /// session tagged into its group are not the session's any more. Each is
+    /// released through the extension where it can be (ab-connect 0.5.34+),
+    /// so the relay drops it from the group, and disowned for this daemon
+    /// either way, so no reconnect or resync takes it back. Nothing is
+    /// attached, evaluated or closed. Tabs the session created are left to
+    /// its ownership record.
+    async fn let_go_of_earlier_adoptions(&mut self) {
+        let Ok(scoped) = self.collect_page_targets().await else {
+            return;
+        };
+        let earlier: Vec<String> = scoped
+            .into_iter()
+            .map(|t| t.target_id)
+            .filter(|t| !self.created_targets.contains(t))
+            .collect();
+        if earlier.is_empty() {
+            return;
+        }
+        let can_release = self
+            .relay_capabilities()
+            .await
+            .iter()
+            .any(|c| c == RELEASE_TAB_CAPABILITY);
+        for target in earlier {
+            disown(&target);
+            self.adopted_targets.remove(&target);
+            if can_release {
+                let _ = self
+                    .client
+                    .send_command(
+                        "ABExt.releaseTab",
+                        Some(json!({ "targetId": target })),
+                        None,
+                    )
+                    .await;
+            }
+        }
+    }
+
     /// Let go of every tab taken with `--force`, for `close`: never close
     /// one, release the debugger hold instead. Over the relay that is
     /// `ABExt.releaseTab` (ab-connect 0.5.34+; an older extension keeps the
@@ -4618,6 +4680,9 @@ impl BrowserManager {
             ADOPT_DIRECTIVE_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
             if let Err(e) = self.adopt_existing_target(&spec).await {
                 set_no_current_tab(&spec);
+                if scoped {
+                    self.let_go_of_earlier_adoptions().await;
+                }
                 return Err(format!("{e}\n{NO_CURRENT_TAB_NEXT}"));
             }
             clear_no_current_tab();
@@ -4633,7 +4698,12 @@ impl BrowserManager {
             return Ok(());
         }
 
-        let page_targets: Vec<TargetInfo> = self.collect_page_targets().await?;
+        let page_targets: Vec<TargetInfo> = self
+            .collect_page_targets()
+            .await?
+            .into_iter()
+            .filter(|t| !is_disowned(&t.target_id))
+            .collect();
 
         if page_targets.is_empty() {
             self.open_first_tab().await?;
@@ -7351,7 +7421,7 @@ impl BrowserManager {
             if self.update_page_target_info(target) {
                 continue;
             }
-            if strict_isolation {
+            if strict_isolation || is_disowned(&target.target_id) {
                 continue;
             }
             let attach_result: AttachToTargetResult = match self
