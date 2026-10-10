@@ -2827,6 +2827,7 @@ Global Options:
 Examples:
   chrome-use hover "#dropdown-trigger"
   chrome-use hover @e4
+  chrome-use hover @e4 --observe   # also return the menu/caption it revealed
 "##
         }
         "focus" => {
@@ -6197,7 +6198,7 @@ Options:
                              Requests: at most 20 summaries, 256 UTF-8 bytes each;
                              data URL payloads omitted. Full capture: network requests --json
                              Applies to click, dblclick, fill, type, press, select,
-                             pick, check, uncheck, evaluate (delta) and navigate,
+                             pick, check, uncheck, evaluate, hover (delta) and navigate,
                              reload, back, forward (fresh tree); also per batch step.
                              Observation status is separate from action success;
                              partial/unavailable results must not trigger action replay.

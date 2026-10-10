@@ -14,6 +14,7 @@ chrome-use pick @e4 --option "Europe" --observe  # custom combobox, with the del
 chrome-use pick @e6 --option "Kyoto"       # autocomplete field: types, clicks the suggestion
 chrome-use check @e5
 chrome-use uncheck @e5
+chrome-use hover @e7 --observe             # the menu or caption the hover revealed
 chrome-use scroll down 500
 chrome-use get value @e2
 chrome-use get text @e6
