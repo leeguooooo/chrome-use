@@ -167,6 +167,9 @@ The background daemon recycles after its idle timeout. In a real/external
 Chrome this disconnects without closing session-created tabs, so their URL and
 in-page state survive until the next command reconnects. Explicit `close` or
 `session stop` remains the intentional cleanup path and closes created tabs.
+`close` reads the tabs back and reports `tabsClosed` and `verifiedAbsent`; when
+one is still open or cannot be confirmed gone it fails with `close incomplete`,
+names the tab, and keeps the session and its ownership so `close` can be retried.
 After idle exit, stop rediscovers the browser and validates persisted ownership.
 If rediscovery fails or identifies another browser, reconnect using the original
 connection options and run close; stop reports failure and retains ownership.

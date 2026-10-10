@@ -18,6 +18,8 @@ chrome-use pushstate <url> # SPA client-side navigation. Auto-detects
                               # window.next.router.push (triggers RSC fetch on Next.js);
                               # falls back to history.pushState + popstate/navigate events.
 chrome-use close           # Close browser (aliases: quit, exit)
+                              # Reports tabsClosed + verifiedAbsent; fails with
+                              # `close incomplete` if a tab is still open
 chrome-use connect 9222    # Connect to browser via CDP port
 ```
 
@@ -414,6 +416,20 @@ chrome-use tab close t2                     # Close by id
 chrome-use tab close docs                   # Close by label
 chrome-use window new                       # New window
 ```
+
+`tab close` on the session's only tab, when the session created it, ends the
+session the way `close` does (`sessionClosed: true`): no separate `close`
+needed. A tab the session did not create (adopted, or the user's) is never
+closed; the refusal says to leave it open and run `close`.
+
+`close` reads every tab it closed back before reporting it: from the
+extension's tab record by exact Chrome tab id over the relay, or from Chrome's
+target list on a direct CDP connection. It returns `tabsClosed` (the tabs
+confirmed gone) and `verifiedAbsent: true`. If any tab the session created is
+still open, or cannot be confirmed gone (`unverified`), it fails with
+`close incomplete` and names those tabs; the session, its daemon and its tab
+ownership are kept, so retry `close`. Do not chain `; close` after a failed
+step and read its exit code alone; read the error.
 
 Tab ids are stable strings of the form `t1`, `t2`, `t3`. They're never reused
 within a session, so the same id keeps referring to the same tab across

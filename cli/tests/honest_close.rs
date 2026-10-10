@@ -364,7 +364,7 @@ fn one_tab(d: &Daemon) -> String {
     tabs[0].1.clone()
 }
 
-fn last_tab_close_ends_the_session(relay: bool) {
+fn last_tab_case(relay: bool) {
     let (fake, url) = Fake::start(relay);
     let mut d = Daemon::start(if relay { "hc-last-r" } else { "hc-last" }, &url, relay);
     let target = one_tab(&d);
@@ -381,15 +381,15 @@ fn last_tab_close_ends_the_session(relay: bool) {
 
 #[test]
 fn last_tab_close_ends_the_session_in_one_round() {
-    last_tab_close_ends_the_session(false);
+    last_tab_case(false);
 }
 
 #[test]
 fn last_tab_close_ends_the_session_over_the_relay() {
-    last_tab_close_ends_the_session(true);
+    last_tab_case(true);
 }
 
-fn successful_close_reports_verified_absent(relay: bool) {
+fn verified_close_case(relay: bool) {
     let (fake, url) = Fake::start(relay);
     let mut d = Daemon::start(if relay { "hc-ok-r" } else { "hc-ok" }, &url, relay);
     let first = one_tab(&d);
@@ -419,12 +419,12 @@ fn successful_close_reports_verified_absent(relay: bool) {
 
 #[test]
 fn successful_close_reports_verified_absent() {
-    successful_close_reports_verified_absent(false);
+    verified_close_case(false);
 }
 
 #[test]
 fn successful_close_reports_verified_absent_over_the_relay() {
-    successful_close_reports_verified_absent(true);
+    verified_close_case(true);
 }
 
 fn close_that_leaves_a_tab_open_fails(relay: bool, refuse: bool) {

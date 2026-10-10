@@ -454,6 +454,17 @@
 <span class="du-prompt">$</span> chrome-use window new                       <span class="du-cmt"># 新窗口</span></code></pre>
       </div>
       <p>
+        会话只剩一个标签、且它是本会话创建的时候，<code>tab close</code> 直接按 <code>close</code> 结束会话
+        （返回 <code>sessionClosed: true</code>），不用再跑一次 <code>close</code>。不是本会话创建的标签
+        （adopt 来的、用户自己的）永远不会被关，拒绝信息会告诉你保持它打开并运行 <code>close</code>。
+      </p>
+      <p>
+        <code>close</code> 关完之后会逐个读回：走 relay 时按确切的 Chrome tab id 查扩展的标签记录，直连 CDP 时查
+        Chrome 自己的 target 列表。返回 <code>tabsClosed</code>（确认已关的标签）和 <code>verifiedAbsent: true</code>。
+        只要有本会话创建的标签还开着，或无法确认已关（<code>unverified</code>），就返回 <code>close incomplete</code>
+        并列出这些标签；会话、daemon 和标签归属记录都保留，重试 <code>close</code> 即可。
+      </p>
+      <p>
         原生复制只支持通过 chrome-use 扩展连接的真实 Chrome。命令完成后会恢复此前可见的前台标签，
         同时让副本成为 chrome-use 内部活动标签。启动型 Chrome、raw CDP、Lightpanda 和云 provider
         不会退化为同 URL 新建标签；副本是否在后台开始加载仍由 Chrome 决定。
