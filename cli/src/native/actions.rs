@@ -1407,6 +1407,7 @@ impl DaemonState {
                                         super::settle::InFlightRequest::from_event(
                                             rid,
                                             &event.params,
+                                            event.received_at,
                                         ),
                                     );
                                 }
@@ -25987,6 +25988,7 @@ mod tests {
                 "defaultPrompt": null,
             }),
             session_id: Some("session-a".to_string()),
+            received_at: std::time::Instant::now(),
         };
         assert!(pending_dialog_from_event(&confirm, true, "session-b").is_none());
 
@@ -25999,6 +26001,7 @@ mod tests {
                 "defaultPrompt": null,
             }),
             session_id: Some("session-a".to_string()),
+            received_at: std::time::Instant::now(),
         };
         assert!(pending_dialog_from_event(&alert, true, "session-a").is_none());
         assert!(pending_dialog_from_event(&alert, false, "session-a").is_some());
@@ -26018,6 +26021,7 @@ mod tests {
                     "defaultPrompt": null,
                 }),
                 session_id: Some("session-a".to_string()),
+                received_at: std::time::Instant::now(),
             })
             .unwrap();
         });

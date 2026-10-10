@@ -157,6 +157,7 @@ pub fn describe_pending(pending: &[String]) -> String {
             "animation" => "animation running",
             "network" => "request in flight",
             "probe" => "page did not answer the settle check",
+            "unknown" => "state at the deadline unknown: the requests waited on had just finished",
             other => other,
         })
         .collect::<Vec<_>>()
@@ -376,7 +377,21 @@ pub async fn settle_armed(
     if last_pending.is_empty() {
         last_pending.push("dom".to_string());
     }
-    if !last_pending.iter().any(|p| p == "network") {
+    // The ceiling hit: describe the requests as they are now, not as the
+    // last round saw them. If the ones the wait was holding for finished in
+    // the meantime, say the state at the deadline is unknown rather than
+    // naming requests that are no longer active.
+    if last_pending.iter().any(|p| p == "network") {
+        state.drain_cdp_events_background().await;
+        last_requests = state.pending_request_detail(since);
+        if last_requests.is_empty() {
+            for p in last_pending.iter_mut() {
+                if p == "network" {
+                    *p = "unknown".to_string();
+                }
+            }
+        }
+    } else {
         last_requests.clear();
     }
     SettleOutcome {
@@ -696,43 +711,30 @@ pub struct InFlightRequest {
     pub id: String,
     pub method: String,
     pub url: String,
-    /// When the request started, from the event's own `wallTime` when the
-    /// clocks agree (see [`InFlightRequest::from_event`]), else when the
-    /// daemon read the event.
+    /// When the client's reader received the request's
+    /// `Network.requestWillBeSent` (see [`InFlightRequest::from_event`]).
     pub started: Instant,
-    /// When the daemon read the event: what the bounded list is pruned by.
+    /// When the daemon drained the event: what the bounded list is pruned by.
     pub seen: Instant,
 }
 
-/// The most a request's `wallTime` may lie behind the moment the daemon
-/// reads its event and still be believed. Beyond this the two clocks
-/// probably disagree (a remote browser), and the read time is used instead.
-const WALL_TIME_TRUST_S: f64 = 600.0;
-
 impl InFlightRequest {
-    /// Build from a `Network.requestWillBeSent` event.
+    /// Build from a `Network.requestWillBeSent` event received at
+    /// `received_at` by the CDP reader.
     ///
-    /// The start time comes from the event's `wallTime`, not from when the
-    /// daemon got round to reading it. Events queue between commands, so a
-    /// request the page started 25 seconds ago (a script left hanging by the
-    /// previous document) used to be stamped "now" on the next command and
-    /// counted as the page still loading, holding `snapshot` to its ceiling
-    /// (#505). A `wallTime` in the future, or implausibly old, means the
-    /// browser's clock is not ours: fall back to the read time, which can
-    /// only make a request look newer, never hide one.
-    pub fn from_event(id: &str, params: &serde_json::Value) -> Self {
-        let now = Instant::now();
-        let wall_now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
-        let started = params
-            .get("wallTime")
-            .and_then(serde_json::Value::as_f64)
-            .map(|wall| wall_now - wall)
-            .filter(|age| (0.0..WALL_TIME_TRUST_S).contains(age))
-            .and_then(|age| now.checked_sub(Duration::from_secs_f64(age)))
-            .unwrap_or(now);
+    /// The start is the reader's receive time, on the daemon's own monotonic
+    /// clock. Events queue between commands, and the old code stamped a
+    /// request with the time the daemon *drained* it, so a request the
+    /// previous document started 25 seconds earlier was dated "now" on the
+    /// next command and held `snapshot` to its ceiling (#505). The receive
+    /// time can only be later than the true start (by the delivery latency),
+    /// so a request may look newer than it is, never older.
+    ///
+    /// The browser's own timestamps (`wallTime`, `timestamp`) are not used:
+    /// nothing proves the browser's clock is the daemon's (a remote browser,
+    /// a skewed or adjusted wall clock), and a browser clock running behind
+    /// would make a fresh request look old and end the wait early.
+    pub fn from_event(id: &str, params: &serde_json::Value, received_at: Instant) -> Self {
         let request = params.get("request");
         let field = |k: &str| {
             request
@@ -745,8 +747,8 @@ impl InFlightRequest {
             id: id.to_string(),
             method: field("method"),
             url: field("url"),
-            started,
-            seen: now,
+            started: received_at,
+            seen: Instant::now(),
         }
     }
 
@@ -757,10 +759,14 @@ impl InFlightRequest {
     /// `GET www.google.com/gen_204 (0.4s)`: host and path only (no query, no
     /// credentials), shortened, with how long it has been in flight.
     fn describe(&self) -> String {
+        // Host and path only: no query, no credentials. A URL that does not
+        // parse is not echoed at all, since it can carry either.
         let place = match url::Url::parse(&self.url) {
             Ok(u) if u.scheme() == "data" => "data: URL".to_string(),
-            Ok(u) => format!("{}{}", u.host_str().unwrap_or(""), u.path()),
-            Err(_) => self.url.chars().take(60).collect(),
+            Ok(u) if u.host_str().is_some() => {
+                format!("{}{}", u.host_str().unwrap_or(""), u.path())
+            }
+            _ => "unknown URL".to_string(),
         };
         let place = if place.chars().count() > 70 {
             let mut p: String = place.chars().take(69).collect();
@@ -871,30 +877,79 @@ mod tests {
         }
     }
 
-    /// #505: a request the page started long before the daemon read its
-    /// event (a script left hanging by the previous document) is not the
-    /// page loading now. Its start comes from the event's wallTime.
-    #[test]
-    fn request_start_comes_from_the_events_wall_time() {
-        let wall_now = std::time::SystemTime::now()
+    fn wall_now() -> f64 {
+        std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs_f64();
-        let old = InFlightRequest::from_event(
-            "1",
-            &json!({ "wallTime": wall_now - 25.0, "request": { "method": "GET", "url": "http://h/x" } }),
-        );
-        assert!(old.started.elapsed() >= Duration::from_secs(24));
-        assert_eq!(pending_requests(&[old], lookback()), 0);
-        // A clock that disagrees (future or absurdly old) falls back to the
-        // read time, which can only make a request look newer.
-        for wall in [wall_now + 30.0, wall_now - 86_400.0] {
-            let r = InFlightRequest::from_event("2", &json!({ "wallTime": wall }));
-            assert!(r.started.elapsed() < Duration::from_secs(1));
-            assert_eq!(pending_requests(&[r], lookback()), 1);
+            .as_secs_f64()
+    }
+
+    /// #505 review: a fresh request stays pending whatever the browser's
+    /// clocks say. A browser wall clock 3 s or 5 s slow (or fast), a wall
+    /// clock adjusted by a day, and an arbitrary monotonic `timestamp` from
+    /// another session or machine all leave the start at the reader's
+    /// receive time.
+    #[test]
+    fn fresh_requests_stay_pending_whatever_the_browser_clock_says() {
+        let now = Instant::now();
+        let w = wall_now();
+        for (wall, ts) in [
+            (w - 3.0, 12.5),
+            (w - 5.0, 99_999.0),
+            (w + 5.0, 0.001),
+            (w - 86_400.0, 3.0),
+            (w + 86_400.0, -1.0),
+        ] {
+            let r = InFlightRequest::from_event(
+                "fresh",
+                &json!({ "wallTime": wall, "timestamp": ts,
+                         "request": { "method": "GET", "url": "https://a.example/x" } }),
+                now,
+            );
+            assert_eq!(
+                r.started, now,
+                "browser clock leaked into the start: {wall} {ts}"
+            );
+            assert_eq!(pending_requests(&[r], lookback()), 1, "{wall} {ts}");
         }
-        let none = InFlightRequest::from_event("3", &json!({}));
-        assert_eq!(pending_requests(&[none], lookback()), 1);
+        // Two sessions with different clocks: each request is dated by its own
+        // receive time only.
+        let earlier = now - Duration::from_millis(500);
+        let a = InFlightRequest::from_event("a", &json!({ "timestamp": 1.0 }), earlier);
+        let b = InFlightRequest::from_event("b", &json!({ "timestamp": 5_000.0 }), now);
+        assert_eq!((a.started, b.started), (earlier, now));
+        assert_eq!(pending_requests(&[a, b], lookback()), 2);
+    }
+
+    /// #505: a request received 25 s ago but drained only now (events queue
+    /// between commands) is dated by its receive time, so it is not the page
+    /// loading now. No clock is guessed for this.
+    #[test]
+    fn a_request_received_long_ago_and_drained_now_does_not_count() {
+        let received = Instant::now() - Duration::from_secs(25);
+        let r = InFlightRequest::from_event(
+            "stale",
+            &json!({ "request": { "method": "GET", "url": "https://a.example/hang" } }),
+            received,
+        );
+        assert!(r.seen > r.started);
+        assert_eq!(pending_requests(&[r], lookback()), 0);
+    }
+
+    /// #505 review: a URL that does not parse is never echoed (it can carry
+    /// a query or credentials).
+    #[test]
+    fn an_unparseable_url_is_described_as_unknown() {
+        let mut r = req("x", Instant::now());
+        r.url = "not a url?token=secret&user:pass@".to_string();
+        let d = r.describe();
+        assert!(d.starts_with("GET unknown URL ("), "{d}");
+        assert!(!d.contains("secret") && !d.contains("pass"), "{d}");
+    }
+
+    #[test]
+    fn a_deadline_with_no_request_left_is_reported_as_unknown() {
+        assert!(describe_pending(&["unknown".to_string()]).contains("unknown"));
     }
 
     /// The warning names the request, host and path only (no query).

@@ -249,6 +249,7 @@ impl CdpClient {
                         method: method.clone(),
                         params: parsed.params.clone().unwrap_or(Value::Null),
                         session_id: parsed.session_id.clone(),
+                        received_at: std::time::Instant::now(),
                     };
                     let _ = event_tx_clone.send(event);
                 }

@@ -159,7 +159,8 @@
         AGENT_BROWSER_SETTLE_MS.</code>
         That means the tree may be mid-transition — re-read before trusting it.
         When the network held it, the line names up to three requests (host and path, never the query) and how long
-        each has been in flight (<code>settle.pendingRequests</code> in JSON); <code>page did not answer the settle
+        each has been in flight (<code>settle.pendingRequests</code> in JSON), as of the moment the wait stopped;
+        <code>state at the deadline unknown</code> means the requests it waited on had just finished; <code>page did not answer the settle
         check</code> means the page was busy or navigating, not that its DOM was changing.
         A mid-transition capture passed off as the final one is worse than being
         slow, so this line is never swallowed.

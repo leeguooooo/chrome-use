@@ -9497,6 +9497,7 @@ mod tests {
             method: method.to_string(),
             params,
             session_id: Some(session_id.to_string()),
+            received_at: std::time::Instant::now(),
         }
     }
 
