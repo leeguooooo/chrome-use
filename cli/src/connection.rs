@@ -2608,7 +2608,6 @@ mod tests {
         assert!(!super::timing_disabled(None));
     }
 
-    #[cfg(unix)]
     /// A daemon on a fake clock: each line arrives `after` the previous one
     /// (or the start), and a read that would wait longer than its timeout
     /// times out, advancing the clock by exactly that timeout. No thread, no
