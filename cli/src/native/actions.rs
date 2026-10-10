@@ -2245,8 +2245,16 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let observe = observe_requested && OBSERVABLE_ACTIONS.contains(&action);
     // Refs kept from before a failed post-action capture are not fresh
     // capability: each one this command names must be confirmed live first.
+    // A page still blocked by `debugger_access_denied` cannot be checked:
+    // clear the block the #373 way once (a read-only step) and check again.
     if state.ref_map.kept().is_some() {
-        if let Err(e) = Box::pin(verify_kept_refs_of(cmd, state)).await {
+        let mut checked = Box::pin(verify_kept_refs_of(cmd, state)).await;
+        if matches!(&checked, Err(e) if e.contains(super::element::KEPT_REF_ACCESS_DENIED))
+            && Box::pin(clear_capture_block(state)).await.is_ok()
+        {
+            checked = Box::pin(verify_kept_refs_of(cmd, state)).await;
+        }
+        if let Err(e) = checked {
             return error_response(&id, &e);
         }
     }
@@ -11262,10 +11270,27 @@ pub(crate) const NAVIGATION_OBSERVABLE_ACTIONS: &[&str] =
 /// spend another one on `snapshot` anyway.
 async fn observe_snapshot_registering(state: &mut DaemonState) -> Result<String, String> {
     let (pre, target_before) = mark_refs_before_capture(state);
-    let result = capture_registering(state).await;
-    let (recaptures, recovery_note) = (0, None);
+    let first = capture_registering(state).await;
+    // `debugger_access_denied` on the capture only (the action already ran):
+    // clear the block the #373 way and capture again. Read-only — the action
+    // is never sent again.
+    let (result, recaptures, recovery_note) = recapture_after_denial(
+        state,
+        first,
+        |s| Box::pin(capture_registering(s)),
+        |s| Box::pin(clear_capture_block(s)),
+    )
+    .await;
     let error = match &result {
-        Ok(_) => return result,
+        Ok(_) => {
+            if recaptures > 0 {
+                state.capture_outcome = Some(CaptureOutcome::Recovered {
+                    recaptures,
+                    note: recovery_note,
+                });
+            }
+            return result;
+        }
         Err(e) => e.clone(),
     };
     let cause = capture_cause(&error);
@@ -11345,9 +11370,65 @@ fn keep_refs_after_failed_capture(
     Ok(pre.clone())
 }
 
+/// Bound on re-reading the page after a denied post-action capture.
+const MAX_RECAPTURES: u32 = 2;
+
+type BoxedStep<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+/// A read of the page after the action ([`recapture_after_denial`]).
+type CaptureStep<S> = for<'a> fn(&'a mut S) -> BoxedStep<'a, Result<String, String>>;
+/// A recovery from a block, with an optional note ([`recapture_after_denial`]).
+type RecoverStep<S> = for<'a> fn(&'a mut S) -> BoxedStep<'a, Result<Option<String>, String>>;
+
+/// After a capture denied by `debugger_access_denied`, run `recover` and
+/// capture again, at most [`MAX_RECAPTURES`] times. Only `capture` (a read)
+/// is ever repeated. Returns the last capture, how many re-captures ran, and
+/// the recovery's note (or why there was none).
+async fn recapture_after_denial<S: Send>(
+    state: &mut S,
+    first: Result<String, String>,
+    capture: CaptureStep<S>,
+    recover: RecoverStep<S>,
+) -> (Result<String, String>, u32, Option<String>) {
+    let mut result = first;
+    let mut recaptures = 0;
+    let mut note = None;
+    while let Err(e) = &result {
+        if !super::browser::is_debugger_access_denied(e) || recaptures >= MAX_RECAPTURES {
+            break;
+        }
+        match recover(state).await {
+            Ok(n) => {
+                recaptures += 1;
+                note = n;
+                result = capture(state).await;
+            }
+            Err(reason) => {
+                note = Some(format!("no automatic recovery: {reason}"));
+                break;
+            }
+        }
+    }
+    (result, recaptures, note)
+}
+
+/// The #373 recovery for a blocked capture: hide the pinned tab for a moment
+/// (only a tab this session created; never the user's tabs or window).
+async fn clear_capture_block(state: &mut DaemonState) -> Result<Option<String>, String> {
+    match state.browser.as_mut() {
+        Some(mgr) if mgr.on_relay() => Box::pin(mgr.cycle_pinned_tab_visibility(true)).await,
+        Some(_) => Err("not on the extension relay".to_string()),
+        None => Err("no browser".to_string()),
+    }
+}
+
 /// What a failed post-action capture did with the refs, for the reply.
 #[derive(Debug, Clone, PartialEq)]
 enum CaptureOutcome {
+    /// Denied, then captured after closing the blocking frame.
+    Recovered {
+        recaptures: u32,
+        note: Option<String>,
+    },
     /// Failed; refs kept, unverified.
     Kept {
         cause: String,
@@ -11471,6 +11552,18 @@ async fn verify_kept_refs_of(cmd: &Value, state: &DaemonState) -> Result<(), Str
 /// how they are guarded), dropped, or captured again after a recovery.
 fn annotate_capture_outcome(resp: &mut Value, outcome: &CaptureOutcome) {
     let (refs, warning) = match outcome {
+        CaptureOutcome::Recovered { recaptures, note } => {
+            let mut w = format!(
+                "post-action capture denied (debugger_access_denied); chrome-use hid the tab \
+                 for a moment to clear the block and captured the page again ({recaptures} \
+                 re-capture{}). The action ran once and was not repeated.",
+                if *recaptures == 1 { "" } else { "s" }
+            );
+            if let Some(n) = note {
+                w.push_str(&format!(" {n}"));
+            }
+            (json!({"status": "fresh", "recaptures": recaptures}), w)
+        }
         CaptureOutcome::Kept {
             cause,
             recaptures,
@@ -11510,6 +11603,14 @@ fn annotate_capture_outcome(resp: &mut Value, outcome: &CaptureOutcome) {
             )
         }
     };
+    let mut refs = refs;
+    let (CaptureOutcome::Recovered { note, .. }
+    | CaptureOutcome::Kept { note, .. }
+    | CaptureOutcome::Dropped { note, .. }) = outcome;
+    if let Some(n) = note {
+        // Also here: `batch --json` keeps a step's data but not its warning.
+        refs["recovery"] = json!(n);
+    }
     let Some(obj) = resp.as_object_mut() else {
         return;
     };
@@ -11669,6 +11770,92 @@ mod capture_failure_tests {
         );
         assert!(w.contains("ran once"), "{w}");
         assert!(!w.to_lowercase().contains("password"), "{w}");
+    }
+
+    #[derive(Default)]
+    struct Counts {
+        captures: u32,
+        recoveries: u32,
+        deny_captures: u32,
+        recover_fails: bool,
+        other_error: bool,
+    }
+
+    fn capture(s: &mut Counts) -> BoxedStep<'_, Result<String, String>> {
+        Box::pin(async move {
+            s.captures += 1;
+            if s.other_error {
+                Err("CDP timeout".to_string())
+            } else if s.captures <= s.deny_captures {
+                Err("debugger_access_denied: fixture".to_string())
+            } else {
+                Ok("textbox \"Email\" [ref=e5]".to_string())
+            }
+        })
+    }
+
+    fn recover(s: &mut Counts) -> BoxedStep<'_, Result<Option<String>, String>> {
+        Box::pin(async move {
+            s.recoveries += 1;
+            if s.recover_fails {
+                Err("the pinned tab was not created by this session".to_string())
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
+    async fn run(mut s: Counts) -> (Result<String, String>, u32, Option<String>, Counts) {
+        let first = capture(&mut s).await;
+        let (r, n, note) = recapture_after_denial(&mut s, first, capture, recover).await;
+        (r, n, note, s)
+    }
+
+    #[tokio::test]
+    async fn a_denied_capture_is_recovered_and_read_again() {
+        let (r, n, _, s) = run(Counts {
+            deny_captures: 1,
+            ..Default::default()
+        })
+        .await;
+        assert!(r.is_ok());
+        assert_eq!((n, s.captures, s.recoveries), (1, 2, 1));
+    }
+
+    #[tokio::test]
+    async fn re_capture_is_bounded() {
+        let (r, n, _, s) = run(Counts {
+            deny_captures: 99,
+            ..Default::default()
+        })
+        .await;
+        assert!(r.is_err());
+        assert_eq!(n, MAX_RECAPTURES);
+        assert_eq!(s.captures, 1 + MAX_RECAPTURES);
+        assert_eq!(s.recoveries, MAX_RECAPTURES);
+    }
+
+    #[tokio::test]
+    async fn no_recovery_means_no_second_read() {
+        let (r, n, note, s) = run(Counts {
+            deny_captures: 99,
+            recover_fails: true,
+            ..Default::default()
+        })
+        .await;
+        assert!(r.is_err());
+        assert_eq!((n, s.captures, s.recoveries), (0, 1, 1));
+        assert!(note.unwrap().contains("no automatic recovery"));
+    }
+
+    #[tokio::test]
+    async fn other_capture_failures_are_not_recovered() {
+        let (_, n, _, s) = run(Counts {
+            other_error: true,
+            ..Default::default()
+        })
+        .await;
+        assert_eq!((n, s.captures, s.recoveries), (0, 1, 0));
     }
 }
 

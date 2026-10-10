@@ -37,6 +37,10 @@ struct Page {
     /// When that denial fires, also move the page to a new document.
     navigate_on_denial: bool,
     denials: u32,
+    /// After that denial, keep the tab blocked: every later page command is
+    /// denied too, as while another extension's frame stays on the page.
+    stay_blocked: bool,
+    blocked: bool,
     /// The session opened its tab (the one page).
     created: bool,
     /// Every method called, for diagnostics.
@@ -82,6 +86,11 @@ impl Fake {
         self.0.lock().unwrap().typed.clone()
     }
 
+    fn arm_blocked(&self) {
+        self.arm(false);
+        self.0.lock().unwrap().stay_blocked = true;
+    }
+
     fn arm(&self, navigate: bool) {
         let mut p = self.0.lock().unwrap();
         p.deny_capture_after_fill = true;
@@ -107,6 +116,9 @@ impl Fake {
         let method = req["method"].as_str().unwrap_or("").to_string();
         let params = &req["params"];
         p.log.push(method.clone());
+        if p.blocked && req.get("sessionId").is_some() {
+            return Err("Cannot access a chrome-extension:// URL of different extension".into());
+        }
         Ok(match method.as_str() {
             "Target.getTargets" => {
                 let infos: Vec<Value> = (p.created)
@@ -138,6 +150,7 @@ impl Fake {
                     if p.navigate_on_denial {
                         p.loader = "L2".into();
                     }
+                    p.blocked = p.stay_blocked;
                     return Err("debugger_access_denied: Chrome blocked debugger access \
                                 (fixture)"
                         .into());
@@ -369,6 +382,12 @@ fn a_denied_after_capture_keeps_refs_for_the_next_batch_step() {
     assert!(!all.contains("Unknown ref"), "{all}");
     assert!(all.contains("kept-unverified"), "{all}");
     assert!(all.contains("debugger_access_denied"), "{all}");
+    // The capture is read again only after a recovery, and there is none
+    // off the extension relay: no second read, and no second fill.
+    assert!(
+        all.contains(r#""recovery":"no automatic recovery: not on the extension relay"#),
+        "{all}"
+    );
     // Each fill ran exactly once: the denied observation repeated nothing.
     assert_eq!(fake.typed(), vec!["me@example.test", "Ada"], "{all}");
 }
@@ -406,4 +425,30 @@ fn a_kept_ref_is_refused_after_the_document_changed() {
     );
     assert_eq!(r["success"], true, "{r}");
     assert_eq!(fake.typed(), vec!["me@example.test", "Ada"]);
+}
+
+/// The tab stays blocked after the denied capture, and there is no way to
+/// clear it here (off the extension relay). The kept ref cannot be checked,
+/// so the next step is refused before it does anything, in words that do not
+/// suggest the refused step may have run; the first fill is not repeated.
+#[test]
+fn a_kept_ref_on_a_tab_that_stays_blocked_is_refused_before_acting() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start("capfail-blocked", &cdp);
+    let snap = d.snapshot();
+    let email = ref_for(&snap, "Email");
+    let name = ref_for(&snap, "Name");
+
+    fake.arm_blocked();
+    let out = d.cli(&[
+        "batch",
+        &format!("fill @{email} me@example.test --observe"),
+        &format!("fill @{name} Ada"),
+    ]);
+    let all = text(&out);
+    assert_eq!(fake.denials(), 1, "{all}");
+    assert!(all.contains("could not confirm"), "{all}");
+    assert!(all.contains("Nothing was acted on"), "{all}");
+    assert!(!all.contains("may already have run"), "{all}");
+    assert_eq!(fake.typed(), vec!["me@example.test"], "{all}");
 }
