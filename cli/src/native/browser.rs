@@ -49,6 +49,10 @@ pub const OWNED_TAB_CLEANUP_BUDGET: Duration = Duration::from_secs(5);
 /// the tab, so one read straight after it is not the verdict.
 pub const CLOSE_VERIFY_BUDGET: Duration = Duration::from_secs(3);
 
+/// First ab-connect build with `ABExt.inspectTab`, which `close` reads tabs
+/// back with over the relay.
+const CLOSE_VERIFY_MIN_EXTENSION_VERSION: &str = "0.5.16";
+
 /// Budget for one verification read (`ABExt.inspectTab` / `Target.getTargets`).
 const CLOSE_VERIFY_CALL_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -131,6 +135,17 @@ impl CloseReport {
                 self.unverified.len(),
                 describe_tabs(&self.unverified)
             ));
+            let old_extension = self.unverified.iter().any(|t| {
+                t.get("reason")
+                    .and_then(Value::as_str)
+                    .is_some_and(|r| r.contains("wasn't found") || r.contains("-32601"))
+            });
+            if old_extension {
+                parts.push(format!(
+                    "the ab-connect extension cannot report tabs; update it to {} or newer",
+                    CLOSE_VERIFY_MIN_EXTENSION_VERSION
+                ));
+            }
         }
         format!(
             "close incomplete: {}. {} closed and verified absent. The session and its tab \
@@ -7291,6 +7306,16 @@ mod honest_close_tests {
         assert!(e.contains("no tab id"), "{e}");
         assert!(e.contains("retry `chrome-use close`"), "{e}");
         assert!(e.contains("ownership were kept"), "{e}");
+        assert!(!e.contains("update it"), "{e}");
+
+        let old = CloseReport {
+            unverified: vec![json!({"targetId": "C", "reason":
+                "the extension could not report the tab: CDP error (ABExt.inspectTab): \
+                 {\"code\":-32601,\"message\":\"'ABExt.inspectTab' wasn't found\"}"})],
+            ..Default::default()
+        };
+        let e = old.incomplete_error();
+        assert!(e.contains("update it to 0.5.16 or newer"), "{e}");
     }
 
     #[test]
