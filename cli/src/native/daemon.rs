@@ -93,6 +93,9 @@ pub async fn run_daemon(session: &str) {
     // Record this daemon's session so tabs it opens on the shared real Chrome
     // (via the ab-connect extension) land in a per-session Chrome tab group.
     let _ = super::browser::DAEMON_SESSION.set(session.to_string());
+    // A failed `adopt` left this session with no current tab (#507): an
+    // earlier daemon of the session may have recorded it.
+    super::browser::load_no_current_tab();
 
     // Bootstrap / refresh the site-adapter pack in the background (first-run +
     // periodic TTL). This populates ~/.chrome-use/sites/.index.json so navigation

@@ -631,45 +631,74 @@ fn adopt_with_no_match_fails_closed_and_tab_new_still_opens_a_tab() {
     assert!(touched.is_empty(), "user tabs were touched: {touched:?}");
 }
 
-/// The same with the adopt retried and a different command in between: the
-/// failed directive is not replayed on later connects, and a second failed
-/// adopt in a session that already has its own tab fails closed too.
+/// A session that adopted one of the user's tabs, then ran an `adopt` that
+/// found nothing. The relay still has the earlier tab tagged into the
+/// session's group, so a plain reconnect would take it back and evaluate in
+/// it; with no current tab nothing is chosen, probed or evaluated. Reads,
+/// clicks and `open` are refused, `tab new` opens a fresh tab, and the state
+/// outlives a daemon that died in between.
 #[test]
-fn failed_adopt_after_a_working_session_drops_the_current_tab() {
+fn failed_adopt_after_an_adopted_user_tab_drops_the_current_tab() {
     let (fake, url) = Fake::start(user_tabs());
     let env = Env::new("ad507b", &url);
 
-    let (v, ctx) = env.json(&["open", "https://mine.example/"]);
-    assert_eq!(v["success"], true, "open failed: {ctx}");
+    let (v, ctx) = env.json(&["adopt", "news.example"]);
+    assert_eq!(v["success"], true, "a matching adopt failed: {ctx}");
+    let (v, ctx) = env.json(&["eval", "location.href"]);
+    assert_eq!(v["data"]["result"], "https://news.example/", "{ctx}");
     let mark = fake.mark();
 
     let (v, ctx) = env.json(&["adopt", "nothing-like-this.example"]);
     assert_eq!(v["success"], false, "adopt with no match succeeded: {ctx}");
+    assert!(
+        is_no_current_tab(&v),
+        "adopt must say no current tab: {ctx}"
+    );
 
-    for args in [
-        &["eval", "location.href"][..],
-        &["snapshot"][..],
-        &["click", "#x"][..],
-    ] {
-        let (v, ctx) = env.json(args);
-        assert_eq!(
-            v["success"], false,
-            "{args:?} ran after a failed adopt: {ctx}"
-        );
-        assert!(
-            is_no_current_tab(&v),
-            "{args:?} must say no current tab: {ctx}"
-        );
+    let refused = |env: &Env| {
+        for args in [
+            &["eval", "location.href"][..],
+            &["snapshot"][..],
+            &["click", "#x"][..],
+            &["open", "https://elsewhere.example/"][..],
+        ] {
+            let (v, ctx) = env.json(args);
+            assert_eq!(
+                v["success"], false,
+                "{args:?} ran after a failed adopt: {ctx}"
+            );
+            assert!(
+                is_no_current_tab(&v),
+                "{args:?} must say no current tab: {ctx}"
+            );
+        }
+    };
+    refused(&env);
+
+    // The daemon dies without its shutdown; the next one still refuses.
+    if let Some(pid) = env.daemon_pid() {
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+        std::thread::sleep(Duration::from_millis(300));
     }
-    let touched = user_touches(&fake, &fake.since(mark));
-    assert!(touched.is_empty(), "user tabs were touched: {touched:?}");
+    refused(&env);
 
-    // A matching adopt afterwards works and is the session's current tab.
-    let (v, ctx) = env.json(&["adopt", "news.example"]);
-    assert_eq!(v["success"], true, "a matching adopt failed: {ctx}");
+    let log = fake.since(mark);
+    let touched = user_touches(&fake, &log);
+    assert!(touched.is_empty(), "user tabs were touched: {touched:?}");
+    let evals: Vec<_> = log
+        .iter()
+        .filter(|(_, m, _, _)| m.starts_with("Runtime."))
+        .collect();
+    assert!(evals.is_empty(), "something was evaluated: {evals:?}");
+    assert_eq!(fake.created(), 0, "a tab was created before `tab new`");
+
+    let (v, ctx) = env.json(&["tab", "new", "https://fresh.example/b"]);
+    assert_eq!(v["success"], true, "tab new failed: {ctx}");
     let (v, ctx) = env.json(&["eval", "location.href"]);
     assert_eq!(v["success"], true, "{ctx}");
-    assert_eq!(v["data"]["result"], "https://news.example/", "{ctx}");
+    assert_eq!(v["data"]["result"], "https://fresh.example/b", "{ctx}");
+    let touched = user_touches(&fake, &fake.since(mark));
+    assert!(touched.is_empty(), "user tabs were touched: {touched:?}");
 }
 
 /// `tab select` of a tab the session does not own (a user tab's handle) is

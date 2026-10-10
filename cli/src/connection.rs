@@ -1050,6 +1050,8 @@ pub fn cleanup_stale_files(session: &str) {
     remove_browser_profile_record(session);
     let _ = fs::remove_file(get_profile_path(session));
     let _ = fs::remove_file(get_relay_profile_path(session));
+    // A failed `adopt`'s no-current-tab state (#507) ends with the session.
+    let _ = fs::remove_file(get_socket_dir().join(format!("{session}.no-current-tab")));
 }
 
 /// Which Chrome profile the session used and why (#437); the next first

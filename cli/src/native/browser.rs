@@ -946,6 +946,74 @@ fn pending_adopt_directive() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Set when `chrome-use adopt <spec>` found no tab (#507): the spec that
+/// failed. While set the session has NO current tab. Connecting then attaches
+/// what the relay scopes to the session's group without choosing, probing or
+/// evaluating in any of it, opens no first tab, and the daemon refuses every
+/// command that acts on "the current tab" until one is opened (`tab new`) or
+/// named (`adopt`, `tab <id>`, `--tab <handle> --force`). It is kept in a
+/// per-session file too, so a daemon that restarts in between still refuses.
+static NO_CURRENT_TAB: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// What the adopt failure, and every refusal after it, says the session can
+/// do next.
+pub const NO_CURRENT_TAB_NEXT: &str = "Nothing was adopted, and this session has no current \
+     tab: commands that act on a page are refused until `chrome-use tab new <url>` opens a tab \
+     of its own, or `chrome-use adopt <url>` names a tab that is open. It never falls back to a \
+     focused or other open tab. `chrome-use tab list --all` lists every tab; a tab of the \
+     user's is acted on only by its exact handle with `--tab <handle> --force`, and only when \
+     the user asked for that tab.";
+
+fn no_current_tab_path() -> Option<std::path::PathBuf> {
+    let session = DAEMON_SESSION.get()?;
+    Some(crate::connection::get_socket_dir().join(format!("{session}.no-current-tab")))
+}
+
+/// The adopt spec that left this session with no current tab, if any.
+pub fn no_current_tab() -> Option<String> {
+    NO_CURRENT_TAB.lock().ok().and_then(|g| g.clone())
+}
+
+fn set_no_current_tab(spec: &str) {
+    if let Ok(mut g) = NO_CURRENT_TAB.lock() {
+        *g = Some(spec.to_string());
+    }
+    if let Some(path) = no_current_tab_path() {
+        let _ = std::fs::write(path, spec);
+    }
+}
+
+/// A tab was opened or named: the session has a current tab again.
+pub fn clear_no_current_tab() {
+    if let Ok(mut g) = NO_CURRENT_TAB.lock() {
+        *g = None;
+    }
+    if let Some(path) = no_current_tab_path() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// At daemon start: take over a no-current-tab state an earlier daemon of
+/// this session left, unless this daemon was started for a new `adopt`.
+pub fn load_no_current_tab() {
+    if pending_adopt_directive().is_some() {
+        return;
+    }
+    let Some(spec) = no_current_tab_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return;
+    };
+    if let Ok(mut g) = NO_CURRENT_TAB.lock() {
+        *g = Some(spec.trim().to_string());
+    }
+}
+
+/// Whether `error` is an `adopt` directive that found no tab (#507). Final:
+/// retrying the connect cannot make the tab appear, and must not connect
+/// without it.
+pub fn is_failed_adopt(error: &str) -> bool {
+    error.contains(NO_CURRENT_TAB_NEXT)
+}
+
 /// Strip zero-width / invisible / bidi-format Unicode from a page title before
 /// we store it. Some sites prepend runs of ZWJ / word-joiner / invisible-times /
 /// BOM to `document.title` (badging, watermarking, anti-scrape); left in, they
@@ -4542,9 +4610,26 @@ impl BrowserManager {
         // directive rides in via env so it takes effect at first connect (before
         // any about:blank would be made). If nothing matches, error out rather
         // than fall back to creating a tab.
+        //
+        // A failed directive is spent, like a successful one (#507): no later
+        // connect of this daemon replays it, and none falls back to a tab it
+        // did not name. The session is left with no current tab.
         if let Some(spec) = pending_adopt_directive() {
-            self.adopt_existing_target(&spec).await?;
             ADOPT_DIRECTIVE_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
+            if let Err(e) = self.adopt_existing_target(&spec).await {
+                set_no_current_tab(&spec);
+                return Err(format!("{e}\n{NO_CURRENT_TAB_NEXT}"));
+            }
+            clear_no_current_tab();
+            return Ok(());
+        }
+
+        // No current tab (#507): attach, choose, probe and open nothing.
+        // Whatever is focused, first, or still tagged to this session's group
+        // from an earlier adopt is not the session's current tab; `tab new`
+        // opens one and `adopt` / `tab list --all` + `--force` name one.
+        if no_current_tab().is_some() {
+            self.active_target_id = None;
             return Ok(());
         }
 
