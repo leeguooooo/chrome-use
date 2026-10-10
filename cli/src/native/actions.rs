@@ -11330,8 +11330,12 @@ fn describe_expect(cmd: &Value) -> String {
 /// Cheap interactive+compact snapshot into a THROWAWAY RefMap (so it never
 /// disturbs the session's live `@ref`s) — the baseline/after capture for
 /// Mutating actions that observe by returning the a11y delta they caused.
+///
+/// `hover` belongs here (#501): it reveals menus and captions, and an agent
+/// otherwise hovers, then snapshots to see what appeared.
 pub(crate) const OBSERVABLE_ACTIONS: &[&str] = &[
     "click", "dblclick", "fill", "type", "press", "select", "pick", "check", "uncheck", "evaluate",
+    "hover",
 ];
 
 /// Actions that replace the whole document. A cross-page diff shares no nodes
@@ -26104,6 +26108,15 @@ mod tests {
                 "`{action}` is in both observe lists"
             );
         }
+    }
+
+    /// `hover --observe` used to warn that the flag was ignored (#501), yet a
+    /// hover is what opens a menu or a caption: it observes by delta, like
+    /// `click`.
+    #[test]
+    fn hover_observes_by_delta() {
+        assert!(OBSERVABLE_ACTIONS.contains(&"hover"));
+        assert!(!NAVIGATION_OBSERVABLE_ACTIONS.contains(&"hover"));
     }
 
     /// A cross-page diff is 100% removals plus 100% additions, so `navigate`

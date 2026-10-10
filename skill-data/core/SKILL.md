@@ -38,7 +38,7 @@ Do not replay a side-effecting command; it is still running. See
 ```bash
 chrome-use open https://example.com
 chrome-use snapshot -i
-chrome-use click @e3 --observe     # fill, select, pick, press also take --observe
+chrome-use click @e3 --observe     # fill, select, pick, press, hover also take --observe
 chrome-use snapshot -i --diff      # only if the observation leaves a question
 ```
 
