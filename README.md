@@ -163,6 +163,8 @@ chrome-use status                 # relay, profile, extension, and session healt
 
 `chrome-use open` then drives your real, logged-in Chrome over **native messaging**: no debug port, no token, and **no "Allow remote debugging?" dialog, ever**. The raw remote-debugging-port alternative (which pops a consent dialog) is described in the [real Chrome guide](https://chrome-use.leeguoo.com/en/real-chrome.html).
 
+Your Chrome profile must have a window open. chrome-use never opens one itself: with no window it stops with `profile not open` (code `profile_not_open`), so open a window in that profile first and rerun. If it cannot tell whether a window is open, it stops with `profile window unavailable` (code `profile_window_unavailable`); unknown means nothing is created. See [Troubleshooting](https://chrome-use.leeguoo.com/en/troubleshooting.html) for the first-tab cleanup codes.
+
 ### Multi-profile Chrome: ChooseBrowser rules
 
 If you keep several Chrome profiles (work, personal, a client's), you already know which account each site belongs to, and you tell us with `--browser` every time. [ChooseBrowser](https://choosebrowser.leeguoo.com) is a macOS link router that stores that mapping. When it is installed, `chrome-use open <url>` without an explicit `--browser` follows the rule you already wrote for that site, and says so:

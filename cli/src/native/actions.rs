@@ -2063,6 +2063,11 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                 replaced_browser = Some(reason);
             }
             if let Err(e) = auto_launch(state).await {
+                // Nothing was launched: the first tab was refused or failed and
+                // the error says exactly how (#486). Say only that.
+                if super::first_tab::is_first_tab_refusal(&e) {
+                    return error_response(&id, &e);
+                }
                 return error_response(&id, &format!("Auto-launch failed: {}", e));
             }
         }
@@ -3167,12 +3172,17 @@ async fn connect_auto_with_fresh_tab() -> Result<BrowserManager, String> {
 /// reconnect guidance. This is what lets a dropped relay self-heal invisibly
 /// instead of erroring or launching a throwaway Chrome. `connect_auto_with_fresh_tab`
 /// only opens a tab on success, so the retries cost nothing while the relay is down.
-/// The extension refused to create an agent tab because no background agent
-/// window could be opened (it never falls back to the user's window). The
-/// relay is fine, so waiting for it to "come back" only turns a clear refusal
-/// into a timeout ("session unresponsive", observed on the build box).
-fn is_agent_window_refusal(error: &str) -> bool {
+/// The relay answered, and the answer is final: the extension could not open
+/// the background agent window (it never falls back to the user's window), or
+/// opening the session's first tab was refused or failed in a way the error
+/// already reports (#486: no window, window unknown, create outcome unknown,
+/// cleanup not confirmed). The relay is fine, so waiting for it to "come back"
+/// only turns a clear refusal into a timeout ("session unresponsive", observed
+/// on the build box), retries could open another tab, and wrapping it in the
+/// reconnect advice buries the fix.
+fn is_final_relay_refusal(error: &str) -> bool {
     error.contains("could not open the background agent window")
+        || super::first_tab::is_first_tab_refusal(error)
 }
 
 async fn retry_relay_connect_after_wait(mut last_err: String) -> Result<BrowserManager, String> {
@@ -3187,6 +3197,8 @@ async fn retry_relay_connect_after_wait(mut last_err: String) -> Result<BrowserM
         waited += step;
         match connect_auto_with_fresh_tab().await {
             Ok(mgr) => return Ok(mgr),
+            // The relay is back and answered for good (#486): stop waiting.
+            Err(e) if is_final_relay_refusal(&e) => return Err(e),
             Err(e) => last_err = e,
         }
     }
@@ -3375,7 +3387,7 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
         // erroring or (worse) tearing down and launching a throwaway Chrome.
         let conn = match connect_auto_with_fresh_tab().await {
             Ok(mgr) => Ok(mgr),
-            Err(e) if is_agent_window_refusal(&e) => Err(e),
+            Err(e) if is_final_relay_refusal(&e) => Err(e),
             Err(e) if crate::connect::host_installed() => retry_relay_connect_after_wait(e).await,
             Err(e) => Err(e),
         };
@@ -3406,7 +3418,7 @@ async fn auto_launch(state: &mut DaemonState) -> Result<(), String> {
                 }
                 // Host installed but the relay never came back within the wait —
                 // point at the cheap reconnect, not a Chrome restart (#54).
-                if is_agent_window_refusal(&e) {
+                if is_final_relay_refusal(&e) {
                     return Err(e);
                 }
                 return Err(auto_connect_failure_message(&e, true));
@@ -4424,7 +4436,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         // host is registered, wait for the keepalive to revive it and retry once.
         let conn = match connect_auto_with_fresh_tab().await {
             Ok(mgr) => Ok(mgr),
-            Err(e) if is_agent_window_refusal(&e) => Err(e),
+            Err(e) if is_final_relay_refusal(&e) => Err(e),
             Err(e) if crate::connect::host_installed() => retry_relay_connect_after_wait(e).await,
             Err(e) => Err(e),
         };
@@ -4453,7 +4465,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
                     crate::connect::open_url(crate::connect::STORE_INSTALL_URL);
                     return Err(crate::connect::extension_not_installed_message());
                 }
-                if is_agent_window_refusal(&e) {
+                if is_final_relay_refusal(&e) {
                     return Err(e);
                 }
                 return Err(auto_connect_failure_message(&e, true));
@@ -6350,6 +6362,28 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         }
     }
     state.browser = None;
+    // First tabs whose delete right a failed connect could not save (#486)
+    // are held by this daemon only. Close them over a new connection once the
+    // session's own manager is closed: a manager on a newer endpoint did not
+    // take them over, and the helper finds the profile's current endpoint.
+    {
+        let session = state.session_id.clone();
+        let groups = super::first_tab::snapshot_unsaved();
+        let closed = super::first_tab::close_held(groups, |endpoint, held| {
+            let session = session.clone();
+            async move {
+                let known = super::first_tab::tab_ids_for(&endpoint);
+                let closed =
+                    close_tabs_after_lost_connection(&session, &endpoint, &held, &known).await;
+                if let Ok(ids) = &closed {
+                    super::first_tab::forget_tab_ids(&endpoint, &ids.iter().cloned().collect());
+                }
+                closed
+            }
+        })
+        .await?;
+        report = report.with_closed_ids(closed, "reconnect");
+    }
     state.launch_hash = None;
     state.screencasting = false;
     state.reset_input_state();
@@ -24445,6 +24479,27 @@ mod tests {
         assert!(should_create_fresh_tab_after_connect(0));
         assert!(!should_create_fresh_tab_after_connect(1));
         assert!(!should_create_fresh_tab_after_connect(2));
+    }
+
+    /// #486: a profile with no window is a refusal from a working relay, not
+    /// a relay to wait for: no revive retry, no reconnect advice around it.
+    #[test]
+    fn profile_not_open_is_a_final_relay_refusal() {
+        assert!(is_final_relay_refusal(
+            crate::native::first_tab::PROFILE_NOT_OPEN
+        ));
+        assert!(is_final_relay_refusal(
+            "profile window unavailable: could not tell whether the Chrome profile has a window"
+        ));
+        assert!(is_final_relay_refusal(
+            "first tab cleanup incomplete: setup failed. The blank tab may still be open"
+        ));
+        assert!(is_final_relay_refusal(
+            "createTarget: could not open the background agent window"
+        ));
+        assert!(!is_final_relay_refusal(
+            "CDP WebSocket connect failed: connection refused"
+        ));
     }
 
     #[test]

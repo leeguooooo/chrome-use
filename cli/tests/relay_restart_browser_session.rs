@@ -113,6 +113,8 @@ impl Fake {
         let method = req["method"].as_str().unwrap_or("");
         let params = &req["params"];
         match method {
+            // The profile has a window open (#486 checks before creating a tab).
+            "ABExt.call" => json!({"result": [{"id": 1, "type": "normal"}]}),
             "Target.getTargets" => {
                 let mut list: Vec<Value> = b
                     .targets

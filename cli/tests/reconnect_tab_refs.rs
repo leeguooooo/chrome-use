@@ -31,6 +31,37 @@ struct Browser {
     evaluated: Vec<(String, String)>,
     /// The listener serving now; an older one stops and its port refuses.
     listener: u64,
+    /// What `windows.getAll` answers over the relay (#486); `None` is one
+    /// normal window.
+    windows: Option<Value>,
+    /// `Page.enable` fails, so a new tab cannot be set up.
+    page_enable_fails: bool,
+    /// `Page.enable` never answers.
+    page_enable_hangs: bool,
+    /// How `Target.closeTarget` behaves.
+    close: CloseMode,
+    /// `ABExt.tabPresence` gets no versioned answer, like ab-connect 0.5.32.
+    old_extension: bool,
+    /// `ABExt.tabPresence` fails for a target whose close went through.
+    presence_fails_after_close: bool,
+    /// Targets a `Target.closeTarget` removed.
+    closed: Vec<String>,
+    /// Every `ABExt.call` the daemon made, as `namespace.method`.
+    calls: Vec<String>,
+    /// `Target.attachToTarget` calls.
+    attached: u32,
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Debug)]
+enum CloseMode {
+    #[default]
+    Closes,
+    /// An error reply; the tab stays.
+    Refused,
+    /// No reply at all; the tab stays.
+    Hangs,
+    /// `{success: true}`, but the tab stays.
+    AckButStays,
 }
 
 #[derive(Clone)]
@@ -150,6 +181,22 @@ impl Fake {
             b.evaluated.push((session, expression));
         }
         match method {
+            "ABExt.call" => {
+                b.calls.push(format!(
+                    "{}.{}",
+                    params["namespace"].as_str().unwrap_or(""),
+                    params["method"].as_str().unwrap_or("")
+                ));
+                let windows = b
+                    .windows
+                    .clone()
+                    .unwrap_or_else(|| json!([{"id": 1, "type": "normal"}]));
+                json!({ "result": windows })
+            }
+            "Page.enable" if b.page_enable_hangs => json!({"__hang": true}),
+            "Page.enable" if b.page_enable_fails => {
+                json!({"__error": "Page.enable: renderer did not answer"})
+            }
             "Target.getTargets" => {
                 let mut list: Vec<Value> = b
                     .targets
@@ -172,17 +219,31 @@ impl Fake {
                 json!({"targetId": id})
             }
             "Target.attachToTarget" => {
+                b.attached += 1;
                 json!({"sessionId": format!("S-{}", params["targetId"].as_str().unwrap_or(""))})
             }
-            "Target.closeTarget" => {
-                let id = params["targetId"].as_str().unwrap_or("").to_string();
-                b.targets.retain(|(t, _)| *t != id);
-                json!({"success": true})
-            }
+            "Target.closeTarget" => match b.close {
+                CloseMode::Closes => {
+                    let id = params["targetId"].as_str().unwrap_or("").to_string();
+                    b.targets.retain(|(t, _)| *t != id);
+                    b.closed.push(id);
+                    json!({"success": true})
+                }
+                CloseMode::Refused => json!({"__error": "Target.closeTarget: refused"}),
+                CloseMode::Hangs => json!({"__hang": true}),
+                CloseMode::AckButStays => json!({"success": true}),
+            },
             // The extension's `ABExt.tabPresence` (ab-connect 0.5.33), which
             // `close` reads tabs back with over a relay endpoint. Target `T<n>`
             // is Chrome tab `<n>`: listed means present; absent only when the
             // target is unlisted and the exact tab id given is gone.
+            "ABExt.tabPresence" if b.old_extension => json!({}),
+            "ABExt.tabPresence"
+                if b.presence_fails_after_close
+                    && b.closed.iter().any(|t| params["targetId"] == t.as_str()) =>
+            {
+                json!({"__error": "tabPresence: chrome.debugger.getTargets failed"})
+            }
             "ABExt.tabPresence" => {
                 let target = params["targetId"].as_str().unwrap_or("").to_string();
                 let tab_of = |t: &str| t.strip_prefix('T').and_then(|n| n.parse::<i64>().ok());
@@ -249,10 +310,11 @@ async fn serve(fake: Fake, stream: tokio::net::TcpStream, generation: u64) {
             return;
         }
         let result = fake.reply(&req);
+        if result.get("__hang").is_some() {
+            continue;
+        }
         let mut reply = match result.get("__error") {
-            Some(message) => {
-                json!({"id": req["id"], "error": {"code": -32000, "message": message}})
-            }
+            Some(e) => json!({"id": req["id"], "error": {"code": -32000, "message": e}}),
             None => json!({"id": req["id"], "result": result}),
         };
         if let Some(s) = req.get("sessionId") {
@@ -1124,4 +1186,357 @@ fn close_never_closes_through_another_profile() {
         assert!(open.contains(t), "{t} closed through another profile");
     }
     assert!(created_record(&d).exists(), "ownership record dropped");
+}
+
+/// The `--json` error of a CLI run, with its code.
+fn cli_error(out: &Output) -> (String, String) {
+    let all = text(out);
+    let v: Value = all
+        .lines()
+        .find_map(|l| serde_json::from_str::<Value>(l).ok())
+        .unwrap_or_else(|| panic!("no JSON in: {all}"));
+    (
+        v["error"].as_str().unwrap_or("").to_string(),
+        v["code"].as_str().unwrap_or("").to_string(),
+    )
+}
+
+fn created_and_attached(fake: &Fake) -> (u32, u32) {
+    let b = fake.0.lock().unwrap();
+    (b.created, b.attached)
+}
+
+/// #486: the session's relay profile has no window open. Connecting must not
+/// create a tab there (Chrome would open a window for it, in front of the
+/// user): `open` and `extension call` say `profile not open` with the fix and
+/// leave nothing behind. Once a window is open the same session works.
+#[test]
+fn a_profile_without_a_window_is_refused_and_nothing_is_created() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start("rc-no-window", &cdp);
+    publish_profile_endpoint(&d, &cdp);
+    fake.0.lock().unwrap().windows = Some(json!([]));
+
+    for args in [
+        &["open", "https://example.test/"][..],
+        &["extension", "call", "tabs.query", "{}"][..],
+    ] {
+        let started = Instant::now();
+        let out = d.cli(args);
+        let (error, code) = cli_error(&out);
+        assert!(!out.status.success(), "{args:?}: {error}");
+        assert!(error.starts_with("profile not open:"), "{args:?}: {error}");
+        assert!(
+            error.contains("Open a window in that profile first"),
+            "{args:?}: {error}"
+        );
+        assert_eq!(code, "profile_not_open", "{args:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{args:?} waited"
+        );
+    }
+    assert_eq!(created_and_attached(&fake), (0, 0));
+    assert!(fake.0.lock().unwrap().targets.is_empty());
+    assert!(fake
+        .0
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .any(|c| c == "windows.getAll"));
+    assert!(
+        !created_record(&d).exists(),
+        "an ownership record was written"
+    );
+
+    fake.0.lock().unwrap().windows = None;
+    let r = d.send(json!({"id": "a", "action": "tab_list"}));
+    assert_eq!(r["success"], true, "{r}");
+    assert_eq!(created_and_attached(&fake), (1, 1), "{r}");
+}
+
+/// An answer that does not show a real normal window is not "open", and it is
+/// not "no window" either: `profile window unavailable`, with nothing created
+/// or attached, through the real CLI.
+#[test]
+fn a_window_list_that_cannot_be_trusted_creates_nothing() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start("rc-bad-windows", &cdp);
+    publish_profile_endpoint(&d, &cdp);
+    for bad in [
+        json!(null),
+        json!({}),
+        json!([null]),
+        json!([{}]),
+        json!([{"id": 1}]),
+        json!([{"type": "normal"}]),
+        json!([{"id": "1", "type": "normal"}]),
+        json!([{"id": 1, "type": "popup"}]),
+        json!([{"id": 1, "type": "normal"}, {"id": 2, "type": "app"}]),
+        json!([{"id": 1, "type": "normal"}, {"id": 1, "type": "normal"}]),
+    ] {
+        fake.0.lock().unwrap().windows = Some(bad.clone());
+        let out = d.cli(&["open", "https://example.test/"]);
+        let (error, code) = cli_error(&out);
+        assert!(!out.status.success(), "{bad}: {error}");
+        assert!(
+            error.starts_with("profile window unavailable:"),
+            "{bad}: {error}"
+        );
+        assert!(error.contains("nothing was opened"), "{bad}: {error}");
+        assert_eq!(code, "profile_window_unavailable", "{bad}");
+        assert_eq!(created_and_attached(&fake), (0, 0), "{bad}");
+    }
+    assert!(!created_record(&d).exists());
+}
+
+/// A first tab that cannot be set up is closed, and reported gone only once
+/// an authoritative read-back says so: Chrome's target list on a direct
+/// connection, the versioned `ABExt.tabPresence` on the relay.
+#[test]
+fn a_first_tab_that_cannot_be_set_up_is_closed_and_read_back() {
+    for relay in [false, true] {
+        let (fake, cdp) = Fake::start();
+        let d = Daemon::start(&format!("rc-setup-fails-{relay}"), &cdp);
+        if relay {
+            publish_profile_endpoint(&d, &cdp);
+        }
+        {
+            let mut b = fake.0.lock().unwrap();
+            b.page_enable_fails = true;
+        }
+        let r = d.send(json!({"id": "a", "action": "tab_list"}));
+        let error = r["error"].as_str().unwrap_or("");
+        assert_eq!(r["success"], false, "relay={relay}: {r}");
+        assert!(
+            error.starts_with("first tab setup failed:"),
+            "relay={relay}: {r}"
+        );
+        assert!(
+            error.contains("Chrome confirms it is gone"),
+            "relay={relay}: {r}"
+        );
+        assert!(open_targets(&fake).is_empty(), "relay={relay}");
+        let record = std::fs::read_to_string(created_record(&d)).unwrap_or_default();
+        assert!(!record.contains("T1"), "relay={relay}: {record}");
+
+        fake.0.lock().unwrap().page_enable_fails = false;
+        let r = d.send(json!({"id": "b", "action": "tab_list"}));
+        assert_eq!(r["success"], true, "relay={relay}: {r}");
+        assert_eq!(open_targets(&fake), vec!["T2".to_string()], "relay={relay}");
+    }
+}
+
+/// Setup fails, then the close is refused, never answered, or acknowledged
+/// while the tab stays, or (relay) gone but not provable, as with
+/// ab-connect 0.5.32. The error must not claim cleanup; the tab keeps its
+/// delete right on disk; the next command adopts that tab instead of opening
+/// another; and a later `close` removes it.
+#[test]
+fn a_first_tab_whose_close_is_not_confirmed_keeps_its_delete_right() {
+    let cases = [
+        (CloseMode::Refused, true),
+        (CloseMode::Hangs, true),
+        (CloseMode::AckButStays, true),
+        (CloseMode::Closes, false),
+    ];
+    for (i, (mode, contract)) in cases.into_iter().enumerate() {
+        let label = format!("{mode:?}-contract={contract}");
+        let (fake, cdp) = Fake::start();
+        let d = Daemon::start(&format!("rc-unconfirmed-{i}"), &cdp);
+        publish_profile_endpoint(&d, &cdp);
+        {
+            let mut b = fake.0.lock().unwrap();
+            b.page_enable_fails = true;
+            b.close = mode;
+            b.old_extension = !contract;
+        }
+        let started = Instant::now();
+        let out = d.cli(&["open", "https://example.test/"]);
+        let (error, code) = cli_error(&out);
+        assert!(
+            started.elapsed() < Duration::from_secs(40),
+            "{label}: too slow"
+        );
+        assert_eq!(code, "first_tab_cleanup_incomplete", "{label}: {error}");
+        assert!(error.contains("target T1"), "{label}: {error}");
+        assert!(error.contains("Do not rerun `open`"), "{label}: {error}");
+        assert!(!error.contains("nothing is left"), "{label}: {error}");
+        let still = mode != CloseMode::Closes;
+        assert_eq!(
+            open_targets(&fake).contains(&"T1".to_string()),
+            still,
+            "{label}"
+        );
+        let record = std::fs::read_to_string(created_record(&d)).unwrap_or_default();
+        assert!(
+            record.contains("T1"),
+            "{label}: delete right lost: {record}"
+        );
+        assert_eq!(fake.0.lock().unwrap().created, 1, "{label}");
+
+        {
+            let mut b = fake.0.lock().unwrap();
+            b.page_enable_fails = false;
+            b.close = CloseMode::Closes;
+        }
+        if still {
+            // The next command takes the leftover tab back, opening nothing.
+            let r = d.send(json!({"id": "b", "action": "tab_list"}));
+            assert_eq!(r["success"], true, "{label}: {r}");
+            assert_eq!(fake.0.lock().unwrap().created, 1, "{label}: opened another");
+        }
+        let r = d.send(json!({"id": "z", "action": "close"}));
+        if contract {
+            assert_eq!(r["success"], true, "{label}: {r}");
+        } else {
+            // An extension that cannot prove a tab gone (0.5.32) never
+            // lets `close` claim it either; the tab is in fact gone.
+            assert_eq!(r["success"], false, "{label}: {r}");
+            assert!(
+                r["error"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("close incomplete"),
+                "{label}: {r}"
+            );
+        }
+        assert!(
+            open_targets(&fake).is_empty(),
+            "{label}: {:?}",
+            open_targets(&fake)
+        );
+        assert_eq!(fake.0.lock().unwrap().created, 1, "{label}: opened another");
+    }
+}
+
+/// A setup that never answers is cut off inside the overall first-tab
+/// deadline (under the client's 45 s), the tab is closed and read back.
+#[test]
+fn a_hanging_setup_ends_inside_the_deadline() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start("rc-setup-hangs", &cdp);
+    publish_profile_endpoint(&d, &cdp);
+    {
+        let mut b = fake.0.lock().unwrap();
+        b.page_enable_hangs = true;
+    }
+    let started = Instant::now();
+    let r = d.send(json!({"id": "a", "action": "tab_list"}));
+    let took = started.elapsed();
+    assert!(took < Duration::from_secs(35), "took {took:?}: {r}");
+    let error = r["error"].as_str().unwrap_or("");
+    assert!(error.starts_with("first tab setup failed:"), "{r}");
+    assert!(error.contains("did not finish in time"), "{r}");
+    assert!(open_targets(&fake).is_empty());
+}
+
+/// The delete right cannot be saved (the record path is taken by a
+/// directory): the tab is removed at once rather than kept without a record.
+/// When that removal is not confirmed either, the error names the tab and the
+/// daemon keeps the right: either the next command takes the tab back as the
+/// session's own, or `close` removes it. Nothing else is opened.
+#[test]
+fn a_delete_right_that_cannot_be_saved_is_never_reported_as_clean() {
+    for (i, (mode, then)) in [
+        (CloseMode::Closes, ""),
+        (CloseMode::AckButStays, "close"),
+        (CloseMode::Refused, "reconnect"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let label = format!("{mode:?}-{then}");
+        let (fake, cdp) = Fake::start();
+        let d = Daemon::start(&format!("rc-unsaved-{i}"), &cdp);
+        publish_profile_endpoint(&d, &cdp);
+        std::fs::create_dir(created_record(&d)).unwrap();
+        {
+            let mut b = fake.0.lock().unwrap();
+            b.close = mode;
+        }
+        let r = d.send(json!({"id": "a", "action": "tab_list"}));
+        let error = r["error"].as_str().unwrap_or("");
+        assert_eq!(r["success"], false, "{label}: {r}");
+        assert!(
+            error.contains("saving this session's delete right"),
+            "{label}: {r}"
+        );
+        assert_eq!(created_and_attached(&fake), (1, 0), "{label}");
+        if mode == CloseMode::Closes {
+            assert!(error.starts_with("first tab setup failed:"), "{r}");
+            assert!(open_targets(&fake).is_empty());
+            continue;
+        }
+        assert!(error.starts_with("first tab cleanup incomplete:"), "{r}");
+        assert!(error.contains("target T1"), "{r}");
+        assert!(error.contains("only this session's running daemon"), "{r}");
+        assert!(!error.contains("nothing is left"), "{r}");
+        assert_eq!(open_targets(&fake), vec!["T1".to_string()], "{label}");
+
+        std::fs::remove_dir(created_record(&d)).unwrap();
+        fake.0.lock().unwrap().close = CloseMode::Closes;
+        if then == "reconnect" {
+            // The next command takes the tab back as created, opening nothing.
+            let r = d.send(json!({"id": "b", "action": "tab_list"}));
+            assert_eq!(r["success"], true, "{label}: {r}");
+            assert_eq!(fake.0.lock().unwrap().created, 1, "{label}: opened another");
+            assert_eq!(created_by_one(&d), vec!["T1".to_string()], "{label}: {r}");
+            let record = std::fs::read_to_string(created_record(&d)).unwrap_or_default();
+            assert!(record.contains("T1"), "{label}: not saved again: {record}");
+        }
+        let r = d.send(json!({"id": "z", "action": "close"}));
+        assert_eq!(r["success"], true, "{label}: {r}");
+        assert!(
+            open_targets(&fake).is_empty(),
+            "{label}: {:?}",
+            open_targets(&fake)
+        );
+        assert_eq!(fake.0.lock().unwrap().created, 1, "{label}: opened another");
+    }
+}
+
+/// The target ids `tab list` marks as created by this session (any number).
+fn created_by_one(d: &Daemon) -> Vec<String> {
+    let r = d.send(json!({"id": "o", "action": "tab_list"}));
+    r["data"]["tabs"]
+        .as_array()
+        .map(|tabs| {
+            tabs.iter()
+                .filter(|t| t["ownership"] == "created")
+                .filter_map(|t| t["targetId"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The cleanup close of a first tab goes through, but reading it back fails:
+/// cleanup is not confirmed and the right is kept. The Chrome tab id the
+/// verifier saw before the close is kept with it, so the same session's
+/// `close` proves the tab gone once read-back works, without `--force`.
+#[test]
+fn a_closed_first_tab_whose_read_back_failed_is_confirmed_by_the_next_close() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start("rc-readback-fails", &cdp);
+    publish_profile_endpoint(&d, &cdp);
+    {
+        let mut b = fake.0.lock().unwrap();
+        b.page_enable_fails = true;
+        b.presence_fails_after_close = true;
+    }
+    let r = d.send(json!({"id": "a", "action": "tab_list"}));
+    let error = r["error"].as_str().unwrap_or("");
+    assert!(error.starts_with("first tab cleanup incomplete:"), "{r}");
+    assert!(error.contains("target T1"), "{r}");
+    assert!(open_targets(&fake).is_empty(), "the close did go through");
+    let record = std::fs::read_to_string(created_record(&d)).unwrap_or_default();
+    assert!(record.contains("T1"), "delete right lost: {record}");
+
+    fake.0.lock().unwrap().presence_fails_after_close = false;
+    let r = d.send(json!({"id": "z", "action": "close"}));
+    assert_eq!(r["success"], true, "{r}");
+    assert_eq!(r["data"]["verifiedAbsent"], true, "{r}");
+    assert!(!created_record(&d).exists(), "the right outlived the tab");
+    assert_eq!(fake.0.lock().unwrap().created, 1, "opened another tab");
 }

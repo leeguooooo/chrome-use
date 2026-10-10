@@ -225,6 +225,16 @@ programs.chrome-use = {
       <hr class="du-divider" />
 
       <!-- ============ 3. SKILLS ============ -->
+      <h2>The profile needs an open window</h2>
+      <p>
+        chrome-use puts its tabs into a profile that already has a window open, and never opens a window itself
+        (that would bring Chrome up in front of you). With no window it stops with <code>profile not open</code>
+        (code <code>profile_not_open</code>): open a window in that profile first, then rerun. If it cannot tell
+        whether a window is open, it stops with <code>profile window unavailable</code>
+        (<code>profile_window_unavailable</code>). Unknown means nothing is created, and neither error is retried
+        automatically. The first-tab cleanup codes are covered in <a href="/en/troubleshooting.html">Troubleshooting</a>.
+      </p>
+
       <h2>Pull the agent skills</h2>
       <div class="du-callout note">
         <div class="du-callout-title">The installers include skill installation and verification</div>

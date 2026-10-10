@@ -222,6 +222,14 @@ programs.chrome-use = {
       <hr class="du-divider" />
 
       <!-- ============ 3. SKILLS ============ -->
+      <h2>profile 里要开着窗口</h2>
+      <p>
+        chrome-use 只把标签页放进已经开着窗口的 profile，从不自己开窗口（那会把 Chrome 弹到你面前）。没有窗口时它会停下并报
+        <code>profile not open</code>（错误码 <code>profile_not_open</code>）：先在那个 profile 里打开一个窗口，再重跑。
+        判断不了有没有窗口时报 <code>profile window unavailable</code>（<code>profile_window_unavailable</code>）。
+        判断不了就什么都不创建，这两个错误都不会自动重试。第一个标签页清理相关的错误码见<a href="/troubleshooting.html">故障排查</a>。
+      </p>
+
       <h2>拉 agent 技能</h2>
       <div class="du-callout note">
         <div class="du-callout-title">安装脚本已包含技能安装与校验</div>
