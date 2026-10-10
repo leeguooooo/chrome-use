@@ -240,6 +240,16 @@ pub fn run_connect(args: &[String], json: bool) {
         if let Some(notice) = health.host_notice() {
             println!("INFO {notice}");
         }
+        if let Some(notice) = health.update_notice() {
+            println!(
+                "{} {}",
+                if notice.blocked { "WARN" } else { "INFO" },
+                notice.message
+            );
+            if let Some(fix) = notice.fix {
+                println!("  fix: {fix}");
+            }
+        }
         // Which Chrome profile is the relay bound to (issue #60). With many
         // profiles, this disambiguates a "logged out" result (wrong profile vs.
         // genuinely not logged in).
@@ -2728,6 +2738,10 @@ pub struct RelayHealth {
     pub host_diagnostic: bool,
     pub debugger: String,
     pub extension_health: Option<serde_json::Value>,
+    /// A downloaded extension update and what holds it back (#524); `None`
+    /// when the extension predates reporting it (before ab-connect 0.5.34).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension_update: Option<serde_json::Value>,
 }
 
 impl Default for RelayHealth {
@@ -2737,7 +2751,213 @@ impl Default for RelayHealth {
             host_diagnostic: false,
             debugger: "debugger: unknown (relay transport did not answer)".into(),
             extension_health: None,
+            extension_update: None,
         }
+    }
+}
+
+/// A pending extension update, as `status`/`doctor` say it (#524).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateNotice {
+    /// True when it may never apply without the user doing something.
+    pub blocked: bool,
+    pub message: String,
+    pub fix: Option<String>,
+}
+
+/// The compact update facts from an `ABExt.state` reply: ab-connect 0.5.35+
+/// sends `update` (it applies once the relay is quiet), 0.5.34 only
+/// `updatePending` / `updateBlockedBy` (it applies only with no tab attached).
+fn extension_update_from_state(state: &serde_json::Value) -> Option<serde_json::Value> {
+    use serde_json::json;
+    if let Some(update) = state.get("update").filter(|v| v.is_object()) {
+        let pick = |key: &str| update.get(key).cloned().unwrap_or(serde_json::Value::Null);
+        return Some(json!({
+            "pending": update.get("pending").and_then(|v| v.as_bool()).unwrap_or(false),
+            "version": pick("version"),
+            "appliesWhen": "idle",
+            "reason": pick("reason"),
+            "commandsInFlight": pick("commandsInFlight"),
+            "attachedTabs": pick("attachedTabs"),
+            "idleForMs": pick("idleForMs"),
+            "appliesAfterIdleMs": pick("appliesAfterIdleMs"),
+            "appliesInMs": pick("appliesInMs"),
+            // The extension's last chrome.runtime.requestUpdateCheck (0.5.35+).
+            "lastCheck": update.get("lastCheck").filter(|v| v.is_object()).map(|c| json!({
+                "status": c.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                "version": c.get("version").cloned().unwrap_or(serde_json::Value::Null),
+                "error": c.get("error").cloned().unwrap_or(serde_json::Value::Null),
+                "ageMs": c.get("ageMs").cloned().unwrap_or(serde_json::Value::Null),
+            })),
+            // When the running version arrived, and from which (0.5.35+).
+            "installed": update.get("installed").filter(|v| v.is_object()).map(|c| json!({
+                "version": c.get("version").cloned().unwrap_or(serde_json::Value::Null),
+                "reason": c.get("reason").cloned().unwrap_or(serde_json::Value::Null),
+                "previousVersion": c.get("previousVersion").cloned().unwrap_or(serde_json::Value::Null),
+                "ageMs": c.get("ageMs").cloned().unwrap_or(serde_json::Value::Null),
+            })),
+        }));
+    }
+    let pending = state.get("updatePending")?.as_bool()?;
+    Some(json!({
+        "pending": pending,
+        "appliesWhen": "noAttachedTab",
+        "attachedTabs": state.get("updateBlockedBy").and_then(|v| v.as_u64()).unwrap_or(0),
+    }))
+}
+
+fn seconds(ms: u64) -> String {
+    format!("{}s", ms.div_ceil(1000))
+}
+
+/// The extension's last Web Store update check, for `doctor` (#524): it
+/// tells "Chrome never found an update" from "one is waiting". `None` when
+/// the extension predates reporting it.
+pub fn update_check_summary(update: Option<&serde_json::Value>) -> Option<String> {
+    let update = update?;
+    let ago = |v: Option<&serde_json::Value>| {
+        v.and_then(|v| v.as_u64())
+            .map(|ms| match ms {
+                ms if ms < 120_000 => format!("{}s ago", ms / 1000),
+                ms if ms < 120 * 60_000 => format!("{} min ago", ms / 60_000),
+                ms if ms < 48 * 3_600_000 => format!("{} h ago", ms / 3_600_000),
+                ms => format!("{} days ago", ms / 86_400_000),
+            })
+            .unwrap_or_else(|| "at an unknown time".into())
+    };
+    // When the running version arrived: a Chrome that has sat on it for days
+    // while a newer one is published is the case #524 is about.
+    let installed = update.get("installed").filter(|v| v.is_object()).map(|i| {
+        let s = |k: &str| i.get(k).and_then(|v| v.as_str());
+        let from = match (s("reason"), s("previousVersion")) {
+            (Some("update"), Some(prev)) => format!(" (updated from {prev})"),
+            (Some("install"), _) => " (installed fresh)".to_string(),
+            _ => String::new(),
+        };
+        format!(
+            "extension {} arrived {}{from}",
+            s("version").unwrap_or("?"),
+            ago(i.get("ageMs"))
+        )
+    });
+    let Some(check) = update.get("lastCheck").filter(|v| v.is_object()) else {
+        return installed;
+    };
+    let ago = ago(check.get("ageMs"));
+    let status = check
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let detail = match status {
+        "no_update" => "no update published beyond the installed version".to_string(),
+        "update_available" => format!(
+            "update{} available",
+            check
+                .get("version")
+                .and_then(|v| v.as_str())
+                .map(|v| format!(" {v}"))
+                .unwrap_or_default()
+        ),
+        "throttled" => "Chrome throttled the check; it asks again within the hour".to_string(),
+        "error" => format!(
+            "the check failed ({})",
+            check
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("no detail")
+        ),
+        other => other.to_string(),
+    };
+    let check = format!("extension update check: last asked Chrome {ago}: {detail}");
+    Some(match installed {
+        Some(installed) => format!("{installed}; {check}"),
+        None => check,
+    })
+}
+
+/// What to say about a pending update, or `None` when there is none.
+pub fn update_notice(update: Option<&serde_json::Value>) -> Option<UpdateNotice> {
+    let update = update?;
+    if !update
+        .get("pending")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let number = |key| update.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+    let target = update
+        .get("version")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .map(|v| format!(" {v}"))
+        .unwrap_or_default();
+    let tabs = |n: u64| format!("{n} attached tab{}", if n == 1 { "" } else { "s" });
+    let reload = "reload the chrome-use extension at chrome://extensions";
+    if update.get("appliesWhen").and_then(|v| v.as_str()) == Some("noAttachedTab") {
+        // ab-connect 0.5.34: an attached tab holds the update back until it is
+        // released, however long that takes.
+        let attached = number("attachedTabs");
+        if attached == 0 {
+            return Some(UpdateNotice {
+                blocked: false,
+                message:
+                    "extension update downloaded; it applies within a minute (no tab is attached)"
+                        .into(),
+                fix: None,
+            });
+        }
+        return Some(UpdateNotice {
+            blocked: true,
+            message: format!(
+                "extension update downloaded but held back by {}: this extension version applies an update only when no tab is attached",
+                tabs(attached)
+            ),
+            fix: Some(format!(
+                "chrome-use close --all   # ends the sessions holding the tabs; or {reload}"
+            )),
+        });
+    }
+    let grace = seconds(
+        update
+            .get("appliesAfterIdleMs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(60_000),
+    );
+    let attached = number("attachedTabs");
+    let release = if attached > 0 {
+        format!(
+            "; {} {} released then and re-attached on the next command",
+            tabs(attached),
+            if attached == 1 { "is" } else { "are" }
+        )
+    } else {
+        String::new()
+    };
+    let message = match update.get("reason").and_then(|v| v.as_str()) {
+        Some("command_in_flight") => format!(
+            "extension update{target} downloaded; waits for {} command{} in flight, then applies after {grace} without commands{release}",
+            number("commandsInFlight"),
+            if number("commandsInFlight") == 1 { "" } else { "s" },
+        ),
+        Some("recent_activity") => format!(
+            "extension update{target} downloaded; applies in about {} once chrome-use has sent no command for {grace}{release}",
+            seconds(number("appliesInMs")),
+        ),
+        _ => format!("extension update{target} downloaded; applying now"),
+    };
+    Some(UpdateNotice {
+        blocked: false,
+        message,
+        fix: Some(format!(
+            "nothing to do, it applies on its own; to apply it now, {reload}"
+        )),
+    })
+}
+
+impl RelayHealth {
+    pub fn update_notice(&self) -> Option<UpdateNotice> {
+        update_notice(self.extension_update.as_ref())
     }
 }
 
@@ -2863,6 +3083,7 @@ async fn probe_relay_health(url: &str, budget: std::time::Duration) -> RelayHeal
                     health.transport_responsive = true;
                     health.extension_health =
                         state.get("relayHealth").filter(|v| v.is_object()).cloned();
+                    health.extension_update = extension_update_from_state(state);
                     health.debugger = debugger_summary(health.extension_health.as_ref());
                     return Some(());
                 }
@@ -4175,6 +4396,123 @@ mod tests {
         );
     }
 
+    /// #524: `status`/`doctor` say when a downloaded update waits and what
+    /// holds it back, for 0.5.35 (applies once quiet), 0.5.34 (applies only
+    /// with nothing attached) and older extensions (say nothing).
+    #[test]
+    fn pending_extension_update_is_reported_with_what_blocks_it() {
+        let notice =
+            |state: serde_json::Value| update_notice(extension_update_from_state(&state).as_ref());
+        // Older than 0.5.34: no fields, no notice.
+        assert!(extension_update_from_state(&json!({"ownedTabs": [1]})).is_none());
+        assert!(notice(json!({"ownedTabs": [1]})).is_none());
+        // Nothing pending.
+        assert!(notice(json!({"updatePending": false, "updateBlockedBy": 2})).is_none());
+        assert!(notice(json!({"update": {"pending": false, "reason": null}})).is_none());
+
+        // 0.5.34 with an attached tab: blocked until released.
+        let n = notice(json!({"updatePending": true, "updateBlockedBy": 2})).unwrap();
+        assert!(n.blocked);
+        assert_eq!(n.message, "extension update downloaded but held back by 2 attached tabs: this extension version applies an update only when no tab is attached");
+        assert_eq!(
+            n.fix.as_deref(),
+            Some("chrome-use close --all   # ends the sessions holding the tabs; or reload the chrome-use extension at chrome://extensions")
+        );
+        let n = notice(json!({"updatePending": true, "updateBlockedBy": 0})).unwrap();
+        assert!(!n.blocked);
+        assert!(n.fix.is_none());
+
+        // 0.5.35: waits for quiet, never blocked for good.
+        let state = |reason: &str, inflight: u64, attached: u64, applies: serde_json::Value| {
+            json!({
+                "updatePending": true,
+                "updateBlockedBy": attached,
+                "update": {
+                    "pending": true, "version": "0.5.36", "reason": reason,
+                    "commandsInFlight": inflight, "attachedTabs": attached,
+                    "idleForMs": 15000, "appliesAfterIdleMs": 60000, "appliesInMs": applies,
+                },
+            })
+        };
+        let compact =
+            extension_update_from_state(&state("recent_activity", 0, 1, json!(45000))).unwrap();
+        assert_eq!(compact["appliesWhen"], "idle");
+        assert_eq!(compact["version"], "0.5.36");
+        let n = notice(state("recent_activity", 0, 1, json!(45000))).unwrap();
+        assert!(!n.blocked);
+        assert_eq!(n.message, "extension update 0.5.36 downloaded; applies in about 45s once chrome-use has sent no command for 60s; 1 attached tab is released then and re-attached on the next command");
+        assert_eq!(
+            n.fix.as_deref(),
+            Some("nothing to do, it applies on its own; to apply it now, reload the chrome-use extension at chrome://extensions")
+        );
+        let n = notice(state("command_in_flight", 2, 3, json!(null))).unwrap();
+        assert!(!n.blocked);
+        assert_eq!(n.message, "extension update 0.5.36 downloaded; waits for 2 commands in flight, then applies after 60s without commands; 3 attached tabs are released then and re-attached on the next command");
+        let n = notice(state("idle", 0, 0, json!(0))).unwrap();
+        assert_eq!(
+            n.message,
+            "extension update 0.5.36 downloaded; applying now"
+        );
+        // Compact: only the update facts, never the whole state reply.
+        let s = serde_json::to_value(RelayHealth {
+            extension_update: extension_update_from_state(&state("idle", 0, 0, json!(0))),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(s["extensionUpdate"]["reason"], "idle");
+        assert!(s["extensionUpdate"].get("ownedTabs").is_none());
+        let s = serde_json::to_value(RelayHealth::default()).unwrap();
+        assert!(s.get("extensionUpdate").is_none());
+
+        // The last Web Store check, so a Chrome that never found the update
+        // can be told from one where it waits.
+        let checked = |check: serde_json::Value| {
+            update_check_summary(
+                extension_update_from_state(
+                    &json!({"update": {"pending": false, "lastCheck": check}}),
+                )
+                .as_ref(),
+            )
+        };
+        assert_eq!(
+            checked(json!({"at": 1, "status": "no_update", "ageMs": 600000})).as_deref(),
+            Some("extension update check: last asked Chrome 10 min ago: no update published beyond the installed version")
+        );
+        assert_eq!(
+            checked(json!({"status": "update_available", "version": "0.5.36", "ageMs": 5000}))
+                .as_deref(),
+            Some("extension update check: last asked Chrome 5s ago: update 0.5.36 available")
+        );
+        assert_eq!(
+            checked(json!({"status": "error", "error": "no update url", "ageMs": 1000})).as_deref(),
+            Some("extension update check: last asked Chrome 1s ago: the check failed (no update url)")
+        );
+        assert!(update_check_summary(
+            extension_update_from_state(&json!({"update": {"pending": false, "lastCheck": null}}))
+                .as_ref()
+        )
+        .is_none());
+        // With the time the running version arrived.
+        let both = extension_update_from_state(&json!({"update": {"pending": false,
+            "installed": {"version": "0.5.35", "reason": "update", "previousVersion": "0.5.34",
+                          "at": 1, "ageMs": 3 * 3_600_000},
+            "lastCheck": {"status": "no_update", "ageMs": 1_200_000}}}));
+        assert_eq!(
+            update_check_summary(both.as_ref()).as_deref(),
+            Some("extension 0.5.35 arrived 3 h ago (updated from 0.5.34); extension update check: last asked Chrome 20 min ago: no update published beyond the installed version")
+        );
+        let only = extension_update_from_state(&json!({"update": {"pending": false,
+            "installed": {"version": "0.5.35", "reason": "install", "ageMs": 3 * 86_400_000}}}));
+        assert_eq!(
+            update_check_summary(only.as_ref()).as_deref(),
+            Some("extension 0.5.35 arrived 3 days ago (installed fresh)")
+        );
+        assert!(update_check_summary(
+            extension_update_from_state(&json!({"updatePending": false})).as_ref()
+        )
+        .is_none());
+    }
+
     #[test]
     fn debugger_summary_covers_passive_states_and_json_is_compact() {
         assert_eq!(
@@ -4323,6 +4661,9 @@ mod tests {
                 assert_eq!(health.host_diagnostic, diagnostic_host);
                 assert_eq!(health.host_notice().is_some(), !diagnostic_host);
                 assert_eq!(health.extension_health.is_none(), fallback);
+                // An extension that predates update reporting says nothing.
+                assert!(health.extension_update.is_none());
+                assert!(health.update_notice().is_none());
                 if fallback {
                     assert_eq!(health.debugger, debugger_summary(None));
                 }

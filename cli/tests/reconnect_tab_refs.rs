@@ -50,6 +50,8 @@ struct Browser {
     calls: Vec<String>,
     /// `Target.attachToTarget` calls.
     attached: u32,
+    /// Page evaluations answered with the extension's `reply_too_large`.
+    huge_replies: u32,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Debug)]
@@ -179,6 +181,20 @@ impl Fake {
             let session = req["sessionId"].as_str().unwrap_or("").to_string();
             let expression = params["expression"].as_str().unwrap_or("").to_string();
             b.evaluated.push((session, expression));
+        }
+        // #530: what ab-connect 0.5.35 answers when a reply is over Chrome's
+        // 64 MiB native-messaging limit.
+        let text = format!("{}{}", params["expression"], params["functionDeclaration"]);
+        if (method == "Runtime.evaluate" || method == "Runtime.callFunctionOn")
+            && text.contains("HUGE_REPLY_530")
+        {
+            b.huge_replies += 1;
+            return json!({"__error": format!(
+                "reply_too_large: the reply to {method} is 70.0 MiB, over Chrome's 64.0 MiB limit \
+                 for one native-messaging message, so the extension cannot send it. Nothing is \
+                 retried; ask for less (a smaller eval result, `snapshot -i` or a scoped selector, \
+                 a smaller screenshot)."
+            )});
         }
         match method {
             "ABExt.call" => {
@@ -1539,4 +1555,141 @@ fn a_closed_first_tab_whose_read_back_failed_is_confirmed_by_the_next_close() {
     assert_eq!(r["data"]["verifiedAbsent"], true, "{r}");
     assert!(!created_record(&d).exists(), "the right outlived the tab");
     assert_eq!(fake.0.lock().unwrap().created, 1, "opened another tab");
+}
+
+/// #524: ab-connect applies an update by reloading itself while a session
+/// sits idle. Its native host restarts on a new port (the record naming it is
+/// written a moment later) and the new worker re-announces the tabs it created,
+/// in its own order. The session's next command runs in the tab it was
+/// driving, with the same tab ids and labels. When the reloaded extension does
+/// not re-announce the driven tab (an older extension forgot its tabs, or it
+/// was a user's tab the session forced), the session refuses honestly instead
+/// of acting in another tab, and opens nothing.
+///
+/// The session is idle for a minute before the extension reloads, so the new
+/// host's record is normally there by the next command; when it is not yet
+/// (`late`), that command fails as a connection error, runs nowhere, and the
+/// next one continues with the same ids.
+#[test]
+fn a_session_continues_after_the_extension_reloads_into_an_update() {
+    for (announced, late) in [(true, false), (false, false), (true, true)] {
+        let (fake, cdp) = Fake::start();
+        let d = Daemon::start(&format!("rc-ext-update-{announced}-{late}"), &cdp);
+        // Bound to the relay profile, as the CLI binds every relay session.
+        bind_to_profile(&d, &cdp);
+        three_tabs(&d);
+        let r = d.send(json!({"id": "p", "action": "url"}));
+        assert_eq!(r["success"], true, "{r}");
+        fake.take_url_reads();
+        let created_before = fake.0.lock().unwrap().created;
+
+        // The reload: every connection drops, the old port refuses, the new
+        // host listens elsewhere and lists the tabs newest first.
+        let new_ws = fake.restart_on_new_port();
+        fake.0.lock().unwrap().reversed = true;
+        if !announced {
+            fake.remove("T2");
+        }
+        let relay = d.relay.path().to_path_buf();
+        let writer = std::thread::spawn(move || {
+            if late {
+                std::thread::sleep(Duration::from_millis(1500));
+            }
+            std::fs::write(relay.join("relay-cdp-url-P1"), new_ws).unwrap();
+        });
+        let mut writer = Some(writer);
+        if !late {
+            writer.take().unwrap().join().unwrap();
+        }
+
+        let mut r = d.send(json!({"id": "u1", "action": "url"}));
+        if let Some(writer) = writer {
+            writer.join().unwrap();
+            if r["success"] == false {
+                assert_eq!(r["code"], "connection_failed", "{r}");
+                assert!(
+                    fake.take_url_reads().is_empty(),
+                    "a failed command ran somewhere"
+                );
+                r = d.send(json!({"id": "u1b", "action": "url"}));
+            }
+        }
+        if announced {
+            assert_eq!(r["success"], true, "{r}");
+            assert_only_session(&fake, "S-T2");
+            let tabs = d.tabs();
+            assert_eq!(tab_of(&tabs, "T1").as_deref(), Some("t1"), "{tabs:?}");
+            assert_eq!(tab_of(&tabs, "T2").as_deref(), Some("t2"), "{tabs:?}");
+            assert_eq!(tab_of(&tabs, "T3").as_deref(), Some("t3"), "{tabs:?}");
+            let docs: Vec<_> = tabs
+                .iter()
+                .filter(|(_, _, l)| l.as_deref() == Some("docs"))
+                .collect();
+            assert_eq!(docs.len(), 1, "{tabs:?}");
+            assert_eq!(docs[0].1, "T2", "{tabs:?}");
+            // And it keeps working, by label too.
+            let r = d.send(json!({"id": "u2", "action": "tab_switch", "tabId": "docs"}));
+            assert_eq!(r["success"], true, "{r}");
+            let r = d.send(json!({"id": "u3", "action": "url"}));
+            assert_eq!(r["success"], true, "{r}");
+            assert_only_session(&fake, "S-T2");
+        } else {
+            // The first command after the reload may itself be the one that
+            // finds the tab missing; either way nothing runs in another tab.
+            if r["success"] == true {
+                let r = d.send(json!({"id": "u2", "action": "url"}));
+                assert!(refused_for_lost_tab(&r), "{r}");
+            } else {
+                assert!(refused_for_lost_tab(&r), "{r}");
+            }
+            assert!(
+                fake.take_url_reads().is_empty(),
+                "a command ran in a tab the session did not choose"
+            );
+            let tabs = d.tabs();
+            assert_eq!(tab_of(&tabs, "T1").as_deref(), Some("t1"), "{tabs:?}");
+            assert_eq!(tab_of(&tabs, "T3").as_deref(), Some("t3"), "{tabs:?}");
+            assert!(tab_of(&tabs, "T2").is_none(), "{tabs:?}");
+        }
+        assert_eq!(
+            fake.0.lock().unwrap().created,
+            created_before,
+            "announced={announced}: the reconnect opened a tab"
+        );
+    }
+}
+
+/// #530: the extension answers a reply too large for Chrome's 64 MiB
+/// native-messaging limit with `reply_too_large`. The CLI says so at once,
+/// as not retryable, sends the evaluation once, and the session still works.
+#[test]
+fn a_reply_over_the_message_limit_fails_at_once_and_is_not_retried() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start("rc-huge-reply", &cdp);
+    three_tabs(&d);
+
+    let started = Instant::now();
+    let out = d.cli(&["eval", "'HUGE_REPLY_530'.repeat(1)"]);
+    let elapsed = started.elapsed();
+    assert!(!out.status.success(), "{}", text(&out));
+    let reply: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    assert_eq!(reply["success"], false, "{reply}");
+    assert_eq!(reply["code"], "reply_too_large", "{reply}");
+    assert_eq!(reply["retryable"], false, "{reply}");
+    let error = reply["error"].as_str().unwrap_or("");
+    assert!(error.contains("64.0 MiB limit"), "{reply}");
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "took {elapsed:?}: waited for a timeout"
+    );
+    assert_eq!(
+        fake.0.lock().unwrap().huge_replies,
+        1,
+        "the evaluation was retried"
+    );
+
+    // Nothing about the session broke.
+    let r = d.send(json!({"id": "u", "action": "url"}));
+    assert_eq!(r["success"], true, "{r}");
 }

@@ -271,6 +271,31 @@ fn relay_checks(checks: &mut Vec<Check>, health: &crate::connect::RelayHealth) {
             .with_fix("reload the chrome-use extension at chrome://extensions (or restart Chrome)");
     }
     checks.push(debugger);
+    // A downloaded extension update and what holds it back (#524).
+    if let Some(notice) = health.update_notice() {
+        let mut update = Check::new(
+            "relay.update",
+            "Launch test",
+            if notice.blocked {
+                Status::Warn
+            } else {
+                Status::Info
+            },
+            notice.message,
+        );
+        if let Some(fix) = notice.fix {
+            update = update.with_fix(fix);
+        }
+        checks.push(update);
+    }
+    if let Some(summary) = crate::connect::update_check_summary(health.extension_update.as_ref()) {
+        checks.push(Check::new(
+            "relay.updateCheck",
+            "Launch test",
+            Status::Info,
+            summary,
+        ));
+    }
 }
 
 fn launch_failed(checks: &mut Vec<Check>, e: String) {
@@ -353,6 +378,44 @@ mod tests {
     use super::*;
     use crate::native::cdp::chrome::{launch_args_for_test, launches_headless, LaunchOptions};
     use crate::test_utils::EnvGuard;
+
+    /// #524: a pending extension update is a doctor check with its blocker
+    /// and a fix; none when nothing is pending.
+    #[test]
+    fn a_pending_extension_update_is_a_doctor_check() {
+        let run = |update: Option<Value>| {
+            let mut checks = vec![];
+            relay_checks(
+                &mut checks,
+                &crate::connect::RelayHealth {
+                    transport_responsive: true,
+                    extension_update: update,
+                    ..Default::default()
+                },
+            );
+            checks.into_iter().find(|c| c.id == "relay.update")
+        };
+        assert!(run(None).is_none());
+        assert!(run(Some(json!({"pending": false, "appliesWhen": "idle"}))).is_none());
+        let blocked = run(Some(
+            json!({"pending": true, "appliesWhen": "noAttachedTab", "attachedTabs": 1}),
+        ))
+        .unwrap();
+        assert_eq!(blocked.status, Status::Warn);
+        assert!(blocked.message.contains("held back by 1 attached tab"));
+        assert!(blocked
+            .fix
+            .as_deref()
+            .unwrap()
+            .contains("chrome-use close --all"));
+        let waiting = run(Some(json!({"pending": true, "appliesWhen": "idle",
+            "reason": "recent_activity", "attachedTabs": 1, "appliesInMs": 30000,
+            "appliesAfterIdleMs": 60000})))
+        .unwrap();
+        assert_eq!(waiting.status, Status::Info);
+        assert!(waiting.message.contains("applies in about 30s"));
+        assert!(waiting.fix.is_some());
+    }
 
     #[test]
     fn passive_relay_checks_classify_observations_and_restore_transport_fix() {
