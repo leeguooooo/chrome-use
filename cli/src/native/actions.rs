@@ -2292,11 +2292,14 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         // Which documents the live refs belong to, should the capture after
         // the action fail (then they are kept only against this).
         state.pre_action_document = Box::pin(read_active_document(state)).await;
+        // The visible text too, in every frame: a receipt that is plain
+        // static text is in no interactive tree.
+        let text = Box::pin(super::observation::capture_text(state)).await;
         // Last thing before the action: watch for the mutations it makes
         // while being dispatched, which the settle's own observer, installed
         // afterwards, cannot see (see `settle::settle_armed`).
         let arm = super::settle::arm(state).await;
-        Some((url, snap, (req_mark, resource_mark), arm))
+        Some((url, (snap, text), (req_mark, resource_mark), arm))
     } else {
         None
     };
@@ -2680,7 +2683,9 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         }
         other => other,
     };
-    if let (true, Some((url0, snap0, (req_mark, resource_mark), arm))) = (ok, observe_baseline) {
+    if let (true, Some((url0, (snap0, text0), (req_mark, resource_mark), arm))) =
+        (ok, observe_baseline)
+    {
         // Wait on signals, not on a number (#228). The 250ms this replaces was
         // wrong in both directions: too short on a slow page, where the delta
         // described a tree that no longer existed by the time the agent read
@@ -2769,7 +2774,11 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             .filter(|f| !frames_before.contains(*f))
             .cloned()
             .collect();
+        let text1 = Box::pin(super::observation::capture_text(state)).await;
         let mut observed = super::observation::changes(&snap0, &snap1, &url0, &url1);
+        // Static text the interactive tree leaves out: an iframe receipt, a
+        // log line, a page counter. A change there is a change.
+        super::observation::apply_text(&mut observed, &text0, &text1);
         // What the page fetched during the action, from resource timing: it
         // works with the Network domain off, where `requests` stays empty (#378).
         let resources: Vec<Value> = match state.browser.as_ref() {

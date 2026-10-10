@@ -266,6 +266,14 @@
         更大的页面照旧给统一格式的 <code>delta</code>。采集不完整时 <code>observed.status</code> 照实写 partial 或 unavailable。
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 静态文字的变化在 observed.text 里</div>
+        可交互树不收普通静态文字，iframe 里的回执、操作日志、「Page 2 of 3」这类计数原先都看不到，点击会显示成没有变化。
+        <code>observed.text</code> 按帧列出新出现（<code>+</code>）和消失（<code>-</code>）的可见文字行，子帧的行以 <code>[frame 名称]</code> 开头；
+        只有文字变了也算 <code>changed: true</code>。最多 20 行、1 KB，多出的计入 <code>textOmitted</code>。
+        输入框和文本域里填的值、可编辑区域的内容、含有密码值的行都不会出现。<code>textStatus: "unavailable"</code> 表示文字没读到，只有文字的变化属于未知，而不是没有。
+      </div>
+
       <div class="du-callout tip">
         <div class="du-callout-title">✅ expect 还是 --observe？</div>
         想要一个<strong>硬性 pass/fail 门禁</strong>（配合退出码、<code>&amp;&amp;</code>、批处理）用

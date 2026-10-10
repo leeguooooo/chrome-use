@@ -174,6 +174,16 @@ keep the unified `delta`. A partial or unavailable capture says so in
 `observed.status` either way; a snapshot beside `status: partial` is a real
 tree, but the observation as a whole is still incomplete.
 
+`observed.text` lists the visible text lines, across all frames, that
+appeared (`+`) or went away (`-`): the static text an interactive tree leaves
+out, such as an iframe's receipt, a log line, or a "Page 2 of 3" counter.
+Lines from a child frame start with `[frame <name>]`. A text change alone sets
+`changed: true`. It is bounded to 20 lines and 1 KB (`textOmitted` counts the
+rest), and never carries what was typed into a field: input and textarea values,
+editable-region content and any line holding a password value are left out.
+`textStatus: "unavailable"` means the text could not be read, so a text-only
+change is unknown, not absent.
+
 `navigate`/`reload`/`back`/`forward` take `--observe` too, and return the
 post-navigation **snapshot** instead of a delta — across a page swap a diff
 shares no nodes with the old tree, so it would be 100% removals plus 100%

@@ -285,6 +285,17 @@
         <code>delta</code>. An incomplete capture still says partial or unavailable in <code>observed.status</code>.
       </div>
 
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ Static text changes are in observed.text</div>
+        The interactive tree leaves plain static text out, so an iframe's receipt, an action log line or a
+        "Page 2 of 3" counter used to be invisible and the click read as no change. <code>observed.text</code> lists the
+        visible text lines, frame by frame, that appeared (<code>+</code>) or went away (<code>-</code>); a child frame's lines
+        start with <code>[frame name]</code>. A text change alone sets <code>changed: true</code>. At most 20 lines and 1 KB;
+        <code>textOmitted</code> counts the rest. What was typed into inputs and textareas, editable-region content and any
+        line holding a password value never appear. <code>textStatus: "unavailable"</code> means the text could not be read,
+        so a text-only change is unknown, not absent.
+      </div>
+
       <div class="du-callout tip">
         <div class="du-callout-title">✅ expect or --observe?</div>
         For a <strong>hard pass/fail gate</strong> (with exit codes, <code>&amp;&amp;</code>, batches) use

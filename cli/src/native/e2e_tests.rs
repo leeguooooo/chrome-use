@@ -11194,6 +11194,101 @@ document.getElementById('go').addEventListener('click', () => {
 }
 
 // ---------------------------------------------------------------------------
+// `--observe` visible text: static receipts the interactive tree leaves out
+// ---------------------------------------------------------------------------
+
+/// A submit inside an iframe whose only effect is a plain `<p>` receipt: the
+/// interactive tree does not move, so before `observed.text` the click read
+/// as "no change" and invited a replay. The receipt must be in the
+/// observation, and what was typed into the fields must not.
+#[tokio::test]
+#[ignore]
+async fn e2e_observe_reports_an_iframe_receipt_in_visible_text() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>Embedded notes</title>
+<main><h1>Embedded notes</h1><p>Complete the embedded note form.</p>
+<iframe title="Embedded form" srcdoc="<form><label>Note <input name='note'></label><label>Pin <input type='password' name='pin'></label><button>Save note</button></form><p id='receipt'>No note</p><script>document.querySelector('form').onsubmit=e=>{e.preventDefault();document.querySelector('#receipt').textContent='Note saved: '+document.querySelector('input').value;}</script>"></iframe></main>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "3", "action": "snapshot", "interactive": true }),
+    )
+    .await;
+    assert_success(&resp);
+    let tree = get_data(&resp)["snapshot"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let ref_for = |marker: &str| -> String {
+        let line = tree
+            .lines()
+            .find(|l| l.contains(marker))
+            .unwrap_or_else(|| panic!("no `{marker}` in snapshot:\n{tree}"));
+        let start = line.find("ref=").expect("line has a ref") + 4;
+        let rest = &line[start..];
+        let end = rest
+            .find(|c: char| !c.is_alphanumeric())
+            .unwrap_or(rest.len());
+        format!("@{}", &rest[..end])
+    };
+    let note = ref_for("textbox \"Note\"");
+    let pin = ref_for("textbox \"Pin\"");
+    let save = ref_for("button \"Save note\"");
+
+    for (id, sel, value) in [
+        ("4", &note, "Synthetic benchmark note"),
+        ("5", &pin, "pin-secret-7731"),
+    ] {
+        let resp = run_cmd(
+            &mut state,
+            json!({ "id": id, "action": "fill", "selector": sel, "value": value }),
+        )
+        .await;
+        assert_success(&resp);
+    }
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "6", "action": "click", "selector": save, "observe": true }),
+    )
+    .await;
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    assert_eq!(observed["status"], json!("complete"), "{observed}");
+    assert_eq!(
+        observed["changed"],
+        json!(true),
+        "a receipt is a change: {observed}"
+    );
+    let text: Vec<&str> = observed["text"]
+        .as_array()
+        .unwrap_or_else(|| panic!("observed.text missing: {observed}"))
+        .iter()
+        .filter_map(|l| l.as_str())
+        .collect();
+    assert!(
+        text.iter()
+            .any(|l| l.starts_with("+ [frame ")
+                && l.ends_with("Note saved: Synthetic benchmark note")),
+        "the iframe receipt must be in observed.text: {text:?}"
+    );
+    assert!(
+        text.iter()
+            .any(|l| l.ends_with("No note") && l.starts_with("- ")),
+        "{text:?}"
+    );
+    let all = observed.to_string();
+    assert!(
+        !all.contains("pin-secret-7731"),
+        "a password value must never be observed: {all}"
+    );
+    server.abort();
+}
+
+// ---------------------------------------------------------------------------
 // Frame boundaries: focus and keys do not cross into a frame (#218)
 // ---------------------------------------------------------------------------
 

@@ -6057,6 +6057,9 @@ Options:
                              A small page (tree ≤4 KB and ≤60 lines) instead comes
                              whole as observed.snapshot (the current tree, refs
                              live) plus observed.changes (+/- lines only).
+                             observed.text: visible text lines that changed in any
+                             frame (receipts, counters); ≤20 lines/1 KB, never field
+                             values or passwords. A text change sets changed=true.
                              Requests: at most 20 summaries, 256 UTF-8 bytes each;
                              data URL payloads omitted. Full capture: network requests --json
                              Applies to click, dblclick, fill, type, press, select,
@@ -6371,6 +6374,27 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
         if let Some(snapshot) = obs.get("snapshot").and_then(|v| v.as_str()) {
             print_observed_snapshot(snapshot);
         }
+    }
+    // Visible text that changed, across frames: static receipts and counters
+    // the interactive tree leaves out.
+    if let Some(lines) = obs.get("text").and_then(|v| v.as_array()) {
+        println!("{}", color::dim("observed text:"));
+        for line in lines.iter().filter_map(|v| v.as_str()) {
+            if line.starts_with('+') {
+                println!("{}", color::green(line));
+            } else {
+                println!("{}", color::red(line));
+            }
+        }
+        if let Some(n) = obs.get("textOmitted").and_then(|v| v.as_u64()) {
+            println!("{}", color::dim(&format!("  … {n} more text lines")));
+        }
+    }
+    if obs.get("textStatus").and_then(|v| v.as_str()) == Some("unavailable") {
+        eprintln!(
+            "{} visible text was not captured; text-only changes are unknown",
+            color::warning_indicator()
+        );
     }
     // A cross-origin frame that appeared during the action: its content is in
     // none of the delta above, so an agent reading only the delta concludes the

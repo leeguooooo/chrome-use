@@ -567,6 +567,213 @@ pub(super) fn changes(
     out
 }
 
+/// The visible text an `--observe` compares, read in every frame. Interactive
+/// snapshots leave out plain static text, so a receipt rendered as a `<p>` (in
+/// an iframe, a log line, a "Page 2 of 3" counter) never reaches the tree
+/// delta and the action reads as "no change".
+///
+/// `innerText` never includes what was typed into an `<input>` or
+/// `<textarea>`; lines that are the content of an editable region are dropped
+/// as well, and so is any line carrying a password field's current value. Text
+/// the page itself renders (a receipt echoing a note) is page text and stays.
+pub(super) const OBSERVE_TEXT_JS: &str = "(function(){try{\
+var b=document.body||document.documentElement;if(!b)return '';\
+var t=b.innerText||'';var drop=new Set();\
+document.querySelectorAll('[contenteditable]:not([contenteditable=false]),textarea').forEach(function(e){\
+String(e.innerText||e.textContent||'').split('\\n').forEach(function(l){l=l.trim();if(l)drop.add(l)})});\
+var pw=[];document.querySelectorAll('input').forEach(function(i){if(i.type==='password'&&i.value)pw.push(i.value)});\
+return t.split('\\n').filter(function(l){var s=l.trim();if(!s||drop.has(s))return false;\
+for(var k=0;k<pw.length;k++){if(s.indexOf(pw[k])>=0)return false}return true}).join('\\n');\
+}catch(e){return ''}})()";
+
+/// Bounds on `observed.text`: lines, total bytes, bytes per line.
+pub(super) const MAX_TEXT_LINES: usize = 20;
+pub(super) const MAX_TEXT_BYTES: usize = 1024;
+const MAX_TEXT_LINE_BYTES: usize = 200;
+
+/// One frame's visible text, keyed by frame id so a frame is compared with
+/// itself before and after the action.
+#[derive(Clone, Debug)]
+pub(super) struct FrameLines {
+    pub id: String,
+    /// `None` for the top frame; otherwise a short name for the frame (the
+    /// last segment of its url), printed in front of its lines.
+    pub label: Option<String>,
+    pub lines: Vec<String>,
+}
+
+fn visible_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|l| {
+            l.split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect::<String>()
+        })
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+fn frame_label(url: &str) -> String {
+    let trimmed = url.split(['?', '#']).next().unwrap_or(url);
+    let name = trimmed
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(trimmed);
+    shorten(name, 40)
+}
+
+pub(super) fn frame_lines(frame_id: &str, url: &str, top: bool, text: &str) -> FrameLines {
+    FrameLines {
+        id: frame_id.to_string(),
+        label: (!top).then(|| frame_label(url)),
+        lines: visible_lines(text),
+    }
+}
+
+/// Read the visible text of every frame in the active page.
+pub(super) async fn capture_text(
+    state: &super::actions::DaemonState,
+) -> Result<Vec<FrameLines>, String> {
+    let mgr = state
+        .browser
+        .as_ref()
+        .ok_or("No active page for observation")?;
+    let session = mgr
+        .active_session_id()
+        .map_err(|_| "No active page for observation".to_string())?
+        .to_string();
+    let read = super::element::collect_all_frames_text_with(
+        &mgr.client,
+        &session,
+        &state.iframe_sessions,
+        OBSERVE_TEXT_JS,
+    );
+    let frames = tokio::time::timeout(std::time::Duration::from_secs(3), read)
+        .await
+        .map_err(|_| "text capture timed out".to_string())??;
+    Ok(frames
+        .iter()
+        .map(|f| frame_lines(&f.frame_id, &f.url, f.kind == "top", &f.text))
+        .collect())
+}
+
+/// The visible-text lines that appeared or went away, `+ ` / `- ` prefixed,
+/// frame by frame, bounded to [`MAX_TEXT_LINES`] lines and [`MAX_TEXT_BYTES`]
+/// bytes. Returns the kept lines and how many were left out.
+pub(super) fn text_changes(before: &[FrameLines], after: &[FrameLines]) -> (Vec<String>, usize) {
+    use similar::{capture_diff_slices_deadline, Algorithm, DiffOp};
+    // A text-heavy page diffs in well under this; the deadline only keeps a
+    // pathological one from holding the reply.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+    let mut all: Vec<String> = Vec::new();
+    let empty: Vec<String> = Vec::new();
+    let mut emit = |label: &Option<String>, sign: char, line: &str| {
+        let prefix = label
+            .as_ref()
+            .map(|l| format!("[frame {l}] "))
+            .unwrap_or_default();
+        all.push(shorten(
+            &format!("{sign} {prefix}{line}"),
+            MAX_TEXT_LINE_BYTES,
+        ));
+    };
+    for frame in after {
+        let old = before
+            .iter()
+            .find(|b| b.id == frame.id)
+            .map(|b| &b.lines)
+            .unwrap_or(&empty);
+        for op in capture_diff_slices_deadline(Algorithm::Myers, old, &frame.lines, Some(deadline))
+        {
+            match op {
+                DiffOp::Equal { .. } => {}
+                DiffOp::Delete {
+                    old_index, old_len, ..
+                } => old[old_index..old_index + old_len]
+                    .iter()
+                    .for_each(|l| emit(&frame.label, '-', l)),
+                DiffOp::Insert {
+                    new_index, new_len, ..
+                } => frame.lines[new_index..new_index + new_len]
+                    .iter()
+                    .for_each(|l| emit(&frame.label, '+', l)),
+                DiffOp::Replace {
+                    old_index,
+                    old_len,
+                    new_index,
+                    new_len,
+                } => {
+                    old[old_index..old_index + old_len]
+                        .iter()
+                        .for_each(|l| emit(&frame.label, '-', l));
+                    frame.lines[new_index..new_index + new_len]
+                        .iter()
+                        .for_each(|l| emit(&frame.label, '+', l));
+                }
+            }
+        }
+    }
+    // A frame the action removed: its text went with it.
+    for frame in before
+        .iter()
+        .filter(|b| !after.iter().any(|a| a.id == b.id))
+    {
+        frame.lines.iter().for_each(|l| emit(&frame.label, '-', l));
+    }
+    let mut kept = Vec::new();
+    let mut bytes = 0;
+    let mut omitted = 0;
+    for line in all {
+        if kept.len() == MAX_TEXT_LINES || bytes + line.len() + 1 > MAX_TEXT_BYTES {
+            omitted += 1;
+            continue;
+        }
+        bytes += line.len() + 1;
+        kept.push(line);
+    }
+    (kept, omitted)
+}
+
+/// Add the visible-text change to an observation. A text change is a change:
+/// a receipt that only exists as static text must not leave `changed:false`.
+/// A capture that failed on either side is reported, never read as "no text
+/// changed".
+pub(super) fn apply_text(
+    observed: &mut serde_json::Map<String, serde_json::Value>,
+    before: &Result<Vec<FrameLines>, String>,
+    after: &Result<Vec<FrameLines>, String>,
+) {
+    use serde_json::json;
+    match (before, after) {
+        (Ok(before), Ok(after)) => {
+            let (lines, omitted) = text_changes(before, after);
+            if lines.is_empty() {
+                return;
+            }
+            observed.insert("text".into(), json!(lines));
+            if omitted > 0 {
+                observed.insert("textOmitted".into(), json!(omitted));
+            }
+            observed.insert("changed".into(), json!(true));
+        }
+        (before, after) => {
+            let error = before
+                .as_ref()
+                .err()
+                .or(after.as_ref().err())
+                .cloned()
+                .unwrap_or_default();
+            observed.insert("textStatus".into(), json!("unavailable"));
+            observed.insert("textError".into(), json!(shorten(&error, 160)));
+        }
+    }
+}
+
 /// Preserve the action result and report its separate observation quality.
 /// Diagnostic failure must not turn a returned action into an invitation to retry.
 pub(super) fn annotate_incomplete(response: &mut serde_json::Value) {
@@ -813,6 +1020,178 @@ mod capture_tests {
             .unwrap()
             .contains("Do not replay"));
         assert_eq!(response["data"]["clicked"], "Save");
+    }
+
+    fn frames(spec: &[(&str, &str, bool, &str)]) -> Result<Vec<FrameLines>, String> {
+        Ok(spec
+            .iter()
+            .map(|(id, url, top, text)| frame_lines(id, url, *top, text))
+            .collect())
+    }
+
+    #[test]
+    fn an_iframe_receipt_is_a_text_change_even_when_the_tree_did_not_move() {
+        let before = frames(&[
+            (
+                "T",
+                "http://x/iframe.html",
+                true,
+                "Embedded notes\nComplete the form",
+            ),
+            ("C", "http://x/child.html", false, "Note Save note\nNo note"),
+        ]);
+        let after = frames(&[
+            (
+                "T",
+                "http://x/iframe.html",
+                true,
+                "Embedded notes\nComplete the form",
+            ),
+            (
+                "C",
+                "http://x/child.html",
+                false,
+                "Note Save note\nNote saved: Synthetic benchmark note",
+            ),
+        ]);
+        let mut observed = changes(&ok("tree"), &ok("tree"), &ok("u"), &ok("u"));
+        assert_eq!(observed["changed"], false);
+        apply_text(&mut observed, &before, &after);
+        assert_eq!(observed["changed"], true);
+        assert_eq!(
+            observed["text"],
+            json!([
+                "- [frame child.html] No note",
+                "+ [frame child.html] Note saved: Synthetic benchmark note"
+            ])
+        );
+        assert_eq!(observed["status"], "complete");
+    }
+
+    #[test]
+    fn unchanged_text_adds_nothing() {
+        let same = frames(&[("T", "u", true, "Page 1 of 3\n  Kit   catalog ")]);
+        let mut observed = changes(&ok("tree"), &ok("tree"), &ok("u"), &ok("u"));
+        apply_text(&mut observed, &same, &same);
+        assert_eq!(observed["changed"], false);
+        assert!(!observed.contains_key("text"));
+        assert!(!observed.contains_key("textStatus"));
+    }
+
+    #[test]
+    fn a_failed_text_capture_is_reported_not_read_as_unchanged() {
+        let mut observed = changes(&ok("tree"), &ok("tree"), &ok("u"), &ok("u"));
+        apply_text(
+            &mut observed,
+            &frames(&[("T", "u", true, "a")]),
+            &Err("text capture timed out".into()),
+        );
+        assert_eq!(observed["textStatus"], "unavailable");
+        assert!(!observed.contains_key("text"));
+        // The tree observation itself stays what it was.
+        assert_eq!(observed["status"], "complete");
+        assert_eq!(observed["changed"], false);
+    }
+
+    #[test]
+    fn text_changes_are_bounded_in_lines_and_bytes() {
+        let many: String = (0..100).map(|i| format!("row {i}\n")).collect();
+        let (lines, omitted) = text_changes(
+            &frames(&[("T", "u", true, "")]).unwrap(),
+            &frames(&[("T", "u", true, &many)]).unwrap(),
+        );
+        assert_eq!(lines.len(), MAX_TEXT_LINES);
+        assert_eq!(omitted, 100 - MAX_TEXT_LINES);
+
+        let wide: String = (0..30)
+            .map(|i| format!("{i} {}\n", "w".repeat(300)))
+            .collect();
+        let (lines, omitted) = text_changes(
+            &frames(&[("T", "u", true, "")]).unwrap(),
+            &frames(&[("T", "u", true, &wide)]).unwrap(),
+        );
+        let bytes: usize = lines.iter().map(|l| l.len() + 1).sum();
+        assert!(bytes <= MAX_TEXT_BYTES, "{bytes}");
+        assert!(lines.iter().all(|l| l.len() <= MAX_TEXT_LINE_BYTES));
+        assert_eq!(lines.len() + omitted, 30);
+        assert!(omitted > 0);
+    }
+
+    #[test]
+    fn a_new_frame_counts_as_added_text_and_a_gone_frame_as_removed() {
+        let (lines, _) = text_changes(
+            &frames(&[
+                ("T", "u", true, "a"),
+                ("old", "http://x/a.html?q=1", false, "bye"),
+            ])
+            .unwrap(),
+            &frames(&[("T", "u", true, "a"), ("new", "http://x/b/", false, "hi")]).unwrap(),
+        );
+        assert_eq!(lines, ["+ [frame b] hi", "- [frame a.html] bye"]);
+    }
+
+    #[test]
+    fn page_counters_and_delayed_totals_show_as_text() {
+        let (lines, _) = text_changes(
+            &frames(&[("T", "u", true, "Previous pagePage 1 of 3Next page\nIdle")]).unwrap(),
+            &frames(&[(
+                "T",
+                "u",
+                true,
+                "Previous pagePage 2 of 3Next page\nReport ready\nTotal entries: 3",
+            )])
+            .unwrap(),
+        );
+        assert!(lines.contains(&"+ Previous pagePage 2 of 3Next page".to_string()));
+        assert!(lines.contains(&"+ Total entries: 3".to_string()));
+        assert!(lines.contains(&"- Idle".to_string()));
+    }
+
+    /// Run the observe text reader under node against a stubbed document.
+    fn run_text_js(body: &str, editables: &[&str], inputs: &[(&str, &str)]) -> Option<String> {
+        let node = std::env::var_os("PATH").and_then(|p| {
+            std::env::split_paths(&p)
+                .map(|d| d.join("node"))
+                .find(|n| n.is_file())
+        })?;
+        let js = format!(
+            "const body = {{ innerText: {body} }}; \
+             const editables = {editables}.map(t => ({{ innerText: t }})); \
+             const inputs = {inputs}.map(([type, value]) => ({{ type, value }})); \
+             globalThis.document = {{ body, querySelectorAll: s => s === 'input' ? inputs : editables }}; \
+             process.stdout.write({})",
+            OBSERVE_TEXT_JS,
+            body = serde_json::to_string(body).unwrap(),
+            editables = serde_json::to_string(editables).unwrap(),
+            inputs = serde_json::to_string(
+                &inputs.iter().map(|(t, v)| [*t, *v]).collect::<Vec<_>>()
+            )
+            .unwrap(),
+        );
+        let out = std::process::Command::new(node)
+            .arg("-e")
+            .arg(js)
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    #[test]
+    fn typed_field_content_and_passwords_never_reach_the_text() {
+        let Some(out) = run_text_js(
+            "Sign in\nhunter2-secret shown by mistake\nDraft: my private draft\nNote saved: hello",
+            &["Draft: my private draft"],
+            &[("password", "hunter2-secret"), ("text", "hello")],
+        ) else {
+            return;
+        };
+        assert!(!out.contains("hunter2-secret"), "{out}");
+        assert!(!out.contains("my private draft"), "{out}");
+        // Page text that echoes an ordinary field is the page's receipt.
+        assert!(out.contains("Note saved: hello"), "{out}");
+        assert!(out.contains("Sign in"), "{out}");
     }
 
     #[test]
