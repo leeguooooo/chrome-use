@@ -75,7 +75,7 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use snapshot                    <span class="du-cmt"># full tree (verbose)</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span>                 <span class="du-cmt"># interactive elements only (recommended)</span>
-<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-u</span>              <span class="du-cmt"># include href url on links</span>
+<span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-u</span>              <span class="du-cmt"># include each link's absolute url (first 400 links)</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-c</span>              <span class="du-cmt"># compact: drop empty structural nodes</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">-d</span> 3            <span class="du-cmt"># depth limit of 3 levels</span>
 <span class="du-prompt">$</span> chrome-use snapshot <span class="du-flag">-i</span> <span class="du-flag">--dom</span>            <span class="du-cmt"># list actionable elements from a DOM walk (pierces shadow roots)</span>
@@ -259,15 +259,19 @@ URL: https://example.com/login
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use read https://docs.example.com/guide         <span class="du-cmt"># read a URL</span>
 <span class="du-prompt">$</span> chrome-use read https://docs.example.com/guide <span class="du-flag">--outline</span>  <span class="du-cmt"># just the heading outline</span>
-<span class="du-prompt">$</span> chrome-use read                                        <span class="du-cmt"># read the active tab</span></code></pre>
+<span class="du-prompt">$</span> chrome-use read                                        <span class="du-cmt"># read the active tab</span>
+<span class="du-prompt">$</span> chrome-use read https://news.ycombinator.com <span class="du-flag">--links</span>   <span class="du-cmt"># plus a "## Links" list: [text](absolute URL)</span></code></pre>
       </div>
 
       <p>
         Common flags: <code>--raw</code> (return the response body untouched), <code>--require-md</code>
         (fail unless the response is <code>text/markdown</code>), <code>--llms &lt;index|full&gt;</code>
         (the nearest <code>llms.txt</code>'s index or full view), <code>--outline</code> (heading
-        outline only), <code>--filter &lt;text&gt;</code> (keep only matching sections/headings), and
-        <code>--timeout &lt;ms&gt;</code>. <code>--json</code> returns metadata alongside the content.
+        outline only), <code>--filter &lt;text&gt;</code> (keep only matching sections/headings),
+        <code>--timeout &lt;ms&gt;</code>, and <code>--links</code> (append a <code>## Links</code> section with
+        the page's links as absolute URLs, unique, the first 100 by default, <code>--max-links &lt;n&gt;</code> up to
+        1000; a cut list says how many it left out; a URL over 2048 bytes is omitted and counted, never truncated into
+        a different address; scanning, de-duplication and output are bounded, and a cut makes the count "at least N"). <code>--json</code> returns metadata alongside the content.
       </p>
 
       <div class="du-callout note">

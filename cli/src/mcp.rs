@@ -322,6 +322,8 @@ fn core_tools() -> Vec<Value> {
                 ("llms", json!({ "type": "string", "enum": ["index", "full"], "description": "Read from the site's llms.txt instead of the page itself." })),
                 ("outline", json!({ "type": "boolean", "description": "Return only the heading outline instead of full content." })),
                 ("filter", json!({ "type": "string", "description": "Keep only lines matching this text/regex filter." })),
+                ("links", json!({ "type": "boolean", "description": "Append the page's links as absolute URLs (a `## Links` section; at most 100 unless maxLinks)." })),
+                ("maxLinks", json!({ "type": "integer", "minimum": 1, "maximum": 1000, "description": "Cap for links (1-1000); implies links." })),
                 ("timeoutMs", json!({ "type": "integer", "description": "Read-specific timeout in ms (distinct from the top-level timeoutMs, which bounds the whole child process)." })),
                 ("tabId", json!({ "type": "string", "description": "Target tab id (e.g. t2), label, or targetId (--tab)." })),
             ]), &[]),
@@ -781,6 +783,20 @@ fn call_read(arguments: &Value) -> Result<Value, ProtocolError> {
     if let Some(filter) = optional_string(arguments, "filter")? {
         args.push("--filter".to_string());
         args.push(filter);
+    }
+    // Both fields are type-checked whether or not the other is present, so
+    // `links: "bad"` is an error, not silently ignored.
+    let links = optional_bool(arguments, "links")?;
+    if let Some(max) = optional_u64(arguments, "maxLinks")? {
+        if !(1..=1000).contains(&max) {
+            return Err(ProtocolError::invalid_params(
+                "maxLinks must be between 1 and 1000",
+            ));
+        }
+        args.push("--max-links".to_string());
+        args.push(max.to_string());
+    } else if links.unwrap_or(false) {
+        args.push("--links".to_string());
     }
     if let Some(timeout) = optional_u64(arguments, "timeoutMs")? {
         args.push("--timeout".to_string());
@@ -1969,6 +1985,37 @@ fn write_json_line(stdout: &mut io::Stdout, value: &Value) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    /// #503 review: `links` is type-checked even when `maxLinks` is present,
+    /// and `maxLinks` is range-checked, before any CLI runs.
+    #[test]
+    fn read_links_arguments_are_validated() {
+        let err = call_read(&json!({ "url": "https://a.example/", "maxLinks": 5, "links": "bad" }))
+            .unwrap_err();
+        assert!(
+            err.message.contains("links must be a boolean"),
+            "{}",
+            err.message
+        );
+        for bad in [0, 1001] {
+            let err =
+                call_read(&json!({ "url": "https://a.example/", "maxLinks": bad })).unwrap_err();
+            assert!(
+                err.message.contains("between 1 and 1000"),
+                "{}",
+                err.message
+            );
+        }
+        let tools = extended_tools()
+            .into_iter()
+            .chain(core_tools())
+            .find(|t| t["name"] == TOOL_READ)
+            .unwrap();
+        let max = &tools["inputSchema"]["properties"]["maxLinks"];
+        assert_eq!(max["minimum"], 1);
+        assert_eq!(max["maximum"], 1000);
+    }
+
     use super::*;
 
     #[test]

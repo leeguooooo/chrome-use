@@ -4914,7 +4914,7 @@ fn canon_element_state(s: &str) -> Option<&'static str> {
 
 fn parse_read(rest: &[&str], id: &str, flags: &Flags) -> Result<Value, ParseError> {
     const READ_USAGE: &str =
-        "read [url] [--raw] [--require-md] [--llms <index|full>] [--outline] [--filter <text>] [--timeout <ms>]";
+        "read [url] [--raw] [--require-md] [--llms <index|full>] [--outline] [--filter <text>] [--timeout <ms>] [--links] [--max-links <n>]";
     let mut cmd = json!({
         "id": id,
         "action": "read",
@@ -4948,6 +4948,28 @@ fn parse_read(rest: &[&str], id: &str, flags: &Flags) -> Result<Value, ParseErro
             }
             "--outline" => {
                 cmd["outline"] = json!(true);
+            }
+            // #503: the page's links as absolute URLs, bounded.
+            "--links" => {
+                if cmd.get("links").is_none() {
+                    cmd["links"] = json!(crate::read::DEFAULT_MAX_LINKS);
+                }
+            }
+            "--max-links" => {
+                let value = rest
+                    .get(i + 1)
+                    .ok_or_else(|| ParseError::MissingArguments {
+                        context: "read --max-links".to_string(),
+                        usage: READ_USAGE,
+                    })?;
+                let n = crate::read::parse_max_links(value).map_err(|message| {
+                    ParseError::InvalidValue {
+                        message,
+                        usage: READ_USAGE,
+                    }
+                })?;
+                cmd["links"] = json!(n);
+                i += 1;
             }
             "--filter" => {
                 let value = rest
@@ -4988,6 +5010,8 @@ fn parse_read(rest: &[&str], id: &str, flags: &Flags) -> Result<Value, ParseErro
                         "--outline",
                         "--filter",
                         "--timeout",
+                        "--links",
+                        "--max-links",
                         "--json",
                     ],
                 });
@@ -5012,6 +5036,16 @@ fn parse_read(rest: &[&str], id: &str, flags: &Flags) -> Result<Value, ParseErro
     {
         return Err(ParseError::InvalidValue {
             message: "read --llms and --outline cannot be used together".to_string(),
+            usage: READ_USAGE,
+        });
+    }
+    if cmd.get("links").is_some()
+        && (cmd.get("llms").is_some() || cmd.get("raw").and_then(|v| v.as_bool()).unwrap_or(false))
+    {
+        return Err(ParseError::InvalidValue {
+            message: "read --links lists the links of an HTML page; it cannot be combined with \
+                      --llms or --raw"
+                .to_string(),
             usage: READ_USAGE,
         });
     }
@@ -7942,6 +7976,22 @@ mod tests {
         let cmd = parse_command(&args("snapshot -i -u"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "snapshot");
         assert_eq!(cmd["urls"], true);
+    }
+
+    /// #503: `read --links` asks for the page's links with the default cap;
+    /// `--max-links` sets the cap (and implies `--links`) in either order.
+    #[test]
+    fn test_read_links_flags() {
+        let cmd = parse_command(&args("read --links"), &default_flags()).unwrap();
+        assert_eq!(cmd["links"], crate::read::DEFAULT_MAX_LINKS);
+        let cmd = parse_command(&args("read --max-links 30"), &default_flags()).unwrap();
+        assert_eq!(cmd["links"], 30);
+        let cmd = parse_command(&args("read --max-links 30 --links"), &default_flags()).unwrap();
+        assert_eq!(cmd["links"], 30);
+        assert!(parse_command(&args("read --max-links 0"), &default_flags()).is_err());
+        assert!(parse_command(&args("read --max-links 5000"), &default_flags()).is_err());
+        assert!(parse_command(&args("read --links --raw"), &default_flags()).is_err());
+        assert!(parse_command(&args("read --links --llms index"), &default_flags()).is_err());
     }
 
     // === Wait ===

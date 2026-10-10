@@ -92,6 +92,17 @@ fn display_text(s: &str) -> String {
     s.replace('\u{00A0}', " ").replace(INVISIBLE_CHARS, "")
 }
 
+/// Most links `snapshot -u` resolves a URL for (#503).
+pub const SNAPSHOT_URL_LIMIT: usize = 400;
+
+/// The line a `-u` tree ends with when links past the limit got no URL.
+pub(crate) fn urls_limit_note(skipped: usize) -> String {
+    format!(
+        "- note: url shown for the first {SNAPSHOT_URL_LIMIT} links only; {skipped} more have none. \
+         Scope with -s <selector> to get theirs, or use `read --links` for a plain list of the page's links"
+    )
+}
+
 #[derive(Default)]
 pub struct SnapshotOptions {
     pub selector: Option<String>,
@@ -795,13 +806,22 @@ async fn take_snapshot_at_depth(
         .map(|text| render_error_line(text))
         .collect();
 
+    // `-u` resolves each link's URL with two CDP calls, so a page with
+    // thousands of links would cost thousands of round trips (over the relay,
+    // seconds). Bounded at SNAPSHOT_URL_LIMIT, in document order; the tree
+    // says when it stopped (#503).
+    let mut urls_skipped = 0usize;
     if options.urls {
-        let link_nodes: Vec<(usize, i64)> = tree_nodes
+        let mut link_nodes: Vec<(usize, i64)> = tree_nodes
             .iter()
             .enumerate()
             .filter(|(_, n)| n.role == "link" && n.has_ref && n.backend_node_id.is_some())
             .filter_map(|(i, n)| n.backend_node_id.map(|bid| (i, bid)))
             .collect();
+        if link_nodes.len() > SNAPSHOT_URL_LIMIT {
+            urls_skipped = link_nodes.len() - SNAPSHOT_URL_LIMIT;
+            link_nodes.truncate(SNAPSHOT_URL_LIMIT);
+        }
 
         if !link_nodes.is_empty() {
             // CDP has no batch resolve API, so we parallelize individual calls.
@@ -1035,6 +1055,13 @@ async fn take_snapshot_at_depth(
 
     if options.compact {
         output = compact_tree(&output, options.interactive);
+    }
+    if urls_skipped > 0 {
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str(&urls_limit_note(urls_skipped));
+        output.push('\n');
     }
 
     let trimmed = output.trim().to_string();

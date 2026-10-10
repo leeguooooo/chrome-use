@@ -3,7 +3,7 @@
 ```bash
 chrome-use snapshot                    # full tree (verbose)
 chrome-use snapshot -i                 # interactive elements only (preferred)
-chrome-use snapshot -i -u              # include href urls on links
+chrome-use snapshot -i -u              # include absolute urls on links (first 400)
 chrome-use snapshot -i -c              # compact (no empty structural nodes)
 chrome-use snapshot -i -d 3            # cap depth at 3 levels
 chrome-use snapshot -s "#main"         # scope to a CSS selector
@@ -33,7 +33,11 @@ when labels and values already answer the question.
 chrome-use read                            # article text from active tab
 chrome-use snapshot -i -s "#main"          # scoped controls
 chrome-use snapshot -i -f "Save|Cancel"    # matching lines and ancestors
-chrome-use snapshot -i -u                  # include link URLs
+chrome-use snapshot -i -u                  # include link URLs (url=..., first 400 links)
+chrome-use read --links                    # text plus a `## Links` list: [text](absolute url),
+                                           # unique, first 100 (--max-links <n>, up to 1000);
+                                           # URLs over 2048 bytes are omitted and counted, and
+                                           # a budget cut makes the count a lower bound
 chrome-use get text --main                 # omit surrounding boilerplate
 chrome-use get attr @e1 href
 chrome-use frames                          # discover child frames
@@ -107,6 +111,7 @@ readability, no markdown, no `llms.txt`, no boilerplate stripping).
 ```bash
 chrome-use read <url>                  # fetch + markdownify (llms.txt / outline aware) — no render needed
 chrome-use read                        # readability extract of the ACTIVE tab (clean main content)
+chrome-use read <url> --links          # ...plus the page's links as absolute URLs (bounded list)
 chrome-use get text                    # WHOLE PAGE — all frames by default (see below)
 chrome-use get text @e1                # visible text of one element (or a CSS selector)
 chrome-use get text --main             # main content only — skip nav/header/sidebar

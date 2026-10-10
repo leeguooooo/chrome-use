@@ -49,6 +49,8 @@ pub struct ReadOptions {
     pub allowed_domains: Vec<String>,
     /// Additional allowlists inherited from daemon state. URLs must match every non-empty allowlist.
     pub enforced_allowed_domains: Vec<Vec<String>>,
+    /// `--links`: append the page's links as absolute URLs, at most this many (#503).
+    pub links: Option<usize>,
 }
 
 impl Default for ReadOptions {
@@ -63,6 +65,7 @@ impl Default for ReadOptions {
             headers: HashMap::new(),
             allowed_domains: Vec::new(),
             enforced_allowed_domains: Vec::new(),
+            links: None,
         }
     }
 }
@@ -136,6 +139,10 @@ pub fn options_from_command(cmd: &Value) -> Result<ReadOptions, String> {
         headers,
         allowed_domains,
         enforced_allowed_domains: Vec::new(),
+        links: cmd
+            .get("links")
+            .and_then(|v| v.as_u64())
+            .map(|n| (n as usize).clamp(1, MAX_MAX_LINKS)),
     })
 }
 
@@ -497,7 +504,7 @@ fn read_json_from_content(
     content: String,
     options: &ReadOptions,
 ) -> Value {
-    if options.outline {
+    let mut value = if options.outline {
         let outline = format_page_outline(&content, &fetch.final_url, options.filter.as_deref());
         read_json(target, fetch, &format!("{}-outline", source), outline)
     } else if let Some(filter) = options.filter.as_deref() {
@@ -505,10 +512,25 @@ fn read_json_from_content(
         read_json(target, fetch, &format!("{}-filtered", source), filtered)
     } else {
         read_json(target, fetch, source, content)
+    };
+    if let Some(max) = options.links {
+        match (source, Url::parse(&fetch.final_url)) {
+            ("html-fallback", Ok(page)) => attach_links(
+                &mut value,
+                &collect_links(&fetch.body, &page, max, fetch.truncated),
+            ),
+            _ => note_links_unavailable(&mut value, source),
+        }
     }
+    value
 }
 
 pub fn read_json_from_active_html(active_url: &str, html: String, options: &ReadOptions) -> Value {
+    let html_for_links = if options.links.is_some() && !options.raw {
+        html.clone()
+    } else {
+        String::new()
+    };
     let (source, content) = if options.raw {
         ("active-tab-raw", html)
     } else {
@@ -528,14 +550,24 @@ pub fn read_json_from_active_html(active_url: &str, html: String, options: &Read
     } else {
         source.to_string()
     };
-    json!({
+    let mut value = json!({
         "url": active_url,
         "finalUrl": active_url,
         "contentType": "text/html",
         "source": source,
         "truncated": false,
         "content": content,
-    })
+    });
+    if let Some(max) = options.links {
+        match (options.raw, Url::parse(active_url)) {
+            (false, Ok(page)) => attach_links(
+                &mut value,
+                &collect_links(&html_for_links, &page, max, false),
+            ),
+            _ => note_links_unavailable(&mut value, &source),
+        }
+    }
+    value
 }
 
 fn is_markdown_content_type(content_type: &str) -> bool {
@@ -1091,6 +1123,532 @@ async fn read_limited_text(response: reqwest::Response) -> Result<(String, bool)
     Ok((String::from_utf8_lossy(&bytes).to_string(), truncated))
 }
 
+/// Default and ceiling for `read --links` (#503): enough for a front page
+/// (Hacker News lists ~230 unique links), bounded so a link farm cannot
+/// flood the reply.
+pub const DEFAULT_MAX_LINKS: usize = 100;
+pub const MAX_MAX_LINKS: usize = 1000;
+
+/// Longest link text kept in the list; the URL is the point, not the prose.
+const LINK_TEXT_MAX: usize = 80;
+/// Most HTML bytes scanned for links. A longer page is scanned up to here,
+/// and the count is then a lower bound.
+const LINK_SCAN_MAX_BYTES: usize = 4 * 1024 * 1024;
+/// Most anchors kept from the scan (before resolution). Beyond this the
+/// count is a lower bound.
+const LINK_RAW_MAX: usize = 10_000;
+/// Longest URL listed (also the longest href or base resolved against). A
+/// longer one is omitted and counted, never cut into a different address.
+const LINK_URL_MAX_BYTES: usize = 2048;
+/// Most distinct URLs remembered for de-duplication. Beyond this the count
+/// is a lower bound.
+const LINK_SEEN_MAX: usize = 5000;
+/// Most bytes the listed links may take in the reply.
+const LINK_OUTPUT_MAX_BYTES: usize = 256 * 1024;
+
+pub fn parse_max_links(raw: &str) -> Result<usize, String> {
+    let n = raw
+        .parse::<usize>()
+        .map_err(|_| format!("Invalid read --max-links value: {raw}"))?;
+    if n == 0 || n > MAX_MAX_LINKS {
+        return Err(format!(
+            "read --max-links must be between 1 and {MAX_MAX_LINKS}, got {n}"
+        ));
+    }
+    Ok(n)
+}
+
+/// The links of an HTML page, resolved to absolute URLs (#503).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PageLinks {
+    /// `(text, absolute url)` in document order, unique by URL, at most the
+    /// requested number and [`LINK_OUTPUT_MAX_BYTES`].
+    pub shown: Vec<(String, String)>,
+    /// Unique navigable links found.
+    pub total: usize,
+    /// False when a budget cut the scan or the de-duplication short, so
+    /// `total` is a lower bound.
+    pub total_exact: bool,
+    /// Links left out because their URL (or the href or base it is resolved
+    /// from) is longer than [`LINK_URL_MAX_BYTES`].
+    pub omitted_too_long: usize,
+    /// Which budgets cut something: `scan`, `anchors`, `dedup`, `output`.
+    pub budgets_hit: Vec<&'static str>,
+}
+
+/// One anchor as the tokenizer saw it.
+struct RawLink {
+    href: String,
+    text: String,
+    label: Option<String>,
+}
+
+/// HTML elements whose content is not markup (and, for these, never holds
+/// links the page shows): skipped whole, so an `<a>` or `<base>` written
+/// inside a script string or a style block cannot be mistaken for one.
+const RAW_TEXT: &[&str] = &[
+    "script",
+    "style",
+    "textarea",
+    "title",
+    "xmp",
+    "noembed",
+    "noframes",
+    "noscript",
+    "template",
+    "iframe",
+    "plaintext",
+];
+const VOID: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
+];
+
+/// Collect `<a href>` links from `html` with a quote-aware tokenizer:
+/// comments, `<!…>` and raw-text elements (script, style, textarea, …) are
+/// skipped, a `>` inside a quoted attribute does not end the tag, and an
+/// anchor's text ends at `</a>`, at the next `<a>`, or where an element that
+/// was open around it closes. The document's base is its first `<base
+/// href>` (wherever it appears), else `page_url`.
+///
+/// Skipped: no href, a same-page `#fragment` and `javascript:`
+/// pseudo-links. Every step is bounded (see the `LINK_*` budgets) and says
+/// so in the result: an overlong URL is omitted, never truncated.
+pub fn collect_links(html: &str, page_url: &Url, max: usize, input_truncated: bool) -> PageLinks {
+    let mut out = PageLinks {
+        total_exact: true,
+        ..Default::default()
+    };
+    // The page itself was cut before it got here (the HTTP body limit): the
+    // links after the cut are unknown, and the cut may fall inside a tag.
+    if input_truncated {
+        out.budgets_hit.push("input");
+    }
+    let scan = if html.len() > LINK_SCAN_MAX_BYTES {
+        out.budgets_hit.push("scan");
+        let mut end = LINK_SCAN_MAX_BYTES;
+        while !html.is_char_boundary(end) {
+            end -= 1;
+        }
+        &html[..end]
+    } else {
+        html
+    };
+    let (raw, base_href, anchors_cut) = tokenize_links(scan);
+    if anchors_cut {
+        out.budgets_hit.push("anchors");
+    }
+
+    // The base is entity-decoded like every href, and the length budget
+    // applies to the decoded value.
+    let base = match base_href.map(|h| decode_html_entities(h.trim())) {
+        Some(h) if h.len() <= LINK_URL_MAX_BYTES => page_url.join(&h).ok(),
+        Some(_) => None,
+        None => Some(page_url.clone()),
+    };
+    let base_too_long = base
+        .as_ref()
+        .map(|b| b.as_str().len() > LINK_URL_MAX_BYTES)
+        .unwrap_or(true);
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut output_bytes = 0usize;
+    let mut dedup_cut = false;
+    for link in raw {
+        let href = decode_html_entities(link.href.trim());
+        let lower = href.to_ascii_lowercase();
+        if href.is_empty() || href.starts_with('#') || lower.starts_with("javascript:") {
+            continue;
+        }
+        if href.len() > LINK_URL_MAX_BYTES {
+            out.omitted_too_long += 1;
+            continue;
+        }
+        // An absolute href needs no base (and no join with an overlong one).
+        let absolute = Url::parse(&href).ok();
+        let resolved = match absolute {
+            Some(u) => u,
+            None => {
+                // A relative href against an overlong (or unusable) base
+                // would only produce an overlong URL: do not build it.
+                if base_too_long {
+                    out.omitted_too_long += 1;
+                    continue;
+                }
+                match base.as_ref().and_then(|b| b.join(&href).ok()) {
+                    Some(u) => u,
+                    None => continue,
+                }
+            }
+        };
+        let url = resolved.to_string();
+        if url.len() > LINK_URL_MAX_BYTES {
+            out.omitted_too_long += 1;
+            continue;
+        }
+        if seen.contains(&url) {
+            continue;
+        }
+        if seen.len() >= LINK_SEEN_MAX {
+            // Cannot tell new from repeated any more: stop counting.
+            dedup_cut = true;
+            break;
+        }
+        seen.insert(url.clone());
+        out.total += 1;
+        if out.shown.len() < max {
+            let text = link_label(&link);
+            let cost = text.len() + url.len() + 8;
+            if output_bytes + cost <= LINK_OUTPUT_MAX_BYTES {
+                output_bytes += cost;
+                out.shown.push((text, url));
+            } else if !out.budgets_hit.contains(&"output") {
+                out.budgets_hit.push("output");
+            }
+        }
+    }
+    if dedup_cut {
+        out.budgets_hit.push("dedup");
+    }
+    out.total_exact = !out
+        .budgets_hit
+        .iter()
+        .any(|b| matches!(*b, "input" | "scan" | "anchors" | "dedup"));
+    out
+}
+
+/// Walk `html` and return its anchors (up to [`LINK_RAW_MAX`]), the first
+/// `<base href>`, and whether the anchor budget cut the list.
+fn tokenize_links(html: &str) -> (Vec<RawLink>, Option<String>, bool) {
+    let bytes = html.as_bytes();
+    let lower = html.to_ascii_lowercase();
+    let mut links: Vec<RawLink> = Vec::new();
+    let mut base: Option<String> = None;
+    let mut cut = false;
+    // Open elements (names), and the anchor being read: (depth when it
+    // opened, href, text so far, label).
+    let mut stack: Vec<String> = Vec::new();
+    let mut open: Option<(usize, String, String, Option<String>)> = None;
+    let close_anchor = |open: &mut Option<(usize, String, String, Option<String>)>,
+                        links: &mut Vec<RawLink>,
+                        cut: &mut bool| {
+        if let Some((_, href, text, label)) = open.take() {
+            if links.len() < LINK_RAW_MAX {
+                links.push(RawLink { href, text, label });
+            } else {
+                *cut = true;
+            }
+        }
+    };
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            // Text: only kept while inside an anchor, and bounded.
+            let next = html[i..].find('<').map(|p| i + p).unwrap_or(bytes.len());
+            if let Some((_, _, text, _)) = open.as_mut() {
+                if text.len() < 1024 {
+                    let take = &html[i..next];
+                    let room = 1024 - text.len();
+                    let mut end = take.len().min(room);
+                    while !take.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    text.push_str(&take[..end]);
+                    text.push(' ');
+                }
+            }
+            i = next;
+            continue;
+        }
+        let rest = &lower[i..];
+        if rest.starts_with("<!--") {
+            i = lower[i + 4..]
+                .find("-->")
+                .map(|p| i + 4 + p + 3)
+                .unwrap_or(bytes.len());
+            continue;
+        }
+        if rest.starts_with("<!") || rest.starts_with("<?") {
+            i = lower[i..]
+                .find('>')
+                .map(|p| i + p + 1)
+                .unwrap_or(bytes.len());
+            continue;
+        }
+        if rest.starts_with("</") {
+            let name_start = i + 2;
+            let mut j = name_start;
+            while j < bytes.len() && bytes[j].is_ascii_alphanumeric() {
+                j += 1;
+            }
+            let name = lower[name_start..j].to_string();
+            i = lower[j..]
+                .find('>')
+                .map(|p| j + p + 1)
+                .unwrap_or(bytes.len());
+            if name == "a" {
+                close_anchor(&mut open, &mut links, &mut cut);
+                if let Some(pos) = stack.iter().rposition(|n| n == "a") {
+                    stack.truncate(pos);
+                }
+                continue;
+            }
+            if let Some(pos) = stack.iter().rposition(|n| *n == name) {
+                // An element that was open around the anchor closes: so does
+                // the anchor's text.
+                if open.as_ref().is_some_and(|o| pos < o.0) {
+                    close_anchor(&mut open, &mut links, &mut cut);
+                }
+                stack.truncate(pos);
+            }
+            continue;
+        }
+        // A start tag: `<` followed by a letter.
+        if !(i + 1 < bytes.len() && bytes[i + 1].is_ascii_alphabetic()) {
+            if let Some((_, _, text, _)) = open.as_mut() {
+                text.push('<');
+            }
+            i += 1;
+            continue;
+        }
+        let name_start = i + 1;
+        let mut j = name_start;
+        while j < bytes.len()
+            && !bytes[j].is_ascii_whitespace()
+            && bytes[j] != b'>'
+            && bytes[j] != b'/'
+        {
+            j += 1;
+        }
+        let name = lower[name_start..j].to_string();
+        // Attributes, quote-aware: a `>` inside quotes does not end the tag.
+        // A tag the input ends inside (a budget or body cut) is dropped and
+        // the scan stops: a cut href is not a destination.
+        let Some((attrs, end)) = parse_attributes(html, j) else {
+            break;
+        };
+        i = end;
+        let attr = |n: &str| attrs.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone());
+        match name.as_str() {
+            "a" => {
+                // HTML closes an open anchor when another one starts.
+                close_anchor(&mut open, &mut links, &mut cut);
+                if let Some(pos) = stack.iter().rposition(|n| n == "a") {
+                    stack.truncate(pos);
+                }
+                if let Some(href) = attr("href") {
+                    let label = attr("aria-label").or_else(|| attr("title"));
+                    open = Some((stack.len(), href, String::new(), label));
+                }
+                stack.push(name);
+            }
+            "base" => {
+                if base.is_none() {
+                    base = attr("href");
+                }
+            }
+            "img" => {
+                if let (Some((_, _, text, label)), Some(alt)) = (open.as_mut(), attr("alt")) {
+                    if label.is_none() && text.trim().is_empty() {
+                        *label = Some(alt);
+                    }
+                }
+            }
+            // Raw text runs to its exact end tag. A self-closing flag on a
+            // non-void element is ignored, as in HTML: `<script/>` still opens
+            // a script.
+            n if RAW_TEXT.contains(&n) => {
+                i = raw_text_end(&lower, i, n);
+            }
+            n if VOID.contains(&n) => {}
+            _ => stack.push(name),
+        }
+    }
+    close_anchor(&mut open, &mut links, &mut cut);
+    (links, base, cut)
+}
+
+/// The index of the end tag `</name` that closes a raw-text element opened
+/// before `from` (the name followed by whitespace, `/` or `>`), or the end of
+/// the input. `</scriptx>` does not end a script.
+fn raw_text_end(lower: &str, from: usize, name: &str) -> usize {
+    let close = format!("</{name}");
+    let mut at = from;
+    while let Some(p) = lower[at..].find(&close) {
+        let start = at + p;
+        let after = start + close.len();
+        match lower.as_bytes().get(after) {
+            None => return start,
+            Some(b) if b.is_ascii_whitespace() || *b == b'/' || *b == b'>' => return start,
+            _ => at = after,
+        }
+    }
+    lower.len()
+}
+
+/// Parse attributes from `html[from..]` up to the end of the start tag.
+/// Returns `(name, value)` pairs (names lowercased, values raw) and the index
+/// just past the closing `>`; `None` when the input ends inside the tag or
+/// inside a quoted value, so a cut fragment is never taken as complete.
+fn parse_attributes(html: &str, from: usize) -> Option<(Vec<(String, String)>, usize)> {
+    let bytes = html.as_bytes();
+    let mut attrs = Vec::new();
+    let mut i = from;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'>' => return Some((attrs, i + 1)),
+            b'/' => {
+                i += 1;
+                continue;
+            }
+            c if c.is_ascii_whitespace() => {
+                i += 1;
+                continue;
+            }
+            _ => {}
+        }
+        let name_start = i;
+        while i < bytes.len()
+            && !bytes[i].is_ascii_whitespace()
+            && !matches!(bytes[i], b'=' | b'>' | b'/')
+        {
+            i += 1;
+        }
+        let name = html[name_start..i].to_ascii_lowercase();
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let mut value = String::new();
+        if i < bytes.len() && bytes[i] == b'=' {
+            i += 1;
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i < bytes.len() && (bytes[i] == b'"' || bytes[i] == b'\'') {
+                let q = bytes[i];
+                let v_start = i + 1;
+                let v_end = html[v_start..]
+                    .bytes()
+                    .position(|b| b == q)
+                    .map(|p| v_start + p)?;
+                value = html[v_start..v_end].to_string();
+                i = v_end + 1;
+            } else {
+                let v_start = i;
+                while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'>' {
+                    i += 1;
+                }
+                value = html[v_start..i].to_string();
+            }
+        }
+        if !name.is_empty() && !attrs.iter().any(|(k, _): &(String, String)| *k == name) {
+            attrs.push((name, value));
+        }
+    }
+    None
+}
+
+/// A one-line label for a link: its text, else `aria-label` / `title`, else
+/// an image's `alt`.
+fn link_label(link: &RawLink) -> String {
+    let text = decode_html_entities(&link.text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let text = if !text.is_empty() {
+        text
+    } else {
+        link.label
+            .as_deref()
+            .map(|l| decode_html_entities(l.trim()))
+            .filter(|l| !l.is_empty())
+            .unwrap_or_else(|| "(no text)".to_string())
+    };
+    let text = text.replace(['[', ']'], "");
+    if text.chars().count() > LINK_TEXT_MAX {
+        let mut t: String = text.chars().take(LINK_TEXT_MAX - 1).collect();
+        t.push('…');
+        t
+    } else {
+        text
+    }
+}
+
+/// Append the page's links to a `read` reply (#503): a `## Links` section at
+/// the end of `content` (so text mode shows it inside the same content
+/// boundaries as the page), plus `links`, `linksTotal`, `linksTotalExact`,
+/// `linksShown`, `linksOmittedTooLong` and `linksBudgetsHit` in JSON. Every
+/// cut says what was cut and whether the total is exact.
+fn attach_links(value: &mut Value, links: &PageLinks) {
+    let shown = links.shown.len();
+    let total = if links.total_exact {
+        format!("{}", links.total)
+    } else {
+        format!("at least {}", links.total)
+    };
+    let mut section = String::from("\n\n## Links\n");
+    if links.total == 0 && links.omitted_too_long == 0 {
+        section.push_str(if links.total_exact {
+            "\n(no links on this page)\n"
+        } else {
+            "\n(no links found in the part of the page scanned)\n"
+        });
+    } else {
+        section.push('\n');
+        for (text, url) in &links.shown {
+            section.push_str(&format!("- [{text}]({url})\n"));
+        }
+        if links.total > shown || !links.total_exact {
+            section.push_str(&format!(
+                "\n({shown} of {total} links shown; raise the cap with --max-links <n>, up to \
+                 {MAX_MAX_LINKS})\n"
+            ));
+        }
+    }
+    if links.omitted_too_long > 0 {
+        section.push_str(&format!(
+            "({} links omitted: their URL is longer than {LINK_URL_MAX_BYTES} bytes)\n",
+            links.omitted_too_long
+        ));
+    }
+    if !links.budgets_hit.is_empty() {
+        section.push_str(&format!(
+            "(link scan cut by a budget: {}; the count is {})\n",
+            links.budgets_hit.join(", "),
+            if links.total_exact {
+                "exact"
+            } else {
+                "a lower bound"
+            }
+        ));
+    }
+    if let Some(content) = value.get("content").and_then(Value::as_str) {
+        value["content"] = json!(format!("{}{}", content.trim_end(), section.trim_end()));
+    }
+    value["links"] = json!(links
+        .shown
+        .iter()
+        .map(|(text, url)| json!({ "text": text, "url": url }))
+        .collect::<Vec<_>>());
+    value["linksTotal"] = json!(links.total);
+    value["linksTotalExact"] = json!(links.total_exact);
+    value["linksShown"] = json!(shown);
+    value["linksOmittedTooLong"] = json!(links.omitted_too_long);
+    value["linksBudgetsHit"] = json!(links.budgets_hit);
+}
+
+/// `--links` on a response that is not an HTML page: nothing to collect,
+/// and the reply says so instead of looking like a page without links.
+fn note_links_unavailable(value: &mut Value, source: &str) {
+    let note = format!(
+        "--links applies to HTML pages; this response came from {source}, whose links (if any) \
+         are inline in the content"
+    );
+    if value.get("warning").is_none() {
+        value["warning"] = json!(note);
+    }
+}
+
 fn html_to_markdownish(html: &str) -> String {
     let stripped = strip_ignored_html_blocks(html);
     let mut out = String::new();
@@ -1347,6 +1905,300 @@ mod tests {
         assert!(text.contains("Hello world."));
         assert!(text.contains("- One"));
         assert!(!text.contains(".x{}"));
+    }
+
+    /// #503: `read --links` lists each link once, as an absolute URL, and
+    /// skips what leads nowhere.
+    #[test]
+    fn collect_links_resolves_dedupes_and_skips_non_navigation() {
+        let html = r##"<html><head><title>t</title></head><body>
+          <a href="item?id=1">First <b>story</b></a>
+          <a href='https://example.com/second'>Second story</a>
+          <a href=../up/third.html>Third &amp; story</a>
+          <a href="mailto:carol@example.com">carol</a>
+          <a href="#top">fragment</a> <a href="javascript:void(0)">js</a> <a>no href</a>
+          <a href="item?id=1">duplicate of first</a>
+          <abbr title="x">not a link</abbr>
+          <a href="/q?a=1&amp;b=2" aria-label="Query"></a>
+          <a href="/img"><img src="x.png" alt="Logo"></a>
+          <script>document.write('<a href="/hidden">x</a>')</script>
+        </body></html>"##;
+        let page = Url::parse("https://news.example.org/news/").unwrap();
+        let links = collect_links(html, &page, 100, false);
+        assert_eq!(
+            links.shown,
+            vec![
+                (
+                    "First story".to_string(),
+                    "https://news.example.org/news/item?id=1".to_string()
+                ),
+                (
+                    "Second story".to_string(),
+                    "https://example.com/second".to_string()
+                ),
+                (
+                    "Third & story".to_string(),
+                    "https://news.example.org/up/third.html".to_string()
+                ),
+                ("carol".to_string(), "mailto:carol@example.com".to_string()),
+                (
+                    "Query".to_string(),
+                    "https://news.example.org/q?a=1&b=2".to_string()
+                ),
+                (
+                    "Logo".to_string(),
+                    "https://news.example.org/img".to_string()
+                ),
+            ]
+        );
+        assert_eq!(links.total, 6);
+    }
+
+    #[test]
+    fn collect_links_honours_base_href_and_the_cap() {
+        let html = r#"<html><head><base href="https://cdn.example.com/docs/"></head><body>
+          <a href="a">A</a><a href="b">B</a><a href="c">C</a></body></html>"#;
+        let page = Url::parse("https://example.com/page").unwrap();
+        let links = collect_links(html, &page, 2, false);
+        assert_eq!(links.total, 3);
+        assert_eq!(links.shown.len(), 2);
+        assert_eq!(links.shown[0].1, "https://cdn.example.com/docs/a");
+        let mut value = json!({ "content": "# Page" });
+        attach_links(&mut value, &links);
+        let content = value["content"].as_str().unwrap();
+        assert!(content.contains("## Links"), "{content}");
+        assert!(
+            content.contains("- [A](https://cdn.example.com/docs/a)"),
+            "{content}"
+        );
+        assert!(content.contains("(2 of 3 links shown"), "{content}");
+        assert_eq!(value["linksTotalExact"], true);
+        assert_eq!(value["linksTotal"], 3);
+        assert_eq!(value["linksShown"], 2);
+        assert_eq!(value["links"][1]["url"], "https://cdn.example.com/docs/b");
+    }
+
+    #[test]
+    fn active_tab_read_appends_links_only_when_asked() {
+        let html = r#"<html><body><p>Hi</p><a href="/x">X</a></body></html>"#;
+        let plain =
+            read_json_from_active_html("https://a.example/", html.into(), &ReadOptions::default());
+        assert!(plain.get("links").is_none());
+        let options = ReadOptions {
+            links: Some(10),
+            ..ReadOptions::default()
+        };
+        let with = read_json_from_active_html("https://a.example/", html.into(), &options);
+        assert_eq!(with["links"][0]["url"], "https://a.example/x");
+        assert!(with["content"]
+            .as_str()
+            .unwrap()
+            .ends_with("- [X](https://a.example/x)"));
+    }
+
+    fn urls(links: &PageLinks) -> Vec<&str> {
+        links.shown.iter().map(|(_, u)| u.as_str()).collect()
+    }
+
+    /// #503 review: a `>` inside a quoted attribute value does not end the
+    /// start tag, so the href after it is still read.
+    #[test]
+    fn a_quoted_gt_does_not_end_the_tag() {
+        let html = r#"<a title="1 > 0" href="/x">X</a><a data-x='a>b' href=/y>Y</a>"#;
+        let page = Url::parse("https://a.example/").unwrap();
+        let links = collect_links(html, &page, 10, false);
+        assert_eq!(
+            urls(&links),
+            vec!["https://a.example/x", "https://a.example/y"]
+        );
+        assert_eq!(links.shown[0].0, "X");
+    }
+
+    /// #503 review: a `<base>` or `<a>` written inside a script string or a
+    /// comment is not markup and changes nothing.
+    #[test]
+    fn fake_base_and_links_in_scripts_and_comments_are_ignored() {
+        let html = r#"<html><head>
+          <script>var s = '<base href="https://evil.example/">'; document.write('<a href="/in-script">s</a>');</script>
+          <!-- <base href="https://comment.example/"> <a href="/in-comment">c</a> -->
+          <style>a::after { content: "<a href='/in-style'>"; }</style>
+          </head><body><a href="real">Real</a></body></html>"#;
+        let page = Url::parse("https://a.example/dir/").unwrap();
+        let links = collect_links(html, &page, 10, false);
+        assert_eq!(urls(&links), vec!["https://a.example/dir/real"]);
+        assert_eq!(links.total, 1);
+    }
+
+    /// #503 review: the document's base is its first `<base href>`, wherever
+    /// it appears, and applies to links before it too.
+    #[test]
+    fn the_first_real_base_applies_to_every_link() {
+        let html = r#"<body><a href="before">B</a>
+          <base href="https://cdn.example/one/"><base href="https://cdn.example/two/">
+          <a href="after">A</a></body>"#;
+        let page = Url::parse("https://a.example/").unwrap();
+        let links = collect_links(html, &page, 10, false);
+        assert_eq!(
+            urls(&links),
+            vec![
+                "https://cdn.example/one/before",
+                "https://cdn.example/one/after"
+            ]
+        );
+    }
+
+    /// #503 review: an anchor's text ends where an element that was open
+    /// around it closes, and at the next `<a>`.
+    #[test]
+    fn anchor_text_ends_at_the_enclosing_block() {
+        let html = r#"<div><a href="/x">Alpha</div><p>after the block</p>
+          <a href="/y">One<a href="/z">Two</a>"#;
+        let page = Url::parse("https://a.example/").unwrap();
+        let links = collect_links(html, &page, 10, false);
+        let texts: Vec<&str> = links.shown.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(texts, vec!["Alpha", "One", "Two"]);
+    }
+
+    /// #503 review: count, cap and omitted are reported, and the count is
+    /// exact when no budget cut the scan.
+    #[test]
+    fn count_and_omitted_are_reported() {
+        let long = format!("/{}", "p".repeat(LINK_URL_MAX_BYTES + 10));
+        let html = format!(
+            r#"<a href="/a">A</a><a href="/b">B</a><a href="/a">dup</a><a href="{long}">L</a>"#
+        );
+        let page = Url::parse("https://a.example/").unwrap();
+        let links = collect_links(&html, &page, 1, false);
+        assert_eq!(links.total, 2);
+        assert!(links.total_exact);
+        assert_eq!(links.shown.len(), 1);
+        assert_eq!(links.omitted_too_long, 1);
+        let mut value = json!({ "content": "x" });
+        attach_links(&mut value, &links);
+        let c = value["content"].as_str().unwrap();
+        assert!(c.contains("(1 of 2 links shown"), "{c}");
+        assert!(
+            c.contains("1 links omitted: their URL is longer than"),
+            "{c}"
+        );
+        assert_eq!(value["linksOmittedTooLong"], 1);
+    }
+
+    /// #503 review: a 1 MB base with 10,000 relative links must not build a
+    /// 1 MB URL per link: they are omitted as too long, without joining, and
+    /// said so. Bounded in time as a proxy for the allocations it skips.
+    #[test]
+    fn an_overlong_base_is_not_joined_10000_times() {
+        let base = format!("https://a.example/{}/", "b".repeat(1024 * 1024));
+        let mut html = format!(r#"<base href="{base}">"#);
+        for i in 0..10_000 {
+            html.push_str(&format!(r#"<a href="r{i}">{i}</a>"#));
+        }
+        let page = Url::parse("https://a.example/").unwrap();
+        let started = std::time::Instant::now();
+        let links = collect_links(&html, &page, 100, false);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(links.shown.is_empty());
+        assert_eq!(links.total, 0);
+        assert_eq!(links.omitted_too_long, 10_000);
+    }
+
+    /// #503 review: dedup storage, the anchor list and the output are all
+    /// bounded, and a cut makes the total a lower bound, never "complete".
+    #[test]
+    fn budgets_bound_dedup_and_output_and_mark_the_total_as_a_lower_bound() {
+        let mut html = String::new();
+        for i in 0..(LINK_SEEN_MAX + 50) {
+            html.push_str(&format!(r#"<a href="https://h.example/{i}">{i}</a>"#));
+        }
+        let page = Url::parse("https://a.example/").unwrap();
+        let links = collect_links(&html, &page, 10, false);
+        assert!(!links.total_exact);
+        assert!(
+            links.budgets_hit.contains(&"dedup"),
+            "{:?}",
+            links.budgets_hit
+        );
+        assert_eq!(links.total, LINK_SEEN_MAX);
+        let mut value = json!({ "content": "x" });
+        attach_links(&mut value, &links);
+        let c = value["content"].as_str().unwrap();
+        assert!(
+            c.contains(&format!("of at least {LINK_SEEN_MAX} links shown")),
+            "{c}"
+        );
+        assert!(c.contains("the count is a lower bound"), "{c}");
+
+        // 1000 links of ~1.9 KB each: the output budget stops the list.
+        let mut html = String::new();
+        for i in 0..1000 {
+            html.push_str(&format!(
+                r#"<a href="https://h.example/{i}/{}">x</a>"#,
+                "q".repeat(1900)
+            ));
+        }
+        let links = collect_links(&html, &page, MAX_MAX_LINKS, false);
+        let bytes: usize = links.shown.iter().map(|(t, u)| t.len() + u.len() + 8).sum();
+        assert!(bytes <= LINK_OUTPUT_MAX_BYTES, "{bytes}");
+        assert!(links.shown.len() < 1000);
+        assert!(links.budgets_hit.contains(&"output"));
+        assert_eq!(links.total, 1000);
+        assert!(links.total_exact);
+    }
+
+    /// #503 review 3: the base href is entity-decoded like every href.
+    #[test]
+    fn the_base_href_is_entity_decoded() {
+        let html = r#"<base href="https://a.example/a&amp;b/"><a href="x">X</a>"#;
+        let page = Url::parse("https://p.example/").unwrap();
+        let links = collect_links(html, &page, 10, false);
+        assert_eq!(urls(&links), vec!["https://a.example/a&b/x"]);
+    }
+
+    /// #503 review 3: `</scriptx>` does not end a script, and `<script/>` /
+    /// `<style/>` still open raw text (HTML ignores the self-closing flag on
+    /// non-void elements). A fake base or anchor inside must not count.
+    #[test]
+    fn raw_text_ends_only_at_its_exact_end_tag() {
+        let html = r#"<script>var a = '</scriptx><base href="https://evil.example/"><a href="/fake1">f</a>';</script>
+          <script/><base href="https://evil2.example/"><a href="/fake2">f</a></script >
+          <style/>a::before{content:'<a href="/fake3">'}</style>
+          <style>x{}</stylex><a href="/fake4">f</a></style>
+          <a href="real">Real</a>"#;
+        let page = Url::parse("https://a.example/d/").unwrap();
+        let links = collect_links(html, &page, 10, false);
+        assert_eq!(urls(&links), vec!["https://a.example/d/real"]);
+    }
+
+    /// #503 review 3: a cut inside a quoted href (a budget or body limit) is
+    /// never taken as a complete destination, and an input cut makes the
+    /// count a lower bound.
+    #[test]
+    fn a_cut_inside_an_href_is_dropped_and_the_count_is_a_lower_bound() {
+        let html = r#"<a href="/ok">OK</a><a href="/target-full"#;
+        let page = Url::parse("https://a.example/").unwrap();
+        let links = collect_links(html, &page, 10, false);
+        assert_eq!(urls(&links), vec!["https://a.example/ok"]);
+        let cut = collect_links(html, &page, 10, true);
+        assert_eq!(urls(&cut), vec!["https://a.example/ok"]);
+        assert!(!cut.total_exact);
+        assert!(cut.budgets_hit.contains(&"input"));
+        // An unquoted value cut at the end, and a tag cut before its `>`.
+        for html in [
+            r#"<a href=/ok>OK</a><a href=/targ"#,
+            r#"<a href="/ok">OK</a><a href="/x" "#,
+        ] {
+            let links = collect_links(html, &page, 10, false);
+            assert_eq!(urls(&links), vec!["https://a.example/ok"], "{html}");
+        }
+    }
+
+    #[test]
+    fn max_links_is_bounded() {
+        assert_eq!(parse_max_links("50").unwrap(), 50);
+        assert!(parse_max_links("0").is_err());
+        assert!(parse_max_links("1001").is_err());
+        assert!(parse_max_links("many").is_err());
     }
 
     #[test]

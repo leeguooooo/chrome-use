@@ -226,7 +226,8 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | 命令 | 用途 |
 |---|---|
 | `chrome-use open <url>` | 连接你的 Chrome 并导航 |
-| `chrome-use snapshot -i` | 读页面；每次交互的起点 |
+| `chrome-use snapshot -i` | 读页面；每次交互的起点（`-u` 给每个链接带上绝对 URL） |
+| `chrome-use read --links` | 页面正文，外加一段有上限的 `## Links`：`[文字](绝对 URL)`（默认前 100 个，`--max-links <n>` 最多 1000） |
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | 按文本、按快照 ref、或按视口坐标点击 |
 | `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` 整体替换，`type` 追加，都用可信输入事件；页面没反应时（比如保存按钮一直禁用）给出 ⚠ 警告 |
 | `chrome-use extract --schema '{"rows":".item","fields":{"title":"a","url":{"sel":"a","get":"@href"}}}'` | 一次调用取出结构化的行；单写 `"@href"` 读这一行元素自己的属性。看不懂的写法直接报错，某个字段每行都空时用 ⚠ 警告点名，不会静默返回 null |
