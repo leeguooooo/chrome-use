@@ -644,7 +644,11 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
 
         // `hover` says whether the page confirmed it (#500): a bare `✓ Done`
         // is what hid a hover that never applied `:hover`.
-        if action == Some("hover") {
+        // Keyed on the reply, not the action name, so `find … hover` gets the
+        // same receipt as `hover`.
+        if action == Some("hover")
+            || (data.get("hovered").is_some() && data.get("dispatch").is_some())
+        {
             if let Some(target) = data.get("hovered").and_then(|v| v.as_str()) {
                 let warning = data.get("warning").and_then(|v| v.as_str());
                 if data.get("verified").and_then(|v| v.as_bool()) == Some(true) {
