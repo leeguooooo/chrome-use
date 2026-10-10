@@ -199,6 +199,23 @@
 
       <hr class="du-divider" />
 
+      <h2>open reports navigation_incomplete: the page never finished loading</h2>
+      <p>
+        <code>open</code> waits up to 25 seconds for the <code>load</code> event. If the DOM is ready by then
+        (readyState interactive or complete), it succeeds with a ⚠ warning listing what is still loading, and the
+        page is usable. If the document is still loading, it fails with <code>navigation_incomplete:</code>, which
+        says whether the navigation committed, the readyState, and what the page is still waiting for, typically a
+        parser-blocking <code>&lt;script&gt;</code> from a slow or unreachable host. This used to be a bare
+        "Operation timed out".
+      </p>
+      <div class="du-callout tip">
+        <div class="du-callout-title">✅ What to do</div>
+        Don't repeat the <code>open</code>. Check <code>get url</code> and <code>snapshot</code> a little later; to
+        return as soon as the navigation commits, use <code>open &lt;url&gt; --wait-until none</code>.
+      </div>
+
+      <hr class="du-divider" />
+
       <h2>stale sessionId (extension relay mode)</h2>
       <p>
         A <code>stale sessionId … re-open your target URL</code> error usually means your tab was closed, navigated across a

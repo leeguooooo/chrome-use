@@ -1398,6 +1398,193 @@ pub(crate) fn navigation_committed(landed: &str, target: &str) -> bool {
     }
 }
 
+/// How long the readiness probe after a lifecycle timeout may take. A
+/// renderer that cannot answer within this is itself the finding.
+const LOAD_PROGRESS_PROBE_MS: u64 = 5_000;
+
+/// What a document is still doing when `open` stops waiting for it (#502):
+/// its readyState and the subresources it references that have not finished.
+/// Resource Timing records a resource when it finishes (success or failure),
+/// so a referenced URL with no entry is one still loading. A lazy image that
+/// has not started does not hold `load`, so it is not listed.
+pub(crate) const LOAD_PROGRESS_JS: &str = r#"(() => {
+  const done = new Set();
+  try { for (const e of performance.getEntriesByType('resource')) done.add(e.name); } catch (e) {}
+  const pending = [];
+  const seen = new Set();
+  const add = (kind, url) => {
+    if (!url || seen.has(url) || done.has(url)) return;
+    if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('javascript:')) return;
+    seen.add(url);
+    pending.push(kind + ' ' + url);
+  };
+  try {
+    for (const s of document.querySelectorAll('script[src]')) add('script', s.src);
+    for (const l of document.querySelectorAll('link[rel~="stylesheet"][href]')) add('stylesheet', l.href);
+    for (const i of document.images) if (!i.complete && i.loading !== 'lazy') add('image', i.currentSrc || i.src);
+    for (const f of document.querySelectorAll('iframe[src]')) add('iframe', f.src);
+  } catch (e) {}
+  return { readyState: document.readyState, url: location.href,
+           pending: pending.slice(0, 5), pendingTotal: pending.length };
+})()"#;
+
+/// The answer to [`LOAD_PROGRESS_JS`].
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct LoadProgress {
+    pub ready_state: String,
+    pub url: String,
+    pub pending: Vec<String>,
+    pub pending_total: u64,
+}
+
+impl LoadProgress {
+    pub(crate) fn from_value(v: &Value) -> Self {
+        Self {
+            ready_state: v
+                .get("readyState")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            url: v
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            pending: v
+                .get("pending")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(|s| truncate_middle(s, 160))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            pending_total: v.get("pendingTotal").and_then(Value::as_u64).unwrap_or(0),
+        }
+    }
+
+    /// The DOM is parsed: the page can be read and acted on even though
+    /// `load` (or the network) has not finished.
+    pub(crate) fn is_ready(&self) -> bool {
+        self.ready_state == "interactive" || self.ready_state == "complete"
+    }
+
+    /// `script https://…/a.js, image https://…/b.png (+3 more)`, or `None`
+    /// when nothing referenced is unfinished.
+    fn describe_pending(&self) -> Option<String> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        let mut s = self.pending.join(", ");
+        let shown = self.pending.len() as u64;
+        if self.pending_total > shown {
+            s.push_str(&format!(" (+{} more)", self.pending_total - shown));
+        }
+        Some(s)
+    }
+}
+
+/// Keep the start and end of a long URL; the middle is the least telling.
+fn truncate_middle(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        return s.to_string();
+    }
+    let head = max * 2 / 3;
+    let tail = max - head - 1;
+    let mut out: String = chars[..head].iter().collect();
+    out.push('…');
+    out.extend(&chars[chars.len() - tail..]);
+    out
+}
+
+/// The warning for a navigation that is usable although its lifecycle event
+/// never came: success, but say what is still loading.
+pub(crate) fn load_incomplete_warning(
+    wait_until: WaitUntil,
+    budget_ms: u64,
+    progress: &LoadProgress,
+) -> String {
+    let still = progress
+        .describe_pending()
+        .map(|p| format!(" Still loading: {p}."))
+        .unwrap_or_default();
+    format!(
+        "`{}` didn't complete within {:.0}s, but the DOM is ready ({}) — continuing; the page \
+         is usable, parts of it may still be arriving.{still} Pass `--wait-until \
+         domcontentloaded` to skip this wait on pages with long-lived requests.",
+        wait_until.as_str(),
+        budget_ms as f64 / 1000.0,
+        progress.ready_state,
+    )
+}
+
+/// The error for a navigation whose document is not usable when the wait
+/// ends (#502). It says whether the navigation committed, what readyState
+/// the document is in, and which subresources it is still waiting for, so
+/// the caller can tell a slow script from a page that never arrived.
+///
+/// The `navigation_incomplete:` prefix keeps it out of the generic timeout
+/// rewrite in [`to_ai_friendly_error`], which used to turn it into
+/// "Operation timed out".
+pub(crate) fn navigation_incomplete_error(
+    target: &str,
+    wait_until: WaitUntil,
+    budget_ms: u64,
+    wait_error: &str,
+    progress: Option<&LoadProgress>,
+) -> String {
+    let secs = budget_ms as f64 / 1000.0;
+    let Some(p) = progress else {
+        return format!(
+            "navigation_incomplete: `{}` for {target} did not arrive within {secs:.0}s \
+             ({wait_error}), and the page did not answer a readiness check either: its main \
+             thread is busy or the renderer is still starting. Check with `get url` and \
+             `snapshot` in a moment before acting; do not repeat the open while it may still be \
+             loading.",
+            wait_until.as_str()
+        );
+    };
+    let place = if navigation_committed(&p.url, target) {
+        format!("the navigation committed (the tab is on {})", p.url)
+    } else if p.url.is_empty() {
+        "the tab's address could not be read".to_string()
+    } else {
+        format!(
+            "the navigation has not committed yet (the tab is still on {})",
+            p.url
+        )
+    };
+    let still = match p.describe_pending() {
+        Some(list) => format!(" Still loading: {list}."),
+        None => " No unfinished subresource is referenced yet: the document itself is still \
+                  arriving."
+            .to_string(),
+    };
+    let blocked = if p.ready_state == "loading"
+        && p.pending.iter().any(|x| x.starts_with("script "))
+    {
+        " A <script> that has not arrived blocks the parser, so nothing after it exists yet; it \
+         may still finish (the server is slow or unreachable)."
+    } else {
+        ""
+    };
+    let ready_state = if p.ready_state.is_empty() {
+        "unknown"
+    } else {
+        p.ready_state.as_str()
+    };
+    format!(
+        "navigation_incomplete: `{}` for {target} did not arrive within {secs:.0}s: {place}, but \
+         the document is still loading (readyState \"{ready_state}\"), so it is not ready to read \
+         or act on.{still}{blocked} Check again with `get url` and `snapshot` in a moment, or use \
+         `open <url> --wait-until none` to return as soon as it commits. Do not repeat the open \
+         while it is still loading.",
+        wait_until.as_str(),
+    )
+}
+
 /// Converts common error messages into AI-friendly, actionable descriptions.
 pub fn to_ai_friendly_error(error: &str) -> String {
     // A first-tab refusal (#486) already says what happened to the tab and
@@ -1413,6 +1600,11 @@ pub fn to_ai_friendly_error(error: &str) -> String {
     // Preserve the no-replay instruction even when the nested cause is stale or
     // timed out; generic transport recovery guidance could duplicate the action.
     if lower.contains("action_outcome_unknown:") {
+        return error.to_string();
+    }
+    // Already says what the page is still waiting for (#502); the generic
+    // timeout rewrite below would replace that with "Operation timed out".
+    if lower.contains("navigation_incomplete:") {
         return error.to_string();
     }
     if is_debugger_access_denied(error) {
@@ -3379,24 +3571,34 @@ impl BrowserManager {
                 // eval/screenshot work immediately (issue #10). If the DOM is
                 // already ready, treat navigation as done (with a warning, carried
                 // in the response so the CLI can surface it) instead of failing.
-                // Only a still-loading document is a real failure.
-                let ready = match self.evaluate_simple("document.readyState").await {
-                    Err(cause) if is_debugger_access_denied(&cause) => return Err(cause),
-                    result => result
-                        .ok()
-                        .and_then(|v| v.as_str().map(str::to_string))
-                        .unwrap_or_default(),
+                // Only a still-loading document is a real failure, and then the
+                // error says what it is still waiting for (#502): the bare
+                // "Operation timed out" it used to collapse into left the caller
+                // unable to tell a dead page from one blocked on a slow script.
+                let probe = tokio::time::timeout(
+                    Duration::from_millis(LOAD_PROGRESS_PROBE_MS),
+                    self.evaluate_simple(LOAD_PROGRESS_JS),
+                )
+                .await;
+                let progress = match probe {
+                    Ok(Err(cause)) if is_debugger_access_denied(&cause) => return Err(cause),
+                    Ok(Ok(value)) => Some(LoadProgress::from_value(&value)),
+                    _ => None,
                 };
-                if ready == "interactive" || ready == "complete" {
-                    nav_warning = Some(format!(
-                        "`{}` didn't complete within the timeout, but the DOM is ready ({}) — \
-                         continuing. Pass `--wait-until domcontentloaded` to skip this wait on \
-                         SPAs with long-lived requests.",
-                        wait_until.as_str(),
-                        ready
-                    ));
-                } else {
-                    return Err(e);
+                let budget_ms = self.default_timeout_ms;
+                match progress {
+                    Some(p) if p.is_ready() => {
+                        nav_warning = Some(load_incomplete_warning(wait_until, budget_ms, &p));
+                    }
+                    other => {
+                        return Err(navigation_incomplete_error(
+                            url,
+                            wait_until,
+                            budget_ms,
+                            &e,
+                            other.as_ref(),
+                        ));
+                    }
                 }
             }
         }
@@ -8562,6 +8764,89 @@ mod tests {
             "https://example.com/",
             "https://sg-git.pwtk.cc/x"
         ));
+    }
+
+    /// #502: a parser-blocked page used to come back as "Operation timed
+    /// out". The error must say the navigation committed, that the document
+    /// is still loading, and which script it is waiting for, and it must
+    /// survive the generic timeout rewrite.
+    #[test]
+    fn incomplete_navigation_names_what_is_still_loading() {
+        let p = LoadProgress::from_value(&json!({
+            "readyState": "loading",
+            "url": "https://the-internet.herokuapp.com/hovers",
+            "pending": ["script https://cdn.example.net/snippet.js"],
+            "pendingTotal": 1,
+        }));
+        assert!(!p.is_ready());
+        let err = navigation_incomplete_error(
+            "https://the-internet.herokuapp.com/hovers",
+            WaitUntil::Load,
+            25_000,
+            "Timeout waiting for Page.loadEventFired",
+            Some(&p),
+        );
+        assert!(err.contains("navigation committed"), "{err}");
+        assert!(err.contains("readyState \"loading\""), "{err}");
+        assert!(
+            err.contains("script https://cdn.example.net/snippet.js"),
+            "{err}"
+        );
+        assert!(err.contains("blocks the parser"), "{err}");
+        assert_eq!(to_ai_friendly_error(&err), err);
+        assert!(!to_ai_friendly_error(&err).contains("Operation timed out"));
+    }
+
+    #[test]
+    fn incomplete_navigation_without_a_commit_or_an_answer_says_so() {
+        let p = LoadProgress::from_value(&json!({
+            "readyState": "complete", "url": "about:blank", "pending": [], "pendingTotal": 0,
+        }));
+        // `complete` on about:blank is the OLD document; still not committed.
+        let err = navigation_incomplete_error(
+            "https://example.com/",
+            WaitUntil::Load,
+            25_000,
+            "Timeout waiting for Page.loadEventFired",
+            Some(&LoadProgress {
+                ready_state: "loading".into(),
+                ..p
+            }),
+        );
+        assert!(err.contains("has not committed"), "{err}");
+        let err = navigation_incomplete_error(
+            "https://example.com/",
+            WaitUntil::Load,
+            25_000,
+            "Timeout waiting for Page.loadEventFired",
+            None,
+        );
+        assert!(err.contains("did not answer a readiness check"), "{err}");
+        assert_eq!(to_ai_friendly_error(&err), err);
+    }
+
+    #[test]
+    fn usable_page_warning_lists_pending_resources_with_a_count() {
+        let p = LoadProgress::from_value(&json!({
+            "readyState": "interactive",
+            "url": "http://127.0.0.1/slow.html",
+            "pending": ["image http://127.0.0.1/a.png", "image http://127.0.0.1/b.png"],
+            "pendingTotal": 4,
+        }));
+        assert!(p.is_ready());
+        let w = load_incomplete_warning(WaitUntil::Load, 25_000, &p);
+        assert!(w.contains("DOM is ready (interactive)"), "{w}");
+        assert!(w.contains("image http://127.0.0.1/a.png"), "{w}");
+        assert!(w.contains("(+2 more)"), "{w}");
+    }
+
+    #[test]
+    fn long_pending_urls_keep_their_ends() {
+        let long = format!("script https://x.example/{}/end.js", "a".repeat(400));
+        let t = truncate_middle(&long, 160);
+        assert_eq!(t.chars().count(), 160);
+        assert!(t.starts_with("script https://x.example/"));
+        assert!(t.ends_with("/end.js"));
     }
 
     #[test]

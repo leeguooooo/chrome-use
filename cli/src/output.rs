@@ -2489,6 +2489,15 @@ confirms the tab gone (rerun is safe); first_tab_cleanup_incomplete means it
 may still be open, so run `close` in the same session before opening again;
 first_tab_outcome_unknown means Chrome never confirmed the tab.
 
+Waiting: `open` waits up to 25s for the page's `load` event
+(--wait-until <load|domcontentloaded|networkidle|none>). When that wait ends:
+  - the DOM is ready (readyState interactive/complete): success, with a ⚠
+    warning naming the subresources still loading;
+  - the document is still loading: error `navigation_incomplete:` saying
+    whether the navigation committed, the readyState, and what it is still
+    waiting for (e.g. a parser-blocking <script> from a slow host). Check
+    again with `get url` / `snapshot` rather than repeating the open.
+
 Global Options:
   --json               Output as JSON
   --session <name>     Use specific session

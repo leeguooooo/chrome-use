@@ -235,7 +235,7 @@ For an authorized task, the bundled skill tells the agent to inspect and attempt
 
 | Command | Purpose |
 |---|---|
-| `chrome-use open <url>` | Connect to your Chrome and navigate |
+| `chrome-use open <url>` | Connect to your Chrome and navigate; a page still loading after 25s fails with `navigation_incomplete:`, naming what it is waiting for |
 | `chrome-use snapshot -i` | Read the page; the start of every interaction (`-u` adds each link's absolute URL) |
 | `chrome-use read --links` | The page as text, plus a bounded `## Links` list of `[text](absolute URL)` (first 100, `--max-links <n>` up to 1000) |
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | Click by text, by snapshot ref, or on a raw viewport coordinate |

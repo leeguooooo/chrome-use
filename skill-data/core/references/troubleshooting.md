@@ -64,6 +64,15 @@ such as `eval` still fail while the page main thread is blocked. On reconnect,
 the extension also validates every attached Chrome tab before re-announcing it,
 so dead bootstrap `about:blank` records are dropped instead of becoming active.
 
+**`open` and a page that never finishes loading.** `open` waits up to 25s for
+`load`. If the DOM is ready by then, it succeeds with a ⚠ warning naming what
+is still loading; use the page. If the document is still loading, it fails with
+`navigation_incomplete:`, which says whether the navigation committed, the
+readyState, and what the page is waiting for, typically a parser-blocking
+`<script>` from a slow or unreachable host. Do not repeat the `open`: check
+`get url` and `snapshot` a little later, or use `open <url> --wait-until none`
+to return as soon as the navigation commits.
+
 `tab select` and `tab adopt` report one of three outcomes, and the third is
 not a success:
 
