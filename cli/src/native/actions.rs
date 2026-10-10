@@ -8304,6 +8304,9 @@ async fn open_link_in_background(
             if let Some(w) = nav.get("warning") {
                 out["openedTab"]["warning"] = w.clone();
             }
+            if let Some(c) = nav.get("commit") {
+                out["openedTab"]["commit"] = c.clone();
+            }
         }
         Err(e) => {
             // Read back where the tab really is: a timeout may well have

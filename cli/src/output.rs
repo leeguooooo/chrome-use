@@ -838,7 +838,11 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             // next command, and hit the identical failure it was recovering
             // from. An unconfirmed result must not look like a done one.
             let unconfirmed = data.get("verified").and_then(|v| v.as_str()) == Some("unconfirmed");
-            let indicator = if unconfirmed {
+            // An `open` whose page is usable but not tied to this navigation
+            // (#502): the tab's real page, not a confirmed one.
+            let commit_unverified =
+                data.get("commit").and_then(|v| v.as_str()) == Some("unverified");
+            let indicator = if unconfirmed || commit_unverified {
                 color::warning_indicator()
             } else {
                 color::success_indicator()
@@ -2493,6 +2497,31 @@ tab was created but its setup failed: first_tab_setup_failed means Chrome
 confirms the tab gone (rerun is safe); first_tab_cleanup_incomplete means it
 may still be open, so run `close` in the same session before opening again;
 first_tab_outcome_unknown means Chrome never confirmed the tab.
+
+Waiting: `open` waits up to 25s for the page's `load` event
+(--wait-until <load|domcontentloaded|networkidle|none>). When that wait ends
+early or runs out:
+  - this navigation committed (its own loader is the frame's document) and
+    the DOM is ready: success, with a ⚠ warning;
+  - nothing ties the tab's page to this navigation (always the case over the
+    extension relay) but the page is clearly usable (readyState interactive
+    or complete, a body showing text or visible content, not about:blank or
+    an error page): success with `commit: "unverified"` and a ⚠ warning
+    naming the tab's real URL and readyState. It may be another
+    navigation's page or the previous one: check `get url` before relying
+    on it being the requested page. Over direct CDP, a frame that still
+    holds its pre-navigation loader is the previous document: an error;
+  - anything else: error `navigation_incomplete:` with the real elapsed time
+    and error, whether this navigation committed (read only from its own
+    loader id; over the extension relay, which navigates through the tab API
+    and has no loader id, it is reported as unknown),
+    the URL and readyState the tab reports, and references with no Resource
+    Timing record, listed only as candidates (a record can be missing for a
+    finished resource). No cause is claimed that was not observed. Check
+    again with `get url` / `snapshot` rather than repeating the open.
+    JSON code: navigation_commit_unknown when the commit is unknown, else
+    navigation_incomplete; both retryable: false, though the message quotes
+    a timeout.
 
 Global Options:
   --json               Output as JSON

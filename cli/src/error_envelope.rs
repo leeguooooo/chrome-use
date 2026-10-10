@@ -22,6 +22,24 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
             retryable: false,
         };
     }
+    // An `open` whose wait ended without a usable page (#502). Its message
+    // quotes the wait error ("Timeout waiting for Page.loadEventFired",
+    // "Event stream closed") and the URL, either of which can read as a
+    // timeout, a lost connection or a denial. None of those applies: the
+    // navigation may still be loading, and repeating the open would start a
+    // second one. Checked before every generic rule, so none can make it
+    // retryable.
+    if lower.contains(crate::native::browser::NAVIGATION_INCOMPLETE_PREFIX) {
+        let code = if lower.contains(crate::native::browser::COMMIT_UNKNOWN_PHRASE) {
+            "navigation_commit_unknown"
+        } else {
+            "navigation_incomplete"
+        };
+        return ErrorMetadata {
+            code,
+            retryable: false,
+        };
+    }
     // Before `timeout` and `connection`: these quote what failed, and each
     // has its own next step (#486). Only a setup failure whose tab Chrome
     // confirms gone is safe to simply rerun.
@@ -249,6 +267,90 @@ mod tests {
             classify_error("action_outcome_unknown: original debugger_access_denied: blocked").code,
             "action_outcome_unknown"
         );
+    }
+
+    /// #502: an unfinished `open` quotes its wait error and its URL, which
+    /// can read as a timeout, a lost connection, a stale target or a denial.
+    /// Built with the real constructor, every combination keeps its own code
+    /// and `retryable: false`, so nothing invites repeating the open.
+    #[test]
+    fn an_unfinished_open_is_never_a_retryable_timeout_connection_or_denial() {
+        use crate::native::browser::{
+            navigation_incomplete_error, to_ai_friendly_error, CommitEvidence, LoadProgress,
+            WaitUntil,
+        };
+        let loading = LoadProgress::from_value(&json!({
+            "readyState": "loading", "url": "https://a.test/x", "pending": [], "pendingTotal": 0
+        }));
+        let wait_errors = [
+            "Timeout waiting for Page.loadEventFired",
+            "Event stream closed",
+            "CDP command timed out: Page.navigate",
+        ];
+        let targets = [
+            "https://a.test/plain",
+            "https://a.test/debugger_access_denied:/x",
+            "https://a.test/Cannot access a chrome-extension:// URL of different extension",
+            "https://a.test/connection-refused/failed to connect/relay is not up",
+            "https://a.test/target closed/detached/stale session",
+            "https://a.test/timed out",
+        ];
+        let commits = [
+            (
+                CommitEvidence::Unknown { url: None },
+                "navigation_commit_unknown",
+            ),
+            (
+                CommitEvidence::Unknown {
+                    url: Some("https://a.test/debugger_access_denied:/connection".into()),
+                },
+                "navigation_commit_unknown",
+            ),
+            (
+                CommitEvidence::Committed {
+                    url: "https://a.test/x".into(),
+                },
+                "navigation_incomplete",
+            ),
+            (
+                CommitEvidence::NotCommitted {
+                    url: "https://a.test/old".into(),
+                },
+                "navigation_incomplete",
+            ),
+        ];
+        for wait_error in wait_errors {
+            for target in targets {
+                for (commit, code) in &commits {
+                    for progress in [Some(&loading), None] {
+                        let message = navigation_incomplete_error(
+                            target,
+                            WaitUntil::Load,
+                            25_000,
+                            25_000,
+                            wait_error,
+                            progress,
+                            commit,
+                        );
+                        let m = classify_error(&message);
+                        assert_eq!(m.code, *code, "{message}");
+                        assert!(!m.retryable, "{message}");
+                        // The daemon's rewrite keeps it verbatim, and the
+                        // #373 denial recovery never sees it as a denial.
+                        assert_eq!(to_ai_friendly_error(&message), message);
+                        assert!(
+                            !crate::native::browser::is_debugger_access_denied(&message),
+                            "{message}"
+                        );
+                        // What the CLI and the MCP tool print.
+                        let mut v = json!({"success": false, "error": message});
+                        enrich_error_value(&mut v);
+                        assert_eq!(v["code"], *code);
+                        assert_eq!(v["retryable"], false);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

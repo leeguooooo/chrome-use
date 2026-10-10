@@ -64,6 +64,28 @@ such as `eval` still fail while the page main thread is blocked. On reconnect,
 the extension also validates every attached Chrome tab before re-announcing it,
 so dead bootstrap `about:blank` records are dropped instead of becoming active.
 
+**`open` and a page that never finishes loading.** `open` waits up to 25s for
+`load`. If this navigation committed and its DOM is ready by then, it succeeds
+with a ⚠ warning; use the page. If nothing ties the tab's page to this
+navigation (always over the extension relay) but that page is clearly usable
+(readyState `interactive`/`complete`, a body showing text or visible content,
+not `about:blank` or an error page), it also succeeds, with
+`commit: "unverified"` and a ⚠ warning giving the tab's real URL and
+readyState. That page may be a redirect, another navigation's page or the
+previous one: check `get url` before relying on it being the requested page,
+and do not reopen. Otherwise it fails with
+`navigation_incomplete:`, which gives the real elapsed time and error, whether
+this navigation committed (read only from its own loader id; over the
+extension relay, which has none, "unknown"), the URL
+and readyState the tab reports, and references with no Resource Timing record
+as candidates only. It names no cause it did not observe. Its JSON code is
+`navigation_commit_unknown` when the commit is unknown, else
+`navigation_incomplete`; both are `retryable: false`, even though the message
+quotes a timeout. Do not repeat the
+`open`: check
+`get url` and `snapshot` a little later, or use `open <url> --wait-until none`
+to return as soon as the navigation commits.
+
 `tab select` and `tab adopt` report one of three outcomes, and the third is
 not a success:
 
