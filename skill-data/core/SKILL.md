@@ -136,6 +136,19 @@ The user is working in the same Chrome. Never use `--activate`, `--front` or
 in front of a window and can bring Chrome over whatever the user is doing.
 Never `tab adopt` a tab the user opened unless they asked you to work in it;
 your own tabs live in a background agent window and that is where you work.
+When the user asks which tabs they have open, or to find one of their tabs,
+run `tab list --all`: every tab of the connected profile, across windows, by
+observation only (nothing is attached or activated, no page is read). Each
+row has a `handle`, window, title, url and owner: `this session`,
+`session <name>` (another chrome-use session, live or not) or `the user`.
+Urls are as Chrome reports them and may carry tokens: quote only what the
+user needs. Acting on a tab you do not own needs `--tab <handle> --force`
+(any page command, in place and in the background) or
+`tab close <handle> --force`. Use `--force` only when the user asked you to
+act on that tab, and tell them which tab you touched (the result's
+`forcedTab` has its title and url). Never force another session's tab
+unless the user asked; the result warns when that session is live. `close`
+never closes a forced tab; it stays open for the user.
 `profile not open` means the user's Chrome profile has no window: chrome-use
 never opens one. Ask the user to open a window in that profile first, then
 rerun. `profile window unavailable` means it could not tell; unknown means

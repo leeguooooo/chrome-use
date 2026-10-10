@@ -293,7 +293,7 @@ async function backgroundCleanupFixture() {
       debugger: { onDetach: { addListener(fn) { listeners.detach = fn } } },
       tabs: { onRemoved: { addListener(fn) { listeners.remove = fn } } },
     },
-    nativeDuplicateTabs: new Set(), forgetAgentPopup() {},
+    nativeDuplicateTabs: new Set(), forgetAgentPopup() {}, releasedTabs: new Set(),
     reloadStates: new Map(), sessionTargets: new Map(),
     ownedTabs: new Set(), unmarkOwned() {},
     setTimeout() {}, RELOAD_LOOP_WINDOW_MS: 1000,
@@ -320,6 +320,18 @@ test('failed recovery does not suppress actual detach cleanup and daemon notific
   assert.equal(c.childSessionToTab.size, 0)
   assert.equal(events[0].params.method, 'Target.detachedFromTarget')
   assert.equal(await c.attachmentHealth.recover(1, {}), false)
+})
+
+test('the detach of a tab ABExt.releaseTab let go of is final: no recovery, no re-attach', async () => {
+  const { context: c, events, emit } = await backgroundCleanupFixture()
+  // releaseTab already forgot the tab and told the daemon; then Chrome
+  // reports the detach.
+  c.tabs.delete(1)
+  c.releasedTabs.add(1)
+  c.port = {}
+  await emit('detach', { tabId: 1 }, 'target_closed')
+  assert.equal(events.length, 0)
+  assert.equal(c.tabs.size, 0)
 })
 
 for (const state of ['unhealthy', 'failed', 'pending']) {

@@ -485,6 +485,12 @@ pub struct Flags {
     pub observe: bool,
     pub new_tab: bool,
     pub tab: Option<String>,
+    /// `--tab <handle> --force` (or `--force --tab <handle>`): act on a tab
+    /// the session does not own, the user's own, in place. `--force` is only
+    /// consumed here when it sits right next to `--tab`, so a subcommand's own
+    /// `--force` (`tab select --activate --force`, `close --all --force`) is
+    /// untouched.
+    pub tab_force: bool,
     pub tab_label: Option<String>,
     pub model: Option<String>,
     pub verbose: bool,
@@ -1027,6 +1033,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
         observe: false,
         new_tab: false,
         tab: None,
+        tab_force: false,
         tab_label: None,
         settle_ms: None,
         with_screenshot: None,
@@ -1444,7 +1451,14 @@ pub fn parse_flags(args: &[String]) -> Flags {
                 if let Some(s) = args.get(i + 1) {
                     flags.tab = Some(s.clone());
                     i += 1;
+                    if args.get(i + 1).map(String::as_str) == Some("--force") {
+                        flags.tab_force = true;
+                        i += 1;
+                    }
                 }
+            }
+            "--force" if args.get(i + 1).map(String::as_str) == Some("--tab") => {
+                flags.tab_force = true;
             }
             "--tab-label" => {
                 if let Some(s) = args.get(i + 1) {
@@ -1530,6 +1544,16 @@ pub fn clean_args(args: &[String]) -> Vec<String> {
             result.extend(args[i + 1..].iter().cloned());
             break;
         }
+        // `--tab <handle> --force` / `--force --tab <handle>`: this `--force`
+        // belongs to `--tab` (see `Flags::tab_force`).
+        if arg == "--tab" && args.get(i + 2).map(String::as_str) == Some("--force") {
+            i += 3;
+            continue;
+        }
+        if arg == "--force" && args.get(i + 1).map(String::as_str) == Some("--tab") {
+            i += 1;
+            continue;
+        }
         if GLOBAL_FLAGS_WITH_VALUE.contains(&arg.as_str()) {
             skip_next = true;
             i += 1;
@@ -1557,6 +1581,28 @@ mod tests {
 
     fn args(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn force_next_to_tab_is_the_tab_force_flag_and_nothing_else_is() {
+        for line in [
+            "--tab chrome-tab:5 --force snapshot -i",
+            "--force --tab chrome-tab:5 snapshot -i",
+            "snapshot -i --tab chrome-tab:5 --force",
+        ] {
+            let f = parse_flags(&args(line));
+            assert!(f.tab_force, "{line}");
+            assert_eq!(f.tab.as_deref(), Some("chrome-tab:5"), "{line}");
+            assert_eq!(clean_args(&args(line)), args("snapshot -i"), "{line}");
+        }
+        // A subcommand's own --force is left alone.
+        for line in ["tab select t2 --activate --force", "close --all --force"] {
+            let f = parse_flags(&args(line));
+            assert!(!f.tab_force, "{line}");
+            assert_eq!(clean_args(&args(line)), args(line), "{line}");
+        }
+        let f = parse_flags(&args("--tab t2 click @e1"));
+        assert!(!f.tab_force);
     }
 
     #[test]

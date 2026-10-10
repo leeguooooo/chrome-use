@@ -249,6 +249,13 @@
         other sessions (and re-attached tabs), not just its own. Adopting by <code>targetId</code> lands session B
         on that stranded tab <strong>without reloading</strong> it, so the half-filled form survives.
       </p>
+      <p>
+        <code>tab list --all</code> shows every tab in the profile with its owner: this session, <code>session
+        &lt;name&gt;</code> (with whether that session is live) or the user, other sessions grouped by name. It only
+        observes. Acting on another session's or the user's tab needs <code>--tab &lt;handle&gt; --force</code>, only
+        when the user asked; the result warns when that session is live and may be driving the tab. See
+        <a href="/en/commands.html">Commands</a>.
+      </p>
 
       <div class="du-callout tip">
         <div class="du-callout-title">✅ Use --reuse-tab to avoid duplicate tabs</div>

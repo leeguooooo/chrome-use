@@ -1792,7 +1792,71 @@ pub fn cb_skip_of(cmd: &Value) -> bool {
     cmd.get("_cbSkip").and_then(Value::as_bool).unwrap_or(false)
 }
 
+/// Actions a `--tab <handle> --force` does not apply to: tab management verbs
+/// (which take their own refs, and `tab close --force` its own flag) and
+/// session lifecycle.
+const FORCE_TAB_SKIPS: &[&str] = &[
+    "tab_switch",
+    "tab_close",
+    "tab_new",
+    "tab_duplicate",
+    "tab_list",
+    "tab_adopt",
+    "tab_inspect",
+    "launch",
+    "close",
+];
+
+/// What a `--tab <handle> --force` took for the command running now, for
+/// [`execute_command`] to put on its result. The daemon runs one command at a
+/// time per process; a nested step (batch, script) keeps its own.
+static FORCED_NOTE: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+
+fn set_forced_note(note: Option<Value>) {
+    if let Ok(mut slot) = FORCED_NOTE.lock() {
+        *slot = note;
+    }
+}
+
+fn take_forced_note() -> Option<Value> {
+    FORCED_NOTE.lock().ok().and_then(|mut slot| slot.take())
+}
+
+/// Record on `response` that a forced action touched a tab the session did
+/// not own: `forced: true`, `forcedTab` (title, url, owner), and the owner
+/// warning, on success and on failure alike.
+fn annotate_forced(response: &mut Value, note: &Value) {
+    // In `data` on failure too: a response's other top-level fields do not
+    // reach the client.
+    if !response.get("data").is_some_and(Value::is_object) {
+        response["data"] = json!({});
+    }
+    if let Some(obj) = response["data"].as_object_mut() {
+        obj.insert("forced".to_string(), json!(true));
+        if let Some(tab) = note.get("forcedTab") {
+            obj.insert("forcedTab".to_string(), tab.clone());
+        }
+    }
+    if let (Some(w), Some(obj)) = (
+        note.get("warning").and_then(Value::as_str),
+        response.as_object_mut(),
+    ) {
+        let merged = crate::profiles::merge_warning(obj.get("warning").and_then(Value::as_str), w);
+        obj.insert("warning".to_string(), json!(merged));
+    }
+}
+
 pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
+    let outer_note = take_forced_note();
+    let mut response = Box::pin(execute_command_noted(cmd, state)).await;
+    if let Some(note) = take_forced_note() {
+        annotate_forced(&mut response, &note);
+    }
+    set_forced_note(outer_note);
+    response
+}
+
+async fn execute_command_noted(cmd: &Value, state: &mut DaemonState) -> Value {
     fn context(state: &DaemonState) -> Option<(String, String, String)> {
         let manager = state.browser.as_ref()?;
         Some((
@@ -2165,6 +2229,110 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                 action
             ),
         );
+    }
+
+    // `--tab <handle> --force`: act on a tab this session does not own (the
+    // user's own, or another session's), named by a handle from
+    // `tab list --all`. The tab is attached in place, never activated, and the
+    // command then runs on it as on any `--tab`; `navigate` (which ignores
+    // `--tab`) acts on it because it is now the session's tab. The result
+    // records `forced: true` with the tab's title and url.
+    let forced_cmd: Value;
+    let cmd: &Value = if cmd.get("forceTab").and_then(Value::as_bool) == Some(true)
+        && !FORCE_TAB_SKIPS.contains(&action)
+    {
+        let Some(spec) = cmd
+            .get("tab")
+            .or_else(|| cmd.get("tabId"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            return error_response(
+                &id,
+                "--force needs `--tab <handle>`: the handle from `chrome-use tab list --all` of \
+                 the tab the user asked you to act on",
+            );
+        };
+        let Some(mgr) = state.browser.as_mut() else {
+            return error_response(&id, "Browser not launched");
+        };
+        let old_target = mgr.active_target_id().ok().map(ToString::to_string);
+        let (tab_ref, note) = match mgr.force_adopt(&spec).await {
+            Ok(v) => v,
+            Err(e) => return error_response(&id, &e),
+        };
+        if note.is_some() {
+            if let Ok(new_target) = mgr.active_target_id().map(ToString::to_string) {
+                state.switch_tab_context(old_target.as_deref(), &new_target);
+            }
+        }
+        set_forced_note(note);
+        let mut rewritten = cmd.clone();
+        if let Some(obj) = rewritten.as_object_mut() {
+            let key = if obj.contains_key("tab") {
+                "tab"
+            } else {
+                "tabId"
+            };
+            obj.insert(key.to_string(), json!(tab_ref));
+            obj.remove("forceTab");
+        }
+        forced_cmd = rewritten;
+        &forced_cmd
+    } else {
+        cmd
+    };
+
+    // A `chrome-tab:<id>` handle of one of the session's own tabs is that
+    // tab's `t<N>`. Any other names a tab the session does not own: refuse,
+    // naming whose it is and the flag.
+    let handle_cmd: Value;
+    let own_ref = cmd
+        .get("tab")
+        .or_else(|| cmd.get("tabId"))
+        .and_then(Value::as_str)
+        .and_then(|h| state.browser.as_ref()?.owned_tab_ref_for_handle(h));
+    let cmd: &Value = match own_ref {
+        Some(tab_ref) => {
+            let mut rewritten = cmd.clone();
+            if let Some(obj) = rewritten.as_object_mut() {
+                let key = if obj.contains_key("tab") {
+                    "tab"
+                } else {
+                    "tabId"
+                };
+                obj.insert(key.to_string(), json!(tab_ref));
+            }
+            handle_cmd = rewritten;
+            &handle_cmd
+        }
+        None => cmd,
+    };
+    if let Some(handle) = cmd
+        .get("tab")
+        .or_else(|| cmd.get("tabId"))
+        .and_then(Value::as_str)
+        .filter(|h| super::browser::parse_chrome_tab_handle(h).is_some())
+    {
+        if !FORCE_TAB_SKIPS.contains(&action) && action != "navigate" {
+            let owner = match (
+                state.browser.as_ref(),
+                super::browser::parse_chrome_tab_handle(handle),
+            ) {
+                (Some(mgr), Some(chrome_tab)) if mgr.on_relay() => {
+                    mgr.relay_tab_owner(chrome_tab).await.label()
+                }
+                _ => "someone other than this session".to_string(),
+            };
+            return error_response(
+                &id,
+                &format!(
+                    "Refusing to act on `{handle}`: this session does not own it; it belongs to \
+                     {owner}. To act on it in place, without bringing it forward, pass `--tab \
+                     {handle} --force`, and only when the user asked you to act on that tab"
+                ),
+            );
+        }
     }
 
     // If a specific tab is targeted via `--tab <ref>` or `tabId`, switch to it
@@ -6367,6 +6535,12 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     // or one whose absence cannot be confirmed, fails the close: the session
     // (and with it the daemon, the connection and the ownership record) is
     // kept, so a retry has everything this attempt had (#485 shape).
+    // Tabs taken with `--force` stay open: they are the user's (or another
+    // session's). Release the session's hold on them and say which they were.
+    let mut forced_left = Vec::new();
+    if let Some(ref mut mgr) = state.browser {
+        forced_left = mgr.release_forced_targets().await;
+    }
     if let Some(ref mut mgr) = state.browser {
         let closed_here = mgr.close_verified().await?;
         if !closed_here.is_complete() {
@@ -6454,6 +6628,9 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
     let mut out = report.to_json();
     if !had_something {
         out["nothingToClose"] = json!(true);
+    }
+    if !forced_left.is_empty() {
+        out["forcedTabsLeftOpen"] = json!(forced_left);
     }
     Ok(out)
 }
@@ -12991,6 +13168,21 @@ async fn handle_keyboard(cmd: &Value, state: &DaemonState) -> Result<Value, Stri
 
 async fn handle_tab_list(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
+    // `tab list --all`: every tab in the profile, by observation only. It
+    // must not run `resync_targets`, which attaches to targets it has not
+    // seen on a direct CDP connection.
+    if cmd.get("all").and_then(Value::as_bool) == Some(true) {
+        let limit = cmd
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map(|n| n as usize)
+            .unwrap_or(super::browser::ALL_TABS_DEFAULT_LIMIT);
+        let mut out = mgr.list_all_tabs(limit).await?;
+        if cmd.get("full").and_then(Value::as_bool) == Some(true) {
+            out["full"] = json!(true);
+        }
+        return Ok(out);
+    }
     // Re-sync with the live browser so the list reflects tabs opened by other
     // sessions or re-attached after a cross-process nav, and drops gone ones
     // (issue #21). Best-effort: a stale list still beats erroring the command.
@@ -13565,14 +13757,76 @@ fn tab_inspect_error_message(
 
 async fn handle_tab_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
+    // `tab close <handle> --force`: a tab the session did not create (the
+    // user's own, adopted, or another session's), only on the user's request.
+    // A tab the session created needs no force and takes the ordinary path.
+    if cmd.get("force").and_then(Value::as_bool) == Some(true) {
+        let spec = match cmd.get("tabId") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(other) => {
+                return Err(format!(
+                    "tab close: tabId must be a tab id or handle string, not {other}; nothing \
+                     was closed"
+                ))
+            }
+        };
+        if !mgr.names_created_tab(spec.as_deref()) {
+            let before = mgr.active_target_id().ok().map(ToString::to_string);
+            let res = mgr.tab_close_forced(spec.as_deref()).await;
+            let after = mgr.active_target_id().ok().map(ToString::to_string);
+            if let Some(closed) = res
+                .as_ref()
+                .ok()
+                .and_then(|r| r.pointer("/forcedTab/targetId"))
+                .and_then(Value::as_str)
+            {
+                state.tab_states.remove(closed);
+            }
+            // The session keeps driving the tab it was on; only when that was
+            // the closed tab do its refs go.
+            if before != after {
+                state.ref_map.clear();
+                state.iframe_sessions.clear();
+                state.active_frame_id = None;
+            }
+            return res;
+        }
+    }
     // Only an absent (or null) `tabId` means "the active tab". Any other
     // non-string (1, true, an object) is refused, never read as omitted: that
     // would close the active tab, or end the session on its last tab.
     let tab_id = match cmd.get("tabId") {
         None | Some(Value::Null) => None,
         Some(Value::String(s)) => {
-            let tab_ref = super::browser::TabRef::parse(s)?;
-            Some(mgr.resolve_tab_ref(&tab_ref)?)
+            // A `chrome-tab:<id>` handle (`tab list --all`): the session's own
+            // tab by that handle, or a refusal naming whose it is.
+            let s = match super::browser::parse_chrome_tab_handle(s) {
+                Some(chrome_tab) => match mgr.owned_tab_ref_for_handle(s) {
+                    Some(tab_ref) => tab_ref,
+                    None => {
+                        let owner = if mgr.on_relay() {
+                            mgr.relay_tab_owner(chrome_tab).await.label()
+                        } else {
+                            "someone other than this session".to_string()
+                        };
+                        return Err(format!(
+                            "Refusing to close `{s}`: this session did not create it; it belongs \
+                             to {owner}. Leave it open. Only when the user asked you to close \
+                             that tab: `chrome-use tab close {s} --force`"
+                        ));
+                    }
+                },
+                None => s.clone(),
+            };
+            let tab_id = match mgr.tab_id_for_target(&s) {
+                Some(id) => id,
+                None => {
+                    let tab_ref = super::browser::TabRef::parse(&s)?;
+                    mgr.resolve_tab_ref(&tab_ref)?
+                }
+            };
+            Some(tab_id)
         }
         Some(other) => {
             return Err(format!(

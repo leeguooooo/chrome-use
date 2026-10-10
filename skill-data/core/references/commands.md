@@ -418,8 +418,69 @@ chrome-use tab docs                         # Switch to tab by label
 chrome-use tab close                        # Close current tab
 chrome-use tab close t2                     # Close by id
 chrome-use tab close docs                   # Close by label
+chrome-use tab list --all                   # Every tab in the profile, the user's too (read-only)
+chrome-use tab list --all --limit 50        # At most 50 rows (default 200, max 1000)
+chrome-use --tab chrome-tab:812 --force snapshot -i  # Act on the user's tab, in place (user asked)
+chrome-use tab close chrome-tab:812 --force # Close the user's tab (user asked)
 chrome-use window new                       # New window
 ```
+
+### Every tab in the profile (`tab list --all`)
+
+`tab list --all` answers "which tabs do I have open?" and "find my tab with
+X": every tab of the connected Chrome profile, across all windows, including
+the user's own and other chrome-use sessions'. It only observes. Over the
+relay it reads `chrome.tabs.query` and `ABExt.state` (ab-connect 0.5.25+); on
+direct CDP, `Target.getTargets` and `Browser.getWindowForTarget`. Nothing is
+attached, activated, focused, moved or reloaded, and no page content is read.
+
+Each row of `browserTabs` has:
+
+- `handle`: what to pass to `--tab` or `tab adopt`. Relay: `chrome-tab:<id>`
+  (the Chrome tab id); direct CDP: the targetId.
+- `windowId`, `index`, `active` (the active tab of its window; relay only),
+  `pinned`, `incognito`, `discarded` (relay only), `title`, `url`.
+- `owner`: `{kind: "self"}`, `{kind: "session", session: "<name>", live}` or
+  `{kind: "user"}`, and `ownerLabel` in words (`this session`,
+  `session alpha (live)`, `the user`). A session is named from the other
+  sessions' ownership records (or its tab group); `live` says whether its
+  daemon answers now. This session's rows also carry `tabId` (`t<N>`) and
+  `ownership` (`created` / `adopted`), and `forced` when taken with `--force`.
+- `needsForce: true` and `actOn: "--tab <handle> --force"` on every row the
+  session does not own.
+
+Rows are ordered: this session's tabs, then other sessions' grouped by name,
+then the user's; within each, by window and tab position. The reply is
+bounded: at most 200 rows (`--limit <n>`, up to 1000), titles cut at 300 and
+urls at 2048 characters (`titleCut` / `urlCut`), and `omitted` / `leftOut` say
+what was left out. Urls are left exactly as Chrome reports them, so they can
+carry session tokens: show the user only what they need.
+
+### Acting on a tab the session does not own (`--force`)
+
+Without `--force`, nothing changes: a tab the session neither created nor
+adopted is refused for `--tab`, `tab select` and `tab close`, and the refusal
+names the owner (`the user`, `session <name>`) and the flag. With it:
+
+- `--tab <handle> --force <command>` runs any page command (`snapshot`,
+  `click`, `fill`, `eval`, `open`/`navigate`, ...) on that tab. The tab is
+  attached in place: not activated, not focused, not moved out of its window.
+  To bring it forward as well (only on request): `tab adopt <handle> --activate`.
+- `tab close <handle> --force` closes it and reads it back
+  (`verifiedAbsent: true`). The session stays on the tab it was driving.
+- Every forced result has `forced: true` and `forcedTab` (`handle`, `tabId`,
+  `title`, `url`, `owner`). A tab of another session that is running carries
+  a warning: your actions can interfere with its work.
+- `close` never closes a forced tab. It stays open, the session lets go of it,
+  and the reply lists it under `forcedTabsLeftOpen` with how it was released:
+  over the relay `ABExt.releaseTab` (ab-connect 0.5.34); an older extension
+  keeps it attached until it restarts, and the reply says so. On direct CDP
+  the session detaches.
+
+Use `--force` only when the user asked you to act on that tab, and tell them
+which tab you touched. `chrome-tab:<id>` handles need ab-connect 0.5.30+.
+`--force` takes exact handles only (a `chrome-tab:<id>`, a targetId or a
+`t<N>`), never a URL fragment, so it cannot land on the wrong tab.
 
 `tab close` of one of several tabs reports `verifiedAbsent: true`; a tab still
 open or unconfirmed fails, stays in `tab list` and keeps its close right.

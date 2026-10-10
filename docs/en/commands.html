@@ -464,8 +464,36 @@
 <span class="du-prompt">$</span> chrome-use tab close                        <span class="du-cmt"># close the current tab</span>
 <span class="du-prompt">$</span> chrome-use tab close t2                     <span class="du-cmt"># close by id</span>
 <span class="du-prompt">$</span> chrome-use tab close docs                   <span class="du-cmt"># close by label</span>
+<span class="du-prompt">$</span> chrome-use tab list <span class="du-flag">--all</span>                   <span class="du-cmt"># every tab in the profile, the user's too (read-only)</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--tab</span> chrome-tab:812 <span class="du-flag">--force</span> snapshot -i <span class="du-cmt"># act on the user's tab in place (user asked)</span>
+<span class="du-prompt">$</span> chrome-use tab close chrome-tab:812 <span class="du-flag">--force</span> <span class="du-cmt"># close the user's tab (user asked)</span>
 <span class="du-prompt">$</span> chrome-use window new                       <span class="du-cmt"># new window</span></code></pre>
       </div>
+      <p>
+        <code>tab list --all</code> answers "which tabs do I have open?": every tab of the connected Chrome profile,
+        across all windows, including the user's own and other chrome-use sessions'. It only observes (over the relay
+        <code>chrome.tabs.query</code> and <code>ABExt.state</code>, ab-connect 0.5.25+; on direct CDP
+        <code>Target.getTargets</code> and <code>Browser.getWindowForTarget</code>): nothing is attached, activated,
+        focused, moved or reloaded, and no page content is read. Each row has a <code>handle</code>
+        (<code>chrome-tab:&lt;id&gt;</code> over the relay, the targetId on direct CDP), its window, whether it is the
+        active tab of that window, pinned/incognito/discarded (relay), title, url, and its owner:
+        <code>{kind: "self"}</code>, <code>{kind: "session", session, live}</code> or <code>{kind: "user"}</code>, also
+        in words (<code>this session</code>, <code>session alpha (live)</code>, <code>the user</code>). This session's
+        tabs come first, then other sessions' by name, then the user's, each by window and tab position. At most 200
+        rows (<code>--limit</code>, up to 1000); titles over 300 and urls over 2048 characters are cut, and the reply
+        says what it left out. Urls are exactly as Chrome reports them and may carry session tokens.
+      </p>
+      <p>
+        Acting on a tab the session does not own needs <code>--force</code>, and only when the user asked for that
+        tab. <code>--tab &lt;handle&gt; --force &lt;command&gt;</code> runs any page command on it in place: it is
+        attached but not activated, focused or moved (to bring it forward too, <code>tab adopt &lt;handle&gt;
+        --activate</code>). <code>tab close &lt;handle&gt; --force</code> closes it and reads it back. Each forced
+        result has <code>forced: true</code> and <code>forcedTab</code> (title, url, owner); another live session's tab
+        also gets a warning. Without <code>--force</code> the refusal names the owner and the flag. <code>close</code>
+        never closes a forced tab: it stays open and is released (<code>forcedTabsLeftOpen</code>; over the relay this
+        needs ab-connect 0.5.34, an older extension keeps it attached until it restarts). <code>chrome-tab:</code>
+        handles need ab-connect 0.5.30+.
+      </p>
       <p>
         <code>tab close</code> on the session's only tab, when the session created it, ends the session the way
         <code>close</code> does (<code>sessionClosed: true</code>), so no separate <code>close</code> is needed. A tab

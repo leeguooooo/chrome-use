@@ -451,8 +451,34 @@
 <span class="du-prompt">$</span> chrome-use tab close                        <span class="du-cmt"># 关闭当前标签</span>
 <span class="du-prompt">$</span> chrome-use tab close t2                     <span class="du-cmt"># 按 id 关闭</span>
 <span class="du-prompt">$</span> chrome-use tab close docs                   <span class="du-cmt"># 按 label 关闭</span>
+<span class="du-prompt">$</span> chrome-use tab list <span class="du-flag">--all</span>                   <span class="du-cmt"># profile 里的全部标签，含用户自己的（只读）</span>
+<span class="du-prompt">$</span> chrome-use <span class="du-flag">--tab</span> chrome-tab:812 <span class="du-flag">--force</span> snapshot -i <span class="du-cmt"># 原地操作用户的标签（用户要求时）</span>
+<span class="du-prompt">$</span> chrome-use tab close chrome-tab:812 <span class="du-flag">--force</span> <span class="du-cmt"># 关闭用户的标签（用户要求时）</span>
 <span class="du-prompt">$</span> chrome-use window new                       <span class="du-cmt"># 新窗口</span></code></pre>
       </div>
+      <p>
+        <code>tab list --all</code> 用来回答“我开着哪些标签”：列出当前 Chrome profile 所有窗口里的全部标签，
+        包括用户自己的和其他 chrome-use 会话的。它只做观察（走 relay 时读 <code>chrome.tabs.query</code> 和
+        <code>ABExt.state</code>，需要 ab-connect 0.5.25+；直接 CDP 时读 <code>Target.getTargets</code> 和
+        <code>Browser.getWindowForTarget</code>）：不 attach、不激活、不聚焦、不移动、不刷新任何标签，也不读页面内容。
+        每行有 <code>handle</code>（relay 下是 <code>chrome-tab:&lt;id&gt;</code>，直接 CDP 下是 targetId）、窗口、
+        是否是该窗口的当前标签、pinned/incognito/discarded（relay）、标题、URL 和归属：
+        <code>{kind: "self"}</code>、<code>{kind: "session", session, live}</code> 或 <code>{kind: "user"}</code>，
+        文字版是 <code>this session</code>、<code>session alpha (live)</code>、<code>the user</code>。
+        排序：先本会话的，再按名字分组的其他会话，最后是用户的；组内按窗口、标签位置。最多 200 行
+        （<code>--limit</code>，上限 1000）；标题超过 300、URL 超过 2048 字符会截断，回复会说明省略了什么。
+        URL 按 Chrome 原样给出，可能带会话 token。
+      </p>
+      <p>
+        操作不属于本会话的标签需要 <code>--force</code>，而且只在用户要求操作那个标签时使用。
+        <code>--tab &lt;handle&gt; --force &lt;命令&gt;</code> 在该标签上原地执行任意页面命令：会 attach，但不激活、
+        不聚焦、不移出窗口（要同时切到前台，只在用户要求时用 <code>tab adopt &lt;handle&gt; --activate</code>）。
+        <code>tab close &lt;handle&gt; --force</code> 关闭它并读回确认。每个 forced 结果都带 <code>forced: true</code>
+        和 <code>forcedTab</code>（标题、URL、归属）；另一个正在运行的会话的标签还会带警告。不加 <code>--force</code>
+        时的拒绝信息会写明归属和这个参数。<code>close</code> 不会关掉 forced 标签：它保持打开并被释放
+        （<code>forcedTabsLeftOpen</code>；走 relay 时需要 ab-connect 0.5.34，旧扩展会保持 attach 直到扩展重启）。
+        <code>chrome-tab:</code> handle 需要 ab-connect 0.5.30+。
+      </p>
       <p>
         会话只剩一个标签、且它是本会话创建的时候，<code>tab close</code> 直接按 <code>close</code> 结束会话
         （返回 <code>sessionClosed: true</code>），不用再跑一次 <code>close</code>。不是本会话创建的标签

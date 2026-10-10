@@ -230,6 +230,12 @@
         而不只是自己的。按 <code>targetId</code> 收养会让 B 会话落到那个搁浅的标签上而<strong>不重新加载</strong>它，
         半填的表单因此得以保留。
       </p>
+      <p>
+        <code>tab list --all</code> 列出 profile 里的全部标签和各自归属：本会话、<code>session &lt;名字&gt;</code>
+        （并标明那个会话是否在运行）或用户，其他会话按名字分组。它只做观察。要操作别的会话或用户的标签，需要
+        <code>--tab &lt;handle&gt; --force</code>，且只在用户要求时使用；那个会话正在运行时，结果会警告它可能正在操作这个标签。
+        见<a href="/commands.html">命令</a>。
+      </p>
 
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 用 --reuse-tab 避免重复标签</div>
