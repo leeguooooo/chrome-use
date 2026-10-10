@@ -711,6 +711,33 @@ fn an_extension_without_tab_presence_is_unverified() {
     assert!(kept.contains(&t1) && kept.contains(&t2), "{kept}");
 }
 
+/// The upgrade path: a close under 0.5.32 closes the tabs but cannot confirm
+/// it, so it keeps the session and the record. Once the extension is
+/// upgraded, `close` on the same session confirms them gone (by the exact tab
+/// ids the session recorded) and clears the record, without `--force`.
+#[test]
+fn close_after_upgrading_the_extension_completes_without_force() {
+    let (fake, url) = Fake::start(true);
+    fake.0.lock().unwrap().old_extension = true;
+    let mut d = Daemon::start("hc-upgrade", &url, true);
+    let (t1, t2) = two_relay_tabs(&fake, &d);
+    let r = d.send(json!({"id": "x", "action": "close"}));
+    assert_eq!(r["success"], false, "{r}");
+    assert!(fake.open_targets().is_empty(), "the tabs were closed");
+    let kept = record(&d);
+    assert!(kept.contains(&t1) && kept.contains(&t2), "{kept}");
+    // ab-connect 0.5.33 is installed.
+    fake.0.lock().unwrap().old_extension = false;
+    let r = d.send(json!({"id": "y", "action": "close"}));
+    assert_eq!(r["success"], true, "{r}");
+    assert_eq!(r["data"]["verifiedAbsent"], true, "{r}");
+    let mut want = vec![t1, t2];
+    want.sort();
+    assert_eq!(closed_targets(&r), want, "{r}");
+    assert!(d.wait_exit());
+    assert!(!d.record_path().exists(), "record left behind");
+}
+
 /// The same with `tab close` of one of several tabs.
 #[test]
 fn tab_close_with_an_extension_without_tab_presence_keeps_the_tab() {

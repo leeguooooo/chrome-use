@@ -440,16 +440,16 @@ async fn close_recorded_targets(
     endpoint: &str,
     client: &Arc<CdpClient>,
     targets: &mut HashSet<String>,
+    known_tabs: &HashMap<String, i64>,
 ) -> Result<Vec<String>, String> {
     let on_relay = crate::connect::is_relay_url(endpoint);
-    let verdicts = close_and_verify_targets(
-        client,
-        targets,
-        HashMap::new(),
-        on_relay,
-        CLOSE_TOTAL_BUDGET,
-    )
-    .await;
+    let chrome_tabs: HashMap<String, i64> = known_tabs
+        .iter()
+        .filter(|(t, _)| targets.contains(*t))
+        .map(|(t, id)| (t.clone(), *id))
+        .collect();
+    let verdicts =
+        close_and_verify_targets(client, targets, chrome_tabs, on_relay, CLOSE_TOTAL_BUDGET).await;
     let total = targets.len();
     let mut closed = Vec::new();
     let mut open = 0usize;
@@ -490,7 +490,7 @@ pub async fn close_persisted_session_tabs_at(
         );
     }
     let client = Arc::new(CdpClient::connect(endpoint).await?);
-    close_recorded_targets(session, endpoint, &client, &mut targets).await
+    close_recorded_targets(session, endpoint, &client, &mut targets, &HashMap::new()).await
 }
 
 /// Rediscover the original external browser rather than storing its possibly
@@ -513,6 +513,7 @@ pub async fn close_owned_tabs_at(
     endpoint: &str,
     dead_endpoint: &str,
     held: &HashSet<String>,
+    known_tabs: &HashMap<String, i64>,
 ) -> Result<Vec<String>, String> {
     let mut targets = crate::connection::read_created_targets(session, endpoint);
     if targets.is_empty() && crate::connection::has_created_targets(session) {
@@ -537,7 +538,7 @@ pub async fn close_owned_tabs_at(
         return Ok(Vec::new());
     }
     let client = Arc::new(CdpClient::connect(endpoint).await?);
-    close_recorded_targets(session, endpoint, &client, &mut targets).await
+    close_recorded_targets(session, endpoint, &client, &mut targets, known_tabs).await
 }
 
 async fn close_created_targets(
@@ -3795,17 +3796,11 @@ impl BrowserManager {
     /// close) and read each back, under [`CLOSE_TOTAL_BUDGET`]. Seeds the
     /// read-back with every Chrome tab id the session knows for them.
     async fn close_and_verify(&self, targets: &HashSet<String>) -> HashMap<String, TabPresence> {
-        let mut chrome_tabs: HashMap<String, i64> = self
-            .dropped_chrome_tabs
-            .iter()
-            .filter(|(t, _)| targets.contains(*t))
-            .map(|(t, id)| (t.clone(), *id))
+        let chrome_tabs: HashMap<String, i64> = self
+            .known_chrome_tabs()
+            .into_iter()
+            .filter(|(t, _)| targets.contains(t))
             .collect();
-        for page in self.pages.iter().filter(|p| targets.contains(&p.target_id)) {
-            if let Some(id) = relay_chrome_tab_id(&page.session_id) {
-                chrome_tabs.insert(page.target_id.clone(), id);
-            }
-        }
         close_and_verify_targets(
             &self.client,
             targets,
@@ -3814,6 +3809,28 @@ impl BrowserManager {
             CLOSE_TOTAL_BUDGET,
         )
         .await
+    }
+
+    /// The relay Chrome tab id (`cb-tab-<id>`) each created tab was last seen
+    /// in: its page, or the id kept when the page left the list. `close` hands
+    /// these to the read-back, which needs the exact tab id to confirm a tab
+    /// whose target Chrome no longer lists is gone, including over a new
+    /// connection after this one died (#485).
+    pub fn known_chrome_tabs(&self) -> HashMap<String, i64> {
+        let mut tabs: HashMap<String, i64> = self
+            .dropped_chrome_tabs
+            .iter()
+            .filter(|(t, _)| self.created_targets.contains(*t))
+            .map(|(t, id)| (t.clone(), *id))
+            .collect();
+        for page in &self.pages {
+            if self.created_targets.contains(&page.target_id) {
+                if let Some(id) = relay_chrome_tab_id(&page.session_id) {
+                    tabs.insert(page.target_id.clone(), id);
+                }
+            }
+        }
+        tabs
     }
 
     /// `{tabId, label, targetId, url}` of a target, as far as the session

@@ -6277,15 +6277,17 @@ async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         if mgr.is_cdp_connection() && !mgr.is_connection_alive().await {
             let dead = mgr.ws_url().to_string();
             let held = mgr.created_target_ids();
-            let closed = close_tabs_after_lost_connection(&state.session_id, &dead, &held)
-                .await
-                .map_err(|error| {
-                    format!(
-                        "close incomplete: this session's browser connection was dead, and \
+            let known_tabs = mgr.known_chrome_tabs();
+            let closed =
+                close_tabs_after_lost_connection(&state.session_id, &dead, &held, &known_tabs)
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "close incomplete: this session's browser connection was dead, and \
                          closing its tabs over a new one failed: {error}. Nothing was reported \
                          closed; retry `close` once the browser is reachable."
-                    )
-                })?;
+                        )
+                    })?;
             report = report.with_closed_ids(closed, "reconnect");
             // Its tabs are closed; there is nothing left to do over it.
             state.browser = None;
@@ -6406,6 +6408,7 @@ async fn close_tabs_after_lost_connection(
     session: &str,
     dead: &str,
     held: &HashSet<String>,
+    known_tabs: &HashMap<String, i64>,
 ) -> Result<Vec<String>, String> {
     use crate::connect::ProfileEndpointError;
     let pin = crate::connection::session_relay_profile(session)?;
@@ -6455,7 +6458,8 @@ async fn close_tabs_after_lost_connection(
                 continue;
             }
         }
-        match super::browser::close_owned_tabs_at(session, &endpoint, dead, held).await {
+        match super::browser::close_owned_tabs_at(session, &endpoint, dead, held, known_tabs).await
+        {
             Ok(closed) => return Ok(closed),
             Err(e)
                 if e.starts_with("CDP WebSocket connect failed")
