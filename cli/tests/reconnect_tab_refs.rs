@@ -1377,7 +1377,20 @@ fn a_first_tab_whose_close_is_not_confirmed_keeps_its_delete_right() {
             assert_eq!(fake.0.lock().unwrap().created, 1, "{label}: opened another");
         }
         let r = d.send(json!({"id": "z", "action": "close"}));
-        assert_eq!(r["success"], true, "{label}: {r}");
+        if contract {
+            assert_eq!(r["success"], true, "{label}: {r}");
+        } else {
+            // An extension that cannot prove a tab gone (0.5.32) never
+            // lets `close` claim it either; the tab is in fact gone.
+            assert_eq!(r["success"], false, "{label}: {r}");
+            assert!(
+                r["error"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("close incomplete"),
+                "{label}: {r}"
+            );
+        }
         assert!(
             open_targets(&fake).is_empty(),
             "{label}: {:?}",

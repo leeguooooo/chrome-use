@@ -4093,14 +4093,14 @@ impl BrowserManager {
                         first_tab::FIRST_TAB_SETUP_FAILED
                     )
                 }
-                first_tab::Cleanup::NotConfirmed { why, close } => {
+                first_tab::Cleanup::NotConfirmed { why } => {
                     // One more try at the record before reporting; failing
                     // that, this daemon holds the right (see `hold_unsaved`).
                     let recorded = self.persist_created_targets().is_ok();
                     if !recorded {
                         first_tab::hold_unsaved(&self.ws_url, &target_id);
                     }
-                    first_tab::cleanup_incomplete(&target_id, &cause, &why, &close, recorded)
+                    first_tab::cleanup_incomplete(&target_id, &cause, &why, recorded)
                 }
             });
         }
@@ -4165,14 +4165,31 @@ impl BrowserManager {
         self.persist_created_targets()
     }
 
-    /// Close a first tab that could not be kept and read back that it is
-    /// gone, by the same authoritative sources as `close` (#496).
+    /// Close a first tab that could not be kept and read it back with
+    /// `close`'s own verifier ([`close_and_verify_targets`], #496), never past
+    /// `deadline`. Only `Absent` counts as gone.
     async fn clean_up_first_tab(
         &self,
         target_id: &str,
         deadline: tokio::time::Instant,
     ) -> first_tab::Cleanup {
-        first_tab::close_and_verify(&self.client, self.via_relay(), target_id, deadline).await
+        let targets = HashSet::from([target_id.to_string()]);
+        let budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let verdicts = close_and_verify_targets(
+            &self.client,
+            &targets,
+            HashMap::new(),
+            self.via_relay(),
+            budget,
+        )
+        .await;
+        let why = match verdicts.get(target_id) {
+            Some(TabPresence::Absent) => return first_tab::Cleanup::Gone,
+            Some(TabPresence::Present) => "Chrome still lists it".to_string(),
+            Some(TabPresence::Unverified(why)) | Some(TabPresence::Unsupported(why)) => why.clone(),
+            None => "it was not read back".to_string(),
+        };
+        first_tab::Cleanup::NotConfirmed { why }
     }
 
     /// On the relay, refuse before creating a tab unless the profile shows an

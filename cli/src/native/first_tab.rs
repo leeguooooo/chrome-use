@@ -16,21 +16,15 @@
 //! - The whole sequence (window check, create, setup, and cleanup) runs under
 //!   one deadline, with a share reserved for cleanup, well under the client's
 //!   45 s.
-//! - A tab is gone only when an authoritative source says so, the same
-//!   contract as `close` (#496): over the relay the extension's versioned
-//!   `ABExt.tabPresence` for that exact target; on a direct CDP connection
-//!   Chrome's own target list. A `Target.closeTarget` acknowledgement proves
-//!   nothing. Whatever is not confirmed gone keeps its recorded delete right,
+//! - A tab is gone only when `close`'s own verifier says so (#496,
+//!   `close_and_verify_targets`): over the relay the extension's versioned
+//!   `ABExt.tabPresence`; on a direct CDP connection Chrome's own target list.
+//!   A `Target.closeTarget` acknowledgement proves nothing. Whatever is not confirmed gone keeps its recorded delete right,
 //!   and the error says so instead of inviting another `open`.
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::Instant;
-
-use super::cdp::client::CdpClient;
-use super::cdp::types::GetTargetsResult;
 
 /// The overall deadline for opening a session's first tab: window check,
 /// `Target.createTarget`, attach and domain setup, and cleanup if any of it
@@ -45,19 +39,6 @@ pub const FIRST_TAB_CLEANUP_RESERVE: Duration = Duration::from_secs(10);
 
 /// The most the window check may take.
 pub const WINDOW_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// The most a single close or read-back may take inside the cleanup reserve.
-const CLEANUP_CALL_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// How long a tab Chrome acknowledged closing but still lists is re-read
-/// before it counts as still open (`Target.closeTarget` answers before the
-/// tab is removed).
-const GONE_RECHECK: Duration = Duration::from_secs(3);
-const GONE_POLL: Duration = Duration::from_millis(200);
-
-/// The `ABExt.tabPresence` contract version understood here; the same as the
-/// one `close` reads (#496). A reply without it never proves a tab gone.
-const TAB_PRESENCE_CONTRACT: u64 = 1;
 
 /// The profile has no window open. Nothing was created.
 pub const PROFILE_NOT_OPEN: &str = "profile not open: the Chrome profile this session uses has \
@@ -167,130 +148,13 @@ pub fn create_failure(error: &str) -> String {
     )
 }
 
-/// Is `target_id` still in the browser, by an authoritative source?
-/// `Ok(true)` present, `Ok(false)` gone, `Err` cannot tell.
-pub fn presence_from_reply(reply: &Result<Value, String>, target_id: &str) -> Result<bool, String> {
-    let v = reply
-        .as_ref()
-        .map_err(|e| format!("the extension did not answer ABExt.tabPresence: {e}"))?;
-    if v.get("tabPresenceVersion")
-        .and_then(Value::as_u64)
-        .is_none_or(|n| n < TAB_PRESENCE_CONTRACT)
-    {
-        return Err(
-            "this ab-connect cannot report whether a tab is gone (no tabPresenceVersion; \
-             0.5.33 or newer can)"
-                .to_string(),
-        );
-    }
-    if v.get("targetId").and_then(Value::as_str) != Some(target_id) {
-        return Err("the extension answered about another tab".to_string());
-    }
-    match v.get("presence").and_then(Value::as_str) {
-        Some("absent") => Ok(false),
-        Some("present") => Ok(true),
-        _ => Err(v
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("the extension could not tell")
-            .to_string()),
-    }
-}
-
-/// On a direct CDP connection Chrome's target list is the record.
-pub fn presence_from_targets(
-    list: &Result<GetTargetsResult, String>,
-    target_id: &str,
-) -> Result<bool, String> {
-    match list {
-        Ok(list) => Ok(list.target_infos.iter().any(|t| t.target_id == target_id)),
-        Err(e) => Err(format!("Chrome's target list could not be read: {e}")),
-    }
-}
-
-async fn read_presence(
-    client: &Arc<CdpClient>,
-    on_relay: bool,
-    target_id: &str,
-    deadline: Instant,
-) -> Result<bool, String> {
-    let cap = std::cmp::min(deadline, Instant::now() + CLEANUP_CALL_TIMEOUT);
-    if on_relay {
-        let reply = tokio::time::timeout_at(
-            cap,
-            client.send_command(
-                "ABExt.tabPresence",
-                Some(json!({ "targetId": target_id, "tabId": null })),
-                None,
-            ),
-        )
-        .await
-        .map_err(|_| "no answer about the tab within the cleanup budget".to_string())?;
-        presence_from_reply(&reply, target_id)
-    } else {
-        let list = tokio::time::timeout_at(
-            cap,
-            client.send_command_typed::<_, GetTargetsResult>("Target.getTargets", &json!({}), None),
-        )
-        .await
-        .map_err(|_| "no target list within the cleanup budget".to_string())?;
-        presence_from_targets(&list, target_id)
-    }
-}
-
 /// How cleaning up a tab that could not be set up ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cleanup {
     /// Chrome confirms the tab is gone.
     Gone,
-    /// The tab may still be open: why it is not confirmed gone, and what the
-    /// close request got.
-    NotConfirmed { why: String, close: String },
-}
-
-/// Ask Chrome to close `target_id`, then read back from an authoritative
-/// source that it is gone, never past `deadline`. The close answer is only
-/// reported, never taken as proof.
-pub async fn close_and_verify(
-    client: &Arc<CdpClient>,
-    on_relay: bool,
-    target_id: &str,
-    deadline: Instant,
-) -> Cleanup {
-    let cap = std::cmp::min(deadline, Instant::now() + CLEANUP_CALL_TIMEOUT);
-    let close = match tokio::time::timeout_at(
-        cap,
-        client.send_command(
-            "Target.closeTarget",
-            Some(json!({ "targetId": target_id })),
-            None,
-        ),
-    )
-    .await
-    {
-        Ok(Ok(v)) if v.get("success").and_then(Value::as_bool) == Some(false) => {
-            "the close was refused".to_string()
-        }
-        Ok(Ok(_)) => "the close was acknowledged".to_string(),
-        Ok(Err(e)) => format!("the close failed: {e}"),
-        Err(_) => "the close got no answer".to_string(),
-    };
-    let recheck_until = std::cmp::min(deadline, Instant::now() + GONE_RECHECK);
-    loop {
-        match read_presence(client, on_relay, target_id, deadline).await {
-            Ok(false) => return Cleanup::Gone,
-            Ok(true) if Instant::now() + GONE_POLL < recheck_until => {
-                tokio::time::sleep(GONE_POLL).await;
-            }
-            Ok(true) => {
-                return Cleanup::NotConfirmed {
-                    why: "Chrome still lists it".to_string(),
-                    close,
-                }
-            }
-            Err(why) => return Cleanup::NotConfirmed { why, close },
-        }
-    }
+    /// The tab may still be open: why it is not confirmed gone.
+    NotConfirmed { why: String },
 }
 
 /// First tabs that may still be open and whose delete right could not be
@@ -351,20 +215,12 @@ pub fn setup_failure(target_id: &str, error: &str, cleanup: &Cleanup, recorded: 
             "{FIRST_TAB_SETUP_FAILED}: {error}. The tab opened for it was closed and Chrome \
              confirms it is gone; nothing is left attached. Rerunning is safe."
         ),
-        Cleanup::NotConfirmed { why, close } => {
-            cleanup_incomplete(target_id, error, why, close, recorded)
-        }
+        Cleanup::NotConfirmed { why } => cleanup_incomplete(target_id, error, why, recorded),
     }
 }
 
 /// The error for a first tab that may still be open.
-pub fn cleanup_incomplete(
-    target_id: &str,
-    cause: &str,
-    why: &str,
-    close: &str,
-    recorded: bool,
-) -> String {
+pub fn cleanup_incomplete(target_id: &str, cause: &str, why: &str, recorded: bool) -> String {
     let recovery = if recorded {
         "This session keeps its delete right for it: run `chrome-use close` (same session) to \
          remove it."
@@ -375,7 +231,7 @@ pub fn cleanup_incomplete(
     };
     format!(
         "{FIRST_TAB_CLEANUP_INCOMPLETE}: {cause}. The blank tab opened for it (target \
-         {target_id}) may still be open: {close}, but it is not confirmed gone ({why}). \
+         {target_id}) may still be open: chrome-use asked Chrome to close it, but it is not confirmed gone ({why}). \
          {recovery} Do not rerun `open` until then; that would open another tab."
     )
 }
@@ -429,26 +285,6 @@ mod tests {
         assert!(old.contains("update it from chrome://extensions"), "{old}");
     }
 
-    /// An acknowledgement is not the contract: only a versioned answer about
-    /// the same target says present or absent.
-    #[test]
-    fn only_the_versioned_presence_answer_decides() {
-        let t = "T1";
-        let absent = json!({"tabPresenceVersion": 1, "targetId": t, "presence": "absent"});
-        let present = json!({"tabPresenceVersion": 1, "targetId": t, "presence": "present"});
-        assert_eq!(presence_from_reply(&Ok(absent), t), Ok(false));
-        assert_eq!(presence_from_reply(&Ok(present), t), Ok(true));
-        for unknown in [
-            Ok(json!({"success": true})),
-            Ok(json!({"targetId": t, "presence": "absent"})),
-            Ok(json!({"tabPresenceVersion": 1, "targetId": "T2", "presence": "absent"})),
-            Ok(json!({"tabPresenceVersion": 1, "targetId": t})),
-            Err("'ABExt.tabPresence' wasn't found".to_string()),
-        ] {
-            assert!(presence_from_reply(&unknown, t).is_err(), "{unknown:?}");
-        }
-    }
-
     #[test]
     fn create_errors_never_claim_no_tab() {
         let e = create_failure("CDP command timed out: Target.createTarget");
@@ -463,7 +299,6 @@ mod tests {
     fn an_unconfirmed_cleanup_keeps_the_right_and_says_not_to_reopen() {
         let not = Cleanup::NotConfirmed {
             why: "Chrome still lists it".into(),
-            close: "the close was acknowledged".into(),
         };
         let e = setup_failure("T1", "Page.enable failed", &not, true);
         assert!(e.starts_with(FIRST_TAB_CLEANUP_INCOMPLETE), "{e}");
@@ -472,7 +307,7 @@ mod tests {
         assert!(!e.contains("nothing is left"), "{e}");
         let lost = setup_failure("T1", "x", &not, false);
         assert!(
-            lost.contains("close that blank tab in Chrome yourself"),
+            lost.contains("only this session's running daemon"),
             "{lost}"
         );
         let ok = setup_failure("T1", "Page.enable failed", &Cleanup::Gone, true);
@@ -493,7 +328,6 @@ mod tests {
             why: "the extension did not answer ABExt.tabPresence: CDP error \
                   (ABExt.tabPresence): no attached tab for targetId T1"
                 .into(),
-            close: "the close was acknowledged".into(),
         };
         for e in [
             setup_failure(

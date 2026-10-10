@@ -210,7 +210,7 @@ mod tests {
                 false,
             ),
             (
-                crate::native::first_tab::cleanup_incomplete("T1", "x", "y", "z", true),
+                crate::native::first_tab::cleanup_incomplete("T1", "x", "y", true),
                 "first_tab_cleanup_incomplete",
                 false,
             ),
