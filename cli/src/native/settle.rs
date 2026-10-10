@@ -917,7 +917,10 @@ mod tests {
             requests: detail,
         };
         let w = s.warning().unwrap();
-        assert!(w.contains("request in flight: GET example.com/r"), "{w}");
+        assert!(
+            w.contains("request in flight still active: GET example.com/r"),
+            "{w}"
+        );
     }
 
     #[test]
