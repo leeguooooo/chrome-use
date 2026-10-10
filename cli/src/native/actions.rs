@@ -563,7 +563,7 @@ pub struct DaemonState {
     /// starts means that command was cancelled in between (its future was
     /// dropped): the refs are marked unverified then, as after a failed
     /// capture, since the action may have changed the page.
-    unfinished_observation: Option<super::element::DocumentIdentity>,
+    unfinished_observation: Option<PendingObservation>,
     /// What a failed post-action capture did this command, for the reply.
     capture_outcome: Option<CaptureOutcome>,
     /// Frame id → the `Referrer-Policy` its document's response header set
@@ -2334,7 +2334,12 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     // From here the action may take effect: until the observation settles
     // the refs' fate, a cancelled command must leave them unverified.
     state.unfinished_observation = if observe {
-        state.pre_action_document.clone()
+        Some(match state.pre_action_document.clone() {
+            Some(identity) => PendingObservation::Known(identity),
+            // The pre-action read failed (denied, malformed): still pending,
+            // and a cancelled command must not leave the refs looking fresh.
+            None => PendingObservation::UnknownDocument,
+        })
     } else {
         None
     };
@@ -11348,15 +11353,53 @@ fn mark_refs_before_capture(
 /// observation finished (see `DaemonState::unfinished_observation`): mark
 /// the refs unverified now, before anything can use them.
 fn mark_refs_after_unfinished_observation(state: &mut DaemonState) {
-    if let Some(identity) = state.unfinished_observation.take() {
-        if state.ref_map.has_snapshot() {
-            state.ref_map.keep_after_failed_capture(
-                identity,
-                "the previous command was cancelled after its action was sent, before its \
-                 observation finished",
-            );
-        }
+    const CAUSE: &str = "the previous command was cancelled after its action was sent, before \
+                         its observation finished";
+    let Some(pending) = state.unfinished_observation.take() else {
+        return;
+    };
+    if !state.ref_map.has_snapshot() {
+        return;
     }
+    match pending {
+        PendingObservation::Known(identity) => {
+            state.ref_map.keep_after_failed_capture(identity, CAUSE)
+        }
+        // Nothing to check the refs against: drop them.
+        PendingObservation::UnknownDocument => state.ref_map.drop_after_failed_capture(
+            CAUSE,
+            "the page's document could not be read before that action",
+        ),
+    }
+}
+
+/// An observed action that was sent and whose observation has not finished.
+#[derive(Debug, Clone, PartialEq)]
+enum PendingObservation {
+    /// The documents read with its baseline: refs can be kept against them.
+    Known(super::element::DocumentIdentity),
+    /// The pre-action read failed: there is nothing to check the refs against.
+    UnknownDocument,
+}
+
+/// Whether `cmd` acts through a ref this session holds only as kept
+/// (unverified). Such a command runs guarded: the #373 recovery (hide the
+/// tab, blur the field, run again) never runs around it, before or after.
+fn names_kept_refs(cmd: &Value, state: &DaemonState) -> bool {
+    state.ref_map.kept().is_some()
+        && refs_named_by(cmd)
+            .iter()
+            .any(|r| state.ref_map.get(r).is_some())
+}
+
+/// A kept-ref refusal (preflight or resolver), by its error code. It came
+/// before any action and is not a blocked command: never recovered.
+fn is_kept_ref_refusal(resp: &Value) -> bool {
+    resp.get("success").and_then(Value::as_bool) == Some(false)
+        && resp
+            .get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|e| e.contains(super::element::KEPT_REF_UNVERIFIED))
 }
 
 /// Whether the refs survive a failed post-action capture, and against which
@@ -11663,6 +11706,45 @@ mod capture_failure_tests {
     }
 
     #[test]
+    fn a_command_naming_a_kept_ref_runs_guarded() {
+        let mut state = DaemonState::new();
+        state.ref_map = form_refs();
+        let fill = json!({"action": "fill", "selector": "@e5", "value": "x"});
+        let snap = json!({"action": "snapshot", "interactive": true});
+        // Fresh refs: the #373 recovery applies as before.
+        assert!(!names_kept_refs(&fill, &state));
+        state
+            .ref_map
+            .keep_after_failed_capture(doc("L1"), "post-action capture denied");
+        assert!(names_kept_refs(&fill, &state));
+        // Commands that use no kept ref keep the existing #373 behaviour.
+        assert!(!names_kept_refs(&snap, &state));
+        assert!(!names_kept_refs(
+            &json!({"action": "click", "selector": "#reserve"}),
+            &state
+        ));
+        // An unknown ref is not a kept one (its error is ordinary).
+        assert!(!names_kept_refs(
+            &json!({"action": "fill", "selector": "@e99", "value": "x"}),
+            &state
+        ));
+    }
+
+    #[test]
+    fn a_kept_ref_refusal_is_recognised_by_its_code_not_its_cause() {
+        let refusal = json!({"success": false, "error": format!(
+            "{} Ref e5 [textbox \"Email\"] ... the page could not be read \
+             (debugger_access_denied: blocked). Nothing was acted on.",
+            crate::native::element::KEPT_REF_UNVERIFIED)});
+        assert!(is_kept_ref_refusal(&refusal));
+        // It still carries the denial, which alone would look recoverable.
+        assert!(is_denied(&refusal));
+        let blocked = json!({"success": false, "error": "debugger_access_denied: blocked"});
+        assert!(!is_kept_ref_refusal(&blocked));
+        assert!(!is_kept_ref_refusal(&json!({"success": true})));
+    }
+
+    #[test]
     fn refs_named_by_reads_element_fields_and_explicit_refs_only() {
         let cmd = json!({"action": "fill", "selector": "e5", "value": "e7"});
         assert_eq!(refs_named_by(&cmd), vec!["e5".to_string()]);
@@ -11732,6 +11814,8 @@ mod cancellation_tests {
         /// The Name field (56) is gone; a node with the same role and name
         /// (66) took its place, which role/name re-anchoring would pick.
         swapped: bool,
+        /// Refuse the frame-tree read (the pre-action document identity).
+        deny_frame_tree: bool,
     }
 
     type Shared = Arc<(Mutex<Page>, Notify)>;
@@ -11756,6 +11840,9 @@ mod cancellation_tests {
         };
         Some(Ok(match req["method"].as_str().unwrap_or("") {
             "Page.getFrameTree" => {
+                if p.deny_frame_tree {
+                    return Some(Err("debugger_access_denied: fixture".into()));
+                }
                 json!({"frameTree": {"frame": {"id": "T1", "loaderId": "L1"}}})
             }
             "Accessibility.getFullAXTree" => {
@@ -11906,6 +11993,57 @@ mod cancellation_tests {
         // The earlier fill was not sent again, and nothing went to the substitute.
         assert_eq!(page.0.lock().unwrap().typed, vec!["me@example.test"]);
         assert!(state.ref_map.kept().is_some());
+    }
+
+    /// As above, but the pre-action document read was refused, so there is
+    /// no identity to keep the refs against. The cancelled command still
+    /// left an observation pending, and the next command drops the refs:
+    /// the old ref acts on nothing and is not re-anchored.
+    #[tokio::test]
+    async fn a_cancelled_command_with_no_pre_action_identity_drops_the_refs() {
+        let (page, url) = start().await;
+        let mut state = DaemonState::new();
+        state.browser = Some(BrowserManager::connect_cdp_direct(&url).await.unwrap());
+        let r = execute_command(
+            &json!({"id": "s", "action": "snapshot", "interactive": true}),
+            &mut state,
+        )
+        .await;
+        assert_eq!(r["success"], true, "{r}");
+        let snap = r["data"]["snapshot"].as_str().unwrap().to_string();
+        let email = ref_for(&snap, "Email");
+        let name = ref_for(&snap, "Name");
+
+        {
+            let mut p = page.0.lock().unwrap();
+            p.hang_settle = true;
+            p.deny_frame_tree = true;
+        }
+        {
+            let cmd = json!({"id": "f", "action": "fill", "selector": format!("@{email}"),
+                             "value": "me@example.test", "observe": true});
+            let fill = execute_command(&cmd, &mut state);
+            tokio::select! {
+                r = fill => panic!("the observation should still be settling: {r}"),
+                _ = page.1.notified() => {}
+            }
+        }
+        assert_eq!(page.0.lock().unwrap().typed, vec!["me@example.test"]);
+        {
+            let mut p = page.0.lock().unwrap();
+            p.hang_settle = false;
+            p.deny_frame_tree = false;
+            p.swapped = true;
+        }
+        let cmd = json!({"id": "n", "action": "fill", "selector": format!("@{name}"),
+                         "value": "Ada"});
+        let r = execute_command(&cmd, &mut state).await;
+        assert_eq!(r["success"], false, "{r}");
+        let e = r["error"].as_str().unwrap_or("");
+        assert!(e.contains("Unknown ref"), "{e}");
+        assert!(e.contains("could not be read before that action"), "{e}");
+        assert_eq!(page.0.lock().unwrap().typed, vec!["me@example.test"]);
+        assert!(!state.ref_map.has_snapshot());
     }
 }
 
@@ -14995,6 +15133,14 @@ fn command_secrets(cmd: &Value) -> Vec<String> {
 
 async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    // A command acting through a kept (unverified) ref runs guarded: its
+    // refusal, and any block it meets, are reported as they are. Hiding the
+    // tab and blurring the field to run it again is exactly the side effect
+    // an unverified ref must not cause.
+    mark_refs_after_unfinished_observation(state);
+    if names_kept_refs(cmd, state) {
+        return execute_command(cmd, state).await;
+    }
     // A click or key press cannot be repeated once it may have run, so check
     // for the block before running it: a password manager's menu opens a moment
     // after `fill` focused a field, and the next command is usually the click
@@ -15013,6 +15159,9 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
         }
     }
     let first = execute_command(cmd, state).await;
+    if is_kept_ref_refusal(&first) {
+        return first;
+    }
     if !is_denied(&first) {
         return match pre {
             Some(Ok(note)) => with_menu_warning(first, "before running the command", note),

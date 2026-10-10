@@ -46,6 +46,16 @@ struct Page {
     /// `DOM.describeNode` answers since the denial, and what they return.
     describes_since_denial: u32,
     dom_payload: Option<Value>,
+    /// After the denial, keep the tab blocked (every page command denied, as
+    /// while another extension's frame is open) until the tab is hidden
+    /// with `tabs.update` (what the #373 recovery does).
+    stay_blocked: bool,
+    blocked: bool,
+    /// The #373 recovery's footprint since the denial: `tabs.update` calls,
+    /// blank temp tabs created, and blur scripts sent to the page.
+    tab_updates: u32,
+    temp_tabs: u32,
+    blurs: u32,
     /// Every method called, for diagnostics.
     log: Vec<String>,
 }
@@ -120,6 +130,16 @@ impl Fake {
         self.0.lock().unwrap().dom_payload = Some(payload);
     }
 
+    fn stay_blocked(&self) {
+        self.0.lock().unwrap().stay_blocked = true;
+    }
+
+    /// `(tabs.update calls, temp tabs, blurs)` since the denial.
+    fn recovery_footprint(&self) -> (u32, u32, u32) {
+        let p = self.0.lock().unwrap();
+        (p.tab_updates, p.temp_tabs, p.blurs)
+    }
+
     fn describes_since_denial(&self) -> u32 {
         self.0.lock().unwrap().describes_since_denial
     }
@@ -141,6 +161,19 @@ impl Fake {
         let method = req["method"].as_str().unwrap_or("").to_string();
         let params = &req["params"];
         p.log.push(method.clone());
+        if p.denials > 0 {
+            let script = format!(
+                "{}{}",
+                params["expression"].as_str().unwrap_or(""),
+                params["functionDeclaration"].as_str().unwrap_or("")
+            );
+            if script.contains("blur(") {
+                p.blurs += 1;
+            }
+        }
+        if p.blocked && req.get("sessionId").is_some() {
+            return Err("Cannot access a chrome-extension:// URL of different extension".into());
+        }
         Ok(match method.as_str() {
             "Target.getTargets" => {
                 let infos: Vec<Value> = (p.created)
@@ -154,8 +187,48 @@ impl Fake {
                 json!({"targetInfos": infos})
             }
             "Target.createTarget" => {
-                p.created = true;
-                json!({"targetId": "T1"})
+                if !p.created {
+                    p.created = true;
+                    json!({"targetId": "T1"})
+                } else {
+                    // Only the #373 recovery opens another (blank) tab here.
+                    p.temp_tabs += 1;
+                    json!({"targetId": format!("TMP{}", p.temp_tabs)})
+                }
+            }
+            "Target.closeTarget" => json!({"success": true}),
+            // The extension relay (`ABExt.*`): enough for the #373 recovery
+            // to run all the way, so a test can see whether it did.
+            "ABExt.inspectTab" => {
+                let ours =
+                    params["targetId"] == json!("T1") || params["sessionId"] == json!("S-T1");
+                if ours {
+                    json!({"chromeTabId": 11, "windowId": 1, "active": true,
+                           "url": "https://form.test/", "title": "Form"})
+                } else {
+                    json!({"chromeTabId": 12, "windowId": 1, "active": false})
+                }
+            }
+            "ABExt.state" => json!({"ownedTabs": [11, 12]}),
+            "ABExt.call" => {
+                let call = format!(
+                    "{}.{}",
+                    params["namespace"].as_str().unwrap_or(""),
+                    params["method"].as_str().unwrap_or("")
+                );
+                match call.as_str() {
+                    "windows.get" => json!({"result": {"state": "normal", "focused": true}}),
+                    "tabs.query" => json!({"result": [{"id": 11, "index": 0, "active": true,
+                                                       "windowId": 1}]}),
+                    "tabs.get" => json!({"result": {"id": 11, "groupId": -1}}),
+                    "tabs.update" => {
+                        p.tab_updates += 1;
+                        // Hiding the tab closes the blocking frame.
+                        p.blocked = false;
+                        json!({"result": {}})
+                    }
+                    _ => json!({"result": null}),
+                }
             }
             "Target.attachToTarget" => json!({"sessionId": "S-T1"}),
             "Target.getTargetInfo" => json!({"targetInfo": {"targetId": "T1", "type": "page",
@@ -172,6 +245,7 @@ impl Fake {
                     if p.navigate_on_denial {
                         p.loader = "L2".into();
                     }
+                    p.blocked = p.stay_blocked;
                     return Err("debugger_access_denied: Chrome blocked debugger access \
                                 (fixture)"
                         .into());
@@ -317,12 +391,21 @@ impl Daemon {
     }
 
     fn start_with(session: &str, cdp: &str, env: &[(&str, &str)]) -> Self {
+        Self::start_full(session, cdp, env, false)
+    }
+
+    /// `relay`: the fake is this session's extension relay (its url is the
+    /// relay record), so the #373 recovery is armed as in a real Chrome.
+    fn start_full(session: &str, cdp: &str, env: &[(&str, &str)], relay_mode: bool) -> Self {
         let home = tempfile::tempdir().unwrap();
         let sock = tempfile::Builder::new()
             .prefix("cuf")
             .tempdir_in("/tmp")
             .unwrap();
         let relay = tempfile::tempdir().unwrap();
+        if relay_mode {
+            std::fs::write(relay.path().join("relay-cdp-url"), cdp).unwrap();
+        }
         let child = Command::new(BIN)
             .env("AGENT_BROWSER_DAEMON", "1")
             .env("AGENT_BROWSER_SESSION", session)
@@ -583,4 +666,71 @@ fn kept_dom_walk_refs_are_refused_whatever_the_dom_says() {
         assert_eq!(fake.describes_since_denial(), 0, "{label}: {all}");
         assert_eq!(fake.typed(), vec!["me@example.test"], "{label}: {all}");
     }
+}
+
+/// On the extension relay, with the tab still blocked after the denied
+/// capture: the next step's kept ref cannot be checked, so it is refused —
+/// and that refusal is not treated as a blocked command. No tab is hidden
+/// (`tabs.update`), no blank tab is opened, nothing is blurred, and nothing
+/// runs again. The fill ran once. The explicit `snapshot -i` that follows is
+/// an ordinary command, so the existing #373 recovery still serves it, and
+/// its fresh refs work.
+#[test]
+fn on_the_relay_a_kept_ref_refusal_triggers_no_recovery() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start_full("capfail-relay", &cdp, &[], true);
+    let snap = d.snapshot();
+    let email = ref_for(&snap, "Email");
+    let name = ref_for(&snap, "Name");
+
+    fake.arm(false);
+    fake.stay_blocked();
+    let out = d.cli(&[
+        "batch",
+        &format!("fill @{email} me@example.test --observe"),
+        &format!("fill @{name} Ada"),
+    ]);
+    let all = text(&out);
+    assert_eq!(fake.denials(), 1, "{all}");
+    assert!(all.contains("kept-unverified"), "{all}");
+    assert!(all.contains("kept_ref_unverified:"), "{all}");
+    // The real cause stays in the message.
+    assert!(all.contains("debugger_access_denied"), "{all}");
+    assert!(all.contains("Nothing was acted on"), "{all}");
+    assert_eq!(fake.recovery_footprint(), (0, 0, 0), "{all}");
+    assert_eq!(fake.typed(), vec!["me@example.test"], "{all}");
+
+    // The explicit next step: a fresh snapshot (recovered the #373 way, as
+    // before this change), then its refs.
+    let out = d.cli(&["snapshot", "-i"]);
+    let snap = text(&out);
+    assert!(out.status.success(), "{snap}");
+    let name = ref_for(&snap, "Name");
+    let out = d.cli(&["fill", &format!("@{name}"), "Ada"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(fake.typed(), vec!["me@example.test", "Ada"]);
+}
+
+/// On the relay, the resolver's own refusal (its second identity probe
+/// fails after the preflight passed) recovers nothing either.
+#[test]
+fn on_the_relay_a_resolver_refusal_triggers_no_recovery() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start_full("capfail-relay-probe", &cdp, &[], true);
+    let snap = d.snapshot();
+    let email = ref_for(&snap, "Email");
+    let name = ref_for(&snap, "Name");
+
+    fake.arm(false);
+    fake.after_denial(AfterDenial::ProbeFails);
+    let out = d.cli(&[
+        "batch",
+        &format!("fill @{email} me@example.test --observe"),
+        &format!("fill @{name} Ada"),
+    ]);
+    let all = text(&out);
+    assert_eq!(fake.denials(), 1, "{all}");
+    assert!(all.contains("kept_ref_unverified:"), "{all}");
+    assert_eq!(fake.recovery_footprint(), (0, 0, 0), "{all}");
+    assert_eq!(fake.typed(), vec!["me@example.test"], "{all}");
 }

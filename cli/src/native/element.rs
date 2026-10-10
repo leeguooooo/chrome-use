@@ -1929,6 +1929,10 @@ pub async fn read_document_identity(
     Ok(identity)
 }
 
+/// The error code that starts every kept-ref refusal: a precondition that
+/// failed before any action, never a blocked command to recover and re-run.
+pub const KEPT_REF_UNVERIFIED: &str = "kept_ref_unverified:";
+
 /// Why a DOM-walk ref kept from before a failed capture is refused.
 const DOM_SOURCED_KEPT: &str = "it came from a DOM-walk snapshot, whose node cannot be \
      confirmed as the same element, so kept DOM refs are never used";
@@ -1946,7 +1950,7 @@ pub(crate) fn kept_ref_refusal(
         .map(|k| k.cause.as_str())
         .unwrap_or("post-action capture failed");
     format!(
-        "Ref {ref_id} [{} \"{}\"] is from the snapshot taken before the last action, whose \
+        "{KEPT_REF_UNVERIFIED} Ref {ref_id} [{} \"{}\"] is from the snapshot taken before the last action, whose \
          post-action capture failed ({cause}). chrome-use could not confirm it still names that \
          element in the same document: {why}. Nothing was acted on. Do not repeat the earlier \
          action; run `snapshot -i` and use its refs.",
