@@ -3621,7 +3621,17 @@ impl BrowserManager {
                 Err(_) => {}
             }
         }
-        Ok(by_id.into_values().collect())
+        Ok(self.live_relay_targets(by_id.into_values().collect()).await)
+    }
+
+    /// Over the relay, only the targets that can be confirmed live: the
+    /// relay's list is the host's record, which older extensions leave dead
+    /// tabs in (#519). Anything else is returned as read.
+    async fn live_relay_targets(&self, targets: Vec<TargetInfo>) -> Vec<TargetInfo> {
+        if !self.via_relay() {
+            return targets;
+        }
+        super::relay_targets::confirm_live(&self.client, targets).await
     }
 
     /// Every tab the relay knows, UNSCOPED (ignores group scoping) — for explicit
@@ -3659,7 +3669,7 @@ impl BrowserManager {
             }
         }
         if any_ok {
-            Ok(by_id.into_values().collect())
+            Ok(self.live_relay_targets(by_id.into_values().collect()).await)
         } else {
             // Older relay without ABRelay.getAllTargets → best-effort scoped list.
             self.collect_page_targets().await
@@ -7138,6 +7148,7 @@ impl BrowserManager {
             .into_iter()
             .filter(should_track_target)
             .collect();
+        let live = self.live_relay_targets(live).await;
         let mut opened: Option<PageInfo> = None;
         for target in &live {
             if before.contains(&target.target_id) {
@@ -7215,6 +7226,7 @@ impl BrowserManager {
             .into_iter()
             .filter(should_track_target)
             .collect();
+        let live = self.live_relay_targets(live).await;
         let live_ids: HashSet<String> = live.iter().map(|t| t.target_id.clone()).collect();
         let on_relay = self.agent_group().is_some();
         if on_relay && self.relay_scoped {

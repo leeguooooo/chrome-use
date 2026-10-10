@@ -122,7 +122,16 @@ export async function targetPresence({ targetId, tabId }, deps) {
   const listed = first.byId.get(targetId)
   if (listed) return listedPresence(base, listed, deps.getTab)
   if (tabId == null) {
-    return { ...base, tabId: null, presence: 'unknown', error: 'the target is not listed and no tab id was given to confirm it' }
+    // `listed: false` (#519): the registry was read and does not have this
+    // target. A target id never comes back, so the CLI may treat it as dead
+    // without a tab id; only `close` needs the stricter `absent`.
+    return {
+      ...base,
+      tabId: null,
+      presence: 'unknown',
+      listed: false,
+      error: 'the target is not listed and no tab id was given to confirm it',
+    }
   }
   const tab = await exactTabPresence(tabId, deps.getTab)
   if (tab.presence === 'present') {
@@ -130,6 +139,7 @@ export async function targetPresence({ targetId, tabId }, deps) {
       ...base,
       tabId,
       presence: 'unknown',
+      listed: false,
       error: `tab ${tabId} still exists but no longer lists this target`,
     }
   }

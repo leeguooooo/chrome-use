@@ -39,6 +39,9 @@ pub type ClientId = u64;
 struct TargetEntry {
     session_id: String,
     target_info: Value,
+    /// For a child target a tab auto-attached (a worker), the tab's session:
+    /// the child goes when its tab does (#519). `None` for a tab itself.
+    parent_session: Option<String>,
 }
 
 /// Relay translation state: the targets the extension exposes, plus the
@@ -313,6 +316,27 @@ impl RelayState {
             return vec![];
         }
 
+        // The extension's full list of the tabs it holds (ab-connect 0.5.34,
+        // #519), sent after it re-announces them on (re)connect and
+        // periodically. Every other tab record is a tab whose detach this host
+        // was never told about, or was told about before a late announce
+        // re-added it: drop it, so `getTargets` lists only live tabs.
+        if msg.get("method").and_then(|m| m.as_str()) == Some("relayTargets") {
+            if let Some(list) = msg.get("targets").and_then(Value::as_array) {
+                let held: HashSet<(String, String)> = list
+                    .iter()
+                    .filter_map(|t| {
+                        Some((
+                            t.get("targetId")?.as_str()?.to_string(),
+                            t.get("sessionId")?.as_str()?.to_string(),
+                        ))
+                    })
+                    .collect();
+                self.retain_held_targets(&held);
+            }
+            return vec![];
+        }
+
         // Response to a forwardCDPCommand we sent → route the raw CDP response
         // back to the client that issued it, with its original id restored.
         if msg.get("id").is_some()
@@ -415,11 +439,37 @@ impl RelayState {
                                     }
                                 }
                             }
+                            // A tab announces itself on its own `cb-tab-*`
+                            // session; a child target (a worker) arrives on
+                            // its tab's session with a session of its own.
+                            let parent_session = session_id
+                                .filter(|parent| !parent.is_empty() && *parent != sid)
+                                .map(str::to_string);
+                            if parent_session.is_none() && !sid.is_empty() {
+                                // One tab has one page target. A record of the
+                                // same tab under an older target id is stale
+                                // and nothing else would ever remove it.
+                                let stale: Vec<String> = self
+                                    .targets
+                                    .iter()
+                                    .filter(|(other, e)| {
+                                        other.as_str() != tid
+                                            && e.parent_session.is_none()
+                                            && e.session_id == sid
+                                    })
+                                    .map(|(other, _)| other.clone())
+                                    .collect();
+                                for other in stale {
+                                    self.targets.remove(&other);
+                                    self.target_group.remove(&other);
+                                }
+                            }
                             self.targets.insert(
                                 tid.to_string(),
                                 TargetEntry {
                                     session_id: sid,
                                     target_info: info.clone(),
+                                    parent_session,
                                 },
                             );
                         }
@@ -442,16 +492,21 @@ impl RelayState {
                         }
                     }
                     if let Some(gone) = gone {
+                        // The session's own record, and every child target
+                        // (worker) its tab carried: those die with the tab and
+                        // Chrome sends no detach for them (#519).
                         let gone_tids: Vec<String> = self
                             .targets
                             .iter()
-                            .filter(|(_, e)| e.session_id == gone)
+                            .filter(|(_, e)| {
+                                e.session_id == gone || e.parent_session.as_deref() == Some(gone)
+                            })
                             .map(|(tid, _)| tid.clone())
                             .collect();
                         for tid in gone_tids {
                             self.target_group.remove(&tid);
+                            self.targets.remove(&tid);
                         }
-                        self.targets.retain(|_, e| e.session_id != gone);
                     }
                     return vec![];
                 }
@@ -501,6 +556,26 @@ impl RelayState {
         vec![]
     }
 
+    /// Keep only the tab records the extension holds (`(targetId, sessionId)`
+    /// pairs) and the child targets of those tabs; drop the rest with their
+    /// group tags.
+    fn retain_held_targets(&mut self, held: &HashSet<(String, String)>) {
+        let held_sessions: HashSet<&str> = held.iter().map(|(_, s)| s.as_str()).collect();
+        let dropped: Vec<String> = self
+            .targets
+            .iter()
+            .filter(|(tid, e)| match &e.parent_session {
+                None => !held.contains(&((*tid).clone(), e.session_id.clone())),
+                Some(parent) => !held_sessions.contains(parent.as_str()),
+            })
+            .map(|(tid, _)| tid.clone())
+            .collect();
+        for tid in dropped {
+            self.targets.remove(&tid);
+            self.target_group.remove(&tid);
+        }
+    }
+
     #[cfg(test)]
     fn seed_target(&mut self, target_id: &str, session_id: &str) {
         self.targets.insert(
@@ -514,6 +589,7 @@ impl RelayState {
                     "url": "about:blank",
                     "attached": true,
                 }),
+                parent_session: None,
             },
         );
     }
@@ -1158,5 +1234,118 @@ mod tests {
                 ("tb".into(), "https://b.example/home".into()),
             ]
         );
+    }
+
+    fn detached_event(session_id: &str) -> Value {
+        json!({ "method": "forwardCDPEvent", "params": {
+            "sessionId": session_id, "method": "Target.detachedFromTarget",
+            "params": { "sessionId": session_id }
+        }})
+    }
+
+    fn page_ids(s: &mut RelayState) -> Vec<String> {
+        let mut ids: Vec<String> = all_target_urls(s).into_iter().map(|(id, _)| id).collect();
+        ids.sort();
+        ids
+    }
+
+    /// #519: an announce that lands after its tab's detach (the extension
+    /// read the closed tab, then posted) used to leave a url-less "attached"
+    /// page no event removed, and attaching to it succeeded. The extension's
+    /// list of what it holds (0.5.34) drops it; a live tab stays.
+    #[test]
+    fn relay_targets_list_drops_a_record_announced_after_its_detach() {
+        let mut s = RelayState::new();
+        s.handle_ext_message(&attached_event("LIVE", "cb-tab-1"), "");
+        s.handle_ext_message(&detached_event("cb-tab-2"), "");
+        let mut late = attached_event("DEAD", "cb-tab-2");
+        late["params"]["params"]["targetInfo"]["url"] = json!("");
+        late["params"]["params"]["targetInfo"]["title"] = json!("");
+        s.handle_ext_message(&late, "");
+        assert_eq!(
+            page_ids(&mut s),
+            vec!["DEAD", "LIVE"],
+            "the phantom the issue saw"
+        );
+
+        let out = s.handle_ext_message(
+            &json!({ "method": "relayTargets",
+                     "targets": [{ "targetId": "LIVE", "sessionId": "cb-tab-1" }] }),
+            "",
+        );
+        assert!(out.is_empty(), "consumed, never sent to a client");
+        assert_eq!(page_ids(&mut s), vec!["LIVE"]);
+        match s.route_client_command(
+            1,
+            &json!({ "id": 3, "method": "Target.attachToTarget", "params": { "targetId": "DEAD" } }),
+        ) {
+            ClientRoute::Local(v) => assert!(v.get("error").is_some(), "{v}"),
+            other => panic!("attach must be answered locally: {other:?}"),
+        }
+    }
+
+    /// A malformed list proves nothing and changes nothing; an empty one means
+    /// the extension holds no tab at all.
+    #[test]
+    fn relay_targets_list_malformed_is_ignored_empty_clears() {
+        let mut s = RelayState::new();
+        s.handle_ext_message(&attached_event("T1", "cb-tab-1"), "");
+        s.handle_ext_message(&json!({ "method": "relayTargets" }), "");
+        s.handle_ext_message(&json!({ "method": "relayTargets", "targets": "x" }), "");
+        assert_eq!(page_ids(&mut s), vec!["T1"]);
+        // Same target id under another session is not the record the extension holds.
+        s.handle_ext_message(
+            &json!({ "method": "relayTargets",
+                     "targets": [{ "targetId": "T1", "sessionId": "cb-tab-9" }] }),
+            "",
+        );
+        assert!(page_ids(&mut s).is_empty());
+    }
+
+    /// A worker a tab auto-attached is recorded under the tab's session and
+    /// goes with it: Chrome sends no detach for it when the tab closes.
+    #[test]
+    fn a_tabs_child_targets_go_when_the_tab_detaches() {
+        let mut s = RelayState::new();
+        s.handle_ext_message(&attached_event("PAGE", "cb-tab-5"), "");
+        s.handle_ext_message(
+            &json!({ "method": "forwardCDPEvent", "params": {
+                "sessionId": "cb-tab-5", "method": "Target.attachedToTarget",
+                "params": { "sessionId": "W-SID", "targetInfo": {
+                    "targetId": "WORKER", "type": "worker", "url": "https://x/w.js", "title": "" } }
+            }}),
+            "",
+        );
+        assert_eq!(page_ids(&mut s), vec!["PAGE", "WORKER"]);
+        s.handle_ext_message(&detached_event("cb-tab-5"), "");
+        assert!(page_ids(&mut s).is_empty(), "the worker outlived its tab");
+
+        // The same through the extension's list: a child of a dropped tab goes.
+        s.handle_ext_message(&attached_event("P2", "cb-tab-6"), "");
+        s.handle_ext_message(
+            &json!({ "method": "forwardCDPEvent", "params": {
+                "sessionId": "cb-tab-6", "method": "Target.attachedToTarget",
+                "params": { "sessionId": "W2", "targetInfo": {
+                    "targetId": "W2T", "type": "worker", "url": "", "title": "" } }
+            }}),
+            "",
+        );
+        s.handle_ext_message(&attached_event("P3", "cb-tab-7"), "");
+        s.handle_ext_message(
+            &json!({ "method": "relayTargets",
+                     "targets": [{ "targetId": "P3", "sessionId": "cb-tab-7" }] }),
+            "",
+        );
+        assert_eq!(page_ids(&mut s), vec!["P3"]);
+    }
+
+    /// One tab has one page target: re-announcing it under a new target id
+    /// replaces the old record instead of leaving it behind.
+    #[test]
+    fn a_tab_reannounced_under_a_new_target_id_keeps_one_record() {
+        let mut s = RelayState::new();
+        s.handle_ext_message(&attached_event("OLD", "cb-tab-8"), "");
+        s.handle_ext_message(&attached_event("NEW", "cb-tab-8"), "");
+        assert_eq!(page_ids(&mut s), vec!["NEW"]);
     }
 }

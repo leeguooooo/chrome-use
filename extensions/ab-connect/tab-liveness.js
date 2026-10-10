@@ -13,12 +13,23 @@ export async function resolveFirstLiveTab(candidateIds, getTab) {
   return null
 }
 
-/** Split attached relay records into live entries and confirmed dead records. */
+/**
+ * Split attached relay records into live entries and confirmed dead records.
+ * A tab is dead when `deps.getTab` answers without it, or fails with an error
+ * `deps.isMissing(error, tabId)` accepts (Chrome's own "No tab with id").
+ * Without `isMissing` every failed read counts as dead (the #196 rule); with
+ * it, any other failure keeps the entry, since it proves nothing.
+ */
 export async function reconcileAttachedTabEntries(entries, deps) {
   const live = []
   const removed = []
   for (const [tabId, entry] of entries) {
-    const tab = await deps.getTab(tabId).catch(() => null)
+    let tab = null
+    try {
+      tab = await deps.getTab(tabId)
+    } catch (error) {
+      if (deps.isMissing && !deps.isMissing(error, tabId)) tab = { id: tabId, unread: true }
+    }
     if (tab) {
       live.push([tabId, entry])
       continue
