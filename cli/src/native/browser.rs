@@ -213,6 +213,7 @@ fn describe_tabs(tabs: &[Value]) -> String {
 pub(crate) fn presence_from_tab_presence(
     result: &Result<Value, String>,
     target_id: &str,
+    asked_tab: Option<i64>,
 ) -> (TabPresence, Option<i64>) {
     let v = match result {
         Ok(v) => v,
@@ -228,14 +229,27 @@ pub(crate) fn presence_from_tab_presence(
             )
         }
     };
-    let version = v.get("tabPresenceVersion").and_then(Value::as_u64);
-    if version.is_none_or(|n| n < TAB_PRESENCE_VERSION) {
-        return (
-            TabPresence::Unsupported(
-                "the extension does not report tab presence (no tabPresenceVersion)".to_string(),
-            ),
-            None,
-        );
+    match v.get("tabPresenceVersion").and_then(Value::as_u64) {
+        Some(TAB_PRESENCE_VERSION) => {}
+        None => {
+            return (
+                TabPresence::Unsupported(
+                    "the extension does not report tab presence (no tabPresenceVersion)"
+                        .to_string(),
+                ),
+                None,
+            )
+        }
+        // A contract this CLI does not know: its answers are not evidence.
+        Some(other) => {
+            return (
+                TabPresence::Unverified(format!(
+                    "the extension answered tab presence version {other}, which this CLI does \
+                     not know"
+                )),
+                None,
+            )
+        }
     }
     if v.get("targetId").and_then(Value::as_str) != Some(target_id) {
         return (
@@ -243,9 +257,20 @@ pub(crate) fn presence_from_tab_presence(
             None,
         );
     }
-    let tab = v.get("tabId").and_then(Value::as_i64);
+    let tab = v.get("tabId").and_then(Value::as_i64).filter(|id| *id >= 0);
     match v.get("presence").and_then(Value::as_str) {
-        Some("absent") => (TabPresence::Absent, tab),
+        // Absence is about one exact tab: the one asked about, named back
+        // with a valid id. Anything less is not proof the tab is gone.
+        Some("absent") => match (tab, asked_tab) {
+            (Some(tab), Some(asked)) if tab == asked => (TabPresence::Absent, Some(tab)),
+            _ => (
+                TabPresence::Unverified(
+                    "the extension reported the tab absent without the exact tab id asked about"
+                        .to_string(),
+                ),
+                asked_tab,
+            ),
+        },
         Some("present") => (TabPresence::Present, tab),
         _ => (
             TabPresence::Unverified(close_reason(
@@ -319,7 +344,7 @@ async fn read_tab_presence(
     )
     .await
     {
-        Some(read) => presence_from_tab_presence(&read, target_id),
+        Some(read) => presence_from_tab_presence(&read, target_id, tab_id),
         None => (
             TabPresence::Unverified(NO_ANSWER_IN_BUDGET.to_string()),
             tab_id,
@@ -7414,11 +7439,11 @@ mod honest_close_tests {
         let reply = |v: serde_json::Value| Ok(v);
         let v1 = |presence: &str| json!({"tabPresenceVersion": 1, "targetId": "T", "tabId": 5, "presence": presence});
         assert_eq!(
-            presence_from_tab_presence(&reply(v1("absent")), "T"),
+            presence_from_tab_presence(&reply(v1("absent")), "T", Some(5)),
             (TabPresence::Absent, Some(5))
         );
         assert_eq!(
-            presence_from_tab_presence(&reply(v1("present")), "T"),
+            presence_from_tab_presence(&reply(v1("present")), "T", Some(5)),
             (TabPresence::Present, Some(5))
         );
         // The target moved to a new Chrome tab (a replacement): present, and
@@ -7426,29 +7451,55 @@ mod honest_close_tests {
         let moved = json!({"tabPresenceVersion": 1, "targetId": "T", "tabId": 9,
                            "presence": "present"});
         assert_eq!(
-            presence_from_tab_presence(&reply(moved), "T"),
+            presence_from_tab_presence(&reply(moved), "T", Some(5)),
             (TabPresence::Present, Some(9))
         );
         assert!(matches!(
-            presence_from_tab_presence(&reply(v1("unknown")), "T").0,
+            presence_from_tab_presence(&reply(v1("unknown")), "T", Some(5)).0,
             TabPresence::Unverified(_)
         ));
         // Another target's answer says nothing about this one.
         assert!(matches!(
-            presence_from_tab_presence(&reply(v1("absent")), "OTHER").0,
+            presence_from_tab_presence(&reply(v1("absent")), "OTHER", Some(5)).0,
             TabPresence::Unverified(_)
         ));
         // No contract version (ab-connect 0.5.32 and older answer other
         // methods, never this one): never absent, whatever it says.
         let unversioned = json!({"targetId": "T", "tabId": 5, "presence": "absent"});
         assert!(matches!(
-            presence_from_tab_presence(&reply(unversioned), "T").0,
+            presence_from_tab_presence(&reply(unversioned), "T", Some(5)).0,
             TabPresence::Unsupported(_)
         ));
-        let v0 = json!({"tabPresenceVersion": 0, "targetId": "T", "presence": "absent"});
+        // Only the V1 contract this CLI knows: not 0, not a future 2.
+        for version in [0, 2, 99] {
+            let other = json!({"tabPresenceVersion": version, "targetId": "T", "tabId": 5,
+                               "presence": "absent"});
+            assert!(matches!(
+                presence_from_tab_presence(&reply(other), "T", Some(5)).0,
+                TabPresence::Unverified(_)
+            ));
+        }
+        // Absent needs the exact tab id asked about, named back and valid.
+        for tab in [json!(null), json!(-1), json!("5"), json!(6), json!(5.5)] {
+            let malformed = json!({"tabPresenceVersion": 1, "targetId": "T", "tabId": tab,
+                                   "presence": "absent"});
+            assert!(
+                matches!(
+                    presence_from_tab_presence(&reply(malformed.clone()), "T", Some(5)).0,
+                    TabPresence::Unverified(_)
+                ),
+                "{malformed}"
+            );
+        }
+        let no_tab = json!({"tabPresenceVersion": 1, "targetId": "T", "presence": "absent"});
         assert!(matches!(
-            presence_from_tab_presence(&reply(v0), "T").0,
-            TabPresence::Unsupported(_)
+            presence_from_tab_presence(&reply(no_tab), "T", Some(5)).0,
+            TabPresence::Unverified(_)
+        ));
+        // Nothing asked, nothing proven.
+        assert!(matches!(
+            presence_from_tab_presence(&reply(v1("absent")), "T", None).0,
+            TabPresence::Unverified(_)
         ));
         // Errors are never parsed: not even one that reads like a missing tab.
         for e in [
@@ -7457,7 +7508,7 @@ mod honest_close_tests {
             "timed out within the close budget",
         ] {
             assert!(matches!(
-                presence_from_tab_presence(&Err(e.to_string()), "T").0,
+                presence_from_tab_presence(&Err(e.to_string()), "T", Some(5)).0,
                 TabPresence::Unsupported(_)
             ));
         }
@@ -7465,13 +7516,15 @@ mod honest_close_tests {
         // tab; none of it reaches the close error, which the command layer
         // would otherwise retry and reword as a lost tab.
         let old = Err("no attached tab for targetId T (ABExt.tabPresence)".to_string());
-        let TabPresence::Unsupported(reason) = presence_from_tab_presence(&old, "T").0 else {
+        let TabPresence::Unsupported(reason) = presence_from_tab_presence(&old, "T", Some(5)).0
+        else {
             panic!("not unsupported");
         };
         assert!(!super::is_stale_target_error(&reason), "{reason}");
         let unknown = json!({"tabPresenceVersion": 1, "targetId": "T", "presence": "unknown",
                              "error": "no attached tab for T"});
-        let TabPresence::Unverified(reason) = presence_from_tab_presence(&Ok(unknown), "T").0
+        let TabPresence::Unverified(reason) =
+            presence_from_tab_presence(&Ok(unknown), "T", Some(5)).0
         else {
             panic!("not unverified");
         };

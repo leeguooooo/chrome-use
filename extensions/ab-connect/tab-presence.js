@@ -42,13 +42,72 @@ export async function exactTabPresence(tabId, getTab) {
 }
 
 /**
+ * Read and validate Chrome's whole target registry. Every record must carry a
+ * non-empty string `id`, ids must be unique, and a `tabId`, when present,
+ * must be a non-negative integer. Anything else (a non-list, a `null` record,
+ * a record without an id, a duplicate) makes the whole list unusable as
+ * evidence: a malformed list proves nothing about which targets are gone.
+ * Returns `{ ok: true, byId }` or `{ ok: false, error }`.
+ */
+export async function readTargetRegistry(getTargets) {
+  let targets
+  try {
+    targets = await getTargets()
+  } catch (error) {
+    return { ok: false, error: `chrome.debugger.getTargets failed: ${String(error?.message ?? error)}` }
+  }
+  if (!Array.isArray(targets)) {
+    return { ok: false, error: 'chrome.debugger.getTargets answered without a list' }
+  }
+  const byId = new Map()
+  for (const record of targets) {
+    if (record === null || typeof record !== 'object') {
+      return { ok: false, error: 'chrome.debugger.getTargets listed a record that is not an object' }
+    }
+    if (typeof record.id !== 'string' || record.id === '') {
+      return { ok: false, error: 'chrome.debugger.getTargets listed a record without a target id' }
+    }
+    if (record.tabId !== undefined && (!Number.isSafeInteger(record.tabId) || record.tabId < 0)) {
+      return { ok: false, error: `chrome.debugger.getTargets listed target ${record.id} with an invalid tab id` }
+    }
+    if (byId.has(record.id)) {
+      return { ok: false, error: `chrome.debugger.getTargets listed target ${record.id} twice` }
+    }
+    byId.set(record.id, record)
+  }
+  return { ok: true, byId }
+}
+
+/** The answer for a target the registry lists. */
+async function listedPresence(base, listed, getTab) {
+  if (listed.tabId === undefined) {
+    // Listed, so it exists; it just is not a tab we can read back.
+    return { ...base, tabId: null, presence: 'present' }
+  }
+  const tab = await exactTabPresence(listed.tabId, getTab)
+  if (tab.presence === 'present') {
+    return { ...base, tabId: listed.tabId, presence: 'present', url: tab.url }
+  }
+  return {
+    ...base,
+    tabId: listed.tabId,
+    presence: 'unknown',
+    error: `the target is listed but its tab ${listed.tabId} could not be read: ${tab.error ?? tab.presence}`,
+  }
+}
+
+/**
  * Whether the tab holding CDP target `targetId` is still open, for
  * `ABExt.tabPresence`. Identity comes from Chrome's own target registry
  * (`chrome.debugger.getTargets`), not the relay's alias maps: a target that
  * survived a tab replacement (discard, prerender swap) under a new Chrome tab
- * id is found at its new tab and reported `present` with that `tabId`. Only a
- * target missing from the registry AND an exact `tabId` Chrome says does not
- * exist is `absent`. Anything short of that is `unknown`.
+ * id is found at its new tab and reported `present` with that `tabId`.
+ *
+ * `absent` takes all of: a valid registry that does not list the target, the
+ * exact `tabId` reported missing by Chrome, and a second valid registry read
+ * AFTER that, which still does not list it (a replacement can move the target
+ * into a new tab while the old one is being read). Anything short of that is
+ * `unknown`, or `present` when the target turns up.
  *
  * `deps.getTargets()` resolves to Chrome's target list; `deps.getTab(id)` is
  * `chrome.tabs.get`.
@@ -58,42 +117,14 @@ export async function targetPresence({ targetId, tabId }, deps) {
   if (typeof targetId !== 'string' || targetId === '') {
     return { ...base, targetId: null, tabId: null, presence: 'unknown', error: 'targetId is required' }
   }
-  let targets
-  try {
-    targets = await deps.getTargets()
-  } catch (error) {
-    return {
-      ...base,
-      tabId: tabId ?? null,
-      presence: 'unknown',
-      error: `chrome.debugger.getTargets failed: ${String(error?.message ?? error)}`,
-    }
-  }
-  if (!Array.isArray(targets)) {
-    return { ...base, tabId: tabId ?? null, presence: 'unknown', error: 'chrome.debugger.getTargets answered without a list' }
-  }
-  const listed = targets.find((t) => t && t.id === targetId)
-  if (listed) {
-    if (!Number.isSafeInteger(listed.tabId)) {
-      // Listed, so it exists; it just is not a tab we can read back.
-      return { ...base, tabId: null, presence: 'present' }
-    }
-    const tab = await exactTabPresence(listed.tabId, deps.getTab)
-    if (tab.presence === 'present') {
-      return { ...base, tabId: listed.tabId, presence: 'present', url: tab.url }
-    }
-    return {
-      ...base,
-      tabId: listed.tabId,
-      presence: 'unknown',
-      error: `the target is listed but its tab ${listed.tabId} could not be read: ${tab.error ?? tab.presence}`,
-    }
-  }
+  const first = await readTargetRegistry(deps.getTargets)
+  if (!first.ok) return { ...base, tabId: tabId ?? null, presence: 'unknown', error: first.error }
+  const listed = first.byId.get(targetId)
+  if (listed) return listedPresence(base, listed, deps.getTab)
   if (tabId == null) {
     return { ...base, tabId: null, presence: 'unknown', error: 'the target is not listed and no tab id was given to confirm it' }
   }
   const tab = await exactTabPresence(tabId, deps.getTab)
-  if (tab.presence === 'absent') return { ...base, tabId, presence: 'absent' }
   if (tab.presence === 'present') {
     return {
       ...base,
@@ -102,5 +133,16 @@ export async function targetPresence({ targetId, tabId }, deps) {
       error: `tab ${tabId} still exists but no longer lists this target`,
     }
   }
-  return { ...base, tabId: tab.tabId, presence: 'unknown', error: tab.error }
+  if (tab.presence !== 'absent') {
+    return { ...base, tabId: tab.tabId, presence: 'unknown', error: tab.error }
+  }
+  // The old tab is gone. Read the registry again: the target may have moved
+  // into a new tab while the old one was being read.
+  const second = await readTargetRegistry(deps.getTargets)
+  if (!second.ok) {
+    return { ...base, tabId, presence: 'unknown', error: `tab ${tabId} is gone, but ${second.error}` }
+  }
+  const moved = second.byId.get(targetId)
+  if (moved) return listedPresence(base, moved, deps.getTab)
+  return { ...base, tabId, presence: 'absent' }
 }

@@ -38,6 +38,8 @@ struct Browser {
     api_error: HashSet<String>,
     /// The extension predates `ABExt.tabPresence` (ab-connect 0.5.32).
     old_extension: bool,
+    /// A malformed answer in place of every `absent` (fields to overwrite).
+    malformed_absence: Option<Value>,
     /// Methods never answered.
     hang: HashSet<String>,
     /// Targets the relay's cached list no longer shows (still open).
@@ -236,8 +238,14 @@ impl Fake {
                     } else {
                         "absent"
                     };
-                    json!({"tabPresenceVersion": 1, "targetId": target, "tabId": tab,
-                           "presence": presence})
+                    let mut reply = json!({"tabPresenceVersion": 1, "targetId": target,
+                                           "tabId": tab, "presence": presence});
+                    if let (Some(fields), "absent") = (b.malformed_absence.as_ref(), presence) {
+                        for (k, v) in fields.as_object().unwrap() {
+                            reply[k] = v.clone();
+                        }
+                    }
+                    reply
                 } else {
                     json!({"tabPresenceVersion": 1, "targetId": target, "tabId": null,
                            "presence": "unknown", "error": "no tab id to confirm"})
@@ -982,4 +990,38 @@ fn text(out: &Output) -> String {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     )
+}
+
+/// #496 review: an `absent` that is malformed (no tab id, a negative one,
+/// another tab's, or a contract version this CLI does not know) is not proof.
+/// The tabs really are closed here, but every close stays unverified: the
+/// ownership record keeps them and the daemon stays up.
+#[test]
+fn a_malformed_absence_reply_keeps_the_rights() {
+    for (i, fields) in [
+        json!({"tabId": null}),
+        json!({"tabId": -1}),
+        json!({"tabId": 1}),
+        json!({"tabPresenceVersion": 2}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (fake, url) = Fake::start(true);
+        fake.0.lock().unwrap().malformed_absence = Some(fields.clone());
+        let mut d = Daemon::start(&format!("hc-malformed-{i}"), &url, true);
+        let (t1, t2) = two_relay_tabs(&fake, &d);
+        let r = d.send(json!({"id": "x", "action": "close"}));
+        assert_eq!(r["success"], false, "{fields}: {r}");
+        let error = r["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains("2 of the 2 tab(s) could not be confirmed closed"),
+            "{fields}: {error}"
+        );
+        assert!(fake.open_targets().is_empty(), "the fake closed them");
+        let kept = record(&d);
+        assert!(kept.contains(&t1) && kept.contains(&t2), "{fields}: {kept}");
+        assert!(d.alive(), "{fields}: daemon exited");
+        assert!(d.sock_path().exists());
+    }
 }

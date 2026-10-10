@@ -159,3 +159,93 @@ test('a listed target in an open tab is present', async () => {
     url: 'https://open/',
   })
 })
+
+test('a malformed target list is never evidence that a target is gone', async () => {
+  const lists = [
+    [null],
+    [{ id: 7 }],
+    [{ tabId: 5 }],
+    [{ id: '' }],
+    [undefined],
+    ['T'],
+    [{ id: 'OTHER', tabId: 6 }, null],
+    [{ id: 'OTHER', tabId: 6 }, { id: 'X', tabId: -1 }],
+    [{ id: 'OTHER', tabId: 6 }, { id: 'X', tabId: '5' }],
+    // Duplicate / contradictory ids.
+    [{ id: 'OTHER', tabId: 6 }, { id: 'OTHER', tabId: 7 }],
+    [{ id: 'T', tabId: 5 }, { id: 'T', tabId: 9 }],
+  ]
+  for (const list of lists) {
+    let read = false
+    const got = await targetPresence(
+      { targetId: 'T', tabId: 5 },
+      {
+        getTargets: registry(list),
+        getTab: async (id) => {
+          read = true
+          throw new Error(`No tab with id: ${id}.`)
+        },
+      },
+    )
+    assert.equal(got.presence, 'unknown', JSON.stringify(list))
+    assert.equal(read, false, `read a tab on the strength of ${JSON.stringify(list)}`)
+  }
+})
+
+test('a replacement during the old tab read: the target found in a new tab is present', async () => {
+  // First list: T is not there (mid-replacement). While tab 5 is read (and
+  // reported missing), T appears in tab 9. Not the static case above, where
+  // the first list already has the new tab.
+  let reads = 0
+  const lists = [[{ id: 'OTHER', tabId: 6 }], [{ id: 'OTHER', tabId: 6 }, { id: 'T', tabId: 9 }]]
+  const got = await targetPresence(
+    { targetId: 'T', tabId: 5 },
+    {
+      getTargets: async () => lists[Math.min(reads++, lists.length - 1)],
+      getTab: tabs({ 9: 'https://moved/' }),
+    },
+  )
+  assert.equal(reads, 2, 'the registry was read again after the missing tab')
+  assert.equal(got.presence, 'present')
+  assert.equal(got.tabId, 9)
+})
+
+test('the registry unreadable or malformed after the missing tab is unknown, not absent', async () => {
+  let reads = 0
+  const got = await targetPresence(
+    { targetId: 'T', tabId: 5 },
+    {
+      getTargets: async () => {
+        if (reads++ === 0) return [{ id: 'OTHER', tabId: 6 }]
+        throw new Error('relay timeout: chrome.debugger.getTargets did not answer within 8000ms')
+      },
+      getTab: tabs({}),
+    },
+  )
+  assert.equal(got.presence, 'unknown')
+  reads = 0
+  const malformed = await targetPresence(
+    { targetId: 'T', tabId: 5 },
+    {
+      getTargets: async () => (reads++ === 0 ? [{ id: 'OTHER', tabId: 6 }] : [null]),
+      getTab: tabs({}),
+    },
+  )
+  assert.equal(malformed.presence, 'unknown')
+})
+
+test('absent needs both registry reads to leave the target out', async () => {
+  let reads = 0
+  const got = await targetPresence(
+    { targetId: 'T', tabId: 5 },
+    {
+      getTargets: async () => {
+        reads++
+        return [{ id: 'OTHER', tabId: 6 }]
+      },
+      getTab: tabs({ 6: 'https://other/' }),
+    },
+  )
+  assert.equal(got.presence, 'absent')
+  assert.equal(reads, 2)
+})
