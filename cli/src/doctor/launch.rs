@@ -288,6 +288,14 @@ fn relay_checks(checks: &mut Vec<Check>, health: &crate::connect::RelayHealth) {
         }
         checks.push(update);
     }
+    if let Some(summary) = crate::connect::update_check_summary(health.extension_update.as_ref()) {
+        checks.push(Check::new(
+            "relay.updateCheck",
+            "Launch test",
+            Status::Info,
+            summary,
+        ));
+    }
 }
 
 fn launch_failed(checks: &mut Vec<Check>, e: String) {

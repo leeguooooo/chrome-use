@@ -13,8 +13,10 @@ import {
   UPDATE_HANDOFF_KEY,
   UPDATE_HANDOFF_MAX_AGE_MS,
   UPDATE_IDLE_GRACE_MS,
+  UPDATE_CHECK_INTERVAL_MS,
   canApplyUpdateNow,
   keepsOwnershipAcrossUpdate,
+  shouldCheckForUpdate,
   updateApplyPlan,
 } from './update-check.js'
 
@@ -154,12 +156,15 @@ function worker({ tabs = [], storage = {} } = {}) {
     loadOwnedTabs: async () => {},
     keepsOwnershipAcrossUpdate,
     updateApplyPlan,
+    shouldCheckForUpdate,
     UPDATE_HANDOFF_KEY,
     // Set per test: what the worker does with a forwarded command.
     handleForwardCdpCommand: async () => ({}),
     chrome: {
       runtime: {
         reload: () => { calls.reload++ },
+        // What Chrome's update check answers; set per test.
+        requestUpdateCheck: async () => context.updateCheckAnswer ?? { status: 'no_update' },
         onStartup: { addListener() {} },
         getManifest: () => ({ version: '0.5.35' }),
       },
@@ -194,6 +199,7 @@ function worker({ tabs = [], storage = {} } = {}) {
     ['async function onHostMessage(', '// ---- CDP command dispatch'],
     ['async function settleOwnershipAfterInstall(', '// ---- self-update'],
     ['let lastUpdateCheckAt = 0;', 'chrome.runtime.onUpdateAvailable.addListener('],
+    ['function maybeCheckForUpdate(', '// Wake-from-sleep'],
   ]) vm.runInContext(slice(start, end), context)
   const read = (expr) => vm.runInContext(expr, context)
   return {
@@ -329,6 +335,41 @@ test('no handoff note, no reload: a failed write is retried later, not in a loop
   assert.equal(w.calls.storageSet.length, 2)
   assert.equal(w.calls.reload, 1)
   assert.deepEqual(w.calls.detach, [7])
+})
+
+test('no onUpdateAvailable at all: the periodic check finds the update and it applies when quiet', async () => {
+  const w = worker({ tabs: [idleTab(0)] })
+  // First check (worker start): nothing yet. It is remembered for status.
+  w.read('maybeCheckForUpdate()')
+  await w.advance(0)
+  let s = w.state()
+  assert.equal(s.pending, false)
+  assert.equal(s.lastCheck.status, 'no_update')
+  // Within the interval Chrome is not asked again.
+  w.context.updateCheckAnswer = { status: 'update_available', version: '0.5.36' }
+  await w.advance(10 * 60_000)
+  w.read('maybeCheckForUpdate()')
+  await w.advance(0)
+  assert.equal(w.state().lastCheck.status, 'no_update')
+  // The next check finds the downloaded update; the idle tab no longer holds it.
+  await w.advance(UPDATE_CHECK_INTERVAL_MS)
+  w.read('maybeCheckForUpdate()')
+  await w.advance(0)
+  s = w.state()
+  assert.equal(s.lastCheck.status, 'update_available')
+  assert.equal(s.lastCheck.version, '0.5.36')
+  assert.equal(w.calls.reload, 1, 'applied: the relay had been quiet for over a minute')
+  assert.deepEqual(w.calls.detach, [7])
+  assert.deepEqual(w.calls.disturbing, [])
+})
+
+test('a failing update check is reported, not hidden', async () => {
+  const w = worker()
+  w.context.chrome.runtime.requestUpdateCheck = async () => { throw new Error('no update url') }
+  w.read('maybeCheckForUpdate()')
+  await w.advance(0)
+  assert.equal(w.state().lastCheck.status, 'error')
+  assert.match(w.state().lastCheck.error, /no update url/)
 })
 
 test('a state read (status, doctor) does not count as a session working', async () => {

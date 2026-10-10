@@ -50,6 +50,8 @@ struct Browser {
     calls: Vec<String>,
     /// `Target.attachToTarget` calls.
     attached: u32,
+    /// Page evaluations answered with the extension's `reply_too_large`.
+    huge_replies: u32,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Debug)]
@@ -179,6 +181,20 @@ impl Fake {
             let session = req["sessionId"].as_str().unwrap_or("").to_string();
             let expression = params["expression"].as_str().unwrap_or("").to_string();
             b.evaluated.push((session, expression));
+        }
+        // #530: what ab-connect 0.5.35 answers when a reply is over Chrome's
+        // 64 MiB native-messaging limit.
+        let text = format!("{}{}", params["expression"], params["functionDeclaration"]);
+        if (method == "Runtime.evaluate" || method == "Runtime.callFunctionOn")
+            && text.contains("HUGE_REPLY_530")
+        {
+            b.huge_replies += 1;
+            return json!({"__error": format!(
+                "reply_too_large: the reply to {method} is 70.0 MiB, over Chrome's 64.0 MiB limit \
+                 for one native-messaging message, so the extension cannot send it. Nothing is \
+                 retried; ask for less (a smaller eval result, `snapshot -i` or a scoped selector, \
+                 a smaller screenshot)."
+            )});
         }
         match method {
             "ABExt.call" => {
@@ -1641,4 +1657,39 @@ fn a_session_continues_after_the_extension_reloads_into_an_update() {
             "announced={announced}: the reconnect opened a tab"
         );
     }
+}
+
+/// #530: the extension answers a reply too large for Chrome's 64 MiB
+/// native-messaging limit with `reply_too_large`. The CLI says so at once,
+/// as not retryable, sends the evaluation once, and the session still works.
+#[test]
+fn a_reply_over_the_message_limit_fails_at_once_and_is_not_retried() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start("rc-huge-reply", &cdp);
+    three_tabs(&d);
+
+    let started = Instant::now();
+    let out = d.cli(&["eval", "'HUGE_REPLY_530'.repeat(1)"]);
+    let elapsed = started.elapsed();
+    assert!(!out.status.success(), "{}", text(&out));
+    let reply: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", text(&out)));
+    assert_eq!(reply["success"], false, "{reply}");
+    assert_eq!(reply["code"], "reply_too_large", "{reply}");
+    assert_eq!(reply["retryable"], false, "{reply}");
+    let error = reply["error"].as_str().unwrap_or("");
+    assert!(error.contains("64.0 MiB limit"), "{reply}");
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "took {elapsed:?}: waited for a timeout"
+    );
+    assert_eq!(
+        fake.0.lock().unwrap().huge_replies,
+        1,
+        "the evaluation was retried"
+    );
+
+    // Nothing about the session broke.
+    let r = d.send(json!({"id": "u", "action": "url"}));
+    assert_eq!(r["success"], true, "{r}");
 }

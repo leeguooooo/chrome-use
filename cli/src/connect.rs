@@ -2782,6 +2782,13 @@ fn extension_update_from_state(state: &serde_json::Value) -> Option<serde_json::
             "idleForMs": pick("idleForMs"),
             "appliesAfterIdleMs": pick("appliesAfterIdleMs"),
             "appliesInMs": pick("appliesInMs"),
+            // The extension's last chrome.runtime.requestUpdateCheck (0.5.35+).
+            "lastCheck": update.get("lastCheck").filter(|v| v.is_object()).map(|c| json!({
+                "status": c.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                "version": c.get("version").cloned().unwrap_or(serde_json::Value::Null),
+                "error": c.get("error").cloned().unwrap_or(serde_json::Value::Null),
+                "ageMs": c.get("ageMs").cloned().unwrap_or(serde_json::Value::Null),
+            })),
         }));
     }
     let pending = state.get("updatePending")?.as_bool()?;
@@ -2794,6 +2801,51 @@ fn extension_update_from_state(state: &serde_json::Value) -> Option<serde_json::
 
 fn seconds(ms: u64) -> String {
     format!("{}s", ms.div_ceil(1000))
+}
+
+/// The extension's last Web Store update check, for `doctor` (#524): it
+/// tells "Chrome never found an update" from "one is waiting". `None` when
+/// the extension predates reporting it.
+pub fn update_check_summary(update: Option<&serde_json::Value>) -> Option<String> {
+    let check = update?.get("lastCheck").filter(|v| v.is_object())?;
+    let ago = check
+        .get("ageMs")
+        .and_then(|v| v.as_u64())
+        .map(|ms| {
+            if ms < 120_000 {
+                format!("{}s ago", ms / 1000)
+            } else {
+                format!("{} min ago", ms / 60_000)
+            }
+        })
+        .unwrap_or_else(|| "at an unknown time".into());
+    let status = check
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let detail = match status {
+        "no_update" => "no update published beyond the installed version".to_string(),
+        "update_available" => format!(
+            "update{} available",
+            check
+                .get("version")
+                .and_then(|v| v.as_str())
+                .map(|v| format!(" {v}"))
+                .unwrap_or_default()
+        ),
+        "throttled" => "Chrome throttled the check; it asks again within the hour".to_string(),
+        "error" => format!(
+            "the check failed ({})",
+            check
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("no detail")
+        ),
+        other => other.to_string(),
+    };
+    Some(format!(
+        "extension update check: last asked Chrome {ago}: {detail}"
+    ))
 }
 
 /// What to say about a pending update, or `None` when there is none.
@@ -4384,6 +4436,39 @@ mod tests {
         assert!(s["extensionUpdate"].get("ownedTabs").is_none());
         let s = serde_json::to_value(RelayHealth::default()).unwrap();
         assert!(s.get("extensionUpdate").is_none());
+
+        // The last Web Store check, so a Chrome that never found the update
+        // can be told from one where it waits.
+        let checked = |check: serde_json::Value| {
+            update_check_summary(
+                extension_update_from_state(
+                    &json!({"update": {"pending": false, "lastCheck": check}}),
+                )
+                .as_ref(),
+            )
+        };
+        assert_eq!(
+            checked(json!({"at": 1, "status": "no_update", "ageMs": 600000})).as_deref(),
+            Some("extension update check: last asked Chrome 10 min ago: no update published beyond the installed version")
+        );
+        assert_eq!(
+            checked(json!({"status": "update_available", "version": "0.5.36", "ageMs": 5000}))
+                .as_deref(),
+            Some("extension update check: last asked Chrome 5s ago: update 0.5.36 available")
+        );
+        assert_eq!(
+            checked(json!({"status": "error", "error": "no update url", "ageMs": 1000})).as_deref(),
+            Some("extension update check: last asked Chrome 1s ago: the check failed (no update url)")
+        );
+        assert!(update_check_summary(
+            extension_update_from_state(&json!({"update": {"pending": false, "lastCheck": null}}))
+                .as_ref()
+        )
+        .is_none());
+        assert!(update_check_summary(
+            extension_update_from_state(&json!({"updatePending": false})).as_ref()
+        )
+        .is_none());
     }
 
     #[test]

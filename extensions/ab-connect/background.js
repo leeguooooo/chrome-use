@@ -66,6 +66,7 @@ import {
   rememberReplayable as rememberReplayableIn,
   selectIdleTabs,
 } from './idle-detach.js';
+import { oversizeReplyError } from './host-message-size.js';
 import {
   shouldCheckForUpdate,
   updateApplyPlan,
@@ -493,12 +494,22 @@ async function buildHelloIdentity() {
 // results into errors: a viewport screenshot of a Wikipedia article is 905 KB
 // of PNG, 1.2 MB once base64'd into the reply. It also serialised every message
 // a second time just to measure it.
-function postToHost(msg) {
+// `method` names the command a reply answers, for the size error (#530).
+function postToHost(msg, method) {
   if (!port) return;
   try {
     port.postMessage(msg);
   } catch (e) {
-    // port died; onDisconnect will reconnect.
+    // A reply over Chrome's 64 MiB message limit: answer with an error that
+    // says so, instead of leaving the caller to time out (#530).
+    const fallback = oversizeReplyError(msg, e, method);
+    if (fallback) {
+      try {
+        port.postMessage(fallback);
+      } catch {}
+      return;
+    }
+    // Otherwise the port died; onDisconnect will reconnect.
   }
 }
 
@@ -730,11 +741,12 @@ async function onHostMessage(msg) {
       hostCommandsInFlight++;
       lastHostCommandAt = Date.now();
     }
+    const method = String(msg?.params?.method || '');
     try {
       const result = await handleForwardCdpCommand(msg);
-      postToHost({ id: msg.id, result });
+      postToHost({ id: msg.id, result }, method);
     } catch (err) {
-      postToHost({ id: msg.id, error: err instanceof Error ? err.message : String(err) });
+      postToHost({ id: msg.id, error: err instanceof Error ? err.message : String(err) }, method);
     } finally {
       if (counts) {
         hostCommandsInFlight = Math.max(0, hostCommandsInFlight - 1);
@@ -2156,6 +2168,8 @@ chrome.runtime.onStartup.addListener(() => void whenReady(connectHost));
 // on its next command. Nothing is activated or focused, and a user's own tab
 // the agent held is only released, never touched.
 let lastUpdateCheckAt = 0;
+// The last chrome.runtime.requestUpdateCheck: {at, status, version?, error?}.
+let lastUpdateCheck = null;
 let updatePending = false;
 let updateVersion = null;
 let updatePendingSince = 0;
@@ -2192,6 +2206,10 @@ function updateStateSnapshot() {
     attachedTabs: plan.attachedTabs,
     idleForMs: plan.idleForMs,
     appliesInMs: updatePending ? plan.appliesInMs : null,
+    lastCheck: lastUpdateCheck && {
+      ...lastUpdateCheck,
+      ageMs: Date.now() - lastUpdateCheck.at,
+    },
   };
 }
 
@@ -2307,16 +2325,28 @@ function maybeCheckForUpdate() {
   const now = Date.now();
   if (!shouldCheckForUpdate(lastUpdateCheckAt, now)) return;
   lastUpdateCheckAt = now;
+  // Remembered for `ABExt.state` (`update.lastCheck`), so `status`/`doctor`
+  // can tell "Chrome never found an update" from "one waits" (#524).
+  const record = (fields) => {
+    lastUpdateCheck = { at: now, ...fields };
+  };
   try {
     // Unpacked/dev installs have no update url: this rejects or reports
-    // `throttled`, and neither is a problem worth surfacing.
+    // `throttled`. A downloaded update that waits is reported again as
+    // `update_available`, so a missed onUpdateAvailable is caught here too.
     const p = chrome.runtime.requestUpdateCheck?.();
     if (p && typeof p.then === 'function') {
+      record({ status: 'checking' });
       p.then((r) => {
+        record({ status: r?.status ?? null, version: r?.version ?? null });
         if (r?.status === 'update_available') markUpdatePending(r?.version);
-      }).catch(() => {});
+      }).catch((e) => record({ status: 'error', error: String(e?.message || e).slice(0, 200) }));
+    } else {
+      record({ status: 'unavailable' });
     }
-  } catch {}
+  } catch (e) {
+    record({ status: 'error', error: String(e?.message || e).slice(0, 200) });
+  }
 }
 
 // Wake-from-sleep / return-from-idle fast reconnect. After the machine sleeps (or

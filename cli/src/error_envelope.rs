@@ -66,6 +66,14 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
             return ErrorMetadata { code, retryable };
         }
     }
+    // The extension could not send a reply over Chrome's 64 MiB message
+    // limit (#530). Asking again gets the same answer: ask for less.
+    if lower.contains("reply_too_large:") {
+        return ErrorMetadata {
+            code: "reply_too_large",
+            retryable: false,
+        };
+    }
     if lower.contains("action_outcome_unknown:") {
         return ErrorMetadata {
             code: "action_outcome_unknown",
@@ -384,6 +392,20 @@ mod tests {
                 retryable: true
             }
         );
+    }
+
+    /// #530: the extension's size refusal mentions neither a timeout nor a
+    /// connection, but its wording must never become retryable even if it did.
+    #[test]
+    fn a_reply_over_the_message_limit_is_not_retryable() {
+        for message in [
+            "CDP error (Runtime.evaluate): reply_too_large: the reply to Runtime.evaluate is 70.0 MiB, over Chrome's 64.0 MiB limit for one native-messaging message, so the extension cannot send it. Nothing is retried; ask for less (a smaller eval result, `snapshot -i` or a scoped selector, a smaller screenshot).",
+            "reply_too_large: the reply is over Chrome's limit; connection kept, no timeout",
+        ] {
+            let value = error_value(message);
+            assert_eq!(value["code"], "reply_too_large", "{message}");
+            assert_eq!(value["retryable"], false, "{message}");
+        }
     }
 
     #[test]
