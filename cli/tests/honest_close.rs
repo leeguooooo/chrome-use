@@ -698,7 +698,8 @@ fn an_extension_without_tab_presence_is_unverified() {
     );
     assert!(error.contains("update it to 0.5.33 or newer"), "{error}");
     // Not mistaken for a lost tab: no stale-session retry closed them again.
-    assert!(!error.contains("is gone"), "{error}");
+    assert!(error.starts_with("close incomplete"), "{error}");
+    assert!(!error.contains("was driving is gone"), "{error}");
     assert_eq!(
         fake.close_requests().len(),
         2,
