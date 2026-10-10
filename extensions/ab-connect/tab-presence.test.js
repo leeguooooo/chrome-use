@@ -249,3 +249,24 @@ test('absent needs both registry reads to leave the target out', async () => {
   assert.equal(got.presence, 'absent')
   assert.equal(reads, 2)
 })
+
+test('a target the registry was read without is reported unlisted, for the CLI to drop (#519)', async () => {
+  const unlisted = await targetPresence(
+    { targetId: 'PHANTOM' },
+    { getTargets: registry([{ id: 'T', tabId: 5 }]), getTab: tabs({ 5: 'https://x/' }) },
+  )
+  assert.equal(unlisted.presence, 'unknown')
+  assert.equal(unlisted.listed, false)
+  const moved = await targetPresence(
+    { targetId: 'OLD', tabId: 5 },
+    { getTargets: registry([{ id: 'NEW', tabId: 5 }]), getTab: tabs({ 5: 'https://x/' }) },
+  )
+  assert.equal(moved.listed, false)
+  // An unreadable registry says nothing about listing.
+  const unread = await targetPresence(
+    { targetId: 'T' },
+    { getTargets: async () => { throw new Error('boom') }, getTab: tabs({}) },
+  )
+  assert.equal(unread.presence, 'unknown')
+  assert.equal('listed' in unread, false)
+})

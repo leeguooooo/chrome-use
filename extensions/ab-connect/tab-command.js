@@ -106,7 +106,12 @@ export async function sendTabCommand(tabId, method, params, childSessionId, deps
     }
     deps.detachTab(tabId, false)
     const recoveredTabId = await deps.recoverSessionTab(`cb-tab-${tabId}`)
-    if (recoveredTabId == null) throw e
+    if (recoveredTabId == null) {
+      // The entry was dropped above without telling the host. If the tab is
+      // gone, its host record must go too, or it lists a dead page (#519).
+      void Promise.resolve(deps.reportTabIfGone?.(tabId)).catch(() => {})
+      throw e
+    }
     try {
       return await withRelayTimeout(
         deps.sendCommand({ tabId: recoveredTabId }, method, params),

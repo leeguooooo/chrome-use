@@ -44,6 +44,7 @@ pub mod recording;
 pub mod ref_hints;
 #[allow(dead_code)]
 pub mod relay;
+pub(crate) mod relay_targets;
 #[allow(dead_code)]
 pub mod screenshot;
 pub mod semantic_locator;

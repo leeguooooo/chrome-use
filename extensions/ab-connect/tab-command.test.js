@@ -278,6 +278,7 @@ for (const stage of ['detach', 'attach']) {
 // Exercise the actual background handlers without starting Chrome or the worker.
 async function backgroundCleanupFixture() {
   const { createAttachmentHealth } = await import('./tab-command.js')
+  const { createRemovedTabs, tabGoneEvent } = await import('./relay-records.js')
   const source = readFileSync(new URL('./background.js', import.meta.url), 'utf8')
   const listeners = {}, events = []
   let pending
@@ -298,10 +299,12 @@ async function backgroundCleanupFixture() {
     ownedTabs: new Set(), unmarkOwned() {},
     setTimeout() {}, RELOAD_LOOP_WINDOW_MS: 1000,
     port: null,
+    removedTabs: createRemovedTabs(), tabGoneEvent, relayKnowsTab: () => true,
   }
   vm.createContext(context)
   for (const [start, end] of [
     ['function detachTab(', 'function eligible('],
+    ['function forgetTab(', '// When a command found no tab'],
     ['chrome.debugger.onDetach.addListener(', '// ---- tab lifecycle'],
     ['chrome.tabs.onRemoved.addListener(', '// `tabs.onUpdated`'],
   ]) vm.runInContext(source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))), context)

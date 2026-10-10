@@ -49,7 +49,13 @@ import {
   RELOAD_LOOP_WINDOW_MS,
 } from './reload-loop.js';
 import { targetInfoForTab } from './target-info.js';
-import { targetPresence } from './tab-presence.js';
+import { isMissingTabError, targetPresence } from './tab-presence.js';
+import {
+  announceVerdict,
+  createRemovedTabs,
+  relayTargetsMessage,
+  tabGoneEvent,
+} from './relay-records.js';
 import { createAgentTabQueue } from './agent-tab-queue.js';
 import { createAttachmentHealth, sendTabCommand } from './tab-command.js';
 import { HostConnectionState } from './host-connection.js';
@@ -83,6 +89,10 @@ let nextHostAttemptAt = 0;
 const tabs = new Map();
 /** tabId -> reload history, retained across debugger/process re-attachments. */
 const reloadStates = new Map();
+/** Tab ids Chrome reported removed or replaced. Late work for one (an attach
+ * or announce that was awaiting Chrome when the tab closed) is refused instead
+ * of recreating a record nothing will ever remove (#519). */
+const removedTabs = createRemovedTabs();
 /** sessionId -> tabId (main session per tab) */
 const sessionToTab = new Map();
 /** child (OOPIF/worker) sessionId -> tabId */
@@ -683,8 +693,9 @@ function connectHost() {
   // Tell the daemon about everything we already have attached, then re-attach
   // the tabs we own (NOT the user's tabs — that's what kept the banner off their
   // pages).
-  void reannounceAttachedTabs();
-  void reattachOwnedTabs();
+  // Then hand the host the full list of what we hold, so it drops records of
+  // tabs that closed while it was not told (#519).
+  void Promise.allSettled([reannounceAttachedTabs(), reattachOwnedTabs()]).then(syncRelayTargets);
   // Start the proactive heartbeat so the worker stays alive while paired.
   scheduleKeepalivePing();
 }
@@ -701,8 +712,8 @@ async function onHostMessage(msg) {
   }
   // Daemon (re)connected — re-announce + re-attach OUR tabs (not the user's).
   if (msg.method === 'attachAll') {
-    void reannounceAttachedTabs();
-    await reattachOwnedTabs();
+    await Promise.allSettled([reannounceAttachedTabs(), reattachOwnedTabs()]);
+    syncRelayTargets();
     return;
   }
   if (typeof msg.id !== 'undefined' && msg.method === 'forwardCDPCommand') {
@@ -904,6 +915,7 @@ function tabCommandDependencies() {
     sendCommand: (target, command, args) => chrome.debugger.sendCommand(target, command, args),
     detachTab,
     recoverSessionTab,
+    reportTabIfGone,
   };
 }
 
@@ -1254,6 +1266,10 @@ async function handleForwardCdpCommand(msg) {
       ownedTabs: [...ownedTabs],
       groups: [...groupIdByName.entries()].map(([name, id]) => ({ name, id })),
       unresolvedOperations: relayUnresolvedOperations(),
+      // Whether a downloaded update waits, and how many attached tabs would
+      // hold it back now (#519: records of closed tabs never do).
+      updatePending,
+      updateBlockedBy: attachedTargetsFrom(tabs.entries()).filter((t) => t.attached).length,
       agentWindowId,
       agentWindowError,
       agentWindowRejected,
@@ -1374,6 +1390,9 @@ async function handleForwardCdpCommand(msg) {
     if (!tabs.has(tabId)) {
       const recovered = await recoverSessionTab(sessionId);
       if (!recovered) {
+        // A dead tab's host record goes now, so the next getTargets does not
+        // list it and attaching to it fails (#519).
+        await reportTabIfGone(tabId);
         throw new Error(
           `stale sessionId ${sessionId} for ${method}: its tab is gone (closed, ` +
             `navigated across processes, or lost after an extension restart). ` +
@@ -1539,13 +1558,21 @@ async function attachTab(tabId, transactionIsActive) {
     await withRelayTimeout(chrome.debugger.detach(dbg), 'detach expired attachment').catch(() => {});
     throw new Error('attachTab: transaction cancelled');
   }
+  // The tab may have closed while this attach was awaiting Chrome. Its
+  // onRemoved already ran and found nothing to remove, so registering it now
+  // would leave an attached record of a dead tab forever (#519).
+  if (removedTabs.has(tabId)) {
+    await withRelayTimeout(chrome.debugger.detach(dbg), 'detach closed tab').catch(() => {});
+    throw new Error(`attachTab: tab ${tabId} was closed while attaching`);
+  }
   const sessionId = `cb-tab-${tabId}`;
   const entry = newTabEntry(tabId, sessionId, targetId, true);
   tabs.set(tabId, entry);
   sessionToTab.set(sessionId, tabId);
   rememberSessionTarget(sessionId, targetId);
   setBadge(tabId, port ? 'on' : 'connecting');
-  await announceAttachedTab(tabId, entry, targetInfo, { openerTargetId, abGroup });
+  const announced = await announceAttachedTab(tabId, entry, targetInfo, { openerTargetId, abGroup });
+  if (announced === 'gone') throw new Error(`attachTab: tab ${tabId} was closed while attaching`);
 
   // Domain initialization is best-effort and must not hold the attach result
   // hostage to an unresponsive renderer. Register the stable tab/session first,
@@ -1722,6 +1749,7 @@ async function announceOwnedTabLazily(tabId) {
   // banner up with nobody driving; release it. (An attachment that isn't ours —
   // DevTools — makes the call fail harmlessly.)
   await chrome.debugger.detach({ tabId }).catch(() => {});
+  if (removedTabs.has(tabId) || tabs.has(tabId)) return; // closed, or attached meanwhile
   const sessionId = `cb-tab-${tabId}`;
   const entry = newTabEntry(tabId, sessionId, String(info.targetId), false);
   tabs.set(tabId, entry);
@@ -1731,9 +1759,37 @@ async function announceOwnedTabLazily(tabId) {
   await announceAttachedTab(tabId, entry, info);
 }
 
+// Returns 'announce' (sent), 'superseded' (another entry replaced this one and
+// announces itself) or 'gone' (the tab closed meanwhile; nothing is sent).
 async function announceAttachedTab(tabId, entry, targetInfo, scopeHints) {
-  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  let tab = null;
+  let missing = false;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch (error) {
+    missing = isMissingTabError(error, tabId);
+  }
   const { openerTargetId, abGroup } = scopeHints || (await tabScopeHints(tabId));
+  // Decide only now, after the awaits: tabs.onRemoved may have run while they
+  // were pending and already told the host the tab is gone. Announcing after
+  // that recreated the record for good — the url-less, title-less "attached"
+  // pages of #519.
+  const verdict = announceVerdict({
+    current: tabs.get(tabId),
+    entry,
+    missing,
+    removed: removedTabs.has(tabId),
+  });
+  if (verdict === 'gone') {
+    // Whatever marked the tab removed (onRemoved, a replacement, a reconcile)
+    // has already told the host; otherwise this read is the first to know.
+    if (!removedTabs.has(tabId)) {
+      removedTabs.add(tabId);
+      forgetTab(tabId);
+    }
+    return verdict;
+  }
+  if (verdict !== 'announce') return verdict;
   postToHost({
     method: 'forwardCDPEvent',
     params: {
@@ -1753,6 +1809,40 @@ async function announceAttachedTab(tabId, entry, targetInfo, scopeHints) {
       },
     },
   });
+  return verdict;
+}
+
+// Drop a tab's record here and at the host. Unlike detachTab, it tells the
+// host even when this worker holds no entry but the relay has known the tab
+// (or `always`): the host may still keep a record of it. A tab the relay never
+// knew (the user's own) costs no message.
+function forgetTab(tabId, always = false) {
+  const held = tabs.has(tabId);
+  // Always: detachTab also clears the tab's attachment health without an entry.
+  detachTab(tabId, true);
+  if (!held && (always || relayKnowsTab(tabId))) postToHost(tabGoneEvent(tabId));
+}
+
+// When a command found no tab for a session, tell the host if Chrome confirms
+// the tab is gone (Chrome's own "No tab with id"; any other error proves
+// nothing).
+async function reportTabIfGone(tabId) {
+  if (tabId == null) return;
+  try {
+    await chrome.tabs.get(tabId);
+  } catch (error) {
+    if (!isMissingTabError(error, tabId)) return;
+    removedTabs.add(tabId);
+    // A command named this tab's session, so the host may hold a record of it
+    // even when this worker (restarted since) never knew the tab.
+    forgetTab(tabId, true);
+  }
+}
+
+// The host keeps exactly the records this worker holds (#519). Hosts from
+// before #519 ignore the message.
+function syncRelayTargets() {
+  postToHost(relayTargetsMessage(tabs.entries()));
 }
 
 async function reannounceAttachedTabs() {
@@ -1762,7 +1852,11 @@ async function reannounceAttachedTabs() {
   // beside the real recovered page (#196).
   const { live } = await reconcileAttachedTabEntries([...tabs.entries()], {
     getTab: (tabId) => chrome.tabs.get(tabId),
-    detach: (tabId) => detachTab(tabId, true),
+    isMissing: isMissingTabError,
+    detach: (tabId) => {
+      removedTabs.add(tabId);
+      detachTab(tabId, true);
+    },
     unmarkOwned,
   });
   for (const [tabId, entry] of live) {
@@ -1935,12 +2029,20 @@ chrome.tabs.onReplaced.addListener(
         await markOwned(addedTabId);
       }
       transferReloadState(reloadStates, removedTabId, addedTabId);
+      // The old tab is gone (no onRemoved follows a replacement), and so is
+      // its target. Drop its record here and at the host; a session still
+      // naming it follows replacedTabs to the new tab on its next command.
+      removedTabs.add(removedTabId);
+      forgetTab(removedTabId);
     })
 );
 
 chrome.tabs.onRemoved.addListener(
   (tabId) =>
     void whenReady(() => {
+      // First, synchronously: an attach or announce still awaiting Chrome
+      // checks this before it registers or announces the tab (#519).
+      removedTabs.add(tabId);
       nativeDuplicateTabs.delete(tabId);
       void forgetAgentPopup(tabId);
       // Keep a short tombstone for stable-target recovery after onRemoved.
@@ -1963,7 +2065,7 @@ chrome.tabs.onRemoved.addListener(
         setTimeout(() => recentlyRemovedOwned.delete(tabId), 5000);
       }
       unmarkOwned(tabId);
-      detachTab(tabId, true);
+      forgetTab(tabId);
     })
 );
 
@@ -2008,9 +2110,12 @@ chrome.runtime.onStartup.addListener(() => void whenReady(connectHost));
 let lastUpdateCheckAt = 0;
 let updatePending = false;
 
-function applyUpdateWhenIdle() {
+async function applyUpdateWhenIdle() {
   if (!updatePending) return;
-  if (!canApplyUpdateNow(tabs.entries())) return;
+  // Records of closed tabs are not "being driven": prune them first so they
+  // never hold the update back (#519).
+  await pruneDeadTabRecords();
+  if (!updatePending || !canApplyUpdateNow(tabs.entries())) return;
   updatePending = false;
   // Everything this worker holds is either persisted (owned tabs) or already
   // released, so the restart re-establishes it. A pending update that never
@@ -2020,9 +2125,22 @@ function applyUpdateWhenIdle() {
   } catch {}
 }
 
+// Drop every entry whose tab Chrome confirms gone, here and at the host.
+async function pruneDeadTabRecords() {
+  await reconcileAttachedTabEntries([...tabs.entries()], {
+    getTab: (tabId) => chrome.tabs.get(tabId),
+    isMissing: isMissingTabError,
+    detach: (tabId) => {
+      removedTabs.add(tabId);
+      detachTab(tabId, true);
+    },
+    unmarkOwned,
+  });
+}
+
 chrome.runtime.onUpdateAvailable.addListener(() => {
   updatePending = true;
-  applyUpdateWhenIdle();
+  void applyUpdateWhenIdle();
 });
 
 function maybeCheckForUpdate() {
@@ -2037,7 +2155,7 @@ function maybeCheckForUpdate() {
       p.then((r) => {
         if (r?.status === 'update_available') {
           updatePending = true;
-          applyUpdateWhenIdle();
+          void applyUpdateWhenIdle();
         }
       }).catch(() => {});
     }
@@ -2107,10 +2225,16 @@ chrome.alarms.onAlarm.addListener((a) => {
   void whenReady(() => {
     sweepIdleTabs();
     maybeCheckForUpdate();
-    applyUpdateWhenIdle();
-    if (!port) connectHost();
-    else {
-      void reattachOwnedTabs();
+    if (!port) {
+      void applyUpdateWhenIdle();
+      connectHost();
+    } else {
+      // Prune dead records, re-announce owned tabs, then resync the host's
+      // list: a periodic backstop for anything a race left behind (#519).
+      void Promise.allSettled([pruneDeadTabRecords(), reattachOwnedTabs()]).then(() => {
+        syncRelayTargets();
+        return applyUpdateWhenIdle();
+      });
       scheduleKeepalivePing();
     }
   });

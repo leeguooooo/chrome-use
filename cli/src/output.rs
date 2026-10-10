@@ -6116,7 +6116,7 @@ Tabs:
   tab duplicate [ref] [--label <name>]
                              Natively duplicate on extension-connected real Chrome
   tab list --full            Full URLs + stable targetId (external: ownership too)
-                             Dead relay tab records are removed on reconnect.
+                             Relay tabs that cannot be confirmed open are never listed.
   tab new [url] [--activate]
                              Create a tab; --activate raises it before initialization
   tab select <ref> [--activate [--force]]
