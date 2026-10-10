@@ -11204,6 +11204,7 @@ document.getElementById('go').addEventListener('click', () => {
 #[tokio::test]
 #[ignore]
 async fn e2e_observe_reports_an_iframe_receipt_in_visible_text() {
+    use std::sync::atomic::Ordering;
     let page = r##"<!doctype html><meta charset="utf-8"><title>Embedded notes</title>
 <main><h1>Embedded notes</h1><p>Complete the embedded note form.</p>
 <iframe title="Embedded form" srcdoc="<form><label>Note <input name='note'></label><label>Pin <input type='password' name='pin'></label><button>Save note</button></form><p id='receipt'>No note</p><script>document.querySelector('form').onsubmit=e=>{e.preventDefault();document.querySelector('#receipt').textContent='Note saved: '+document.querySelector('input').value;}</script>"></iframe></main>"##
@@ -11285,17 +11286,176 @@ async fn e2e_observe_reports_an_iframe_receipt_in_visible_text() {
         !all.contains("pin-secret-7731"),
         "a password value must never be observed: {all}"
     );
-    // The session's first observation names its target; the next one, on
-    // the same target, leaves it out.
+    // Every machine-JSON observation names its target.
     assert!(observed["target"]["targetId"].is_string(), "{observed}");
+
+    // The after-read fails at the CDP level: the earlier receipt must not be
+    // reported as removed, and the unchanged tree must not read as "no
+    // change" — the observation is partial and says not to replay.
     let resp = run_cmd(
         &mut state,
-        json!({ "id": "7", "action": "click", "selector": save, "observe": true }),
+        json!({ "id": "7", "action": "fill", "selector": note, "value": "Second synthetic note" }),
+    )
+    .await;
+    assert_success(&resp);
+    super::observation::FAIL_TEXT_READS.store(0b10, Ordering::SeqCst);
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "8", "action": "click", "selector": save, "observe": true }),
+    )
+    .await;
+    assert_eq!(
+        super::observation::FAIL_TEXT_READS.load(Ordering::SeqCst),
+        0,
+        "both reads must have run"
+    );
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    assert!(observed["target"]["targetId"].is_string(), "{observed}");
+    assert_eq!(observed["status"], json!("partial"), "{observed}");
+    assert_ne!(observed["changed"], json!(false), "{observed}");
+    assert!(observed.get("text").is_none(), "{observed}");
+    assert!(
+        !observed.to_string().contains("- [frame"),
+        "a failed read is not a removal: {observed}"
+    );
+    assert_eq!(observed["retryAction"], json!(false), "{observed}");
+    assert!(observed["textStatus"].is_string(), "{observed}");
+    assert!(observed["textFrames"].is_array(), "{observed}");
+
+    // Both reads fail: never complete.
+    super::observation::FAIL_TEXT_READS.store(0b11, Ordering::SeqCst);
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "9", "action": "click", "selector": save, "observe": true }),
     )
     .await;
     assert_success(&resp);
     let observed = &get_data(&resp)["observed"];
-    assert!(observed.get("target").is_none(), "{observed}");
+    assert_ne!(observed["status"], json!("complete"), "{observed}");
+    assert_eq!(observed["textStatus"], json!("unavailable"), "{observed}");
+    assert_ne!(observed["changed"], json!(false), "{observed}");
+
+    // Repeated identical clicks whose text evidence is missing never earn a
+    // "no progress" hint.
+    super::observation::FAIL_TEXT_READS.store(u32::MAX, Ordering::SeqCst);
+    for id in ["10", "11", "12", "13"] {
+        let resp = run_cmd(
+            &mut state,
+            json!({ "id": id, "action": "click", "selector": save, "observe": true }),
+        )
+        .await;
+        assert_success(&resp);
+        let observed = &get_data(&resp)["observed"];
+        assert!(observed.get("noProgress").is_none(), "{observed}");
+        assert_ne!(observed["status"], json!("complete"), "{observed}");
+    }
+    super::observation::FAIL_TEXT_READS.store(0, Ordering::SeqCst);
+    server.abort();
+}
+
+/// What a person typed never reaches `observed.text`: inline and nested
+/// contenteditable (with a non-editable island inside), a textarea's text,
+/// an editable region inside an open shadow root, and password values the
+/// page reflects into its own text, in the top frame and in a child frame.
+/// All values are synthetic.
+#[tokio::test]
+#[ignore]
+async fn e2e_observe_text_never_carries_typed_or_editable_content() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>Private fields</title>
+<main><h1>Private fields</h1>
+<p>Note: <span id="ce" contenteditable="true">SYNPRIV-INLINE</span> end</p>
+<div contenteditable="true"><p>Nested <b id="nested">SYNPRIV-NESTED</b> <span contenteditable="false">SYNPRIV-ISLAND</span></p></div>
+<label>Remarks <textarea>SYNPRIV-TEXTAREA</textarea></label>
+<label>Plain <input id="plain"></label>
+<label>PIN <input id="pw" type="password"></label>
+<div id="host"></div>
+<p id="status">Idle</p>
+<p id="refl">nothing reflected</p>
+<button id="go">Go</button>
+<iframe title="Child" srcdoc="<label>Child PIN <input id='cpw' type='password'></label><p id='crefl'>child idle</p>"></iframe>
+</main>
+<script>
+const shadow = document.getElementById('host').attachShadow({mode: 'open'});
+shadow.innerHTML = '<p>Shadow <span id="sce" contenteditable="true">SYNPRIV-SHADOW</span> tail</p>';
+document.getElementById('go').onclick = () => {
+  document.getElementById('ce').textContent = 'SYNPRIV-INLINE-2';
+  document.getElementById('nested').textContent = 'SYNPRIV-NESTED-2';
+  shadow.getElementById('sce').textContent = 'SYNPRIV-SHADOW-2';
+  document.getElementById('status').textContent = 'Done: ' + document.getElementById('plain').value.length + ' chars';
+  document.getElementById('refl').textContent = 'Reflected ' + document.getElementById('pw').value + ' here';
+  const child = frames[0].document;
+  child.getElementById('crefl').textContent = 'Child reflected ' + child.getElementById('cpw').value;
+};
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "3", "action": "snapshot", "interactive": true }),
+    )
+    .await;
+    assert_success(&resp);
+    let tree = get_data(&resp)["snapshot"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let line = tree
+        .lines()
+        .find(|l| l.contains("Child PIN"))
+        .unwrap_or_else(|| panic!("no child PIN field in:\n{tree}"));
+    let start = line.find("ref=").expect("ref") + 4;
+    let rest = &line[start..];
+    let child_pin = format!(
+        "@{}",
+        &rest[..rest
+            .find(|c: char| !c.is_alphanumeric())
+            .unwrap_or(rest.len())]
+    );
+    for (id, sel, value) in [
+        ("4", "#plain".to_string(), "SYNPRIV-TYPED"),
+        ("5", "#pw".to_string(), "SYNPRIV-PW-77"),
+        ("6", child_pin, "SYNPRIV-CPW-5"),
+    ] {
+        let resp = run_cmd(
+            &mut state,
+            json!({ "id": id, "action": "fill", "selector": sel, "value": value }),
+        )
+        .await;
+        assert_success(&resp);
+    }
+
+    let resp = run_cmd(
+        &mut state,
+        json!({ "id": "7", "action": "click", "selector": "#go", "observe": true }),
+    )
+    .await;
+    assert_success(&resp);
+    let observed = &get_data(&resp)["observed"];
+    assert_eq!(observed["status"], json!("complete"), "{observed}");
+    let text: Vec<&str> = observed["text"]
+        .as_array()
+        .unwrap_or_else(|| panic!("observed.text missing: {observed}"))
+        .iter()
+        .filter_map(|l| l.as_str())
+        .collect();
+    // The reader ran and saw the page's own change.
+    assert!(text.contains(&"+ Done: 13 chars"), "{text:?}");
+    assert!(text.contains(&"- Idle"), "{text:?}");
+    let joined = text.join("\n");
+    assert!(
+        !joined.contains("SYNPRIV"),
+        "typed, editable or password content reached observed.text: {text:?}"
+    );
+    // Nor in the per-frame text notes.
+    let notes = observed
+        .get("textFrames")
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+    assert!(!notes.contains("SYNPRIV"), "{notes}");
     server.abort();
 }
 

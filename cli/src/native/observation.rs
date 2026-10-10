@@ -438,9 +438,12 @@ pub(super) fn page_replaced(delta: &super::diff::SnapshotDiffResult) -> bool {
 /// spends a round trip on `snapshot` just to read the receipt in context.
 pub(super) const SMALL_TREE_BYTES: usize = 4096;
 pub(super) const SMALL_TREE_LINES: usize = 60;
-/// Cap on the compact change list that rides with a small tree. The tree is
-/// bounded, but a page that shrank to a small one can drop many lines.
+/// Caps on the compact change list that rides with a small tree. The tree is
+/// bounded, but a page that shrank to a small one can drop many lines, and a
+/// single removed line can be arbitrarily long.
 const MAX_CHANGE_LINES: usize = 60;
+const MAX_CHANGE_BYTES: usize = 4096;
+const MAX_CHANGE_LINE_BYTES: usize = 240;
 
 /// Whether the post-action tree is small enough to return whole.
 pub(super) fn small_tree(after: &str) -> bool {
@@ -448,26 +451,78 @@ pub(super) fn small_tree(after: &str) -> bool {
     after.len() <= SMALL_TREE_BYTES && after.lines().count() <= SMALL_TREE_LINES
 }
 
+/// The compact change list and what its budget left out.
+#[derive(Debug, Default)]
+pub(super) struct CompactChanges {
+    pub lines: Vec<String>,
+    /// Changed lines not listed: over the line or byte budget.
+    pub omitted: usize,
+    /// Listed lines cut to [`MAX_CHANGE_LINE_BYTES`].
+    pub shortened: usize,
+}
+
 /// The added and removed lines alone, `+ ` / `- ` prefixed, in diff order:
 /// no context lines and no hunk headers, since the whole tree rides beside
-/// them. Returns the lines kept and how many were left out by the cap.
-pub(super) fn compact_changes(before: &str, after: &str) -> (Vec<String>, usize) {
+/// them. At most [`MAX_CHANGE_LINES`] lines and [`MAX_CHANGE_BYTES`] UTF-8
+/// bytes in total (one byte per line counted for its separator); each line at
+/// most [`MAX_CHANGE_LINE_BYTES`].
+pub(super) fn compact_changes(before: &str, after: &str) -> CompactChanges {
     use similar::{ChangeTag, TextDiff};
-    let mut lines = Vec::new();
-    let mut omitted = 0;
+    let mut out = CompactChanges::default();
+    let mut bytes = 0;
     for change in TextDiff::from_lines(before, after).iter_all_changes() {
         let sign = match change.tag() {
             ChangeTag::Insert => '+',
             ChangeTag::Delete => '-',
             ChangeTag::Equal => continue,
         };
-        if lines.len() == MAX_CHANGE_LINES {
-            omitted += 1;
+        if out.lines.len() == MAX_CHANGE_LINES || bytes >= MAX_CHANGE_BYTES {
+            out.omitted += 1;
             continue;
         }
-        lines.push(format!("{sign} {}", change.value().trim_end_matches('\n')));
+        let value = change.value().trim_end_matches('\n');
+        let (line, cut) = bounded_line(sign, "", value, MAX_CHANGE_LINE_BYTES);
+        if bytes + line.len() + 1 > MAX_CHANGE_BYTES {
+            out.omitted += 1;
+            continue;
+        }
+        bytes += line.len() + 1;
+        out.shortened += usize::from(cut);
+        out.lines.push(line);
     }
-    (lines, omitted)
+    out
+}
+
+/// `"{sign} {prefix}{value}"` in at most `limit` bytes. A longer value keeps
+/// its head and says how many bytes were cut; only the kept head is copied.
+fn bounded_line(sign: char, prefix: &str, value: &str, limit: usize) -> (String, bool) {
+    // " [truncated; <up to 20 digits> bytes omitted]" is at most 48 bytes.
+    const SUFFIX_ROOM: usize = 48;
+    let fixed = 2 + prefix.len();
+    if fixed + value.len() <= limit {
+        return (format!("{sign} {prefix}{value}"), false);
+    }
+    let kept = head(value, limit.saturating_sub(fixed + SUFFIX_ROOM));
+    (
+        format!(
+            "{sign} {prefix}{kept} [truncated; {} bytes omitted]",
+            value.len() - kept.len()
+        ),
+        true,
+    )
+}
+
+/// The first `limit` bytes of `value`, cut on a character boundary, without
+/// copying the rest: a removed line can be megabytes long.
+fn head(value: &str, limit: usize) -> &str {
+    if value.len() <= limit {
+        return value;
+    }
+    let mut end = limit;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
 }
 
 /// Compare only evidence actually captured. Missing evidence is never an empty
@@ -506,10 +561,13 @@ pub(super) fn changes(
                 // complete is still `status`, below.
                 out.insert("snapshot".into(), json!(after.trim_end()));
                 if delta.changed {
-                    let (lines, omitted) = compact_changes(&before_text, &after_text);
-                    out.insert("changes".into(), json!(lines));
-                    if omitted > 0 {
-                        out.insert("changesOmitted".into(), json!(omitted));
+                    let compact = compact_changes(&before_text, &after_text);
+                    out.insert("changes".into(), json!(compact.lines));
+                    if compact.omitted > 0 {
+                        out.insert("changesOmitted".into(), json!(compact.omitted));
+                    }
+                    if compact.shortened > 0 {
+                        out.insert("changesShortened".into(), json!(compact.shortened));
                     }
                     out.insert("added".into(), json!(delta.additions));
                     out.insert("removed".into(), json!(delta.removals));
@@ -572,35 +630,79 @@ pub(super) fn changes(
 /// an iframe, a log line, a "Page 2 of 3" counter) never reaches the tree
 /// delta and the action reads as "no change".
 ///
-/// `innerText` never includes what was typed into an `<input>` or
-/// `<textarea>`; lines that are the content of an editable region are dropped
-/// as well, and so is any line carrying a password field's current value. Text
-/// the page itself renders (a receipt echoing a note) is page text and stays.
-pub(super) const OBSERVE_TEXT_JS: &str = "(function(){try{\
-var b=document.body||document.documentElement;if(!b)return '';\
-var t=b.innerText||'';var drop=new Set();\
-document.querySelectorAll('[contenteditable]:not([contenteditable=false]),textarea').forEach(function(e){\
-String(e.innerText||e.textContent||'').split('\\n').forEach(function(l){l=l.trim();if(l)drop.add(l)})});\
-var pw=[];document.querySelectorAll('input').forEach(function(i){if(i.type==='password'&&i.value)pw.push(i.value)});\
-return t.split('\\n').filter(function(l){var s=l.trim();if(!s||drop.has(s))return false;\
-for(var k=0;k<pw.length;k++){if(s.indexOf(pw[k])>=0)return false}return true}).join('\\n');\
-}catch(e){return ''}})()";
+/// It walks the rendered DOM itself instead of reading `innerText`, so what a
+/// person typed is excluded by structure, not by matching strings afterwards:
+/// `<input>`, `<textarea>`, `<select>` and every element that is editable
+/// (`isContentEditable`: the editable host, everything inside it, and the
+/// whole document under `designMode`) are skipped with their subtrees. Open
+/// shadow roots are walked through their slots; frames are read separately.
+/// Lines that contain the current value of a password field anywhere in this
+/// document (open shadow roots included) are dropped as well, so a page that
+/// reflects a password into its own text does not leak it. A password from
+/// another frame is not known to this frame's reader.
+///
+/// Errors are not caught: an exception reaches the caller as one, never as an
+/// empty page. Output is capped (`truncated` says so).
+pub(super) const OBSERVE_TEXT_JS: &str = r#"(function(){
+var LIMIT=131072,MAX_NODES=60000,out=[],len=0,nodes=0,truncated=false,pw=[];
+var SKIP={SCRIPT:1,STYLE:1,NOSCRIPT:1,TEMPLATE:1,TEXTAREA:1,INPUT:1,SELECT:1,OPTION:1,OPTGROUP:1,DATALIST:1,IFRAME:1,FRAME:1,OBJECT:1,EMBED:1,HEAD:1};
+function push(s){if(truncated)return;if(len+s.length>LIMIT){truncated=true;return}out.push(s);len+=s.length}
+function scan(root){var w=document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT),n;while((n=w.nextNode())){if(n.tagName==='INPUT'&&n.type==='password'&&n.value)pw.push(n.value);if(n.shadowRoot)scan(n.shadowRoot)}}
+function kids(list,vis){for(var i=0;i<list.length&&!truncated;i++)walk(list[i],vis)}
+function walk(node,vis){
+if(truncated)return;
+if(++nodes>MAX_NODES){truncated=true;return}
+if(node.nodeType===3){if(vis){var t=node.data.replace(/\s+/g,' ');if(t.trim())push(t)}return}
+if(node.nodeType===11){kids(node.childNodes,vis);return}
+if(node.nodeType!==1)return;
+var el=node,tag=el.tagName;
+if(SKIP[tag]||el.isContentEditable)return;
+if(tag==='BR'){push('\n');return}
+var cs=getComputedStyle(el);
+if(cs.display==='none')return;
+var v=cs.visibility==='visible',d=cs.display,block=d.indexOf('inline')!==0&&d!=='contents',sep=d==='table-cell'?' ':'\n';
+if(block)push(sep);
+if(tag==='SLOT'){var a=el.assignedNodes({flatten:true});kids(a.length?a:el.childNodes,v)}
+else kids((el.shadowRoot||el).childNodes,v);
+if(block)push(sep)}
+scan(document);
+var root=document.body||document.documentElement;
+if(root&&!(document.designMode==='on'))walk(root,true);
+var lines=out.join('').split('\n').map(function(l){return l.replace(/\s+/g,' ').trim()}).filter(function(l){
+if(!l)return false;for(var k=0;k<pw.length;k++){if(l.indexOf(pw[k])>=0)return false}return true});
+return {text:lines.join('\n'),href:String(location.href),truncated:truncated}})()"#;
 
-/// Bounds on `observed.text`: lines, total bytes, bytes per line.
+/// Bounds on `observed.text`: lines, total UTF-8 bytes, bytes per line.
 pub(super) const MAX_TEXT_LINES: usize = 20;
 pub(super) const MAX_TEXT_BYTES: usize = 1024;
 const MAX_TEXT_LINE_BYTES: usize = 200;
+/// At most this many frames are read per side; more is reported, not read.
+const MAX_TEXT_FRAMES: usize = 32;
+/// Per-frame problems listed in `observed.textFrames`.
+const MAX_TEXT_FRAME_NOTES: usize = 10;
 
-/// One frame's visible text, keyed by frame id so a frame is compared with
-/// itself before and after the action.
+/// One frame's text, as read.
 #[derive(Clone, Debug)]
-pub(super) struct FrameLines {
-    pub id: String,
-    /// `None` for the top frame; otherwise a short name for the frame (the
-    /// last segment of its url), printed in front of its lines.
-    pub label: Option<String>,
+pub(super) struct FrameText {
     pub lines: Vec<String>,
+    /// The reader hit its size or node cap: the text is a prefix.
+    pub truncated: bool,
 }
+
+/// One frame of a visible-text read: which frame (id and the document it
+/// held, `loaderId`), and its text or why it could not be read.
+#[derive(Clone, Debug)]
+pub(super) struct FrameRead {
+    pub id: String,
+    pub loader: String,
+    /// `None` for the top frame; otherwise a short name for the frame.
+    pub label: Option<String>,
+    pub text: Result<FrameText, String>,
+}
+
+/// A whole visible-text read. `Err` when the frame tree itself could not be
+/// read or validated: then nothing about any frame is known.
+pub(super) type TextRead = Result<Vec<FrameRead>, String>;
 
 fn visible_lines(text: &str) -> Vec<String> {
     text.lines()
@@ -627,163 +729,477 @@ fn frame_label(url: &str) -> String {
     shorten(name, 40)
 }
 
-pub(super) fn frame_lines(frame_id: &str, url: &str, top: bool, text: &str) -> FrameLines {
-    FrameLines {
-        id: frame_id.to_string(),
-        label: (!top).then(|| frame_label(url)),
+fn without_fragment(url: &str) -> &str {
+    url.split('#').next().unwrap_or(url)
+}
+
+/// A frame as the frame tree names it.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct TreeFrame {
+    pub id: String,
+    pub url: String,
+    pub loader: String,
+    pub top: bool,
+}
+
+/// Validate a `Page.getFrameTree` result: every node has a frame with a
+/// string id, url and loaderId, and `childFrames`, when present, is a list of
+/// nodes. Anything else is an error, never a shorter list of frames.
+pub(super) fn validate_frame_tree(result: &serde_json::Value) -> Result<Vec<TreeFrame>, String> {
+    fn node(
+        value: &serde_json::Value,
+        top: bool,
+        out: &mut Vec<TreeFrame>,
+        depth: usize,
+    ) -> Result<(), String> {
+        if depth > 64 {
+            return Err("frame tree is nested deeper than 64 frames".into());
+        }
+        let frame = value
+            .get("frame")
+            .and_then(|f| f.as_object())
+            .ok_or("frame tree node has no frame")?;
+        let field = |name: &str| {
+            frame
+                .get(name)
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .ok_or_else(|| format!("frame tree node has no string {name}"))
+        };
+        out.push(TreeFrame {
+            id: field("id")?,
+            url: field("url")?,
+            loader: field("loaderId")?,
+            top,
+        });
+        match value.get("childFrames") {
+            None => Ok(()),
+            Some(serde_json::Value::Array(children)) => {
+                for child in children {
+                    node(child, false, out, depth + 1)?;
+                }
+                Ok(())
+            }
+            Some(_) => Err("frame tree childFrames is not a list".into()),
+        }
+    }
+    let root = result
+        .get("frameTree")
+        .ok_or("frame tree result has no frameTree")?;
+    let mut out = Vec::new();
+    node(root, true, &mut out, 0)?;
+    Ok(out)
+}
+
+/// Check one reader result: no exception, an object with string `text` and
+/// `href`, a boolean `truncated`, and an `href` that is the document the frame
+/// tree names (fragment aside). Anything else is an error for that frame.
+pub(super) fn parse_frame_read(
+    response: &serde_json::Value,
+    expected_url: &str,
+) -> Result<FrameText, String> {
+    if let Some(ex) = response.get("exceptionDetails") {
+        let what = ex
+            .pointer("/exception/description")
+            .or_else(|| ex.get("text"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("exception");
+        return Err(format!("text reader threw: {}", shorten(what, 120)));
+    }
+    let value = response
+        .pointer("/result/value")
+        .and_then(|v| v.as_object())
+        .ok_or("text reader returned no object")?;
+    let text = value
+        .get("text")
+        .and_then(|v| v.as_str())
+        .ok_or("text reader returned no string text")?;
+    let href = value
+        .get("href")
+        .and_then(|v| v.as_str())
+        .ok_or("text reader returned no string href")?;
+    let truncated = value
+        .get("truncated")
+        .and_then(|v| v.as_bool())
+        .ok_or("text reader returned no truncated flag")?;
+    if without_fragment(href) != without_fragment(expected_url) {
+        return Err(format!(
+            "read {} but the frame tree names {}",
+            shorten(href, 80),
+            shorten(expected_url, 80)
+        ));
+    }
+    Ok(FrameText {
         lines: visible_lines(text),
+        truncated,
+    })
+}
+
+/// Test hook: each set bit, lowest first, makes one visible-text read fail at
+/// the CDP level (the reader is sent to a context that does not exist).
+#[cfg(test)]
+pub(crate) static FAIL_TEXT_READS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+fn take_text_fault() -> bool {
+    #[cfg(test)]
+    {
+        use std::sync::atomic::Ordering;
+        let mut fail = false;
+        let _ = FAIL_TEXT_READS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+            fail = v & 1 == 1;
+            Some(v >> 1)
+        });
+        fail
+    }
+    #[cfg(not(test))]
+    {
+        false
     }
 }
 
-/// Read the visible text of every frame in the active page.
-pub(super) async fn capture_text(
-    state: &super::actions::DaemonState,
-) -> Result<Vec<FrameLines>, String> {
+async fn eval_reader(
+    client: &super::cdp::client::CdpClient,
+    session: &str,
+    frame_id: &str,
+    fault: bool,
+) -> Result<serde_json::Value, String> {
+    let world = client
+        .send_command(
+            "Page.createIsolatedWorld",
+            Some(serde_json::json!({ "frameId": frame_id, "worldName": "chrome_use_observe" })),
+            Some(session),
+        )
+        .await?;
+    let context = world
+        .get("executionContextId")
+        .and_then(|c| c.as_i64())
+        .ok_or("no execution context for the frame")?;
+    let context = if fault { i64::from(i32::MAX) } else { context };
+    client
+        .send_command(
+            "Runtime.evaluate",
+            Some(serde_json::json!({
+                "expression": OBSERVE_TEXT_JS,
+                "returnByValue": true,
+                "contextId": context,
+            })),
+            Some(session),
+        )
+        .await
+}
+
+/// Read every frame one session hosts, except `skip`: the tree before, each
+/// frame in its own isolated world, the tree again. A frame whose document
+/// changed (or that left) between the two trees is unknown, not read.
+async fn read_session(
+    client: &super::cdp::client::CdpClient,
+    session: &str,
+    skip: &std::collections::HashMap<String, String>,
+    fault: bool,
+) -> Result<Vec<FrameRead>, String> {
+    let tree = validate_frame_tree(
+        &client
+            .send_command_no_params("Page.getFrameTree", Some(session))
+            .await?,
+    )?;
+    let mut reads = Vec::new();
+    for frame in tree.iter().filter(|f| f.top || !skip.contains_key(&f.id)) {
+        let label = (!frame.top).then(|| frame_label(&frame.url));
+        let text = if reads.len() == MAX_TEXT_FRAMES {
+            Err("frame not read: over the frame budget".to_string())
+        } else {
+            match eval_reader(client, session, &frame.id, fault).await {
+                Ok(response) => parse_frame_read(&response, &frame.url),
+                Err(e) => Err(e),
+            }
+        };
+        reads.push(FrameRead {
+            id: frame.id.clone(),
+            loader: frame.loader.clone(),
+            label,
+            text,
+        });
+    }
+    let after = client
+        .send_command_no_params("Page.getFrameTree", Some(session))
+        .await
+        .and_then(|t| validate_frame_tree(&t));
+    for read in &mut reads {
+        let same = match &after {
+            Ok(frames) => frames
+                .iter()
+                .any(|f| f.id == read.id && f.loader == read.loader),
+            Err(_) => false,
+        };
+        if !same && read.text.is_ok() {
+            read.text = Err(match &after {
+                Ok(_) => "frame navigated or was replaced during the read".into(),
+                Err(e) => format!("frame tree unreadable after the read: {e}"),
+            });
+        }
+    }
+    Ok(reads)
+}
+
+/// Read the visible text of every frame in the active page, strictly: the
+/// top session's frames, then each out-of-process frame through its own
+/// session, which must be attached to that frame.
+pub(super) async fn capture_text(state: &super::actions::DaemonState) -> TextRead {
+    let fault = take_text_fault();
     let mgr = state
         .browser
         .as_ref()
         .ok_or("No active page for observation")?;
-    let session = mgr
+    let top = mgr
         .active_session_id()
         .map_err(|_| "No active page for observation".to_string())?
         .to_string();
-    let read = super::element::collect_all_frames_text_with(
-        &mgr.client,
-        &session,
-        &state.iframe_sessions,
-        OBSERVE_TEXT_JS,
-    );
-    let frames = tokio::time::timeout(std::time::Duration::from_secs(3), read)
-        .await
-        .map_err(|_| "text capture timed out".to_string())??;
-    Ok(frames
-        .iter()
-        .map(|f| frame_lines(&f.frame_id, &f.url, f.kind == "top", &f.text))
-        .collect())
+    let client = &mgr.client;
+    let mut reads = read_session(client, &top, &state.iframe_sessions, fault).await?;
+    let mut oopifs: Vec<(&String, &String)> = state.iframe_sessions.iter().collect();
+    oopifs.sort();
+    for (frame_id, session) in oopifs {
+        if reads.iter().any(|r| &r.id == frame_id) {
+            continue;
+        }
+        let unknown = |reason: String| FrameRead {
+            id: frame_id.clone(),
+            loader: String::new(),
+            label: Some(format!("frame {}", head(frame_id, 8))),
+            text: Err(reason),
+        };
+        if reads.len() >= MAX_TEXT_FRAMES {
+            reads.push(unknown("frame not read: over the frame budget".into()));
+            continue;
+        }
+        match read_session(client, session, &std::collections::HashMap::new(), fault).await {
+            Ok(frames) if frames.first().is_some_and(|f| &f.id == frame_id) => {
+                for frame in frames {
+                    if !reads.iter().any(|r| r.id == frame.id) {
+                        reads.push(frame);
+                    }
+                }
+            }
+            Ok(_) => reads.push(unknown(
+                "the frame's session holds a different frame".into(),
+            )),
+            Err(e) => reads.push(unknown(e)),
+        }
+    }
+    Ok(reads)
 }
 
-/// The visible-text lines that appeared or went away, `+ ` / `- ` prefixed,
-/// frame by frame, bounded to [`MAX_TEXT_LINES`] lines and [`MAX_TEXT_BYTES`]
-/// bytes. Returns the kept lines and how many were left out.
-pub(super) fn text_changes(before: &[FrameLines], after: &[FrameLines]) -> (Vec<String>, usize) {
-    use similar::{capture_diff_slices_deadline, Algorithm, DiffOp};
-    // A text-heavy page diffs in well under this; the deadline only keeps a
-    // pathological one from holding the reply.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
-    let mut all: Vec<String> = Vec::new();
-    let empty: Vec<String> = Vec::new();
-    let mut emit = |label: &Option<String>, sign: char, line: &str| {
+/// The bounded `observed.text` list under construction. A line is formatted
+/// only while there is budget for it; past the budget it is counted.
+struct TextBudget {
+    lines: Vec<String>,
+    bytes: usize,
+    omitted: usize,
+}
+
+impl TextBudget {
+    fn push(&mut self, sign: char, label: &Option<String>, line: &str) {
+        if self.lines.len() == MAX_TEXT_LINES || self.bytes >= MAX_TEXT_BYTES {
+            self.omitted += 1;
+            return;
+        }
         let prefix = label
             .as_ref()
             .map(|l| format!("[frame {l}] "))
             .unwrap_or_default();
-        all.push(shorten(
-            &format!("{sign} {prefix}{line}"),
-            MAX_TEXT_LINE_BYTES,
-        ));
+        let (line, _) = bounded_line(sign, &prefix, line, MAX_TEXT_LINE_BYTES);
+        if self.bytes + line.len() + 1 > MAX_TEXT_BYTES {
+            self.omitted += 1;
+            return;
+        }
+        self.bytes += line.len() + 1;
+        self.lines.push(line);
+    }
+}
+
+/// The outcome of comparing two visible-text reads.
+#[derive(Debug, Default)]
+pub(super) struct TextComparison {
+    pub lines: Vec<String>,
+    /// Changed lines not listed, over the line or byte budget.
+    pub omitted: usize,
+    /// Frames that could not be compared: (frame, status, reason).
+    pub problems: Vec<(String, &'static str, String)>,
+    /// Frames in the before read that the (valid) after tree no longer has.
+    pub gone: Vec<String>,
+    pub compared: usize,
+}
+
+fn frame_name(label: &Option<String>) -> String {
+    label.clone().unwrap_or_else(|| "top".into())
+}
+
+/// Compare two reads frame by frame. Only a frame read successfully on both
+/// sides (or new, and read after) contributes lines; a frame with a failed or
+/// truncated read on either side is a problem, never a removal or "no change".
+pub(super) fn text_diff(before: &[FrameRead], after: &[FrameRead]) -> TextComparison {
+    use similar::{capture_diff_slices_deadline, Algorithm, DiffOp};
+    let mut out = TextComparison::default();
+    let mut budget = TextBudget {
+        lines: Vec::new(),
+        bytes: 0,
+        omitted: 0,
     };
+    let empty = FrameText {
+        lines: Vec::new(),
+        truncated: false,
+    };
+    // A text-heavy page diffs in well under this; the deadline only keeps a
+    // pathological one from holding the reply.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
     for frame in after {
-        let old = before
-            .iter()
-            .find(|b| b.id == frame.id)
-            .map(|b| &b.lines)
-            .unwrap_or(&empty);
-        for op in capture_diff_slices_deadline(Algorithm::Myers, old, &frame.lines, Some(deadline))
+        let old = before.iter().find(|b| b.id == frame.id);
+        let pair = match (old.map(|b| &b.text), &frame.text) {
+            (None, Ok(new)) => Ok((&empty, new)),
+            (Some(Ok(old)), Ok(new)) => Ok((old, new)),
+            (Some(Err(e)), _) | (_, Err(e)) => Err(e.clone()),
+        };
+        let (old, new) = match pair {
+            Ok(pair) => pair,
+            Err(reason) => {
+                out.problems
+                    .push((frame_name(&frame.label), "unavailable", reason));
+                continue;
+            }
+        };
+        if old.truncated || new.truncated {
+            out.problems.push((
+                frame_name(&frame.label),
+                "partial",
+                "text over the reader's size budget".into(),
+            ));
+            continue;
+        }
+        out.compared += 1;
+        for op in
+            capture_diff_slices_deadline(Algorithm::Myers, &old.lines, &new.lines, Some(deadline))
         {
-            match op {
-                DiffOp::Equal { .. } => {}
+            let (removed, added) = match op {
+                DiffOp::Equal { .. } => continue,
                 DiffOp::Delete {
                     old_index, old_len, ..
-                } => old[old_index..old_index + old_len]
-                    .iter()
-                    .for_each(|l| emit(&frame.label, '-', l)),
+                } => (old_index..old_index + old_len, 0..0),
                 DiffOp::Insert {
                     new_index, new_len, ..
-                } => frame.lines[new_index..new_index + new_len]
-                    .iter()
-                    .for_each(|l| emit(&frame.label, '+', l)),
+                } => (0..0, new_index..new_index + new_len),
                 DiffOp::Replace {
                     old_index,
                     old_len,
                     new_index,
                     new_len,
-                } => {
-                    old[old_index..old_index + old_len]
-                        .iter()
-                        .for_each(|l| emit(&frame.label, '-', l));
-                    frame.lines[new_index..new_index + new_len]
-                        .iter()
-                        .for_each(|l| emit(&frame.label, '+', l));
-                }
+                } => (
+                    old_index..old_index + old_len,
+                    new_index..new_index + new_len,
+                ),
+            };
+            for i in removed {
+                budget.push('-', &frame.label, &old.lines[i]);
+            }
+            for i in added {
+                budget.push('+', &frame.label, &new.lines[i]);
             }
         }
     }
-    // A frame the action removed: its text went with it.
     for frame in before
         .iter()
         .filter(|b| !after.iter().any(|a| a.id == b.id))
     {
-        frame.lines.iter().for_each(|l| emit(&frame.label, '-', l));
+        out.gone.push(frame_name(&frame.label));
     }
-    let mut kept = Vec::new();
-    let mut bytes = 0;
-    let mut omitted = 0;
-    for line in all {
-        if kept.len() == MAX_TEXT_LINES || bytes + line.len() + 1 > MAX_TEXT_BYTES {
-            omitted += 1;
-            continue;
-        }
-        bytes += line.len() + 1;
-        kept.push(line);
-    }
-    (kept, omitted)
+    out.lines = budget.lines;
+    out.omitted = budget.omitted;
+    out
 }
 
-/// Add the visible-text change to an observation. A text change is a change:
-/// a receipt that only exists as static text must not leave `changed:false`.
-/// A capture that failed on either side is reported, never read as "no text
-/// changed".
+/// Add the visible-text comparison to an observation. A text change is a
+/// change. Missing text evidence is missing evidence: the observation is no
+/// longer complete, and an unchanged tree no longer proves "no change", so
+/// nothing downstream (the no-progress hint, the no-change probe) can read
+/// an unknown as a stall.
 pub(super) fn apply_text(
     observed: &mut serde_json::Map<String, serde_json::Value>,
-    before: &Result<Vec<FrameLines>, String>,
-    after: &Result<Vec<FrameLines>, String>,
+    before: &TextRead,
+    after: &TextRead,
 ) {
     use serde_json::json;
-    match (before, after) {
-        (Ok(before), Ok(after)) => {
-            let (lines, omitted) = text_changes(before, after);
-            if lines.is_empty() {
-                return;
-            }
-            observed.insert("text".into(), json!(lines));
-            if omitted > 0 {
-                observed.insert("textOmitted".into(), json!(omitted));
-            }
-            observed.insert("changed".into(), json!(true));
-        }
+    let diff = match (before, after) {
+        (Ok(before), Ok(after)) => text_diff(before, after),
         (before, after) => {
+            let side = if before.is_err() { "before" } else { "after" };
             let error = before
                 .as_ref()
                 .err()
                 .or(after.as_ref().err())
                 .cloned()
                 .unwrap_or_default();
-            observed.insert("textStatus".into(), json!("unavailable"));
-            observed.insert("textError".into(), json!(shorten(&error, 160)));
+            TextComparison {
+                problems: vec![("page".into(), "unavailable", format!("{side}: {error}"))],
+                ..Default::default()
+            }
+        }
+    };
+    if !diff.lines.is_empty() {
+        observed.insert("text".into(), json!(diff.lines));
+        if diff.omitted > 0 {
+            observed.insert("textOmitted".into(), json!(diff.omitted));
+            observed.insert("textTruncated".into(), json!(true));
+        }
+        observed.insert("changed".into(), json!(true));
+    }
+    let mut notes: Vec<serde_json::Value> = diff
+        .problems
+        .iter()
+        .map(|(frame, status, reason)| {
+            json!({"frame": frame, "status": status, "reason": shorten(reason, 160)})
+        })
+        .chain(
+            diff.gone
+                .iter()
+                .map(|frame| json!({"frame": frame, "status": "gone"})),
+        )
+        .collect();
+    let noted = notes.len();
+    notes.truncate(MAX_TEXT_FRAME_NOTES);
+    if !notes.is_empty() {
+        observed.insert("textFrames".into(), json!(notes));
+        if noted > MAX_TEXT_FRAME_NOTES {
+            observed.insert(
+                "textFramesOmitted".into(),
+                json!(noted - MAX_TEXT_FRAME_NOTES),
+            );
         }
     }
-}
-
-/// Whether an observation must name its target (#237): the first one in the
-/// session, a target or url other than the one the last observation reported,
-/// or an action that itself moved the session. Leaving an unchanged target out
-/// never hides a switch: every change since the last report is news here.
-pub(super) fn target_is_news(
-    last: Option<&(String, String, String)>,
-    current: &(String, String, String),
-    moved_during_action: bool,
-) -> bool {
-    moved_during_action || last != Some(current)
+    if diff.problems.is_empty() {
+        return;
+    }
+    observed.insert(
+        "textStatus".into(),
+        json!(if diff.compared > 0 {
+            "partial"
+        } else {
+            "unavailable"
+        }),
+    );
+    let (frame, _, reason) = &diff.problems[0];
+    let error = capture_error("visibleText", &format!("{frame}: {reason}"));
+    match observed.get_mut("errors").and_then(|e| e.as_array_mut()) {
+        Some(errors) => errors.push(error),
+        None => {
+            observed.insert("errors".into(), json!([error]));
+        }
+    }
+    if observed.get("status").and_then(|s| s.as_str()) == Some("complete") {
+        observed.insert("status".into(), json!("partial"));
+    }
+    if observed.get("changed") == Some(&json!(false)) {
+        observed.insert("changed".into(), serde_json::Value::Null);
+    }
 }
 
 /// Preserve the action result and report its separate observation quality.
@@ -1001,9 +1417,11 @@ mod capture_tests {
     fn a_shrinking_page_caps_the_change_list() {
         let before = tree("row", 200);
         let after = "- button \"Done\" [ref=e999]";
-        let (lines, omitted) = compact_changes(&format!("{before}\n"), &format!("{after}\n"));
-        assert_eq!(lines.len(), MAX_CHANGE_LINES);
-        assert_eq!(omitted, 201 - MAX_CHANGE_LINES);
+        let out = compact_changes(&format!("{before}\n"), &format!("{after}\n"));
+        assert!(out.lines.len() <= MAX_CHANGE_LINES);
+        assert_eq!(out.lines.len() + out.omitted, 201);
+        let bytes: usize = out.lines.iter().map(|l| l.len() + 1).sum();
+        assert!(bytes <= MAX_CHANGE_BYTES, "{bytes}");
     }
 
     #[test]
@@ -1034,42 +1452,73 @@ mod capture_tests {
         assert_eq!(response["data"]["clicked"], "Save");
     }
 
-    fn frames(spec: &[(&str, &str, bool, &str)]) -> Result<Vec<FrameLines>, String> {
-        Ok(spec
-            .iter()
-            .map(|(id, url, top, text)| frame_lines(id, url, *top, text))
-            .collect())
+    #[test]
+    fn a_huge_removed_line_is_cut_not_copied_whole() {
+        let huge = format!("- text \"{}\"", "z".repeat(1_000_000));
+        let out = compact_changes(&format!("{huge}\n"), "- button \"Done\"\n");
+        assert_eq!(out.lines.len(), 2);
+        assert!(out.lines.iter().all(|l| l.len() <= MAX_CHANGE_LINE_BYTES));
+        assert_eq!(out.shortened, 1);
+        assert!(out.lines[0].starts_with("- - text"));
+        assert!(out.lines[0].contains("bytes omitted]"));
+        // Many long lines: the total byte budget holds, the rest is counted.
+        let many: String = (0..50)
+            .map(|i| format!("- row {i} {}\n", "w".repeat(500)))
+            .collect();
+        let out = compact_changes(&many, "");
+        let bytes: usize = out.lines.iter().map(|l| l.len() + 1).sum();
+        assert!(bytes <= MAX_CHANGE_BYTES, "{bytes}");
+        assert!(out.omitted > 0);
+        assert_eq!(out.lines.len() + out.omitted, 50);
+        // Multi-byte text is cut on a character boundary.
+        let wide = format!("- text \"{}\"", "路".repeat(500));
+        let out = compact_changes(&format!("{wide}\n"), "");
+        assert!(out.lines[0].len() <= MAX_CHANGE_LINE_BYTES);
+    }
+
+    fn read(id: &str, label: Option<&str>, text: &str) -> FrameRead {
+        FrameRead {
+            id: id.into(),
+            loader: format!("L-{id}"),
+            label: label.map(str::to_string),
+            text: Ok(FrameText {
+                lines: visible_lines(text),
+                truncated: false,
+            }),
+        }
+    }
+
+    fn failed(id: &str, label: Option<&str>) -> FrameRead {
+        FrameRead {
+            id: id.into(),
+            loader: format!("L-{id}"),
+            label: label.map(str::to_string),
+            text: Err("Cannot find context with specified id".into()),
+        }
+    }
+
+    fn unchanged_tree() -> serde_json::Map<String, serde_json::Value> {
+        changes(&ok("tree"), &ok("tree"), &ok("u"), &ok("u"))
     }
 
     #[test]
     fn an_iframe_receipt_is_a_text_change_even_when_the_tree_did_not_move() {
-        let before = frames(&[
-            (
-                "T",
-                "http://x/iframe.html",
-                true,
-                "Embedded notes\nComplete the form",
-            ),
-            ("C", "http://x/child.html", false, "Note Save note\nNo note"),
+        let before = Ok(vec![
+            read("T", None, "Embedded notes"),
+            read("C", Some("child.html"), "Note Save note\nNo note"),
         ]);
-        let after = frames(&[
-            (
-                "T",
-                "http://x/iframe.html",
-                true,
-                "Embedded notes\nComplete the form",
-            ),
-            (
+        let after = Ok(vec![
+            read("T", None, "Embedded notes"),
+            read(
                 "C",
-                "http://x/child.html",
-                false,
+                Some("child.html"),
                 "Note Save note\nNote saved: Synthetic benchmark note",
             ),
         ]);
-        let mut observed = changes(&ok("tree"), &ok("tree"), &ok("u"), &ok("u"));
-        assert_eq!(observed["changed"], false);
+        let mut observed = unchanged_tree();
         apply_text(&mut observed, &before, &after);
         assert_eq!(observed["changed"], true);
+        assert_eq!(observed["status"], "complete");
         assert_eq!(
             observed["text"],
             json!([
@@ -1077,165 +1526,184 @@ mod capture_tests {
                 "+ [frame child.html] Note saved: Synthetic benchmark note"
             ])
         );
-        assert_eq!(observed["status"], "complete");
+        assert!(!observed.contains_key("textStatus"));
+    }
+
+    #[test]
+    fn a_failed_after_read_is_neither_a_removal_nor_no_change() {
+        let before = Ok(vec![
+            read("T", None, "Embedded notes"),
+            read("C", Some("child.html"), "Note saved: earlier receipt"),
+        ]);
+        let after = Ok(vec![
+            read("T", None, "Embedded notes"),
+            failed("C", Some("child.html")),
+        ]);
+        let mut observed = unchanged_tree();
+        apply_text(&mut observed, &before, &after);
+        assert!(!observed.contains_key("text"), "{observed:?}");
+        assert_eq!(observed["status"], "partial");
+        assert!(observed["changed"].is_null());
+        assert_eq!(observed["textStatus"], "partial");
+        assert_eq!(observed["textFrames"][0]["frame"], "child.html");
+        assert_eq!(observed["textFrames"][0]["status"], "unavailable");
+        assert_eq!(observed["errors"][0]["stage"], "visibleText");
+    }
+
+    #[test]
+    fn both_reads_failing_is_never_complete() {
+        let mut observed = unchanged_tree();
+        apply_text(
+            &mut observed,
+            &Err("frame tree result has no frameTree".into()),
+            &Err("Cannot find context".into()),
+        );
+        assert_ne!(observed["status"], "complete");
+        assert!(observed["changed"].is_null());
+        assert_eq!(observed["textStatus"], "unavailable");
+        // A real tree change survives missing text evidence.
+        let mut observed = changes(&ok("button A"), &ok("button B"), &ok("u"), &ok("u"));
+        apply_text(&mut observed, &Err("x".into()), &Err("y".into()));
+        assert_eq!(observed["changed"], true);
+        assert_eq!(observed["status"], "partial");
+    }
+
+    #[test]
+    fn a_tree_change_is_kept_when_the_text_read_fails() {
+        let mut observed = changes(&ok("button A"), &ok("button B"), &ok("u"), &ok("u"));
+        apply_text(
+            &mut observed,
+            &Ok(vec![read("T", None, "a")]),
+            &Ok(vec![failed("T", None)]),
+        );
+        assert_eq!(observed["changed"], true);
+        assert_eq!(observed["status"], "partial");
+        assert_eq!(observed["textStatus"], "unavailable");
     }
 
     #[test]
     fn unchanged_text_adds_nothing() {
-        let same = frames(&[("T", "u", true, "Page 1 of 3\n  Kit   catalog ")]);
-        let mut observed = changes(&ok("tree"), &ok("tree"), &ok("u"), &ok("u"));
+        let same = Ok(vec![read("T", None, "Page 1 of 3\n  Kit   catalog ")]);
+        let mut observed = unchanged_tree();
         apply_text(&mut observed, &same, &same);
         assert_eq!(observed["changed"], false);
+        assert_eq!(observed["status"], "complete");
         assert!(!observed.contains_key("text"));
         assert!(!observed.contains_key("textStatus"));
     }
 
     #[test]
-    fn a_failed_text_capture_is_reported_not_read_as_unchanged() {
-        let mut observed = changes(&ok("tree"), &ok("tree"), &ok("u"), &ok("u"));
+    fn a_truncated_read_is_partial_not_a_diff() {
+        let mut big = read("T", None, "a\nb");
+        if let Ok(t) = &mut big.text {
+            t.truncated = true;
+        }
+        let mut observed = unchanged_tree();
         apply_text(
             &mut observed,
-            &frames(&[("T", "u", true, "a")]),
-            &Err("text capture timed out".into()),
+            &Ok(vec![read("T", None, "a")]),
+            &Ok(vec![big]),
         );
-        assert_eq!(observed["textStatus"], "unavailable");
         assert!(!observed.contains_key("text"));
-        // The tree observation itself stays what it was.
-        assert_eq!(observed["status"], "complete");
-        assert_eq!(observed["changed"], false);
+        assert_eq!(observed["textFrames"][0]["status"], "partial");
+        assert_eq!(observed["status"], "partial");
     }
 
     #[test]
-    fn text_changes_are_bounded_in_lines_and_bytes() {
-        let many: String = (0..100).map(|i| format!("row {i}\n")).collect();
-        let (lines, omitted) = text_changes(
-            &frames(&[("T", "u", true, "")]).unwrap(),
-            &frames(&[("T", "u", true, &many)]).unwrap(),
-        );
-        assert_eq!(lines.len(), MAX_TEXT_LINES);
-        assert_eq!(omitted, 100 - MAX_TEXT_LINES);
+    fn text_changes_are_bounded_while_they_are_built() {
+        let many: String = (0..5000).map(|i| format!("row {i}\n")).collect();
+        let out = text_diff(&[read("T", None, "")], &[read("T", None, &many)]);
+        assert_eq!(out.lines.len(), MAX_TEXT_LINES);
+        assert_eq!(out.omitted, 5000 - MAX_TEXT_LINES);
 
         let wide: String = (0..30)
-            .map(|i| format!("{i} {}\n", "w".repeat(300)))
+            .map(|i| format!("{i} {}\n", "w".repeat(100_000)))
             .collect();
-        let (lines, omitted) = text_changes(
-            &frames(&[("T", "u", true, "")]).unwrap(),
-            &frames(&[("T", "u", true, &wide)]).unwrap(),
-        );
-        let bytes: usize = lines.iter().map(|l| l.len() + 1).sum();
+        let out = text_diff(&[read("T", None, "")], &[read("T", None, &wide)]);
+        let bytes: usize = out.lines.iter().map(|l| l.len() + 1).sum();
         assert!(bytes <= MAX_TEXT_BYTES, "{bytes}");
-        assert!(lines.iter().all(|l| l.len() <= MAX_TEXT_LINE_BYTES));
-        assert_eq!(lines.len() + omitted, 30);
-        assert!(omitted > 0);
+        assert!(out.lines.iter().all(|l| l.len() <= MAX_TEXT_LINE_BYTES));
+        assert_eq!(out.lines.len() + out.omitted, 30);
+        let mut observed = unchanged_tree();
+        apply_text(
+            &mut observed,
+            &Ok(vec![read("T", None, "")]),
+            &Ok(vec![read("T", None, &wide)]),
+        );
+        assert_eq!(observed["textTruncated"], true);
+        assert!(observed["textOmitted"].as_u64().unwrap() > 0);
     }
 
     #[test]
-    fn a_new_frame_counts_as_added_text_and_a_gone_frame_as_removed() {
-        let (lines, _) = text_changes(
-            &frames(&[
-                ("T", "u", true, "a"),
-                ("old", "http://x/a.html?q=1", false, "bye"),
-            ])
-            .unwrap(),
-            &frames(&[("T", "u", true, "a"), ("new", "http://x/b/", false, "hi")]).unwrap(),
+    fn new_and_gone_frames() {
+        let out = text_diff(
+            &[read("T", None, "a"), read("old", Some("a.html"), "bye")],
+            &[read("T", None, "a"), read("new", Some("b"), "hi")],
         );
-        assert_eq!(lines, ["+ [frame b] hi", "- [frame a.html] bye"]);
+        assert_eq!(out.lines, ["+ [frame b] hi"]);
+        assert_eq!(out.gone, ["a.html"]);
+        assert!(out.problems.is_empty());
     }
 
     #[test]
     fn page_counters_and_delayed_totals_show_as_text() {
-        let (lines, _) = text_changes(
-            &frames(&[("T", "u", true, "Previous pagePage 1 of 3Next page\nIdle")]).unwrap(),
-            &frames(&[(
+        let out = text_diff(
+            &[read("T", None, "Previous pagePage 1 of 3Next page\nIdle")],
+            &[read(
                 "T",
-                "u",
-                true,
+                None,
                 "Previous pagePage 2 of 3Next page\nReport ready\nTotal entries: 3",
-            )])
-            .unwrap(),
+            )],
         );
-        assert!(lines.contains(&"+ Previous pagePage 2 of 3Next page".to_string()));
-        assert!(lines.contains(&"+ Total entries: 3".to_string()));
-        assert!(lines.contains(&"- Idle".to_string()));
-    }
-
-    /// Run the observe text reader under node against a stubbed document.
-    fn run_text_js(body: &str, editables: &[&str], inputs: &[(&str, &str)]) -> Option<String> {
-        let node = std::env::var_os("PATH").and_then(|p| {
-            std::env::split_paths(&p)
-                .map(|d| d.join("node"))
-                .find(|n| n.is_file())
-        })?;
-        let js = format!(
-            "const body = {{ innerText: {body} }}; \
-             const editables = {editables}.map(t => ({{ innerText: t }})); \
-             const inputs = {inputs}.map(([type, value]) => ({{ type, value }})); \
-             globalThis.document = {{ body, querySelectorAll: s => s === 'input' ? inputs : editables }}; \
-             process.stdout.write({})",
-            OBSERVE_TEXT_JS,
-            body = serde_json::to_string(body).unwrap(),
-            editables = serde_json::to_string(editables).unwrap(),
-            inputs = serde_json::to_string(
-                &inputs.iter().map(|(t, v)| [*t, *v]).collect::<Vec<_>>()
-            )
-            .unwrap(),
-        );
-        let out = std::process::Command::new(node)
-            .arg("-e")
-            .arg(js)
-            .output()
-            .ok()?;
-        out.status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+        assert!(out
+            .lines
+            .contains(&"+ Previous pagePage 2 of 3Next page".to_string()));
+        assert!(out.lines.contains(&"+ Total entries: 3".to_string()));
+        assert!(out.lines.contains(&"- Idle".to_string()));
     }
 
     #[test]
-    fn typed_field_content_and_passwords_never_reach_the_text() {
-        let Some(out) = run_text_js(
-            "Sign in\nhunter2-secret shown by mistake\nDraft: my private draft\nNote saved: hello",
-            &["Draft: my private draft"],
-            &[("password", "hunter2-secret"), ("text", "hello")],
-        ) else {
-            return;
-        };
-        assert!(!out.contains("hunter2-secret"), "{out}");
-        assert!(!out.contains("my private draft"), "{out}");
-        // Page text that echoes an ordinary field is the page's receipt.
-        assert!(out.contains("Note saved: hello"), "{out}");
-        assert!(out.contains("Sign in"), "{out}");
+    fn a_malformed_frame_tree_is_an_error_not_fewer_frames() {
+        let good = json!({"frameTree": {"frame": {"id": "T", "url": "u", "loaderId": "L"},
+            "childFrames": [{"frame": {"id": "C", "url": "c", "loaderId": "L2"}}]}});
+        let frames = validate_frame_tree(&good).unwrap();
+        assert_eq!(frames.len(), 2);
+        assert!(frames[0].top && !frames[1].top);
+        for bad in [
+            json!({}),
+            json!({"frameTree": {}}),
+            json!({"frameTree": {"frame": {"id": "T", "url": "u"}}}),
+            json!({"frameTree": {"frame": {"id": "T", "url": "u", "loaderId": "L"},
+                "childFrames": {"frame": {}}}}),
+            json!({"frameTree": {"frame": {"id": "T", "url": "u", "loaderId": "L"},
+                "childFrames": [{"frame": {"id": 7, "url": "c", "loaderId": "L2"}}]}}),
+        ] {
+            assert!(validate_frame_tree(&bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
-    fn the_target_is_named_whenever_it_is_news() {
-        let t = |tab: &str, target: &str, url: &str| {
-            (tab.to_string(), target.to_string(), url.to_string())
-        };
-        let a = t("t1", "AAA", "http://x/a");
-        // First observation in the session.
-        assert!(target_is_news(None, &a, false));
-        // Same tab, target and url as last reported: left out.
-        assert!(!target_is_news(Some(&a), &a, false));
-        // A rebinding (new targetId), another tab, a new url: named.
-        assert!(target_is_news(
-            Some(&a),
-            &t("t1", "BBB", "http://x/a"),
-            false
-        ));
-        assert!(target_is_news(
-            Some(&a),
-            &t("t2", "AAA", "http://x/a"),
-            false
-        ));
-        assert!(target_is_news(
-            Some(&a),
-            &t("t1", "AAA", "http://x/b"),
-            false
-        ));
-        // The action moved the session (e.g. a followed popup) back onto the
-        // tab last reported: still named, since the caller's baseline was
-        // another tab.
-        assert!(target_is_news(Some(&a), &a, true));
+    fn a_reader_result_is_checked_not_defaulted() {
+        let good = json!({"result": {"type": "object",
+            "value": {"text": "a\nb", "href": "http://x/c.html#top", "truncated": false}}});
+        assert_eq!(
+            parse_frame_read(&good, "http://x/c.html").unwrap().lines,
+            ["a", "b"]
+        );
+        // Another document than the tree names.
+        assert!(parse_frame_read(&good, "http://x/other.html").is_err());
+        for bad in [
+            json!({"exceptionDetails": {"text": "Uncaught",
+                   "exception": {"description": "TypeError: x"}},
+                   "result": {"type": "object"}}),
+            json!({"result": {"type": "string", "value": ""}}),
+            json!({"result": {"type": "undefined"}}),
+            json!({"result": {"value": {"text": 3, "href": "u", "truncated": false}}}),
+            json!({"result": {"value": {"text": "a", "truncated": false}}}),
+            json!({"result": {"value": {"text": "a", "href": "u"}}}),
+        ] {
+            assert!(parse_frame_read(&bad, "u").is_err(), "{bad}");
+        }
     }
 
     #[test]

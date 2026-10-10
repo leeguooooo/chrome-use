@@ -178,17 +178,25 @@ tree, but the observation as a whole is still incomplete.
 appeared (`+`) or went away (`-`): the static text an interactive tree leaves
 out, such as an iframe's receipt, a log line, or a "Page 2 of 3" counter.
 Lines from a child frame start with `[frame <name>]`. A text change alone sets
-`changed: true`. It is bounded to 20 lines and 1 KB (`textOmitted` counts the
-rest), and never carries what was typed into a field: input and textarea values,
-editable-region content and any line holding a password value are left out.
-`textStatus: "unavailable"` means the text could not be read, so a text-only
-change is unknown, not absent.
+`changed: true`. At most 20 lines and 1 KB, 200 bytes a line; `textOmitted`
+counts the rest and `textTruncated: true` says so.
 
-`observed.target` (`session`, `tabId`, `targetId`, `url`) names the page the
-observation came from when that is news: the first observation in the session,
-a tab, target or url other than the one the last observation reported, or an
-action that moved the session to another tab. When it is absent, the
-observation is about the same target as the last one that named it.
+The text is read from the rendered DOM, not from `innerText`: `<input>`,
+`<textarea>`, `<select>` and every editable element (the editable host, all
+of its content, any document in `designMode`) are skipped with their
+subtrees, including inside open shadow roots. A line that contains the current
+value of a password field in the same document is dropped. A password value
+that a page copies into another frame's text is not filtered.
+
+Each frame is read in its own isolated world and checked against the frame
+tree. A frame whose read failed, or whose document changed during the read,
+is unknown: it is listed in `textFrames` with its status and reason, contributes
+no lines, and makes the observation incomplete. `textStatus` is `partial`
+(some frames compared) or `unavailable` (none); `status` is then no better
+than `partial`, an unchanged tree no longer reads as `changed: false`, and no
+`noProgress` hint is given. `textFrames` also lists frames that are `gone`
+from a valid frame tree. The small-page `changes` list is capped at 60 lines
+and 4 KB, 240 bytes a line (`changesOmitted`, `changesShortened`).
 
 `navigate`/`reload`/`back`/`forward` take `--observe` too, and return the
 post-navigation **snapshot** instead of a delta — across a page swap a diff

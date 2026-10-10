@@ -290,13 +290,27 @@
         The interactive tree leaves plain static text out, so an iframe's receipt, an action log line or a
         "Page 2 of 3" counter used to be invisible and the click read as no change. <code>observed.text</code> lists the
         visible text lines, frame by frame, that appeared (<code>+</code>) or went away (<code>-</code>); a child frame's lines
+        start with <code>[frame name]</code>. A text change alone sets <code>changed: true</code>. At most 20 lines, 1 KB and
+        200 bytes a line; <code>textOmitted</code> counts the rest and <code>textTruncated: true</code> says so.
+        The text is read from the rendered DOM, not <code>innerText</code>: <code>&lt;input&gt;</code>, <code>&lt;textarea&gt;</code>,
+        <code>&lt;select&gt;</code> and every editable element (the editable host, all its content, a document in
+        <code>designMode</code>) are skipped with their subtrees, inside open shadow roots too. A line holding the current value
+        of a password field in the same document is dropped; a password a page copies into another frame's text is not filtered.
+        Each frame is read in its own isolated world and checked against the frame tree. A frame whose read failed or whose
+        document changed during the read is unknown: it is listed in <code>textFrames</code> with status and reason, adds no
+        lines, and makes the observation incomplete. <code>textStatus</code> is <code>partial</code> or <code>unavailable</code>,
+        <code>status</code> is at best <code>partial</code>, an unchanged tree no longer reads as <code>changed: false</code>, and
+        no <code>noProgress</code> hint is given. The small-page <code>changes</code> list is capped at 60 lines, 4 KB and
+        240 bytes a line (<code>changesOmitted</code>, <code>changesShortened</code>).
+      </div>
+        The interactive tree leaves plain static text out, so an iframe's receipt, an action log line or a
+        "Page 2 of 3" counter used to be invisible and the click read as no change. <code>observed.text</code> lists the
+        visible text lines, frame by frame, that appeared (<code>+</code>) or went away (<code>-</code>); a child frame's lines
         start with <code>[frame name]</code>. A text change alone sets <code>changed: true</code>. At most 20 lines and 1 KB;
         <code>textOmitted</code> counts the rest. What was typed into inputs and textareas, editable-region content and any
         line holding a password value never appear. <code>textStatus: "unavailable"</code> means the text could not be read,
         so a text-only change is unknown, not absent.
       </div>
-
-      <p><code>observed.target</code> (<code>session</code>, <code>tabId</code>, <code>targetId</code>, <code>url</code>) appears when it is news: the first observation in the session, a tab, target or url other than the one the last observation reported, or an action that moved the session to another tab. When it is absent, the observation is about the same target the last one named.</p>
 
       <div class="du-callout tip">
         <div class="du-callout-title">✅ expect or --observe?</div>

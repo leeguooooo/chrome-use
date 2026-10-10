@@ -6058,8 +6058,12 @@ Options:
                              whole as observed.snapshot (the current tree, refs
                              live) plus observed.changes (+/- lines only).
                              observed.text: visible text lines that changed in any
-                             frame (receipts, counters); ≤20 lines/1 KB, never field
-                             values or passwords. A text change sets changed=true.
+                             frame (receipts, counters); ≤20 lines/1 KB. Inputs,
+                             textareas, selects and editable regions are skipped;
+                             lines holding a same-document password value dropped.
+                             A text change sets changed=true; a frame that could not
+                             be read is listed in textFrames and makes the
+                             observation partial (never "no change").
                              Requests: at most 20 summaries, 256 UTF-8 bytes each;
                              data URL payloads omitted. Full capture: network requests --json
                              Applies to click, dblclick, fill, type, press, select,
@@ -6371,6 +6375,9 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
         if let Some(n) = obs.get("changesOmitted").and_then(|v| v.as_u64()) {
             println!("{}", color::dim(&format!("  … {n} more changed lines")));
         }
+        if let Some(n) = obs.get("changesShortened").and_then(|v| v.as_u64()) {
+            println!("{}", color::dim(&format!("  ({n} long lines cut)")));
+        }
     }
     if !replaced {
         if let Some(snapshot) = obs.get("snapshot").and_then(|v| v.as_str()) {
@@ -6392,11 +6399,23 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
             println!("{}", color::dim(&format!("  … {n} more text lines")));
         }
     }
-    if obs.get("textStatus").and_then(|v| v.as_str()) == Some("unavailable") {
+    if let Some(status) = obs.get("textStatus").and_then(|v| v.as_str()) {
         eprintln!(
-            "{} visible text was not captured; text-only changes are unknown",
+            "{} visible text {status}: text-only changes in the frames below are unknown",
             color::warning_indicator()
         );
+    }
+    if let Some(frames) = obs.get("textFrames").and_then(|v| v.as_array()) {
+        for f in frames {
+            let name = f.get("frame").and_then(|v| v.as_str()).unwrap_or("?");
+            let status = f.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+            match f.get("reason").and_then(|v| v.as_str()) {
+                Some(reason) => {
+                    eprintln!("  {}", color::dim(&format!("{name}: {status} ({reason})")))
+                }
+                None => eprintln!("  {}", color::dim(&format!("{name}: {status}"))),
+            }
+        }
     }
     // A cross-origin frame that appeared during the action: its content is in
     // none of the delta above, so an agent reading only the delta concludes the
