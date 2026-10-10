@@ -96,6 +96,10 @@ pub struct CdpEvent {
     pub method: String,
     pub params: Value,
     pub session_id: Option<String>,
+    /// When the client's reader took the event off the wire. Subscribers may
+    /// read it much later (events queue between commands), so anything that
+    /// dates an event uses this, never the time it was drained (#505).
+    pub received_at: std::time::Instant,
 }
 
 // ---------------------------------------------------------------------------

@@ -40,9 +40,16 @@ whichever takes longest, up to a 1 second ceiling, and they return the moment
 the page goes quiet (a static page costs about 100ms, not the ceiling). A
 `wait 2000` in front of a snapshot buys nothing and costs two seconds. If the
 ceiling expires with the page still moving, the reply says so — `Page had not
-settled after 1000ms (request in flight still active) — this capture may be
-mid-transition. Re-read to confirm, or raise the ceiling with
-AGENT_BROWSER_SETTLE_MS.` — so re-read rather than trusting that tree.
+settled after 1000ms (request in flight still active: GET example.com/api/list
+(0.8s)) — this capture may be mid-transition. Re-read to confirm, or raise the
+ceiling with AGENT_BROWSER_SETTLE_MS.` — so re-read rather than trusting that
+tree. A network wait names up to three requests (host and path, never the
+query) and how long each has been in flight (`settle.pendingRequests` in
+JSON), as they were when the wait stopped; `state at the deadline unknown`
+means the requests it waited on are no longer counted (finished, or past the
+stale cutoff). `page did not answer the
+settle check` means the page was busy or navigating, not that its DOM was
+changing.
 
 The two differ in one way. A plain `snapshot` has no action to react to, so a
 still page is its answer and it returns as soon as everything is quiet. After a

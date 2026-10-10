@@ -77,6 +77,8 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
    pointer and confirms the pointer reached the element; a refused or unconfirmed hover says so.
 7. Do not `open` the URL already in the tab; use `reload --observe` on purpose.
    Wait on a condition (`wait --text`, `wait <sel>`, `wait --url`), not a sleep.
+   A "Page had not settled" warning names the requests still in flight
+   (`settle.pendingRequests`); re-read rather than trusting that capture.
 8. Before writing `eval`, use the command that already does it; it keeps
    the verification and hints `eval` loses (more: `core/interacting`):
 
