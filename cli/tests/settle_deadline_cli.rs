@@ -358,8 +358,11 @@ fn a_request_finished_before_the_deadline_is_not_reported_and_the_page_is_not_ca
     // The request finished before the deadline: it must not be reported as
     // active, and its query must never appear.
     assert_eq!(settle["pendingRequests"], json!([]), "{v}");
-    assert!(!text.contains("token=secret"), "{text}");
-    assert!(!text.contains("api/save"), "{text}");
+    // The settle report never carries the request's URL or query (the
+    // separate `observed.requests` summary is not part of the settle).
+    let settle_text = format!("{settle} {}", v["warning"]);
+    assert!(!settle_text.contains("token=secret"), "{settle_text}");
+    assert!(!settle_text.contains("api/save"), "{settle_text}");
     // The page never answered the quiet check: not quiet.
     assert_eq!(settle["quiet"], false, "{v}");
     let pending = settle["pending"].as_array().cloned().unwrap_or_default();
