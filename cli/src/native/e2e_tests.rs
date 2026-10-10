@@ -3914,12 +3914,10 @@ async fn e2e_hover_applies_css_hover_and_refuses_covered_target() {
     .await;
     assert_success(&resp);
 
-    let caption = |cls: &str| {
-        format!(
-            "getComputedStyle(document.querySelector('.{cls} .cap')).display + '/' + \
-             document.querySelector('.{cls}').matches(':hover')"
-        )
-    };
+    // The applied `:hover` rule is the evidence: `matches(':hover')` read over
+    // CDP answers false even while the rule applies (see HOVER_RECORDER_JS).
+    let caption =
+        |cls: &str| format!("getComputedStyle(document.querySelector('.{cls} .cap')).display");
 
     // The caption under CSS :hover appears, and the reply says it was checked.
     let resp = execute_command(
@@ -3935,7 +3933,7 @@ async fn e2e_hover_applies_css_hover_and_refuses_covered_target() {
         &mut state,
     )
     .await;
-    assert_eq!(get_data(&resp)["result"], "block/true", "{resp}");
+    assert_eq!(get_data(&resp)["result"], "block", "{resp}");
 
     // Below the fold: scrolled into view, then hovered.
     let resp = execute_command(
@@ -3950,7 +3948,7 @@ async fn e2e_hover_applies_css_hover_and_refuses_covered_target() {
         &mut state,
     )
     .await;
-    assert_eq!(get_data(&resp)["result"], "block/true", "{resp}");
+    assert_eq!(get_data(&resp)["result"], "block", "{resp}");
 
     // pointer-events:none: the pointer lands on the container, and the reply
     // says so rather than claiming the image itself is hovered.

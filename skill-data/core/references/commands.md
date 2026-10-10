@@ -127,7 +127,7 @@ chrome-use press Enter --selector @e2  # Focus the target first (alias: --on)
 chrome-use press Control+a     # Key combination
 chrome-use keydown Shift       # Hold key down
 chrome-use keyup Shift         # Release key
-chrome-use hover @e1           # Hover with the real pointer; ✓ only when the page confirms :hover
+chrome-use hover @e1           # Hover with the real pointer; ✓ only when a trusted pointer event reached the element
 chrome-use bringToFront        # Surface the active tab (tabs are driven in the background, where document.visibilityState stays 'hidden')
 chrome-use check @e1           # Check checkbox
 chrome-use uncheck @e1         # Uncheck checkbox

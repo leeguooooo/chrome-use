@@ -240,7 +240,7 @@ For an authorized task, the bundled skill tells the agent to inspect and attempt
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | Click by text, by snapshot ref, or on a raw viewport coordinate |
 | `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` replaces a whole value and `type` appends, both with trusted input events; a ⚠ warning says when the page did not react (e.g. its Save stayed disabled) |
 | `chrome-use extract --schema '{"rows":".item","fields":{"title":"a","url":{"sel":"a","get":"@href"}}}'` | Structured rows in one call; `"@href"` alone reads the row element's own attribute. A spec it does not understand is an error, and a field empty in every row is named in a ⚠ warning, never a silent null |
-| `chrome-use hover @e3` | Move the real pointer onto the element, so CSS `:hover` captions and menus open; ✓ only when the page confirms `:hover`, and a covered target is refused instead of hovered |
+| `chrome-use hover @e3` | Move the real pointer onto the element, so CSS `:hover` captions and menus open; ✓ only when a trusted pointer event reached the element, and a covered target is refused instead of hovered |
 | `chrome-use network request <id>` | Read the recorded response body from its originating renderer, including cross-origin frames; unavailable bodies carry `responseBodyError` |
 | `chrome-use screenshot ./page.png` | Save visual evidence; use it for image challenges and canvas targets, and refs for ordinary controls |
 | `chrome-use solve-slider 1` · `skills get core/captcha` | Attempt a Yidun puzzle (nonzero exit if unsolved); load ordered clicks and verification |

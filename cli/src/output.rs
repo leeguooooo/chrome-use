@@ -653,7 +653,7 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                     } else {
                         color::success_indicator()
                     };
-                    println!("{indicator} Hovered {target} (:hover confirmed)");
+                    println!("{indicator} Hovered {target} (pointer confirmed on it)");
                 } else {
                     println!(
                         "{} Hover sent to {target}, not confirmed",
@@ -2776,13 +2776,15 @@ Moves the real mouse pointer onto the element, the way a user does, so CSS
 both respond. Useful for triggering hover states or dropdown menus.
 
 The element is scrolled into view, then hit-tested: the pointer goes to a
-point where the element itself is on top. After the move chrome-use reads
-:hover back and reports only what the page confirms:
-  ✓ Hovered <sel> (:hover confirmed)   the element matches :hover
+point where the element itself is on top. After the move chrome-use checks
+whether a trusted pointer event reached the element (the same hit test that
+sets :hover) and reports only that:
+  ✓ Hovered <sel> (pointer confirmed on it)   the element received it
   error "hover refused"                 something covers the element (a
                                         banner, a backdrop); nothing is sent
-  error "did not take effect"           the move was sent but :hover did not
-                                        follow (the page moved or re-rendered)
+  error "did not take effect"           the move was sent but no trusted event
+                                        reached the element (it moved or
+                                        re-rendered)
   ⚠ ... not confirmed                   the check could not run, or the target
                                         is in a cross-origin frame, where only
                                         synthetic events (isTrusted=false) can

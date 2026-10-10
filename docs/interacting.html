@@ -75,16 +75,16 @@
 <pre><code><span class="du-prompt">$</span> chrome-use click @e1                   <span class="du-cmt"># 点击</span>
 <span class="du-prompt">$</span> chrome-use click @e1 <span class="du-flag">--new-tab</span>         <span class="du-cmt"># 在新标签页打开链接，而不是当前页导航</span>
 <span class="du-prompt">$</span> chrome-use dblclick @e1                <span class="du-cmt"># 双击</span>
-<span class="du-prompt">$</span> chrome-use hover @e1                   <span class="du-cmt"># 悬停（真实鼠标移动，回读 :hover 确认）</span>
+<span class="du-prompt">$</span> chrome-use hover @e1                   <span class="du-cmt"># 悬停（真实鼠标移动，确认指针事件落在元素上）</span>
 <span class="du-prompt">$</span> chrome-use focus @e1                   <span class="du-cmt"># 聚焦（键盘输入前常用）</span></code></pre>
       </div>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ hover 只报告页面确认过的结果</div>
         <code>hover</code> 先把元素滚进视口，找一个元素本身在最上层的点，把真实鼠标移过去，
-        再读回 <code>:hover</code>。确认了才输出 <code>✓ Hovered … (:hover confirmed)</code>；
+        再确认有可信（isTrusted）的指针事件落到元素上，这和设置 <code>:hover</code> 用的是同一次命中测试。确认了才输出 <code>✓ Hovered … (pointer confirmed on it)</code>；
         元素被横幅、遮罩挡住时报 <code>hover refused</code>，什么都不发；移动发出去了但
-        <code>:hover</code> 没跟上时报 <code>did not take effect</code>。跨源 iframe 里放不了真实指针，
+        没有事件落到元素上时报 <code>did not take effect</code>。跨源 iframe 里放不了真实指针，
         只能派发合成事件（<code>isTrusted=false</code>），CSS <code>:hover</code> 不会生效，输出会标成未确认。
       </div>
 

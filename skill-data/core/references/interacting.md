@@ -82,10 +82,11 @@ chrome-use click @e1                   # click
 chrome-use click @e1 --new-tab         # open link in new tab instead of navigating
 chrome-use dblclick @e1                # double-click
 chrome-use hover @e1                   # hover: real pointer move at a point where the
-                                          # element is on top, then :hover is read back.
+                                          # element is on top, then confirms a trusted
+                                          # pointer event reached the element.
                                           # ✓ only when confirmed; a covered target is
-                                          # refused ("hover refused"), a move :hover did not
-                                          # follow is an error ("did not take effect")
+                                          # refused ("hover refused"), a move whose events
+                                          # missed it is an error ("did not take effect")
 chrome-use focus @e1                   # focus (useful before keyboard input)
 chrome-use fill @e2 "hello"            # clear then type (verified by read-back;
                                           # a mismatch error quotes both values and

@@ -955,33 +955,65 @@ const HOVER_HIT_POINT_JS: &str = r#"function() {
   return { error: 'covered', cover: describe(hit) };
 }"#;
 
-/// After the move: does the page agree the pointer is over the target?
-/// `this` is the target; `x`, `y` are the frame-local point the pointer was
-/// put at. For a `pointer-events: none` target (`ancestorMode`) the element
-/// actually under the pointer must be hovered and contain the target.
-const HOVER_VERIFY_JS: &str = r#"function(x, y, ancestorMode) {
+/// Installed on the target before the move: records the trusted pointer
+/// events that reach the page, so the reply can say whether the real
+/// pointer landed on the element (#500).
+///
+/// Why not read `:hover` back: measured on Chrome for Testing (headless and
+/// headed), after a real `Input.dispatchMouseEvent` move the `:hover` rule
+/// applies (`.b:hover` turns the box red) and trusted `pointerover` /
+/// `mouseover` / `mousemove` reach the element, yet `el.matches(':hover')`
+/// and `querySelectorAll(':hover')` evaluated over CDP still answer false /
+/// empty. A check built on them would refuse every hover that worked. A
+/// trusted mouse event targeted at the element is produced by the same hit
+/// test that sets the hover state, and a synthetic event can never fake it.
+///
+/// The recorder is held by a CDP remote-object handle, not stored on the
+/// page, and stops listening after 10s or when read.
+const HOVER_RECORDER_JS: &str = r#"function() {
   const el = this;
-  if (!el.isConnected) return { hovered: false, under: 'the target was removed from the page' };
-  let hovered = false;
-  try { hovered = el.matches(':hover'); } catch (e) {}
   const doc = el.ownerDocument;
-  const root = el.getRootNode ? el.getRootNode() : doc;
-  const scope = root && typeof root.elementFromPoint === 'function' ? root : doc;
-  const hit = scope.elementFromPoint(x, y);
-  if (!hovered && ancestorMode && hit && hit.contains(el)) {
-    try { hovered = hit.matches(':hover'); } catch (e) {}
-  }
-  let under = 'nothing';
-  if (hit && hit.tagName) {
-    under = '<' + hit.tagName.toLowerCase() + (hit.id ? ' id="' + hit.id + '"' : '') + '>';
-  }
+  const rec = { events: [], stop: null };
+  const types = ['pointerover', 'pointermove', 'mouseover', 'mousemove'];
+  const describe = (n) => (n && n.tagName)
+    ? '<' + n.tagName.toLowerCase() + (n.id ? ' id="' + n.id + '"' : '') + '>'
+    : 'nothing';
+  const on = (e) => {
+    if (!e.isTrusted) return;
+    const path = e.composedPath ? e.composedPath() : [];
+    const t = path.length ? path[0] : e.target;
+    if (!t || t.nodeType !== 1) return;
+    rec.events.push({
+      inside: t === el || el.contains(t),
+      ancestor: t !== doc.documentElement && t !== doc.body && t.contains(el),
+      under: describe(t),
+    });
+  };
+  for (const ty of types) doc.addEventListener(ty, on, true);
+  let timer = 0;
+  rec.stop = () => {
+    for (const ty of types) doc.removeEventListener(ty, on, true);
+    clearTimeout(timer);
+  };
+  timer = setTimeout(rec.stop, 10000);
+  return rec;
+}"#;
+
+/// Read a recorder (`this`): did a trusted pointer event land on the target
+/// (or, for a `pointer-events: none` target, on the ancestor under the
+/// pointer)? `stop` ends the recording.
+const HOVER_RECORD_READ_JS: &str = r#"function(ancestorMode, stop) {
+  const evs = this.events;
+  if (stop) this.stop();
+  const hovered = evs.some((e) => e.inside) || (ancestorMode && evs.some((e) => e.ancestor));
+  const under = evs.length ? evs[evs.length - 1].under : 'no trusted mouse event reached the page';
   return { hovered, under };
 }"#;
 
-/// How long to keep re-reading `:hover` after the move. Chrome normally
-/// applies hover while handling the move itself; the retries cover a page
-/// that is busy or a hover update deferred to the next frame.
-const HOVER_VERIFY_ATTEMPTS: u32 = 6;
+/// How long to keep reading the recorder after each move. The move's own
+/// reply normally arrives after the page handled it; the retries cover a
+/// page that is busy.
+const HOVER_VERIFY_ATTEMPTS: u32 = 4;
 const HOVER_VERIFY_INTERVAL_MS: u64 = 50;
 
 /// What the verification probe found.
@@ -1064,9 +1096,11 @@ fn hover_refusal(selector_or_ref: &str, reply: &Value) -> Option<String> {
 ///
 /// Steps: scroll into view, find a point where the pointer is over the
 /// element (refusing when something covers it), move the real pointer there,
-/// then read `:hover` back. A move the page does not confirm is an error. A
-/// target no real pointer can reach (inside a cross-origin frame) gets the
-/// synthetic events and a warning saying `:hover` is unverified.
+/// then confirm a trusted pointer event reached the element (see
+/// [`HOVER_RECORDER_JS`] for why not `:hover`). A move the page does not
+/// confirm is an error. A target no real pointer can reach (inside a
+/// cross-origin frame) gets the synthetic events and a warning saying the
+/// hover is unverified.
 pub async fn hover_reporting(
     client: &CdpClient,
     session_id: &str,
@@ -1103,21 +1137,7 @@ pub async fn hover_reporting(
 
     if point.get("error").and_then(Value::as_str) == Some("cross-origin-frame") {
         dom_hover(client, &object_id, &effective_session_id).await?;
-        let check = parse_hover_check(
-            client
-                .send_command(
-                    "Runtime.callFunctionOn",
-                    Some(json!({
-                        "objectId": object_id,
-                        "functionDeclaration": HOVER_VERIFY_JS,
-                        "arguments": [{ "value": -1 }, { "value": -1 }, { "value": false }],
-                        "returnByValue": true,
-                    })),
-                    Some(&effective_session_id),
-                )
-                .await,
-        );
-        let verified = check == HoverCheck::Hovered;
+        let verified = false;
         return Ok(HoverOutcome {
             dispatch: "dom",
             point: None,
@@ -1127,8 +1147,8 @@ pub async fn hover_reporting(
                     "hover unverified: {selector_or_ref} is inside a cross-origin frame, where \
                      chrome-use cannot place a real pointer, so it dispatched synthetic \
                      mouseover/mouseenter events (isTrusted=false). JS hover handlers ran, but \
-                     CSS :hover cannot be applied this way and the element does not match \
-                     :hover. Check the effect with `snapshot` before relying on it"
+                     CSS :hover is never applied this way. Check the effect with `snapshot` \
+                     before relying on it"
                 )
             }),
         });
@@ -1149,49 +1169,97 @@ pub async fn hover_reporting(
         .and_then(Value::as_str)
         .map(String::from);
 
-    restore_rendering_if_hidden(client, session_id).await;
-    // Top-level coordinates go to the page session: Chrome hit-tests them
-    // through every frame, the same as a user's pointer.
-    client
-        .send_command_typed::<_, Value>(
-            "Input.dispatchMouseEvent",
-            &DispatchMouseEventParams {
-                event_type: "mouseMoved".to_string(),
-                x: gx,
-                y: gy,
-                button: None,
-                buttons: None,
-                click_count: None,
-                delta_x: None,
-                delta_y: None,
-                modifiers: None,
-            },
-            Some(session_id),
+    let recorder = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({
+                "objectId": object_id,
+                "functionDeclaration": HOVER_RECORDER_JS,
+                "returnByValue": false,
+            })),
+            Some(&effective_session_id),
         )
-        .await?;
+        .await
+        .ok()
+        .and_then(|r| r.get("result")?.get("objectId")?.as_str().map(String::from));
 
-    let mut check = HoverCheck::Unknown("not checked".to_string());
-    for attempt in 0..HOVER_VERIFY_ATTEMPTS {
-        if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(HOVER_VERIFY_INTERVAL_MS)).await;
+    restore_rendering_if_hidden(client, session_id).await;
+    // Two moves: a pointer already resting at the chosen point would produce
+    // no event for a move to the same place, so the second lands half a
+    // pixel away (still inside the hit-tested region). Same parameters as
+    // `mouse move`.
+    let mut check =
+        HoverCheck::Unknown("the event recorder could not be installed on the element".to_string());
+    for (step, (mx, my)) in [(gx, gy), (gx + 0.5, gy + 0.5)].into_iter().enumerate() {
+        // Top-level coordinates go to the page session: Chrome hit-tests
+        // them through every frame, the same as a user's pointer.
+        client
+            .send_command_typed::<_, Value>(
+                "Input.dispatchMouseEvent",
+                &DispatchMouseEventParams {
+                    event_type: "mouseMoved".to_string(),
+                    x: mx,
+                    y: my,
+                    button: Some("none".to_string()),
+                    buttons: Some(0),
+                    click_count: None,
+                    delta_x: None,
+                    delta_y: None,
+                    modifiers: None,
+                },
+                Some(session_id),
+            )
+            .await?;
+        let Some(rec) = recorder.as_deref() else {
+            break;
+        };
+        let last_step = step == 1;
+        for attempt in 0..HOVER_VERIFY_ATTEMPTS {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(HOVER_VERIFY_INTERVAL_MS))
+                    .await;
+            }
+            let stop = last_step && attempt + 1 == HOVER_VERIFY_ATTEMPTS;
+            check = parse_hover_check(
+                client
+                    .send_command(
+                        "Runtime.callFunctionOn",
+                        Some(json!({
+                            "objectId": rec,
+                            "functionDeclaration": HOVER_RECORD_READ_JS,
+                            "arguments": [{ "value": ancestor.is_some() }, { "value": stop }],
+                            "returnByValue": true,
+                        })),
+                        Some(&effective_session_id),
+                    )
+                    .await,
+            );
+            if check == HoverCheck::Hovered || matches!(check, HoverCheck::Unknown(_)) {
+                break;
+            }
         }
-        check = parse_hover_check(
-            client
-                .send_command(
-                    "Runtime.callFunctionOn",
-                    Some(json!({
-                        "objectId": object_id,
-                        "functionDeclaration": HOVER_VERIFY_JS,
-                        "arguments": [{ "value": x }, { "value": y }, { "value": ancestor.is_some() }],
-                        "returnByValue": true,
-                    })),
-                    Some(&effective_session_id),
-                )
-                .await,
-        );
-        if check == HoverCheck::Hovered {
+        if check == HoverCheck::Hovered || matches!(check, HoverCheck::Unknown(_)) {
             break;
         }
+    }
+    if let Some(rec) = recorder.as_deref() {
+        let _ = client
+            .send_command(
+                "Runtime.callFunctionOn",
+                Some(json!({
+                    "objectId": rec,
+                    "functionDeclaration": "function() { this.stop(); }",
+                })),
+                Some(&effective_session_id),
+            )
+            .await;
+        let _ = client
+            .send_command(
+                "Runtime.releaseObject",
+                Some(json!({ "objectId": rec })),
+                Some(&effective_session_id),
+            )
+            .await;
     }
     hover_outcome(selector_or_ref, (gx, gy), ancestor.as_deref(), check)
 }
@@ -1213,15 +1281,15 @@ fn hover_outcome(
             warning: ancestor.map(|a| {
                 format!(
                     "{selector_or_ref} has pointer-events:none, so no pointer can be over it; \
-                     the pointer is over its ancestor {a}, which matches :hover"
+                     the pointer is over its ancestor {a}, which received it"
                 )
             }),
         }),
         HoverCheck::NotHovered { under } => Err(format!(
             "hover did not take effect: a real mouse move was dispatched at ({gx:.0}, {gy:.0}), \
-             but {} does not match :hover afterwards (under the pointer now: {under}). The page \
-             may have moved or re-rendered the element, or this tab is not receiving input. Take \
-             a fresh snapshot and hover again; `mouse move <x> <y>` places the pointer by hand",
+             but no trusted pointer event reached {} (last one went to: {under}). The page may \
+             have moved or re-rendered the element, or this tab is not receiving input. Take a \
+             fresh snapshot and hover again; `mouse move <x> <y>` places the pointer by hand",
             ancestor.unwrap_or(selector_or_ref)
         )),
         HoverCheck::Unknown(why) => Ok(HoverOutcome {
@@ -1230,7 +1298,8 @@ fn hover_outcome(
             verified: false,
             warning: Some(format!(
                 "hover unverified: a real mouse move was dispatched at ({gx:.0}, {gy:.0}), but \
-                 reading :hover back failed ({why}). Check the effect with `snapshot` before \
+                 confirming it reached the element failed ({why}). Check the effect with \
+                 `snapshot` before \
                  relying on it"
             )),
         }),
