@@ -83,7 +83,7 @@ pub struct CdpClient {
 }
 
 /// Flat budget for an ordinary CDP round trip.
-const CDP_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+pub(crate) const CDP_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Extra budget per byte of a size-proportional payload. `Input.insertText`
 /// makes the renderer process the text character by character, so its cost
 /// scales with size, not with round-trip health: 34 KB into a rich editor

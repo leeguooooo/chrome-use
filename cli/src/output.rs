@@ -2490,12 +2490,15 @@ may still be open, so run `close` in the same session before opening again;
 first_tab_outcome_unknown means Chrome never confirmed the tab.
 
 Waiting: `open` waits up to 25s for the page's `load` event
-(--wait-until <load|domcontentloaded|networkidle|none>). When that wait ends:
-  - the DOM is ready (readyState interactive/complete): success, with a ⚠
-    warning naming the subresources still loading;
-  - the document is still loading: error `navigation_incomplete:` saying
-    whether the navigation committed, the readyState, and what it is still
-    waiting for (e.g. a parser-blocking <script> from a slow host). Check
+(--wait-until <load|domcontentloaded|networkidle|none>). When that wait ends
+early or runs out:
+  - this navigation committed (its own loader is the frame's document) and
+    the DOM is ready: success, with a ⚠ warning;
+  - anything else: error `navigation_incomplete:` with the real elapsed time
+    and error, whether this navigation committed (or that this is unknown),
+    the URL and readyState the tab reports, and references with no Resource
+    Timing record, listed only as candidates (a record can be missing for a
+    finished resource). No cause is claimed that was not observed. Check
     again with `get url` / `snapshot` rather than repeating the open.
 
 Global Options:

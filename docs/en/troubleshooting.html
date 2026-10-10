@@ -201,12 +201,12 @@
 
       <h2>open reports navigation_incomplete: the page never finished loading</h2>
       <p>
-        <code>open</code> waits up to 25 seconds for the <code>load</code> event. If the DOM is ready by then
-        (readyState interactive or complete), it succeeds with a ⚠ warning listing what is still loading, and the
-        page is usable. If the document is still loading, it fails with <code>navigation_incomplete:</code>, which
-        says whether the navigation committed, the readyState, and what the page is still waiting for, typically a
-        parser-blocking <code>&lt;script&gt;</code> from a slow or unreachable host. This used to be a bare
-        "Operation timed out".
+        <code>open</code> waits up to 25 seconds for the <code>load</code> event. If this navigation committed (the
+        frame's document is this navigation's loader) and its DOM is ready, it succeeds with a ⚠ warning and the page
+        is usable. Otherwise it fails with <code>navigation_incomplete:</code>, which gives the real elapsed time and
+        error, whether this navigation committed (or that this is unknown), the URL and readyState the tab reports,
+        and the references with no Resource Timing record. Those are candidates only: a missing record does not mean
+        something is still loading, and no cause is inferred. This used to be a bare "Operation timed out".
       </p>
       <div class="du-callout tip">
         <div class="du-callout-title">✅ What to do</div>

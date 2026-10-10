@@ -65,11 +65,13 @@ the extension also validates every attached Chrome tab before re-announcing it,
 so dead bootstrap `about:blank` records are dropped instead of becoming active.
 
 **`open` and a page that never finishes loading.** `open` waits up to 25s for
-`load`. If the DOM is ready by then, it succeeds with a ⚠ warning naming what
-is still loading; use the page. If the document is still loading, it fails with
-`navigation_incomplete:`, which says whether the navigation committed, the
-readyState, and what the page is waiting for, typically a parser-blocking
-`<script>` from a slow or unreachable host. Do not repeat the `open`: check
+`load`. If this navigation committed and its DOM is ready by then, it succeeds
+with a ⚠ warning; use the page. Otherwise it fails with
+`navigation_incomplete:`, which gives the real elapsed time and error, whether
+this navigation committed (read from its own loader, or "unknown"), the URL
+and readyState the tab reports, and references with no Resource Timing record
+as candidates only. It names no cause it did not observe. Do not repeat the
+`open`: check
 `get url` and `snapshot` a little later, or use `open <url> --wait-until none`
 to return as soon as the navigation commits.
 

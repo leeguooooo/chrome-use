@@ -4206,6 +4206,190 @@ async fn e2e_hover_refuses_covered_or_scaled_iframes() {
     assert_success(&resp);
 }
 
+/// Issue #502 review: a local server with the four shapes the review named.
+/// Every slow response is held for 40s, past the 25s navigation budget.
+async fn spawn_slow_load_server() -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("HTTP listener should bind");
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut request = [0_u8; 4096];
+                let n = stream.read(&mut request).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&request[..n]).to_string();
+                let path = head.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let hold = || tokio::time::sleep(std::time::Duration::from_secs(40));
+                let html = |body: &str| {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\
+                         Connection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                };
+                let streaming_head = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\
+                                      Cache-Control: no-store\r\nConnection: close\r\n\r\n";
+                match path.as_str() {
+                    // Cross-host redirect to a page that never finishes streaming.
+                    "/redir" => {
+                        let to = format!("http://localhost:{port}/streaming");
+                        let _ = stream
+                            .write_all(
+                                format!(
+                                    "HTTP/1.1 302 Found\r\nLocation: {to}\r\nContent-Length: 0\r\n\
+                                     Connection: close\r\n\r\n"
+                                )
+                                .as_bytes(),
+                            )
+                            .await;
+                    }
+                    "/streaming" => {
+                        let _ = stream.write_all(streaming_head.as_bytes()).await;
+                        let _ = stream
+                            .write_all(b"<!doctype html><html><body><h1>streaming</h1>")
+                            .await;
+                        let _ = stream.flush().await;
+                        hold().await;
+                    }
+                    "/old" => {
+                        let _ = stream
+                            .write_all(
+                                html("<!doctype html><title>old</title><h1>old page</h1>")
+                                    .as_bytes(),
+                            )
+                            .await;
+                    }
+                    // Never answers: the navigation cannot commit.
+                    "/hang" => hold().await,
+                    "/cleared" => {
+                        let body = "<!doctype html><html><head>\
+                            <link rel=stylesheet href=/fast.css></head><body><h1>cleared</h1>\
+                            <script>performance.clearResourceTimings()</script>\
+                            <img src=/slow.png width=4 height=4></body></html>";
+                        let _ = stream.write_all(html(body).as_bytes()).await;
+                    }
+                    "/fast.css" => {
+                        let body = "h1{color:black}";
+                        let _ = stream
+                            .write_all(
+                                format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: text/css\r\nContent-Length: {}\r\n\
+                                     Connection: close\r\n\r\n{body}",
+                                    body.len()
+                                )
+                                .as_bytes(),
+                            )
+                            .await;
+                    }
+                    "/async-stream" => {
+                        let _ = stream.write_all(streaming_head.as_bytes()).await;
+                        let _ = stream
+                            .write_all(
+                                b"<!doctype html><html><body><script async src=/slow.js></script>\
+                                  <p>partial",
+                            )
+                            .await;
+                        let _ = stream.flush().await;
+                        hold().await;
+                    }
+                    // slow.png, slow.js and anything else: held.
+                    _ => hold().await,
+                }
+            });
+        }
+    });
+    port
+}
+
+async fn open_for_e2e(state: &mut DaemonState, id: &str, url: &str) -> Value {
+    execute_command(
+        &json!({ "id": id, "action": "navigate", "url": url }),
+        state,
+    )
+    .await
+}
+
+/// #502 review, through the real navigate entry against a launched browser:
+/// commit is read from this navigation's loader (a cross-host redirect that
+/// committed is "committed"; a same-host previous document is "not
+/// committed"); missing timing records are candidates, never a mechanism.
+#[tokio::test]
+#[ignore]
+async fn e2e_open_reports_commit_and_candidates_from_evidence() {
+    let port = spawn_slow_load_server().await;
+    let base = format!("http://127.0.0.1:{port}");
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    // 1. Cross-host redirect, then a document that never finishes: committed.
+    let resp = open_for_e2e(&mut state, "2", &format!("{base}/redir")).await;
+    assert_eq!(resp["success"], false, "{resp}");
+    let err = resp["error"].as_str().unwrap_or("");
+    assert!(err.starts_with("navigation_incomplete:"), "{err}");
+    assert!(
+        err.contains(&format!(
+            "This navigation committed; the tab is on http://localhost:{port}/streaming"
+        )),
+        "{err}"
+    );
+    assert!(err.contains("readyState \"loading\""), "{err}");
+
+    // 2. Same host, the previous document still showing: not committed, and
+    //    its complete readyState is not mistaken for a usable new page.
+    let resp = open_for_e2e(&mut state, "3", &format!("{base}/old")).await;
+    assert_success(&resp);
+    let resp = open_for_e2e(&mut state, "4", &format!("{base}/hang")).await;
+    assert_eq!(resp["success"], false, "{resp}");
+    let err = resp["error"].as_str().unwrap_or("");
+    // Chrome may hold `Page.navigate` itself until response headers arrive;
+    // either way the old document must not be taken as the new one: it is
+    // "not committed" (frame tree shows another loader) or "unknown", and
+    // the tab's real URL is named.
+    assert!(
+        err.contains("has not committed") || err.contains("committed is unknown"),
+        "{err}"
+    );
+    assert!(!err.contains("This navigation committed"), "{err}");
+    assert!(err.contains(&format!("{base}/old")), "{err}");
+
+    // 3. A cleared timing buffer: the stylesheet that finished has no record
+    //    and is listed only as a candidate; the page itself is usable.
+    let resp = open_for_e2e(&mut state, "5", &format!("{base}/cleared")).await;
+    assert_success(&resp);
+    let w = get_data(&resp)["warning"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        w.contains("this navigation committed and its DOM is ready"),
+        "{resp}"
+    );
+    assert!(
+        w.contains("may still be loading, or their record is missing"),
+        "{w}"
+    );
+    assert!(w.contains("fast.css"), "{w}");
+    assert!(!w.contains("Still loading:"), "{w}");
+
+    // 4. A slow async script while the HTML is still streaming: no claim that
+    //    the script blocks the parser.
+    let resp = open_for_e2e(&mut state, "6", &format!("{base}/async-stream")).await;
+    assert_eq!(resp["success"], false, "{resp}");
+    let err = resp["error"].as_str().unwrap_or("");
+    assert!(err.contains("script (async)"), "{err}");
+    assert!(!err.contains("blocks the parser"), "{err}");
+    assert!(err.contains("This navigation committed"), "{err}");
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
 /// Issue #500 review: every entry point that hovers keeps the daemon's
 /// mouse state on the real final point. `find … hover` (parsed by the real
 /// CLI parser) followed by a coordinate-less `mousedown` must press where the
