@@ -650,6 +650,13 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             || (data.get("hovered").is_some() && data.get("dispatch").is_some())
         {
             if let Some(target) = data.get("hovered").and_then(|v| v.as_str()) {
+                // `find … hover` resolves through an internal marker
+                // attribute; name it for what it is instead of printing it.
+                let target = if target.contains("data-chrome-use-located") {
+                    "the found element"
+                } else {
+                    target
+                };
                 let warning = data.get("warning").and_then(|v| v.as_str());
                 if data.get("verified").and_then(|v| v.as_bool()) == Some(true) {
                     let indicator = if warning.is_some() {
