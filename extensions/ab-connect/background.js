@@ -27,6 +27,7 @@ import {
 } from './agent-window.js';
 import { attachTabById } from './attach-by-id.js';
 import { releaseTab } from './release-tab.js';
+import { removeAgentTab } from './remove-agent-tab.js';
 import { shouldForwardEvent } from './cdp-event-filter.js';
 import { clearDownloads, listDownloads, startDownload } from './download-manager.js';
 import { isRelayTimeoutError, relayUnresolvedOperations, withRelayTimeout } from './relay-timeout.js';
@@ -363,6 +364,13 @@ async function unmarkOwned(tabId) {
   await loadOwnedTabs();
   if (ownedTabs.delete(tabId)) persistOwnedTabs();
 }
+
+// Closing an agent tab ungroups it first so Chrome keeps no saved tab group
+// (see remove-agent-tab.js).
+const agentTabRemoval = {
+  ungroup: (tabId) => chrome.tabs.ungroup(tabId),
+  remove: (tabId) => chrome.tabs.remove(tabId),
+};
 
 // Deterministic color per group name so a given session keeps the same color.
 const GROUP_COLORS = ['blue', 'cyan', 'green', 'yellow', 'orange', 'red', 'pink', 'purple', 'grey'];
@@ -1231,7 +1239,7 @@ async function handleForwardCdpCommand(msg) {
       focusWindow: (windowId) => chrome.windows.update(windowId, { focused: true }),
       removeTab: async (tabId) => {
         try {
-          await chrome.tabs.remove(tabId);
+          await removeAgentTab(tabId, agentTabRemoval);
         } finally {
           nativeDuplicateTabs.delete(tabId);
         }
@@ -1383,7 +1391,7 @@ async function handleForwardCdpCommand(msg) {
     const tabId = tid ? tabForTarget(tid) : null;
     if (!tabId) return { success: false };
     try {
-      await chrome.tabs.remove(tabId);
+      await removeAgentTab(tabId, agentTabRemoval);
     } catch {
       return { success: false };
     }
