@@ -177,8 +177,9 @@ The file extension picks the encoder:
 - `.webm`: WebM with VP8 (`libvpx`)
 - anything else, such as `.mp4`: H.264 (`libx264`)
 
-Both play in modern browsers and video players. Your `ffmpeg` build must
-include the matching encoder.
+Use `.webm` or `.mp4` for browser playback. Other extensions depend on the
+output container and player support; H.264 alone does not guarantee playback.
+Your `ffmpeg` build must include the matching encoder.
 
 ## Limitations
 
