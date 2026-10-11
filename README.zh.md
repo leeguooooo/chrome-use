@@ -246,6 +246,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use download @e2 ./video.mp4` | 用已登录浏览器的同一份 cookie 下载，且不导航当前标签页 |
 | `chrome-use network route "*/api/me" --body '{"vip":true}'` | 伪造响应、改写出站请求或拦截请求 |
 | `chrome-use site github/issues epiral/bb-browser --json` | 运行站点适配器，从网站自己的接口拿干净的 JSON |
+| `chrome-use site info github/issues` · `site info github` | 查看单个适配器的参数和域名，或整个 pack 的适配器、参数和用法 |
 | `chrome-use tab close t2` · `close` | 关闭一个标签，或结束会话并关闭它创建的全部标签。两者都先读回再报告已关（`tabsClosed`、`verifiedAbsent: true`）；还开着或无法确认已关的标签会返回 `close incomplete`，并保留会话和标签归属以便重试。会话只剩最后一个标签时，`tab close` 直接结束会话（`sessionClosed: true`）。不是本会话创建的标签永远不会被关。走 relay 时确认需要 ab-connect 0.5.33+ |
 | `chrome-use session list` · `session stop [name]` | 管理会话 worker |
 | `chrome-use auth login --bwu [--item <id\|name>]` | 从 Bitwarden 填写当前登录页，处理 TOTP 和支持的 passkey 两步验证 |

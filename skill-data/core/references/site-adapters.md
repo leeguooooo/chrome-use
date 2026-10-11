@@ -54,7 +54,7 @@ chrome-use site github/issues owner/repo --json   # run it → JSON (navigates t
 > (`tab new`/`tab <id>`, `back`/`forward`, a click that navigates, the first command on a tab you
 > didn't open). It prints a `site adapters for <domain>` line on stderr and adds a
 > `siteAdapters: {domain, commands}` field in `--json`. The stderr hint also prints an
-> `e.g.` call that runs as printed (an adapter with no required args, else `<arg>` placeholders) and
+> `e.g.` call that runs as printed when no arguments are required; replace any `<arg>` placeholders before running. It also prints
 > `args: chrome-use site info <pack>`, which lists every adapter in that pack with its args. A session that stays on one site hears
 > about it once, not on every command. **When you see that, prefer the listed `site <name>/<cmd>` over snapshot+click
 > for reading data** — it's the cheaper, more reliable path and it's already installed. You don't

@@ -1010,12 +1010,20 @@ pub fn required_args(adapter: &Adapter) -> Vec<String> {
         .collect()
 }
 
-/// `chrome-use site <spec> <req1> <req2>`: the shortest call that runs, with
-/// each required arg as a positional placeholder.
+/// Usage with required placeholders. After an omitted optional position,
+/// use named flags so values still align with [`map_args`].
 pub fn usage_line(adapter: &Adapter) -> String {
     let mut usage = format!("chrome-use site {}", adapter.spec);
-    for k in required_args(adapter) {
-        usage.push_str(&format!(" <{k}>"));
+    let required = required_args(adapter);
+    let mut omitted_position = false;
+    for k in &adapter.arg_order {
+        if !required.contains(k) {
+            omitted_position = true;
+        } else if omitted_position {
+            usage.push_str(&format!(" --{k} <{k}>"));
+        } else {
+            usage.push_str(&format!(" <{k}>"));
+        }
     }
     usage
 }
@@ -1045,7 +1053,7 @@ pub fn hint_example(cmds: &[&str]) -> Option<String> {
         .iter()
         .flatten()
         .find(|a| required_args(a).is_empty())
-        .or_else(|| loaded.first().and_then(|a| a.as_ref()))
+        .or_else(|| loaded.iter().flatten().next())
         .map(usage_line)
         .or_else(|| cmds.first().map(|c| format!("chrome-use site {c}")))?;
     Some(format!("{call} --json"))
@@ -2301,6 +2309,22 @@ mod tests {
     }
 
     #[test]
+    fn usage_after_optional_argument_preserves_mapping() {
+        let adapter = Adapter {
+            meta: serde_json::json!({"args": {
+                "optional": {"required": false}, "id": {"required": true}
+            }}),
+            func_src: String::new(),
+            arg_order: vec!["optional".into(), "id".into()],
+            spec: "test/item".into(),
+        };
+        assert_eq!(usage_line(&adapter), "chrome-use site test/item --id <id>");
+        let args = map_args(&adapter, &[], &[("id".into(), "42".into())]);
+        assert_eq!(args["id"], "42");
+        assert!(args.get("optional").is_none());
+    }
+
+    #[test]
     fn site_info_takes_a_bare_pack_name_as_the_site_hint_prints() {
         let guard = crate::test_utils::EnvGuard::new(&["HOME", "AGENT_BROWSER_SITES_NO_OPENCLI"]);
         guard.set("AGENT_BROWSER_SITES_NO_OPENCLI", "1");
@@ -2360,6 +2384,11 @@ mod tests {
         // Otherwise the required args are shown, in declaration order.
         assert_eq!(
             hint_example(&["github/issue"]).as_deref(),
+            Some("chrome-use site github/issue <repo> <number> --json")
+        );
+        // A missing first adapter must not hide a later loadable adapter.
+        assert_eq!(
+            hint_example(&["missing/command", "github/issue"]).as_deref(),
             Some("chrome-use site github/issue <repo> <number> --json")
         );
         // A command with no local file (OpenCLI) falls back to its name.
