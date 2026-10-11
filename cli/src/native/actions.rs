@@ -8226,6 +8226,12 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         None
     };
 
+    // Chrome raises itself over the user's app when the page opens a tab
+    // (#468): note which app is in front now, so it can be put back.
+    let focus_watch = mgr
+        .focus_watch_probe(&before, relay_before.as_ref())
+        .map(|(probe, pid)| super::focus_restore::FocusWatch::arm(mgr.client.clone(), probe, pid));
+
     let dialog_events = mgr.client.subscribe();
     let mut outcome: Option<interaction::ClickOutcome> = None;
     let click_future = async {
@@ -8305,6 +8311,7 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         relay_before,
         follow,
         clicked_at: std::time::Instant::now(),
+        focus_watch,
         raised_note: may_open_links.then(|| {
             popup_guard::chrome_raised_note(
                 guard_report
@@ -8338,6 +8345,9 @@ pub(crate) struct DeferredClickTabCheck {
     /// When the click was delivered: the check waits until
     /// [`CLICK_NEW_TAB_GRACE_MS`] after it, never less.
     clicked_at: std::time::Instant,
+    /// Puts the app the user was in back in front if a tab the page opened
+    /// raised Chrome (#468); reported as `focusRestored`.
+    focus_watch: Option<super::focus_restore::FocusWatch>,
     /// Added to `openedTabWarning` when the page opened a tab through Chrome,
     /// which raises its window (#468). Set only where chrome-use could open a
     /// plain link itself (the relay, a tab the session created), whether or
@@ -8623,16 +8633,30 @@ async fn finish_click_tab_check(state: &mut DaemonState, pending: DeferredClickT
     if let Some(status) = check.status {
         out["openedTabStatus"] = json!(status);
     }
+    // Whether the page opened a tab (adopted or not), and whether the focus
+    // watch put the user's app back in front after Chrome raised itself.
+    let tab_opened = check.opened.is_some() || out.get("openedTabStatus").is_some();
+    let focus = match pending.focus_watch.as_ref() {
+        Some(w) if tab_opened => Some(w.settled(super::focus_restore::REPORT_WAIT).await),
+        Some(w) => {
+            Some(w.status()).filter(|s| matches!(s, super::focus_restore::Status::Restored { .. }))
+        }
+        None => None,
+    };
     // The page opened a tab through Chrome (window.open, a link the guard left
     // alone): Chrome raised its window doing so. Say it, adopted or not (#468).
     if let Some(note) = pending.raised_note.as_deref() {
-        if check.opened.is_some() || out.get("openedTabStatus").is_some() {
+        if tab_opened {
+            let note = super::focus_restore::raised_note(note, focus.as_ref());
             let warning = match out.get("openedTabWarning").and_then(Value::as_str) {
                 Some(w) => format!("{w}; {note}"),
-                None => note.to_string(),
+                None => note,
             };
             out["openedTabWarning"] = json!(warning);
         }
+    }
+    if let Some(status) = focus.as_ref() {
+        merge_object(&mut out, status.fields());
     }
     let opened = check.opened;
     // A popup the page opened is ours (adopt_newly_opened only returns tabs

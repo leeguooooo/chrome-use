@@ -20,6 +20,11 @@ pub struct ChromeProcess {
 }
 
 impl ChromeProcess {
+    /// The browser's own process id.
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
     pub fn kill(&mut self) {
         let _ = self.child.kill();
         // On Unix, kill the entire process group to ensure Chrome helper

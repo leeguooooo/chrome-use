@@ -2785,6 +2785,12 @@ pub struct RelayTabBaseline {
     tab_ids: HashSet<i64>,
 }
 
+impl RelayTabBaseline {
+    pub fn tab_ids(&self) -> &HashSet<i64> {
+        &self.tab_ids
+    }
+}
+
 /// Budget for finding a relay pop-up in chrome.tabs and waiting for it to
 /// leave about:blank. Every chrome.tabs read inside it is cut off at the
 /// deadline, so this phase never runs past it.
@@ -5056,6 +5062,30 @@ impl BrowserManager {
 
     pub fn on_relay(&self) -> bool {
         self.agent_group().is_some()
+    }
+
+    /// How a click's focus watch (#468) tells that the browser has a tab the
+    /// click opened, and the pid of a browser this daemon launched. `None`
+    /// where Chrome cannot be on this machine's screen or a new tab cannot be
+    /// told: a headless or remote browser, or a relay extension that cannot
+    /// list tabs (`relay_before` is `None`).
+    pub fn focus_watch_probe(
+        &self,
+        before: &HashSet<String>,
+        relay_before: Option<&RelayTabBaseline>,
+    ) -> Option<(super::focus_restore::NewTabProbe, Option<i32>)> {
+        use super::focus_restore::NewTabProbe;
+        match &self.browser_process {
+            Some(BrowserProcess::Chrome(p)) if !p.headless => Some((
+                NewTabProbe::Targets(before.clone()),
+                i32::try_from(p.pid()).ok(),
+            )),
+            Some(_) => None,
+            None if self.on_relay() => {
+                relay_before.map(|b| (NewTabProbe::RelayTabs(b.tab_ids().clone()), None))
+            }
+            None => None,
+        }
     }
 
     /// Whether a click here may take over a `target=_blank` link and open it
