@@ -186,10 +186,21 @@ pub fn raised_note(note: &str, status: Option<&Status>) -> String {
         Some(Status::Restored {
             app,
             chrome_front_ms,
-        }) => format!(
-            "{note}. It did: chrome-use put the app the user was in ({app}) back in front \
-             {chrome_front_ms} ms later ({RESTORE_FOCUS_ENV}=0 turns this off)"
-        ),
+        }) => {
+            let restored = format!(
+                "; it did, and chrome-use put the app the user was in ({app}) back in front \
+                 {chrome_front_ms} ms later ({RESTORE_FOCUS_ENV}=0 turns this off)"
+            );
+            // Right after the sentence about Chrome coming to the front, before
+            // any hint about AGENT_BROWSER_BACKGROUND_LINKS.
+            match note.find("(#468)") {
+                Some(i) => {
+                    let at = i + "(#468)".len();
+                    format!("{}{restored}{}", &note[..at], &note[at..])
+                }
+                None => format!("{note}{restored}"),
+            }
+        }
         _ => note.to_string(),
     }
 }
@@ -695,6 +706,24 @@ mod tests {
             .as_str()
             .unwrap()
             .contains(RESTORE_FOCUS_ENV));
+    }
+
+    #[test]
+    fn the_468_note_says_the_app_was_put_back() {
+        let note = "the page opened this tab itself, and Chrome brings its window to the \
+                    front, so it may have come over the app the user is in (#468). HINT";
+        let restored = Status::Restored {
+            app: "com.apple.finder".into(),
+            chrome_front_ms: 40,
+        };
+        let out = raised_note(note, Some(&restored));
+        assert!(out.contains("(#468); it did, and chrome-use put the app the user was in (com.apple.finder) back in front 40 ms later"));
+        assert!(out.ends_with(". HINT"));
+        assert_eq!(raised_note(note, None), note);
+        assert_eq!(
+            raised_note(note, Some(&Status::Skipped(Reason::BrowserWasFront))),
+            note
+        );
     }
 
     #[test]

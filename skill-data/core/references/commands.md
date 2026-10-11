@@ -625,7 +625,7 @@ identical to Chrome's click.
 So on macOS chrome-use undoes it instead (on by default): right before the
 click it notes which app is in front, and if Chrome then comes to the front
 with a tab that was not there before the click, within 1.5 s, it puts that app
-back in front (measured: Chrome in front for about 10–40 ms). The click reports
+back in front (measured: Chrome in front for about 45–60 ms). The click reports
 `focusRestored: true` with `focusRestoredApp` and `focusRestoredAfterMs`, or
 `focusRestored: false` with `focusNote` saying why not. It never switches apps
 when Chrome was already the frontmost app before the click (you are in Chrome;
