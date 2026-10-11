@@ -601,6 +601,9 @@ pub fn worker_site(url: &str) -> String {
             let origin = u.origin();
             if origin.is_tuple() {
                 origin.ascii_serialization()
+            } else if let Some(host) = u.host_str().filter(|h| !h.is_empty()) {
+                // chrome-extension://<id> and other non-special schemes.
+                format!("{}://{host}", u.scheme())
             } else {
                 format!("{}:", u.scheme())
             }
@@ -2587,6 +2590,10 @@ mod tests {
             "https://a.example"
         );
         assert_eq!(worker_site("data:text/javascript,1"), "data:");
+        assert_eq!(
+            worker_site("chrome-extension://abcdef/background.js"),
+            "chrome-extension://abcdef"
+        );
         assert_eq!(worker_site(""), "(no url)");
         assert_eq!(worker_site("not a url"), "(opaque)");
     }
