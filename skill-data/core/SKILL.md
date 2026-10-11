@@ -149,6 +149,9 @@ act on that tab, and tell them which tab you touched (the result's
 `forcedTab` has its title and url). Never force another session's tab
 unless the user asked; the result warns when that session is live. `close`
 never closes a forced tab; it stays open for the user.
+For which pages leak or grow (heap, DOM nodes, listeners), run
+`diag pages --json` (read-only; `--measure`, `--watch <s>`; `--force` only on
+the user's request); its schema is in references/diag-pages.md.
 `profile not open` means the user's Chrome profile has no window: chrome-use
 never opens one. Ask the user to open a window in that profile first, then
 rerun. `profile window unavailable` means it could not tell; unknown means

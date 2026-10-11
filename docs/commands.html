@@ -479,6 +479,32 @@
         （<code>forcedTabsLeftOpen</code>；走 relay 时需要 ab-connect 0.5.34，旧扩展会保持 attach 直到扩展重启）。
         <code>chrome-tab:</code> handle 需要 ab-connect 0.5.30+。
       </p>
+      <h3 id="diag-pages">页面诊断：<code>diag pages</code></h3>
+      <div class="du-code">
+        <pre><code><span class="du-prompt">$</span> chrome-use diag pages <span class="du-flag">--json</span>                       <span class="du-cmt"># 全部页面、归属、过期 relay 记录、扩展版本（不 attach 任何东西）</span>
+<span class="du-prompt">$</span> chrome-use diag pages <span class="du-flag">--measure</span> <span class="du-flag">--json</span>             <span class="du-cmt"># 加上已 attach 页面的堆、节点、监听器数</span>
+<span class="du-prompt">$</span> chrome-use diag pages <span class="du-flag">--watch</span> 60 <span class="du-flag">--force</span> <span class="du-flag">--json</span>    <span class="du-cmt"># 间隔 60 秒采两次，每页给出泄漏类别</span></code></pre>
+      </div>
+      <p>
+        <code>diag pages</code> 是给外部工具（例如 Thermo）查泄漏页面用的稳定、只读、带版本号的报告（JSON
+        <code>"schema": 1</code>），用来代替直接拿 raw CDP 驱动 relay。它用自己的诊断连接：不启动 daemon、不开会话标签、
+        不重启 relay。每个页面给出 <code>handle</code>、<code>targetId</code>、URL、标题、<code>windowId</code>、
+        <code>active</code> / <code>visible</code> / <code>discarded</code>（relay 下）、<code>attached</code> 和归属
+        （<code>self</code> / <code>session</code> / <code>user</code>）；顶层另有过期 relay 记录数、扩展版本及是否落后于商店发布版
+        （附带和 <code>doctor</code> 相同的更新 / 重新加载提示）、profile 和 relay 连接状态。
+      </p>
+      <p>
+        不加 <code>--measure</code> 时绝不 attach 任何页面。<code>--measure</code> 通过 <code>Performance.getMetrics</code>
+        给出 <code>JSHeapUsedSize</code>、<code>Nodes</code>、<code>JSEventListeners</code>、<code>Documents</code>，只测本会话的页面，
+        以及 chrome-use 已经 attach 且不属于其他运行中会话的页面；worker 按站点汇总 <code>Runtime.getHeapUsage</code>。其余页面跳过并写明原因。
+        <code>--force</code>（配合 <code>--measure</code> / <code>--watch</code>）也测其余页面：没 attach 的标签会被 attach、测量后立即释放
+        （ab-connect 0.5.34+），不激活、不聚焦；期间该页会显示 Chrome 的调试提示条，所以只在用户要求时用。
+        <code>--watch &lt;秒&gt;</code> 隔这么久采两次，给出每页增量和泄漏类别：<code>listeners_growing_nodes_flat</code>、
+        <code>heap_growing</code>（≥ 1.5 MiB/分钟）、<code>nodes_climbing</code> 或 <code>none</code>。
+        输出有上限（<code>--limit</code> 默认 200 页，最多 1000；标题截到 300、URL 截到 2048 字符），并说明省略了什么。
+        退出码：0 正常，1 用法错误，2 扩展 relay（或 <code>--cdp</code> 端点）未连接，3 未加 <code>--force</code> 做 <code>--measure</code>
+        而所有页面都被其他运行中的 chrome-use 会话占用。JSON 结构见 core skill 的 <code>references/diag-pages.md</code>。
+      </p>
       <p>
         会话只剩一个标签、且它是本会话创建的时候，<code>tab close</code> 直接按 <code>close</code> 结束会话
         （返回 <code>sessionClosed: true</code>），不用再跑一次 <code>close</code>。不是本会话创建的标签
