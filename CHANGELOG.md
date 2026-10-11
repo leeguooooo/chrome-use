@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.185
+## 1.5.186
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.35 (published on the Chrome Web Store; Chrome updates it automatically).
+
+### Features
+
+- **`diag pages`: a read-only page report other tools can depend on.** `chrome-use diag pages [--json]` lists every real page (url, title, window, tab, active, discarded, owner) plus stale relay records, whether the extension is behind, the profile and the relay state, without attaching to anything. `--measure` adds heap, DOM nodes, event listeners and documents per page, and worker heaps; measuring a tab chrome-use doesn't hold needs `--force` (Chrome shows its debugging bar while measuring), and such tabs are attached, measured and released without being activated. `--watch SECONDS` samples twice and classifies leaks (`listeners_growing_nodes_flat`, `heap_growing`, `nodes_climbing`). The JSON is versioned (`schema: 1`, documented in the diag-pages reference); exit codes are 0 ok, 2 relay not connected, 3 another live session holds every page. Also as the MCP tool `chrome_use_diag_pages`. (#533, fixes #521)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.185
+
 Works with extension ab-connect 0.5.34; 0.5.35 (submitted to the Chrome Web Store, Chrome updates it automatically once published) adds the update and large-reply fixes below.
 
 ### Bug Fixes
@@ -19,7 +32,6 @@ Works with extension ab-connect 0.5.34; 0.5.35 (submitted to the Chrome Web Stor
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.184
 
