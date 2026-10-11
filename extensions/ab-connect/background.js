@@ -365,12 +365,15 @@ async function unmarkOwned(tabId) {
   if (ownedTabs.delete(tabId)) persistOwnedTabs();
 }
 
-// Closing an agent tab ungroups it first so Chrome keeps no saved tab group
-// (see remove-agent-tab.js).
+// Closing an agent tab ungroups it first so Chrome keeps no saved tab group;
+// a user's own tab (`tab close --force`) keeps its group (see remove-agent-tab.js).
 const agentTabRemoval = {
+  isAgentTab: (tabId) => ownedTabs.has(tabId),
   ungroup: (tabId) => chrome.tabs.ungroup(tabId),
   remove: (tabId) => chrome.tabs.remove(tabId),
 };
+// A native duplicate is always one the agent made, owned yet or not.
+const duplicateTabRemoval = { ...agentTabRemoval, isAgentTab: () => true };
 
 // Deterministic color per group name so a given session keeps the same color.
 const GROUP_COLORS = ['blue', 'cyan', 'green', 'yellow', 'orange', 'red', 'pink', 'purple', 'grey'];
@@ -1239,7 +1242,7 @@ async function handleForwardCdpCommand(msg) {
       focusWindow: (windowId) => chrome.windows.update(windowId, { focused: true }),
       removeTab: async (tabId) => {
         try {
-          await removeAgentTab(tabId, agentTabRemoval);
+          await removeAgentTab(tabId, duplicateTabRemoval);
         } finally {
           nativeDuplicateTabs.delete(tabId);
         }

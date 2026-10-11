@@ -11,11 +11,21 @@
 // last tab of a group deletes the group, as Chrome's own "Ungroup" does. The
 // ungroup is best-effort (a tab may already be ungrouped, or the API missing);
 // the removal is the effect the caller asked for, so only its error surfaces.
+//
+// Only a tab the agent created is ungrouped. `Target.closeTarget` also closes
+// the user's own tabs (`tab close --force`), and ungrouping the last tab of a
+// user's group would delete the user's saved group instead of letting Chrome
+// keep it. Those tabs get a plain removal.
 // Kept free of `chrome.*` globals so the order is unit-testable.
 //
-// deps: { ungroup(tabId) -> Promise, remove(tabId) -> Promise }
+// deps: { isAgentTab(tabId) -> boolean, ungroup(tabId) -> Promise,
+//         remove(tabId) -> Promise }
 
 export async function removeAgentTab(tabId, deps) {
+  if (!deps.isAgentTab(tabId)) {
+    await deps.remove(tabId);
+    return;
+  }
   try {
     await deps.ungroup(tabId);
   } catch {

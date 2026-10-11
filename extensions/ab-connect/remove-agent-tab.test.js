@@ -3,10 +3,11 @@ import test from 'node:test'
 
 import { removeAgentTab } from './remove-agent-tab.js'
 
-function deps({ ungroupError = null, removeError = null } = {}) {
+function deps({ ungroupError = null, removeError = null, agentTab = true } = {}) {
   const calls = []
   return {
     calls,
+    isAgentTab: () => agentTab,
     ungroup: async (id) => {
       calls.push(['ungroup', id])
       if (ungroupError) throw new Error(ungroupError)
@@ -33,4 +34,10 @@ test('a failed ungroup still removes the tab', async () => {
 test('a failed removal is reported, not swallowed', async () => {
   const d = deps({ removeError: 'No tab with id: 11.' })
   await assert.rejects(removeAgentTab(11, d), /No tab with id: 11/)
+})
+
+test("a user's own tab is removed without leaving its group", async () => {
+  const d = deps({ agentTab: false })
+  await removeAgentTab(11, d)
+  assert.deepEqual(d.calls, [['remove', 11]])
 })
