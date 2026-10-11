@@ -25,14 +25,16 @@
 //! app is read with `GetFrontProcess` (Process Manager, deprecated but
 //! exported). `NSWorkspace.frontmostApplication` is NOT used: in a process
 //! without a running main run loop (the daemon) it is a cached value that
-//! never changes. The app is re-activated with `-[NSRunningApplication
-//! activateWithOptions:]`, which brought Finder back ~6–8 ms after the call
-//! from a background, run-loop-less process, with no prompt. It does not
-//! launch anything, open windows or send a reopen event (`open -b` would);
-//! AppleScript `activate` was not used because sending Apple Events to
-//! another app can raise an Automation permission prompt. AppKit is loaded
-//! with `dlopen` the first time it is needed, so other commands do not pay
-//! for it.
+//! never changes. The app is brought back with `SetFrontProcessWithOptions`
+//! (front window only), which put Finder back 6–9 ms after the call from a
+//! background thread of a run-loop-less process, with no prompt.
+//! `-[NSRunningApplication activateWithOptions:]` works from the main thread
+//! but off it (where the daemon's tokio workers run) the call blocked
+//! ~1010 ms before Finder came back. Neither launches anything, opens windows
+//! or sends a reopen event (`open -b` would); AppleScript `activate` was not
+//! used because sending Apple Events to another app can raise an Automation
+//! permission prompt. The frameworks are loaded with `dlopen` the first time
+//! they are needed, so other commands do not pay for them.
 //!
 //! Windows and Linux: no equivalent is attempted. Windows' foreground lock
 //! normally keeps a background process from taking the foreground, and on
@@ -265,7 +267,12 @@ fn new_page_target(reply: &Value, before: &HashSet<String>) -> bool {
 pub struct FocusWatch {
     status: Arc<Mutex<Status>>,
     stop: Arc<std::sync::atomic::AtomicBool>,
+    /// With [`TRACE_ENV`]`=1`: what the watch saw, in ms since it was armed.
+    trace: Option<Arc<Mutex<Vec<String>>>>,
 }
+
+/// `1` adds `focusTrace` (the watch's timeline) to the click, for measuring.
+pub const TRACE_ENV: &str = "AGENT_BROWSER_FOCUS_TRACE";
 
 impl Drop for FocusWatch {
     fn drop(&mut self) {
@@ -278,7 +285,14 @@ impl FocusWatch {
         Self {
             status: Arc::new(Mutex::new(status)),
             stop: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            trace: None,
         }
+    }
+
+    /// The watch's timeline, when [`TRACE_ENV`] is set.
+    pub fn trace(&self) -> Option<Value> {
+        let t = self.trace.as_ref()?.lock().ok()?;
+        Some(json!(*t))
     }
 
     pub fn status(&self) -> Status {
@@ -316,12 +330,25 @@ impl FocusWatch {
         if is_browser(&before, browser_pid) {
             return Self::done(Status::Skipped(Reason::BrowserWasFront));
         }
+        let trace = (std::env::var(TRACE_ENV).ok().as_deref() == Some("1"))
+            .then(|| Arc::new(Mutex::new(Vec::new())));
         let watch = Self {
             status: Arc::new(Mutex::new(Status::Watching)),
             stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            trace: trace.clone(),
         };
         let (status, stop) = (watch.status.clone(), watch.stop.clone());
         let armed_at = Instant::now();
+        let note = move |what: String| {
+            if let Some(t) = trace.as_ref().and_then(|t| t.lock().ok()).as_mut() {
+                t.push(format!("{} {what}", armed_at.elapsed().as_millis()));
+            }
+        };
+        note(format!(
+            "armed; front pid {} {}",
+            before.pid,
+            before.bundle_id.as_deref().unwrap_or("?")
+        ));
         tokio::spawn(async move {
             let set = |s: Status| {
                 if let Ok(mut g) = status.lock() {
@@ -333,6 +360,7 @@ impl FocusWatch {
             let mut restored = false;
             loop {
                 if armed_at.elapsed() > WINDOW || stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    note("watch ended".into());
                     return;
                 }
                 let Some(front) = platform::frontmost() else {
@@ -344,6 +372,11 @@ impl FocusWatch {
                     continue;
                 }
                 if !is_browser(&front, browser_pid) {
+                    note(format!(
+                        "front is pid {} {}: not the browser",
+                        front.pid,
+                        front.bundle_id.as_deref().unwrap_or("?")
+                    ));
                     // The user went to another app: theirs. A restore already
                     // done stays reported.
                     if !restored {
@@ -351,9 +384,17 @@ impl FocusWatch {
                     }
                     return;
                 }
-                let seen = *seen_at.get_or_insert_with(Instant::now);
+                let seen = *seen_at.get_or_insert_with(|| {
+                    note(format!(
+                        "browser in front: pid {} {}",
+                        front.pid,
+                        front.bundle_id.as_deref().unwrap_or("?")
+                    ));
+                    Instant::now()
+                });
                 if !confirmed {
                     confirmed = probe.new_tab_exists(&client).await;
+                    note(format!("new tab: {confirmed}"));
                     if !confirmed {
                         set(Status::Skipped(Reason::NoNewTab));
                         return;
@@ -368,6 +409,7 @@ impl FocusWatch {
                 }
                 match platform::activate(before.pid).await {
                     Ok(()) => {
+                        note("previous app in front again".into());
                         restored = true;
                         seen_at = None;
                         set(Status::Restored {
@@ -382,6 +424,7 @@ impl FocusWatch {
                         // too; any other app ends the watch.
                     }
                     Err(e) => {
+                        note(format!("activation failed: {e}"));
                         if !restored {
                             set(Status::Skipped(Reason::ActivateFailed(e)));
                         }
@@ -396,8 +439,13 @@ impl FocusWatch {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    //! `GetFrontProcess` and `NSRunningApplication`, through `dlopen` so the
-    //! binary does not link AppKit (every command would load it).
+    //! The Process Manager (`GetFrontProcess`, `SetFrontProcessWithOptions`,
+    //! `ProcessInformationCopyDictionary`) and CoreFoundation, loaded with
+    //! `dlopen` so other commands do not load them. All of it works from any
+    //! thread without a run loop. AppKit is not used: `-[NSRunningApplication
+    //! activateWithOptions:]` called off the main thread (the daemon's tokio
+    //! workers) blocked ~1010 ms before the activation took effect, while
+    //! `SetFrontProcessWithOptions` took 6–9 ms.
     use super::App;
     use std::ffi::{c_char, c_void, CStr};
     use std::sync::OnceLock;
@@ -405,28 +453,35 @@ mod platform {
 
     pub const SUPPORTED: bool = true;
 
-    type Id = *mut c_void;
-    type Sel = *mut c_void;
-
     #[repr(C)]
     struct Psn {
         high: u32,
         low: u32,
     }
 
+    /// `kSetFrontProcessFrontWindowOnly`: bring the app's front window
+    /// forward, as `activateWithOptions:` without `AllWindows` does.
+    const FRONT_WINDOW_ONLY: u32 = 1;
+    /// `kProcessDictionaryIncludeAllInformationMask`.
+    const ALL_INFORMATION: u32 = 0xFFFF_FFFF;
+    /// `kCFStringEncodingUTF8`.
+    const UTF8: u32 = 0x0800_0100;
+
+    type CfRef = *const c_void;
+
     struct Api {
-        get_class: unsafe extern "C" fn(*const c_char) -> Id,
-        sel: unsafe extern "C" fn(*const c_char) -> Sel,
-        msg_send: *const c_void,
-        pool_push: unsafe extern "C" fn() -> *mut c_void,
-        pool_pop: unsafe extern "C" fn(*mut c_void),
         get_front_process: unsafe extern "C" fn(*mut Psn) -> i32,
         get_process_pid: unsafe extern "C" fn(*const Psn, *mut i32) -> i32,
+        get_process_for_pid: unsafe extern "C" fn(i32, *mut Psn) -> i32,
+        set_front_process_with_options: unsafe extern "C" fn(*const Psn, u32) -> i32,
+        process_information_copy_dictionary: unsafe extern "C" fn(*const Psn, u32) -> CfRef,
+        cf_dictionary_get_value: unsafe extern "C" fn(CfRef, CfRef) -> CfRef,
+        cf_string_create_with_c_string: unsafe extern "C" fn(CfRef, *const c_char, u32) -> CfRef,
+        cf_string_get_c_string: unsafe extern "C" fn(CfRef, *mut c_char, isize, u32) -> u8,
+        cf_get_type_id: unsafe extern "C" fn(CfRef) -> usize,
+        cf_string_get_type_id: unsafe extern "C" fn() -> usize,
+        cf_release: unsafe extern "C" fn(CfRef),
     }
-
-    // Function pointers into system frameworks, valid for the process.
-    unsafe impl Send for Api {}
-    unsafe impl Sync for Api {}
 
     fn api() -> Option<&'static Api> {
         static API: OnceLock<Option<Api>> = OnceLock::new();
@@ -435,8 +490,7 @@ mod platform {
 
     unsafe fn load() -> Option<Api> {
         for lib in [
-            c"/usr/lib/libobjc.A.dylib",
-            c"/System/Library/Frameworks/AppKit.framework/AppKit",
+            c"/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation",
             c"/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices",
         ] {
             if libc::dlopen(lib.as_ptr(), libc::RTLD_LAZY | libc::RTLD_GLOBAL).is_null() {
@@ -447,18 +501,27 @@ mod platform {
             let p = libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr());
             (!p.is_null()).then_some(p)
         };
+        macro_rules! f {
+            ($name:literal) => {
+                std::mem::transmute::<*mut c_void, _>(sym($name)?)
+            };
+        }
         Some(Api {
-            get_class: std::mem::transmute::<*mut c_void, _>(sym(c"objc_getClass")?),
-            sel: std::mem::transmute::<*mut c_void, _>(sym(c"sel_registerName")?),
-            msg_send: sym(c"objc_msgSend")?,
-            pool_push: std::mem::transmute::<*mut c_void, _>(sym(c"objc_autoreleasePoolPush")?),
-            pool_pop: std::mem::transmute::<*mut c_void, _>(sym(c"objc_autoreleasePoolPop")?),
-            get_front_process: std::mem::transmute::<*mut c_void, _>(sym(c"GetFrontProcess")?),
-            get_process_pid: std::mem::transmute::<*mut c_void, _>(sym(c"GetProcessPID")?),
+            get_front_process: f!(c"GetFrontProcess"),
+            get_process_pid: f!(c"GetProcessPID"),
+            get_process_for_pid: f!(c"GetProcessForPID"),
+            set_front_process_with_options: f!(c"SetFrontProcessWithOptions"),
+            process_information_copy_dictionary: f!(c"ProcessInformationCopyDictionary"),
+            cf_dictionary_get_value: f!(c"CFDictionaryGetValue"),
+            cf_string_create_with_c_string: f!(c"CFStringCreateWithCString"),
+            cf_string_get_c_string: f!(c"CFStringGetCString"),
+            cf_get_type_id: f!(c"CFGetTypeID"),
+            cf_string_get_type_id: f!(c"CFStringGetTypeID"),
+            cf_release: f!(c"CFRelease"),
         })
     }
 
-    fn front_pid(a: &Api) -> Option<i32> {
+    fn front(a: &Api) -> Option<(Psn, i32)> {
         let mut psn = Psn { high: 0, low: 0 };
         let mut pid = -1;
         unsafe {
@@ -466,72 +529,67 @@ mod platform {
                 return None;
             }
         }
-        (pid > 0).then_some(pid)
+        (pid > 0).then_some((psn, pid))
     }
 
-    /// `[NSRunningApplication runningApplicationWithProcessIdentifier:pid]`,
-    /// then `f` on it, inside an autorelease pool.
-    fn with_app<T>(a: &Api, pid: i32, f: impl FnOnce(Id) -> T) -> Option<T> {
+    fn bundle_id(a: &Api, psn: &Psn) -> Option<String> {
         unsafe {
-            let pool = (a.pool_push)();
-            let class = (a.get_class)(c"NSRunningApplication".as_ptr());
-            let out = if class.is_null() {
-                None
-            } else {
-                let send: unsafe extern "C" fn(Id, Sel, i32) -> Id =
-                    std::mem::transmute(a.msg_send);
-                let app = send(
-                    class,
-                    (a.sel)(c"runningApplicationWithProcessIdentifier:".as_ptr()),
-                    pid,
-                );
-                (!app.is_null()).then(|| f(app))
-            };
-            (a.pool_pop)(pool);
-            out
-        }
-    }
-
-    fn bundle_id(a: &Api, pid: i32) -> Option<String> {
-        with_app(a, pid, |app| unsafe {
-            let send_id: unsafe extern "C" fn(Id, Sel) -> Id = std::mem::transmute(a.msg_send);
-            let s = send_id(app, (a.sel)(c"bundleIdentifier".as_ptr()));
-            if s.is_null() {
+            let dict = (a.process_information_copy_dictionary)(psn, ALL_INFORMATION);
+            if dict.is_null() {
                 return None;
             }
-            let send_str: unsafe extern "C" fn(Id, Sel) -> *const c_char =
-                std::mem::transmute(a.msg_send);
-            let p = send_str(s, (a.sel)(c"UTF8String".as_ptr()));
-            (!p.is_null()).then(|| CStr::from_ptr(p).to_string_lossy().into_owned())
-        })
-        .flatten()
+            let key = (a.cf_string_create_with_c_string)(
+                std::ptr::null(),
+                c"CFBundleIdentifier".as_ptr(),
+                UTF8,
+            );
+            let mut out = None;
+            if !key.is_null() {
+                let v = (a.cf_dictionary_get_value)(dict, key);
+                if !v.is_null() && (a.cf_get_type_id)(v) == (a.cf_string_get_type_id)() {
+                    let mut buf = [0 as c_char; 512];
+                    if (a.cf_string_get_c_string)(v, buf.as_mut_ptr(), buf.len() as isize, UTF8)
+                        != 0
+                    {
+                        out = Some(CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned());
+                    }
+                }
+                (a.cf_release)(key);
+            }
+            (a.cf_release)(dict);
+            out
+        }
     }
 
     /// The frontmost application, read from the window server each time.
     pub fn frontmost() -> Option<App> {
         let a = api()?;
-        let pid = front_pid(a)?;
+        let (psn, pid) = front(a)?;
         Some(App {
             pid,
-            bundle_id: bundle_id(a, pid),
+            bundle_id: bundle_id(a, &psn),
         })
     }
 
-    /// Activate `pid` and wait (briefly) until it is the frontmost app.
+    /// Bring `pid` to the front and wait (briefly) until it is the frontmost
+    /// app. Never launches anything or opens a window.
     pub async fn activate(pid: i32) -> Result<(), String> {
-        let a = api().ok_or("AppKit is not available")?;
-        let asked = with_app(a, pid, |app| unsafe {
-            let send: unsafe extern "C" fn(Id, Sel, usize) -> i8 = std::mem::transmute(a.msg_send);
-            send(app, (a.sel)(c"activateWithOptions:".as_ptr()), 0) != 0
-        });
-        match asked {
-            None => return Err("the app is no longer running".into()),
-            Some(false) => return Err("macOS refused to activate it".into()),
-            Some(true) => {}
+        let a = api().ok_or("the Process Manager is not available")?;
+        let mut psn = Psn { high: 0, low: 0 };
+        let err = unsafe {
+            if (a.get_process_for_pid)(pid, &mut psn) != 0 {
+                return Err("the app is no longer running".into());
+            }
+            (a.set_front_process_with_options)(&psn, FRONT_WINDOW_ONLY)
+        };
+        if err != 0 {
+            return Err(format!(
+                "macOS refused to bring it to the front (error {err})"
+            ));
         }
         let deadline = Instant::now() + Duration::from_millis(300);
         while Instant::now() < deadline {
-            if front_pid(a) == Some(pid) {
+            if front(a).map(|(_, p)| p) == Some(pid) {
                 return Ok(());
             }
             tokio::time::sleep(Duration::from_millis(5)).await;

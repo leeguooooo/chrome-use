@@ -2820,7 +2820,14 @@ attach; it may be attached but is not tracked).
 A tab a page opens itself (target=_blank, window.open) brings Chrome to the
 front over whatever app the user is in (#468). By default chrome-use leaves
 it to Chrome, exactly as a user's click; in your own Chrome the click then
-says so in openedTabWarning.
+says so in openedTabWarning. On macOS chrome-use then puts the app that was
+in front before the click back in front (on by default): only when Chrome
+comes to the front within 1.5 s of the click with a tab that was not there
+before, never when Chrome was already the frontmost app or another app came
+to the front. The click reports focusRestored (true with focusRestoredApp and
+focusRestoredAfterMs, or false with focusNote saying why). Windows and Linux:
+not done. AGENT_BROWSER_RESTORE_FOCUS=0 turns it off (read when the daemon
+starts).
 
 AGENT_BROWSER_BACKGROUND_LINKS=cross-site (opt-in; also `1`/`on`): in a tab
 the session created, a plain left click on a CROSS-SITE target=_blank link

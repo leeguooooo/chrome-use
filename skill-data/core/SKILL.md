@@ -60,7 +60,9 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
    it (`followed: true`). In your own Chrome that needs ab-connect 0.5.30+;
    otherwise `openedTabWarning` says why it was left alone. A tab the page
    opens brings Chrome to the front over the user's app, and
-   `openedTabWarning` says so. `AGENT_BROWSER_BACKGROUND_LINKS=cross-site`
+   `openedTabWarning` says so; on macOS chrome-use puts the user's app back
+   in front (`focusRestored`; `AGENT_BROWSER_RESTORE_FOCUS=0` turns it
+   off). `AGENT_BROWSER_BACKGROUND_LINKS=cross-site`
    (opt-in, read when the session's daemon starts) opens cross-site
    `target=_blank` links in a background tab instead; cost: a link that
    redirects back to the page's site loses its SameSite=Strict cookies (see

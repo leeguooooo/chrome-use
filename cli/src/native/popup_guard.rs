@@ -1,7 +1,10 @@
 //! Opt-in: open cross-site `target=_blank` links an agent clicks in a
 //! background tab, so Chrome does not come to the front (#468). Off by
 //! default: by default every page-opened tab is Chrome's own (which raises
-//! Chrome) and the click says so.
+//! Chrome) and the click says so. What is on by default instead is undoing
+//! the raise: on macOS `focus_restore` puts the app that was in front before
+//! the click back in front once Chrome has raised itself with a new tab
+//! (measured: Chrome in front ~10–40 ms); see that module.
 //!
 //! Chrome's own background-tab clicks were measured as the alternative and
 //! rejected: a Cmd/Ctrl-click or middle click dispatched with

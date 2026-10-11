@@ -8658,6 +8658,9 @@ async fn finish_click_tab_check(state: &mut DaemonState, pending: DeferredClickT
     if let Some(status) = focus.as_ref() {
         merge_object(&mut out, status.fields());
     }
+    if let Some(trace) = pending.focus_watch.as_ref().and_then(|w| w.trace()) {
+        out["focusTrace"] = trace;
+    }
     let opened = check.opened;
     // A popup the page opened is ours (adopt_newly_opened only returns tabs
     // it can attribute to this session), but its first document loaded before

@@ -622,6 +622,19 @@ background-tab click (Cmd/Ctrl or middle click) still activates the window and
 changes what the page sees, and opening the link from chrome-use is not
 identical to Chrome's click.
 
+So on macOS chrome-use undoes it instead (on by default): right before the
+click it notes which app is in front, and if Chrome then comes to the front
+with a tab that was not there before the click, within 1.5 s, it puts that app
+back in front (measured: Chrome in front for about 10–40 ms). The click reports
+`focusRestored: true` with `focusRestoredApp` and `focusRestoredAfterMs`, or
+`focusRestored: false` with `focusNote` saying why not. It never switches apps
+when Chrome was already the frontmost app before the click (you are in Chrome;
+the agent's window may then become Chrome's focused window), when another app
+came to the front (you moved), or when Chrome came to the front without a new
+tab. It does not launch anything or open windows. Windows and Linux: not done
+(`focusNote` says so). `AGENT_BROWSER_RESTORE_FOCUS=0` turns it off; read when
+the session's daemon starts.
+
 `AGENT_BROWSER_BACKGROUND_LINKS=cross-site` (opt-in; also `1` / `on`) makes
 chrome-use open **cross-site** `target=_blank` links itself, in a tab the
 session created: a left click without modifiers on an `<a>`/`<area>` with an
@@ -1035,6 +1048,9 @@ AGENT_BROWSER_BACKGROUND_LINKS="cross-site"  # Opt-in (#468): open cross-site ta
                                              #   "cross-site"/"1"/"on"; "all" = same-site too. Cost:
                                              #   redirect-back links lose SameSite=Strict cookies.
                                              #   Read at daemon start
+AGENT_BROWSER_RESTORE_FOCUS="0"              # Turn off (#468, macOS, on by default): putting the app the
+                                             #   user was in back in front when a tab a click opened
+                                             #   raised Chrome. Read at daemon start
 ```
 
 ### Click reliability
