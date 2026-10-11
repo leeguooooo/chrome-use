@@ -152,6 +152,9 @@ struct TreeNode {
     /// page has flagged this field, which is what a rejected submit looks like
     /// before any message appears (#375).
     invalid: bool,
+    /// `context="..."` for `snapshot -i`, set by [`assign_contexts`] only for
+    /// a control whose rendered line would otherwise be indistinguishable.
+    context: Option<String>,
 }
 
 impl TreeNode {
@@ -179,6 +182,7 @@ impl TreeNode {
             in_top_layer: false,
             sensitive: false,
             invalid: false,
+            context: None,
         }
     }
 
@@ -201,6 +205,7 @@ impl TreeNode {
         self.ref_id = None;
         self.depth = 0;
         self.cursor_info = None;
+        self.context = None;
     }
 }
 
@@ -894,6 +899,10 @@ async fn take_snapshot_at_depth(
             &mut tree_nodes,
         ))
         .await;
+    }
+
+    if options.interactive {
+        assign_contexts(&mut tree_nodes);
     }
 
     let mut output = String::new();
@@ -2011,6 +2020,7 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
             in_top_layer: false,
             sensitive: false,
             invalid,
+            context: None,
         });
         id_to_idx.insert(node.node_id.clone(), i);
     }
@@ -2109,9 +2119,6 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
     (tree_nodes, root_indices)
 }
 
-/// Recover short, local text lost by interactive filtering without changing
-/// accessible names or ref identity. Never cross a nested item boundary or
-/// walk an unbounded subtree merely to annotate one control.
 /// Context for a control whose name is not unique on the page.
 ///
 /// [`control_context`] only speaks for containers it can vouch for — a semantic
@@ -2130,26 +2137,157 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
 /// a second identical line is worse than a short one.
 fn disambiguating_context(nodes: &[TreeNode], idx: usize) -> Option<String> {
     let me = &nodes[idx];
-    if me.ref_id.is_none() || me.name.trim().is_empty() || !is_interactive_role(&me.role) {
+    if !context_candidate(me) {
         return None;
     }
-    let twins: Vec<usize> = nodes
+    let group: Vec<usize> = nodes
         .iter()
         .enumerate()
-        .filter(|(j, n)| *j != idx && n.ref_id.is_some() && n.role == me.role && n.name == me.name)
+        .filter(|(_, n)| context_candidate(n) && n.role == me.role && n.name == me.name)
         .map(|(j, _)| j)
         .collect();
-    if twins.is_empty() {
-        return None;
+    let pos = group.iter().position(|&j| j == idx)?;
+    group_contexts(nodes, &group).swap_remove(pos)
+}
+
+/// Longest context rendered for a named control. Enough for a title plus a
+/// price; anything longer is a paragraph, not a label.
+const CONTEXT_MAX_CHARS: usize = 100;
+/// An unnamed control (an icon link such as Hacker News' vote arrow) gets one
+/// short fragment, not the whole row.
+const UNNAMED_CONTEXT_MAX_CHARS: usize = 60;
+
+/// Whether a node is a rendered control that context could be attached to.
+fn context_candidate(node: &TreeNode) -> bool {
+    node.ref_id.is_some() && is_interactive_role(&node.role)
+}
+
+/// Decide `context="..."` for every control of an interactive snapshot.
+///
+/// Context exists to tell apart lines that would otherwise read the same, so
+/// it is computed per repeated (role, name) group and nowhere else. A unique
+/// name already identifies its control; decorating it with the surrounding
+/// row only made `snapshot -i` larger than the full tree (Hacker News: every
+/// author, title and site link carried its whole row).
+fn assign_contexts(nodes: &mut [TreeNode]) {
+    let mut groups: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+    for (idx, node) in nodes.iter().enumerate() {
+        if context_candidate(node) {
+            groups
+                .entry((node.role.as_str(), node.name.as_str()))
+                .or_default()
+                .push(idx);
+        }
     }
-    let mine = nearest_labelling_text(nodes, idx)?;
-    if twins
+    let mut assigned = Vec::new();
+    for members in groups.values().filter(|m| m.len() > 1) {
+        for (&idx, context) in members.iter().zip(group_contexts(nodes, members)) {
+            if let Some(context) = context {
+                assigned.push((idx, context));
+            }
+        }
+    }
+    for (idx, context) in assigned {
+        nodes[idx].context = Some(context);
+    }
+}
+
+/// Context for each member of one repeated (role, name) group, in order.
+///
+/// A member needs none when the tree already separates it: its nearest
+/// rendered, named ancestor line (a table cell, a list item) is unique among
+/// the group. Otherwise the container text from [`control_context`] or
+/// [`nearest_labelling_text`] is used, but only when no other member would
+/// get the same words: a second identical line is worse than a short one.
+fn group_contexts(nodes: &[TreeNode], members: &[usize]) -> Vec<Option<String>> {
+    if members.len() < 2 {
+        return vec![None; members.len()];
+    }
+    let anchors: Vec<Option<&str>> = members
         .iter()
-        .any(|&j| nearest_labelling_text(nodes, j).as_deref() == Some(mine.as_str()))
-    {
-        return None;
+        .map(|&idx| rendered_anchor(nodes, idx))
+        .collect();
+    let needs: Vec<bool> = anchors
+        .iter()
+        .map(|anchor| anchor.is_none_or(|a| anchors.iter().filter(|b| **b == Some(a)).count() > 1))
+        .collect();
+    if !needs.iter().any(|n| *n) {
+        return vec![None; members.len()];
     }
-    Some(mine)
+    let primary: Vec<Option<String>> = members
+        .iter()
+        .zip(&needs)
+        .map(|(&idx, &need)| {
+            need.then(|| control_context(nodes, idx))
+                .flatten()
+                .and_then(|raw| tidy_context(&raw, &nodes[idx].name))
+        })
+        .collect();
+    let fallback: Vec<Option<String>> = members
+        .iter()
+        .zip(&needs)
+        .map(|(&idx, &need)| {
+            need.then(|| nearest_labelling_text(nodes, idx))
+                .flatten()
+                .and_then(|raw| tidy_context(&raw, &nodes[idx].name))
+        })
+        .collect();
+    let unique = |list: &[Option<String>], k: usize| -> Option<String> {
+        let mine = list[k].as_ref()?;
+        let shared = list
+            .iter()
+            .enumerate()
+            .any(|(j, other)| j != k && other.as_ref() == Some(mine));
+        (!shared).then(|| mine.clone())
+    };
+    (0..members.len())
+        .map(|k| unique(&primary, k).or_else(|| unique(&fallback, k)))
+        .collect()
+}
+
+/// Name of the nearest ancestor `snapshot -i` prints as its own named line
+/// (a reffed, non-interactive node such as a table cell). Controls under
+/// different anchors are already told apart by the tree itself.
+fn rendered_anchor(nodes: &[TreeNode], idx: usize) -> Option<&str> {
+    let mut parent = nodes[idx].parent_idx;
+    while let Some(p) = parent {
+        let node = &nodes[p];
+        if node.ref_id.is_some() && !is_interactive_role(&node.role) && !node.name.trim().is_empty()
+        {
+            return Some(node.name.as_str());
+        }
+        parent = node.parent_idx;
+    }
+    None
+}
+
+/// Clean raw container text into a context value: drop the control's own
+/// name and punctuation-only fragments ("(", "|"), dedupe, and cap the length.
+/// An unnamed control keeps only the first fragment.
+fn tidy_context(raw: &str, own_name: &str) -> Option<String> {
+    let raw = raw.strip_suffix(" [truncated]").unwrap_or(raw);
+    let own = own_name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut parts: Vec<&str> = Vec::new();
+    for part in raw.split(" | ").map(str::trim) {
+        if part.is_empty() || part == own || !part.chars().any(char::is_alphanumeric) {
+            continue;
+        }
+        if !parts.contains(&part) {
+            parts.push(part);
+        }
+    }
+    let (joined, max) = if own.is_empty() {
+        (parts.first()?.to_string(), UNNAMED_CONTEXT_MAX_CHARS)
+    } else if parts.is_empty() {
+        return None;
+    } else {
+        (parts.join(" | "), CONTEXT_MAX_CHARS)
+    };
+    if joined.chars().count() <= max {
+        return Some(joined);
+    }
+    let cut: String = joined.chars().take(max).collect();
+    Some(format!("{} [truncated]", cut.trim_end()))
 }
 
 /// Text from the nearest ancestor that holds this control and nothing else
@@ -2213,6 +2351,12 @@ fn nearest_labelling_text(nodes: &[TreeNode], idx: usize) -> Option<String> {
     None
 }
 
+/// Recover short, local text lost by interactive filtering without changing
+/// accessible names or ref identity. Never cross a nested item boundary or
+/// walk an unbounded subtree merely to annotate one control.
+///
+/// This is a candidate only: [`assign_contexts`] decides whether a control
+/// needs it at all.
 fn control_context(nodes: &[TreeNode], idx: usize) -> Option<String> {
     if !is_interactive_role(&nodes[idx].role) {
         return None;
@@ -2578,10 +2722,8 @@ fn render_tree(
     }
 
     if options.interactive {
-        if let Some(context) =
-            control_context(nodes, idx).or_else(|| disambiguating_context(nodes, idx))
-        {
-            if let Ok(encoded) = serde_json::to_string(&context) {
+        if let Some(ref context) = node.context {
+            if let Ok(encoded) = serde_json::to_string(context) {
                 attrs.push(format!("context={}", encoded));
             }
         }
@@ -3522,6 +3664,202 @@ mod tests {
         nodes[3].ref_id = Some("e1".to_string());
         nodes[4].ref_id = Some("e2".to_string());
         assert_eq!(disambiguating_context(&nodes, 3), None);
+    }
+
+    /// Append a node under `parent`, giving it a ref when `ref_id` is set.
+    fn push_child(
+        nodes: &mut Vec<TreeNode>,
+        parent: usize,
+        role: &str,
+        name: &str,
+        ref_id: Option<&str>,
+    ) -> usize {
+        let idx = nodes.len();
+        let mut node = make_node(role, name, Some(idx as i64));
+        node.parent_idx = Some(parent);
+        if let Some(r) = ref_id {
+            node.has_ref = true;
+            node.ref_id = Some(r.to_string());
+        }
+        nodes.push(node);
+        nodes[parent].children.push(idx);
+        idx
+    }
+
+    /// The Hacker News front page shape: per story, a title row (rank cell,
+    /// an unnamed vote-arrow link in an unnamed cell, a title cell holding the
+    /// title link and the site link) and a subtext row (one cell holding the
+    /// user, age, "hide" and comments links). Stories are numbered from 1.
+    fn hn_fixture(stories: &[(&str, &str, &str, &str, &str)]) -> Vec<TreeNode> {
+        let mut nodes = vec![make_node("RootWebArea", "", None)];
+        let table = push_child(&mut nodes, 0, "table", "", None);
+        let mut next_ref = 0;
+        let mut r = || {
+            next_ref += 1;
+            format!("e{next_ref}")
+        };
+        for (i, (title, site, user, age, comments)) in stories.iter().enumerate() {
+            let row = push_child(&mut nodes, table, "row", "", None);
+            let rank = format!("{}.", i + 1);
+            // Live HN context never contained the rank, so its text is
+            // modelled on the cell's own name only.
+            push_child(&mut nodes, row, "cell", &rank, Some(&r()));
+            let vote_cell = push_child(&mut nodes, row, "cell", "", None);
+            push_child(&mut nodes, vote_cell, "link", "", Some(&r()));
+            let title_cell = push_child(
+                &mut nodes,
+                row,
+                "cell",
+                &format!("{title} ({site})"),
+                Some(&r()),
+            );
+            push_child(&mut nodes, title_cell, "link", title, Some(&r()));
+            push_child(&mut nodes, title_cell, "StaticText", "(", None);
+            push_child(&mut nodes, title_cell, "link", site, Some(&r()));
+            push_child(&mut nodes, title_cell, "StaticText", ")", None);
+
+            let sub_row = push_child(&mut nodes, table, "row", "", None);
+            let sub = push_child(
+                &mut nodes,
+                sub_row,
+                "cell",
+                &format!("10 points by {user} {age} | hide | {comments}"),
+                Some(&r()),
+            );
+            push_child(&mut nodes, sub, "StaticText", "10 points", None);
+            push_child(&mut nodes, sub, "StaticText", "by", None);
+            push_child(&mut nodes, sub, "link", user, Some(&r()));
+            push_child(&mut nodes, sub, "link", age, Some(&r()));
+            push_child(&mut nodes, sub, "StaticText", "|", None);
+            push_child(&mut nodes, sub, "link", "hide", Some(&r()));
+            push_child(&mut nodes, sub, "StaticText", "|", None);
+            push_child(&mut nodes, sub, "link", comments, Some(&r()));
+        }
+        nodes
+    }
+
+    fn render_interactive(nodes: &mut [TreeNode]) -> String {
+        assign_contexts(nodes);
+        let options = SnapshotOptions {
+            interactive: true,
+            ..Default::default()
+        };
+        let mut output = String::new();
+        render_tree(nodes, 0, 0, &mut output, &options);
+        output
+    }
+
+    /// Regression: `snapshot -i` on Hacker News came out larger than the full
+    /// tree because every link carried its whole row as context — including
+    /// unique titles and authors, the link's own name, and bare "(" / "|".
+    #[test]
+    fn hn_rows_get_no_context_where_the_tree_already_separates_them() {
+        let mut nodes = hn_fixture(&[
+            (
+                "Total Annihilation",
+                "github.com",
+                "alice",
+                "1 hour ago",
+                "discuss",
+            ),
+            (
+                "Terence Tao: Math 2.0",
+                "github.com",
+                "bob",
+                "1 hour ago",
+                "discuss",
+            ),
+            (
+                "A third story",
+                "example.org",
+                "carol",
+                "2 hours ago",
+                "5 comments",
+            ),
+        ]);
+        let output = render_interactive(&mut nodes);
+
+        // Only the unnamed vote arrows need help, and they get the title alone.
+        let contexts: Vec<&str> = output.lines().filter(|l| l.contains("context=")).collect();
+        assert_eq!(contexts.len(), 3, "{output}");
+        assert!(
+            output.contains("- link [ref=e2, context=\"Total Annihilation\"]"),
+            "{output}"
+        );
+        assert!(
+            output.contains("context=\"Terence Tao: Math 2.0\""),
+            "{output}"
+        );
+        // Unique names, and repeated ones ("hide", "discuss", "github.com",
+        // "1 hour ago") that sit under distinct cell lines, stay bare.
+        for bare in [
+            "link \"Total Annihilation\" [ref=e4]",
+            "link \"alice\" [ref=e7]",
+            "link \"hide\" [ref=e9]",
+            "link \"discuss\" [ref=e10]",
+            "link \"github.com\" [ref=e5]",
+        ] {
+            assert!(output.contains(&format!("{bare}\n")), "{bare}: {output}");
+        }
+        assert!(
+            !output.contains("| |") && !output.contains("( |"),
+            "{output}"
+        );
+    }
+
+    /// Without named cells to anchor them, repeated controls still get the
+    /// text that separates them — minus their own name and punctuation.
+    #[test]
+    fn repeated_controls_without_an_anchor_get_tidy_context() {
+        let mut nodes = hn_fixture(&[
+            ("First story", "a.com", "alice", "1 hour ago", "discuss"),
+            ("Second story", "b.com", "bob", "1 hour ago", "discuss"),
+        ]);
+        for node in nodes.iter_mut() {
+            if node.role == "cell" {
+                node.has_ref = false;
+                node.ref_id = None;
+            }
+        }
+        let output = render_interactive(&mut nodes);
+        let hide: Vec<&str> = output.lines().filter(|l| l.contains("\"hide\"")).collect();
+        assert_eq!(hide.len(), 2);
+        assert!(
+            hide[0].contains("context=\"10 points | by | alice | 1 hour ago | discuss\""),
+            "{output}"
+        );
+        assert!(hide[1].contains("bob"), "{output}");
+        // Unique names stay bare even here.
+        assert!(output.contains("link \"alice\" [ref=e7]\n"), "{output}");
+        assert!(
+            output.contains("link \"First story\" [ref=e4]\n"),
+            "{output}"
+        );
+        for line in output.lines().filter(|l| l.contains("context=")) {
+            assert!(!line.contains("| |") && !line.contains("\"(\""), "{line}");
+        }
+    }
+
+    #[test]
+    fn tidy_context_drops_own_name_and_punctuation_and_caps_length() {
+        assert_eq!(
+            tidy_context("Title | ( | site.com | )", "Title").as_deref(),
+            Some("site.com")
+        );
+        assert_eq!(
+            tidy_context("10 points | by | bob | | | hide", "hide").as_deref(),
+            Some("10 points | by | bob")
+        );
+        assert_eq!(tidy_context("hide | ( | )", "hide"), None);
+        assert_eq!(
+            tidy_context("Some title | ( | site.com | )", "").as_deref(),
+            Some("Some title")
+        );
+        let long = tidy_context(&"word ".repeat(100), "Buy").unwrap();
+        assert!(long.ends_with(" [truncated]"));
+        assert!(long.chars().count() <= CONTEXT_MAX_CHARS + 12);
+        let unnamed = tidy_context(&"字".repeat(100), "").unwrap();
+        assert!(unnamed.chars().count() <= UNNAMED_CONTEXT_MAX_CHARS + 12);
     }
 
     #[test]

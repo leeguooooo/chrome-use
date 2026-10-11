@@ -26,7 +26,7 @@ chrome-use approach:
 Compact snapshot → @refs assigned → Direct interaction (~200-400 tokens)
 ```
 
-Interactive snapshots add a bounded `context` annotation for controls inside nearby articles, list items, rows, or groups identified by a heading or one distinct linked product name and one action control. Named product links omit repeated context when their sibling action carries it. It preserves local text such as product prices without changing accessible names or refs. Live `status` receipts also remain visible in interactive snapshots and action observations, with bounded text and explicit truncation. Context may be absent or marked truncated; use a scoped or full snapshot when a required detail is missing.
+Interactive snapshots add a bounded `context` annotation only to controls whose role and name repeat on the page and are not already separated by a named parent line (for example a table cell). The text comes from the nearby article, list item, row, or card (so a repeated `Add to cart` keeps its product and price), must differ between the repeated controls, never repeats the control's own name, drops punctuation-only fragments, and is capped at about 100 characters. Unnamed repeated controls such as icon links get one short fragment. Unique names get no context. Accessible names and refs are unchanged. Live `status` receipts also remain visible in interactive snapshots and action observations, with bounded text and explicit truncation. Context may be absent or marked truncated; use a scoped or full snapshot when a required detail is missing.
 
 ## The Snapshot Command
 
@@ -266,6 +266,6 @@ chrome-use get text @e5
 
 ## Context and status receipts
 
-Interactive snapshots add a bounded `context` annotation for controls inside nearby articles, list items, rows, or groups identified by a heading or one distinct linked product name and one action control. Named product links omit repeated context when their sibling action carries it. It preserves local text such as product prices without changing accessible names or refs. Live `status` receipts also remain visible in interactive snapshots and action observations, with bounded text and explicit truncation. Context may be absent or marked truncated; use a scoped or full snapshot when a required detail is missing.
+Interactive snapshots add a bounded `context` annotation only to controls whose role and name repeat on the page and are not already separated by a named parent line (for example a table cell). The text comes from the nearby article, list item, row, or card (so a repeated `Add to cart` keeps its product and price), must differ between the repeated controls, never repeats the control's own name, drops punctuation-only fragments, and is capped at about 100 characters. Unnamed repeated controls such as icon links get one short fragment. Unique names get no context. Accessible names and refs are unchanged. Live `status` receipts also remain visible in interactive snapshots and action observations, with bounded text and explicit truncation. Context may be absent or marked truncated; use a scoped or full snapshot when a required detail is missing.
 
 Interactive snapshots also carry form alerts. A short observation is not proof that missing content is absent; scope the read or use a full snapshot.
