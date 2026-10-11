@@ -66,7 +66,7 @@
       <ul>
         <li><code>git remote</code> 的 <code>upstream</code> 仍指向 <code>vercel-labs/agent-browser</code>；</li>
         <li>环境变量前缀沿用 <code>AGENT_BROWSER_*</code>；</li>
-        <li><code>abs</code> 命令别名来自仓库旧名 agent-browser-stealth；</li>
+        <li>旧仓库名 agent-browser-stealth 时期曾提供 <code>abs</code> 命令别名（改名时已移除，现在只安装 <code>chrome-use</code>）；</li>
         <li>早期 Release tag 带 <code>-fork.N</code> 后缀（如 <code>v0.27.0-fork.12</code>），现行 tag 已是独立的 <code>v1.x.y</code> 序列。</li>
       </ul>
       <div class="du-callout note">
@@ -137,8 +137,8 @@
 $ curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
 
 <span class="du-cmt"># 锁定到指定版本</span>
-$ AGENT_BROWSER_VERSION=v1.5.70 \
-    curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
+$ curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh \
+    | AGENT_BROWSER_VERSION=v1.5.188 sh</code></pre>
       </div>
       <div class="du-callout tip">
         <div class="du-callout-title">💡 老 tag</div>

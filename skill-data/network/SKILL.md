@@ -1,7 +1,7 @@
 ---
 name: network
 description: Mock responses, rewrite outgoing requests, block URLs, and record HAR with `chrome-use network route` (CDP Fetch, no proxy). Use when a task needs to stub an API response, override request headers/body, rewrite a URL to staging, block analytics, or capture/inspect network traffic.
-allowed-tools: Bash(chrome-use:*), Bash(chrome-use:*), Bash(abs:*), Bash(npx chrome-use:*), Bash(npx chrome-use:*)
+allowed-tools: Bash(chrome-use:*), Bash(npx chrome-use:*)
 ---
 
 # chrome-use — Network Interception

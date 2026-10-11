@@ -1,7 +1,7 @@
 ---
 name: sessions
 description: Run multiple isolated browser sessions in parallel (each --session = own cookies/tabs/refs), recover a stranded tab by CDP targetId across sessions, --reuse-tab, and reset stuck daemons (daemon status/restart). Use for multi-user flows, parallel scraping, or when a session's tab/handle got stuck.
-allowed-tools: Bash(chrome-use:*), Bash(chrome-use:*), Bash(abs:*), Bash(npx chrome-use:*), Bash(npx chrome-use:*)
+allowed-tools: Bash(chrome-use:*), Bash(npx chrome-use:*)
 ---
 
 # chrome-use — Sessions & Parallel Browsers

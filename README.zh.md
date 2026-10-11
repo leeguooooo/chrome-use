@@ -41,13 +41,13 @@ chrome-use 让**任意** agent（Claude Code、Cursor、Codex、你自己的脚�
 |---|:---:|:---:|:---:|:---:|
 | **任意** agent / CLI 都能用（不绑单一 app） | ✅ | ✅ | ❌ 仅 Claude | ✅ |
 | 驱动你**真实、已登录**的 Chrome | 可配置；新上下文默认无登录态 | ✅ | ✅ | ✅ |
-| 连接方式 / **"Allow remote debugging?" 弹框** | —（自带浏览器） | `--remote-debugging-port` · 取决于版本和模式 | `chrome.debugger` · 无 | 原生消息 · **从不** ✅ |
+| 连接方式 / **"Allow remote debugging?" 弹框** | —（自带浏览器） | `--remote-debugging-port` · 取决于版本和模式 | `chrome.debugger` · 无 | 原生消息 · **从不** ✅⁴ |
 | 真实浏览器指纹（CreepJS ~0%）¹ | ❌ 自动化特征 / headless | ✅ | ✅ | ✅ **已实测 0%** |
 | **无 `Runtime.enable` CDP 泄漏**（rebrowser）² | ❌ 泄漏 | ❌ 泄漏 | — | ✅ **默认关闭** |
 | 多 agent 共用**同一个**真实 Chrome、标签组隔离³ | ❌ 各开各的浏览器 | ⚠️ 共享 tab、无隔离 | ❌ 单 app | ✅ |
 | 权限面 | 完全控制 | 完整 CDP | 16 个，含 `<all_urls>` | **12 个，无 `<all_urls>`** |
 
-<sub>¹ 三家「真实 Chrome」工具在 CreepJS 上都 ~0%（毕竟是真浏览器），我们的是实测过的。² rebrowser `runtimeEnableLeak`：我们的中继路径实测无泄漏；Claude in Chrome 未独立测试（—）。³ web-access 也能跑并行子 agent，但无每会话隔离；本工具每个 `--session` 拿到自己彩色、命令隔离的标签组。实测数字见 [反检测](#反检测)。</sub>
+<sub>¹ 三家「真实 Chrome」工具在 CreepJS 上都 ~0%（毕竟是真浏览器），我们的是实测过的。² rebrowser `runtimeEnableLeak`：我们的中继路径实测无泄漏；Claude in Chrome 未独立测试（—）。³ web-access 也能跑并行子 agent，但无每会话隔离；本工具每个 `--session` 拿到自己彩色、命令隔离的标签组。⁴ 不弹同意框，但扩展仍然用 `chrome.debugger`，所以 agent 标签页被 attach 时 Chrome 会显示「started debugging this browser」提示条，去掉方法见 [连接你的 Chrome](#连接你的-chrome)。实测数字见 [反检测](#反检测)。</sub>
 
 ## 工作原理
 
@@ -73,13 +73,13 @@ curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.
 irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | iex
 ```
 
-从最新的 [GitHub Release](https://github.com/leeguooooo/chrome-use/releases) 下载对应平台的预编译二进制，安装 `chrome-use`（以及 `abs` 别名）。无需 npm，无需 token。
+从最新的 [GitHub Release](https://github.com/leeguooooo/chrome-use/releases) 下载对应平台的预编译二进制，安装 `chrome-use`。无需 npm，无需 token。
 
 <details>
 <summary>其他安装方式</summary>
 
-- **锁定版本：** `AGENT_BROWSER_VERSION=v0.27.0-fork.12 curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh`
-- **自定义路径：** `AGENT_BROWSER_BIN_DIR=$HOME/bin curl -fsSL … | sh`
+- **锁定版本：** `curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | AGENT_BROWSER_VERSION=v1.5.188 sh`
+- **自定义路径：** `curl -fsSL … | AGENT_BROWSER_BIN_DIR=$HOME/bin sh`
 - **Windows 锁定版本或安装位置：** 在 `irm … | iex` 前先设置 `$env:AGENT_BROWSER_VERSION = 'v1.5.139'` 或 `$env:AGENT_BROWSER_BIN_DIR = 'D:\tools'`。默认装到 `%LOCALAPPDATA%\Programs\chrome-use` 并加入用户 PATH，原有条目原样保留（不想改 PATH 就设 `$env:AGENT_BROWSER_NO_PATH = 1`）。不需要管理员权限。
 - **Windows 手动安装：** 从 [Releases 页](https://github.com/leeguooooo/chrome-use/releases) 下载 `chrome-use-win32-x64.tar.gz` 和对应的 `.sha256`，确认 `(Get-FileHash chrome-use-win32-x64.tar.gz -Algorithm SHA256).Hash` 与 `.sha256` 文件一致，用 `tar -xzf chrome-use-win32-x64.tar.gz` 解压，再把 `chrome-use.exe` 放进 PATH。运行前一定先对哈希：下载中断的包照样能解压出 `.exe`，它会在启动时报访问违规（退出码 `-1073741819`，即 `0xC0000005`），而不会提示下载不完整。
 </details>
@@ -87,7 +87,7 @@ irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | i
 ### 用 Nix 安装
 
 免安装直接运行一次：`nix run github:leeguooooo/chrome-use -- --help`。
-flake 同时提供 home-manager 模块和 NixOS 模块（`programs.chrome-use.enable = true`）；NixOS 上原生消息 host 是按用户注册的，切换后运行一次 `chrome-use extension connect`。
+flake 同时提供 home-manager 模块和 NixOS 模块（`programs.chrome-use.enable = true`）；NixOS 上原生消息 host 是按用户注册的，切换后运行一次 `chrome-use extension connect`（它会像 `extension install` 一样注册 host，然后连上扩展中继）。
 开发环境：`nix develop`（rust 工具链 + node 24 + pnpm + chromium + vhs）。
 完整片段见[安装指南](https://chrome-use.leeguoo.com/install.html)。
 
@@ -96,8 +96,8 @@ flake 同时提供 home-manager 模块和 NixOS 模块（`programs.chrome-use.en
 使用新版 CLI 时，安装脚本直接安装并校验内置的发现入口，不需要 Node、npx、Git 或额外下载。手动安装或刷新：
 
 ```bash
-chrome-use skill install
-chrome-use skill install --project
+chrome-use skills install
+chrome-use skills install --project
 ```
 
 全局安装覆盖 `~/.agents/skills`、Claude Code、Codex 和 Cursor，以及检测到配置目录的 Pi、OpenCode、Windsurf、CodeBuddy 和 Trae；遵循 `CLAUDE_CONFIG_DIR`、`XDG_CONFIG_HOME`。项目安装写入 `.agents/skills`、`.claude/skills`，以及已有的 `.pi`、`.windsurf`、`.codebuddy`、`.trae` 配置目录。安装后重启 agent 或重新加载技能。任一目录写入失败都会报错，即使其他目录已成功。详见[安装说明](https://chrome-use.leeguoo.com/install.html)。
@@ -123,7 +123,7 @@ npx skills add leeguooooo/chrome-use -g
 > Use the `chrome-use` CLI from the shell for every browser task; start with `chrome-use skills get core`. Do not use the built-in Chrome plugin for browser work here.
 > ```
 
-无论哪种方式，agent 都会拿到正确的用法和 `chrome-use` / `abs` 的预授权 bash 权限；二进制缺失时 skill 会自动重跑上面对应平台的一行安装命令来修复。专项指南（`electron`、`slack`、`agentcore` 等）由二进制自己通过 `chrome-use skills get <name>` 提供，所以说明永远和已安装版本一致。
+无论哪种方式，agent 都会拿到正确的用法和 `chrome-use` 的预授权 bash 权限；二进制缺失时 skill 会自动重跑上面对应平台的一行安装命令来修复。专项指南（`electron`、`slack`、`agentcore` 等）由二进制自己通过 `chrome-use skills get <name>` 提供，所以说明永远和已安装版本一致。
 
 升级二进制**不会**更新已经拷到 runner 里的 SKILL.md；那份副本在二进制之外。`chrome-use upgrade` 两样都管：先装最新的 GitHub Release，再逐个刷新找到的 skill 副本（Claude Code 插件、git checkout、安装脚本写入的目录；`npx skills add` 拷的副本会提示运行 `npx skills update chrome-use`）。`chrome-use upgrade --check`（或 `--json`）什么都不改，只报告当前版本、最新版本和 skill 装在哪；退出码 2 表示检查失败。其他命令每天最多在后台检查一次；只要有新版本，每次运行都会往 stderr 打一行提示；设 `CHROME_USE_NO_UPDATE_CHECK=1` 或全家通用的 `USE_NO_UPDATE_CHECK=1` 可关闭。只刷新 skill 用 `chrome-use skills update`（`refresh` / `install` 是同一个命令；加 `--project` 装到 `./` 而不是全局）。
 
@@ -150,6 +150,8 @@ chrome-use status                 # 中继、profile、扩展与会话健康总�
 ```
 
 之后 `chrome-use open` 就通过**原生消息**驱动你真实、已登录的 Chrome：无调试端口、无 token、**永远不弹 "Allow remote debugging?"**。裸 remote-debugging 端口的备选方案（会弹同意框）见[真实 Chrome 指南](https://chrome-use.leeguoo.com/real-chrome.html)。
+
+`extension install` 是一次性的安装步骤。`chrome-use extension connect`（别名 `chrome-use reconnect`）在扩展已装好的前提下重新连上它的中继，不重装任何东西。被 attach 的 agent 标签页上 Chrome 仍会显示「chrome-use started debugging this browser」提示条；`chrome-use extension connect --silent` 会带 `--silent-debugger-extension-api` 把 Chrome 重启一次来去掉它（标签和登录自动恢复；同时开着多个 Chrome 实例时不会重启）。`--keep-banner` 完全不碰浏览器；两个 flag 都不带时，交互终端里会先问一句。详见[静音提示条](https://chrome-use.leeguoo.com/debugger-banner-silence.html)。
 
 你的 Chrome profile 里必须开着一个窗口。chrome-use 从不自己开窗口：没有窗口时它会停下并报 `profile not open`（错误码 `profile_not_open`），先在那个 profile 里打开一个窗口再重跑。如果它判断不了有没有窗口，会报 `profile window unavailable`（错误码 `profile_window_unavailable`），判断不了就什么都不创建。第一个标签页清理相关的错误码见[故障排查](https://chrome-use.leeguoo.com/troubleshooting.html)。
 

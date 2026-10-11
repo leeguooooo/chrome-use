@@ -12,7 +12,7 @@ On Windows, in PowerShell:
 irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | iex
 ```
 
-If the runner cannot discover chrome-use, run `chrome-use skill install`.
+If the runner cannot discover chrome-use, run `chrome-use skills install`.
 It installs and verifies the binary's bundled discovery entry offline.
 `chrome-use skills update` refreshes the same entry; restart the runner or
 reload its skills afterward. Use `--project` for a local install.
@@ -24,7 +24,7 @@ refresh that entry before relying on it. `chrome-use skills get core --full`
 includes every reference and template; use it only when you need the whole
 collection.
 
-`chrome-use skill install` installs the discovery entry bundled with the CLI.
+`chrome-use skills install` installs the discovery entry bundled with the CLI.
 `skills update` and `skills refresh` do the same. No Node, npx, Git, network
 access or administrator privileges are needed for this step. It replaces only
 `chrome-use/SKILL.md`, reads it back, and reports each verified path. Any failed

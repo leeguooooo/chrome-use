@@ -58,7 +58,7 @@
       <h2>一行装好 CLI</h2>
       <p>
         从最新的 <a href="https://github.com/leeguooooo/chrome-use/releases">GitHub Release</a>
-        下载对应平台的预编译二进制，装好 <code>chrome-use</code>（以及 <code>abs</code> 短别名）。这是主要分发渠道，不经过 npm，也不需要任何 token。
+        下载对应平台的预编译二进制，装好 <code>chrome-use</code>。这是主要分发渠道，不经过 npm，也不需要任何 token。
       </p>
 
       <div class="du-code">
@@ -85,8 +85,7 @@
       </p>
 
       <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ 一个二进制，两个名字</div>
-        <code>chrome-use</code> 和 <code>abs</code> 是<strong>同一个可执行文件</strong>——<code>abs</code> 只是短别名。
+        <div class="du-callout-title">ℹ️ 一个二进制</div>
         没有单独的「stealth 可执行文件」；反检测是运行时行为，连你的真实 Chrome 就零补丁，<code>--launch</code> 开新浏览器才上全套补丁。详见
         <a href="/real-chrome.html">连接真实 Chrome</a>。
       </div>
@@ -100,10 +99,10 @@
           <span class="du-code-name">bash</span>
         </div>
 <pre><code><span class="du-cmt"># 固定某个版本</span>
-<span class="du-prompt">$</span> AGENT_BROWSER_VERSION=v1.5.70 curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
+<span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | AGENT_BROWSER_VERSION=v1.5.188 sh
 
 <span class="du-cmt"># 装到自定义目录</span>
-<span class="du-prompt">$</span> AGENT_BROWSER_BIN_DIR=$HOME/bin curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
+<span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | AGENT_BROWSER_BIN_DIR=$HOME/bin sh</code></pre>
       </div>
 
       <ul>
@@ -236,7 +235,7 @@ programs.chrome-use = {
         <code>install.sh</code> 和 <code>install.ps1</code> 安装 CLI 内置的发现入口，不需要 Node、npx、Git 或额外下载。
         任一目录写入失败都会报错，不再无条件显示全部就绪。可用 <code>AGENT_BROWSER_NO_SKILL=1</code> 跳过。
       </div>
-      <p>手动安装或刷新：<code>chrome-use skill install</code>；只装当前项目：<code>chrome-use skill install --project</code>。
+      <p>手动安装或刷新：<code>chrome-use skills install</code>；只装当前项目：<code>chrome-use skills install --project</code>。
         安装后重启 agent 或重新加载技能。全局目录覆盖 <code>~/.agents/skills</code>、Claude Code、Codex、Cursor，
         以及已有配置的 Pi、OpenCode、Windsurf、CodeBuddy、Trae；遵循 <code>CLAUDE_CONFIG_DIR</code>、<code>XDG_CONFIG_HOME</code>。
         项目安装写入 <code>.agents/skills</code>、<code>.claude/skills</code>，以及已有的 <code>.pi</code>、<code>.windsurf</code>、<code>.codebuddy</code>、<code>.trae</code> 配置目录。</p>
@@ -289,7 +288,7 @@ Do not use the built-in Chrome plugin for browser work here.</code></pre>
       </div>
 
       <p>
-        两种装法都让 AI agent 拿到正确的用法模式和对 <code>chrome-use</code>、<code>abs</code> 预授权的 bash 权限；
+        两种装法都让 AI agent 拿到正确的用法模式和对 <code>chrome-use</code> 预授权的 bash 权限；
         专门化指南（electron / slack / agentcore …）由二进制经 <code>chrome-use skills get &lt;name&gt;</code> 提供，
         永远和已装版本一致。装好后建议先读一遍 <a href="/core-loop.html">核心循环</a>。
       </p>

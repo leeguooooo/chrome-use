@@ -1,7 +1,7 @@
 ---
 name: canvas
 description: Drive canvas / WebGL / game UIs that paint to a <canvas> with no DOM or accessibility node — game boards, voice-room mic seats, map tiles, 3D viewers, design canvases (Figma/mockitt), HUDs. Use when snapshot/find/eval querySelector return no ref for something clearly on screen, when the label shows in `get text` but has no @ref, or when you need real-time coordinate/keyboard control. Covers canvas capture, coordinate clicks, hold-to-move, batch timed sequences, reading engine globals, and the real-time WebSocket stream.
-allowed-tools: Bash(chrome-use:*), Bash(chrome-use:*), Bash(abs:*), Bash(npx chrome-use:*), Bash(npx chrome-use:*)
+allowed-tools: Bash(chrome-use:*), Bash(npx chrome-use:*)
 ---
 
 # chrome-use canvas / WebGL / games

@@ -4,9 +4,10 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
 #
-# Env overrides:
-#   AGENT_BROWSER_VERSION=v0.27.0-fork.11   pin a specific release tag
-#   AGENT_BROWSER_BIN_DIR=/usr/local/bin    install location (auto-detected otherwise)
+# Env overrides go on `sh`, not `curl`, so the script sees them:
+#   curl -fsSL <this url> | AGENT_BROWSER_VERSION=v1.5.188 sh
+#   AGENT_BROWSER_VERSION=v1.5.188      pin a specific release tag
+#   AGENT_BROWSER_BIN_DIR=/usr/local/bin  install location (auto-detected otherwise)
 set -eu
 
 REPO="leeguooooo/chrome-use"

@@ -59,7 +59,7 @@
       <p>
         Download the prebuilt binary for your platform from the latest
         <a href="https://github.com/leeguooooo/chrome-use/releases">GitHub Release</a>
-        to install <code>chrome-use</code> (plus the short alias <code>abs</code>). This is the primary distribution channel—it doesn't go through npm and needs no token.
+        to install <code>chrome-use</code>. This is the primary distribution channel—it doesn't go through npm and needs no token.
       </p>
 
       <div class="du-code">
@@ -87,8 +87,7 @@
       </p>
 
       <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ One binary, two names</div>
-        <code>chrome-use</code> and <code>abs</code> are the <strong>same executable</strong>—<code>abs</code> is just a short alias.
+        <div class="du-callout-title">ℹ️ One binary</div>
         There's no separate "stealth executable"; anti-detection is runtime behavior. Connecting to your real Chrome applies zero patches, and only <code>--launch</code> (opening a fresh browser) applies the full patch set. See
         <a href="/en/real-chrome.html">Connecting to your real Chrome</a>.
       </div>
@@ -102,10 +101,10 @@
           <span class="du-code-name">bash</span>
         </div>
 <pre><code><span class="du-cmt"># pin a specific version</span>
-<span class="du-prompt">$</span> AGENT_BROWSER_VERSION=v1.5.70 curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
+<span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | AGENT_BROWSER_VERSION=v1.5.188 sh
 
 <span class="du-cmt"># install to a custom directory</span>
-<span class="du-prompt">$</span> AGENT_BROWSER_BIN_DIR=$HOME/bin curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
+<span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | AGENT_BROWSER_BIN_DIR=$HOME/bin sh</code></pre>
       </div>
 
       <ul>
@@ -241,7 +240,7 @@ programs.chrome-use = {
         <code>install.sh</code> and <code>install.ps1</code> install the CLI's bundled discovery entry without Node, npx, Git or another download.
         A failed destination is an error; completion is no longer unconditional. Opt out with <code>AGENT_BROWSER_NO_SKILL=1</code>.
       </div>
-      <p>Install or refresh manually with <code>chrome-use skill install</code>; use <code>chrome-use skill install --project</code> for the current project.
+      <p>Install or refresh manually with <code>chrome-use skills install</code>; use <code>chrome-use skills install --project</code> for the current project.
         Restart your agent or reload its skills afterward. Global destinations cover <code>~/.agents/skills</code>, Claude Code, Codex, Cursor,
         and existing Pi, OpenCode, Windsurf, CodeBuddy and Trae configurations. <code>CLAUDE_CONFIG_DIR</code> and <code>XDG_CONFIG_HOME</code> are respected.
         Project installs use <code>.agents/skills</code> and <code>.claude/skills</code>, plus existing <code>.pi</code>, <code>.windsurf</code>, <code>.codebuddy</code> and <code>.trae</code> configuration directories.</p>
@@ -295,7 +294,7 @@ Do not use the built-in Chrome plugin for browser work here.</code></pre>
       </div>
 
       <p>
-        Either way the AI agent gets the right usage patterns and pre-authorized bash permissions for <code>chrome-use</code> and <code>abs</code>;
+        Either way the AI agent gets the right usage patterns and pre-authorized bash permissions for <code>chrome-use</code>;
         the specialized guides (electron / slack / agentcore / …) are served by the binary itself via <code>chrome-use skills get &lt;name&gt;</code>,
         so they always match the installed version. Once installed, it's worth reading
         <a href="/en/core-loop.html">The core loop</a> first.

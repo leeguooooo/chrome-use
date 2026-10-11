@@ -1,7 +1,7 @@
 ---
 name: react
 description: Inspect React apps and measure Web Vitals with chrome-use's built-in `react …` and `vitals` commands (component tree, props/hooks/state, re-render profiling, Suspense, LCP/CLS/INP, SPA pushstate). Requires launching with --enable react-devtools. Use when debugging a React app's renders/state or measuring page performance.
-allowed-tools: Bash(chrome-use:*), Bash(chrome-use:*), Bash(abs:*), Bash(npx chrome-use:*), Bash(npx chrome-use:*)
+allowed-tools: Bash(chrome-use:*), Bash(npx chrome-use:*)
 ---
 
 # chrome-use — React / Web Vitals

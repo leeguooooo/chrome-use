@@ -13,7 +13,7 @@ description: >-
   diagnostics, multi-session workflows, Electron apps, Slack, Vercel Sandbox,
   and AWS Bedrock AgentCore. 中文触发：搜一下、联网查、打开或读取链接、抓数据、
   登录后操作、网页自动化、填表、截图、测试网页、小红书、微博、推特、知乎。
-allowed-tools: Bash(chrome-use:*), Bash(abs:*), Bash(npx chrome-use:*)
+allowed-tools: Bash(chrome-use:*), Bash(npx chrome-use:*)
 ---
 
 # chrome-use

@@ -66,7 +66,7 @@
       <ul>
         <li><code>git remote</code>'s <code>upstream</code> still points at <code>vercel-labs/agent-browser</code>;</li>
         <li>the environment-variable prefix is still <code>AGENT_BROWSER_*</code>;</li>
-        <li>the <code>abs</code> command alias comes from the old repo name agent-browser-stealth;</li>
+        <li>the old repo name agent-browser-stealth once shipped an <code>abs</code> command alias (dropped at the rebrand; only <code>chrome-use</code> is installed now);</li>
         <li>early Release tags carried a <code>-fork.N</code> suffix (like <code>v0.27.0-fork.12</code>); current tags are an independent <code>v1.x.y</code> series.</li>
       </ul>
       <div class="du-callout note">
@@ -136,8 +136,8 @@
 $ curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh
 
 <span class="du-cmt"># pin a version</span>
-$ AGENT_BROWSER_VERSION=v1.5.70 \
-    curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
+$ curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh \
+    | AGENT_BROWSER_VERSION=v1.5.188 sh</code></pre>
       </div>
       <div class="du-callout tip">
         <div class="du-callout-title">💡 Old tags</div>
