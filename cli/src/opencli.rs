@@ -35,7 +35,15 @@ const RUNNER_JS: &str = include_str!("opencli_runner.mjs");
 /// refreshed rather than falling back to the upstream command (main.rs). The
 /// ports carry chrome-use's fixes to `douyin/delete` (#508, #525), which used
 /// to be written over the installed package.
-pub const PORTED: &[&str] = &["douyin/delete", "douyin/update", "twitter/delete"];
+pub const PORTED: &[&str] = &[
+    "douyin/delete",
+    "douyin/update",
+    "twitter/delete",
+    "twitter/like",
+    "twitter/follow",
+    "bilibili/user-videos",
+    "bilibili/creator-stats",
+];
 
 /// Whether `spec` is one of the `PORTED` commands.
 pub fn is_ported(spec: &str) -> bool {
@@ -579,7 +587,15 @@ mod tests {
 
     #[test]
     fn ported_names_cover_the_douyin_writes() {
-        for spec in ["douyin/delete", "douyin/update", "twitter/delete"] {
+        for spec in [
+            "douyin/delete",
+            "douyin/update",
+            "twitter/delete",
+            "twitter/like",
+            "twitter/follow",
+            "bilibili/user-videos",
+            "bilibili/creator-stats",
+        ] {
             assert!(is_ported(spec), "{spec}");
         }
         assert!(!is_ported("douyin/videos"));

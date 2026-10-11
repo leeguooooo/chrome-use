@@ -25,10 +25,11 @@ chrome-use site github/issues owner/repo --json   # run it → JSON (navigates t
   `name/cmd` the official one wins.
 - **Where a command comes from, in priority order:** a configured extra source
   (`site add`), the official chrome-use-sites pack, the bb-sites community pack, and only
-  then OpenCLI (below). Ours always win a shared name. `douyin/delete`, `douyin/update` and
-  `twitter/delete` used to come from OpenCLI and are now maintained in chrome-use-sites
+  then OpenCLI (below). Ours always win a shared name. `douyin/delete`, `douyin/update`,
+  `twitter/delete`, `twitter/like`, `twitter/follow`, `bilibili/user-videos` and
+  `bilibili/creator-stats` used to come from OpenCLI and are now maintained in chrome-use-sites
   (ported with attribution); OpenCLI never runs them, and a cache that predates them is
-  synced on first use. Both deletes open their page first: run them with `--until-done`.
+  synced on first use. Delete, like and follow open their page first: run them with `--until-done`.
 - **OpenCLI is a last resort.** When Node.js 20+ is on PATH, `site update` also installs
   [OpenCLI](https://github.com/jackwener/OpenCLI) (~1,300 commands over ~180 sites). A
   `name/cmd` that neither pack has runs through OpenCLI's own runtime in Node, driving this

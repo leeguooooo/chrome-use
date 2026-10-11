@@ -263,13 +263,14 @@ site adapters for github.com: github/issues, github/pulls, github/repo …</code
         设 <code>AGENT_BROWSER_SITES_NO_SUGGEST=1</code> 关闭这个提示。
       </p>
 
-      <h3>OpenCLI 的命令也能直接用</h3>
+      <h3>OpenCLI：最后的选择</h3>
       <p>
         装了 Node.js 20+ 时，<code>site update</code> 会顺带安装 <a href="https://github.com/jackwener/OpenCLI">OpenCLI</a>（约 180 个站点、1300 多条命令，固定版本，<code>--ignore-scripts</code>）。
         两个适配器库都没有的 <code>name/cmd</code>，会用 OpenCLI 自己的运行时执行，操作的还是你当前的 chrome-use 会话和登录态，比如
         <code>chrome-use site hackernews/best --limit 5 --json</code>。<code>site list</code> 里标着 <code>(opencli)</code>，<code>site info</code> 能看参数，站点提示里排在最后。
         同名时永远用我们自己的（优先级：<code>site add</code> 加的来源 → 官方 chrome-use-sites → 社区 bb-sites → OpenCLI）；我们的只读命令运行失败而 OpenCLI 有同名的只读命令时，会自动改用它（写操作不会重试）。<code>AGENT_BROWSER_SITES_NO_OPENCLI=1</code> 关闭。
-        <code>douyin/delete</code>、<code>douyin/update</code>、<code>twitter/delete</code> 以前走 OpenCLI，现在移植到 chrome-use-sites 维护（注明出处，Apache-2.0），OpenCLI 不再运行它们；本地缓存里还没有时，第一次使用会先同步。两个删除命令要先打开对应页面，请加 <code>--until-done</code>。
+        <code>douyin/delete</code>、<code>douyin/update</code>、<code>twitter/delete</code>、<code>twitter/like</code>、<code>twitter/follow</code>、<code>bilibili/user-videos</code>、<code>bilibili/creator-stats</code> 以前走 OpenCLI，现在移植到 chrome-use-sites 维护（注明出处，Apache-2.0），OpenCLI 不再运行它们；本地缓存里还没有时，第一次使用会先同步。删除、点赞、关注要先打开对应页面，请加 <code>--until-done</code>。
+        OpenCLI 是第三方代码，chrome-use 不维护，出过坏掉的命令。每次走 OpenCLI 都会在 stderr 打一行 <code>note: … third-party OpenCLI command, not maintained by chrome-use</code>，<code>--json</code> 里有 <code>maintainedBy: "opencli"</code>、<code>readOnly</code> 和 <code>notice</code>。有我们自己的适配器就用我们的；发帖、点赞、关注、删除、发布这类动你真实账号的操作不要依赖 OpenCLI，应该移植进 chrome-use-sites。
       </p>
 
       <h3>站点没登录时</h3>
