@@ -29,14 +29,22 @@ chrome-use site github/issues owner/repo --json   # run it → JSON (navigates t
   `twitter/delete` used to come from OpenCLI and are now maintained in chrome-use-sites
   (ported with attribution); OpenCLI never runs them, and a cache that predates them is
   synced on first use. Both deletes open their page first: run them with `--until-done`.
-- **OpenCLI commands work too.** When Node.js 20+ is on PATH, `site update` also installs
+- **OpenCLI is a last resort.** When Node.js 20+ is on PATH, `site update` also installs
   [OpenCLI](https://github.com/jackwener/OpenCLI) (~1,300 commands over ~180 sites). A
   `name/cmd` that neither pack has runs through OpenCLI's own runtime in Node, driving this
   same session. They show as `(opencli)` in `site list`, `site info` shows their args, and they come
   last in the `siteAdapters` hint. If one of our adapters fails and OpenCLI has a read command
-  of the same name, chrome-use runs that instead (stderr says so; `--json` adds
-  `source: "opencli"` and `fallbackFrom`). Writes never retry. Same command, same JSON: `chrome-use site hackernews/best
-  --limit 5 --json`. `AGENT_BROWSER_SITES_NO_OPENCLI=1` turns them off.
+  of the same name, chrome-use runs that instead (`--json` adds `fallbackFrom`). Writes never
+  retry. Same command, same JSON: `chrome-use site hackernews/best --limit 5 --json`.
+  `AGENT_BROWSER_SITES_NO_OPENCLI=1` turns them off.
+  OpenCLI is third-party code chrome-use does not maintain, and its commands have shipped broken
+  (`douyin/delete`, `twitter/delete`). Every OpenCLI run prints a stderr `note: … third-party
+  OpenCLI command, not maintained by chrome-use`; `--json` adds `source: "opencli"`,
+  `maintainedBy: "opencli"`, `readOnly` and `notice`. Prefer a chrome-use-sites or bb-sites
+  adapter whenever one exists. **For account actions** (posting, liking, following, deleting,
+  publishing) on the user's real accounts, don't rely on OpenCLI: tell the user the command is
+  unmaintained third-party code and offer to port it into chrome-use-sites, where ported commands
+  live and get fixed.
 
 > **Auto-trigger — act on it.** chrome-use keeps both packs synced automatically (first use +
 > weekly), and whenever you reach a page whose domain has adapters it tells you: on every
@@ -58,8 +66,9 @@ If you work on the same site a lot and no adapter covers it, chrome-use adds
 **Ask the user** whether to turn the steps you keep repeating there into an adapter. Don't write
 one without a yes. If they agree:
 
-1. First check `chrome-use site list | grep <site>`: OpenCLI may already cover it. Otherwise
-   do the action that loads the data (search, scroll, open the list), then run
+1. First check `chrome-use site list | grep <site>` for a chrome-use-sites or bb-sites adapter.
+   An `(opencli)` entry is a last resort for reads only; for account actions, write or port
+   our own instead. Then do the action that loads the data (search, scroll, open the list), then run
    `chrome-use site analyze`. It lists the API calls the page made, the state it embeds
    (`__NEXT_DATA__`, `__INITIAL_STATE__`, …) and any anti-bot vendor, and picks a strategy.
    Prefer, in this order: a public API; the site's own JSON API called from the page

@@ -215,6 +215,42 @@ pub fn info(entry: &Value) -> Value {
         "args": args,
         "columns": entry.get("columns"),
         "source": format!("{SOURCE_LABEL} ({PACKAGE}@{})", version()),
+        "maintainedBy": SOURCE_LABEL,
+    })
+}
+
+/// Whether OpenCLI declares `entry` read-only. Anything else (a write, or an
+/// entry with no `access`) counts as a write.
+pub fn is_read(entry: &Value) -> bool {
+    entry.get("access").and_then(|v| v.as_str()) == Some("read")
+}
+
+/// The stderr note printed whenever a command runs through OpenCLI: it is
+/// third-party code chrome-use does not maintain (`douyin/delete` and
+/// `twitter/delete` shipped broken before being ported), so a write on the
+/// user's account should move to an adapter of ours.
+pub fn third_party_note(spec: &str, entry: &Value) -> String {
+    let base =
+        format!("note: site {spec} is a third-party OpenCLI command, not maintained by chrome-use");
+    if is_read(entry) {
+        format!("{base}; it may break without notice")
+    } else {
+        format!(
+            "{base}. It acts on the user's account: our own adapter is recommended. \
+             Offer the user to port it into chrome-use-sites rather than rely on it"
+        )
+    }
+}
+
+/// The `--json` data for a result OpenCLI produced: the result plus who
+/// maintains it, whether it was a read, and the same note as stderr.
+pub fn tagged_data(spec: &str, entry: &Value, result: Value) -> Value {
+    json!({
+        "result": result,
+        "source": SOURCE_LABEL,
+        "maintainedBy": SOURCE_LABEL,
+        "readOnly": is_read(entry),
+        "notice": third_party_note(spec, entry),
     })
 }
 
@@ -556,5 +592,37 @@ mod tests {
         assert_eq!(i["readOnly"], true);
         assert!(i["args"].get("limit").is_some());
         assert!(i["source"].as_str().unwrap().starts_with("opencli"));
+        assert_eq!(i["maintainedBy"], "opencli");
+    }
+
+    #[test]
+    fn note_flags_third_party_and_steers_writes_to_a_port() {
+        let read = third_party_note("bilibili/feed", &entry());
+        assert!(read.contains("third-party OpenCLI command, not maintained by chrome-use"));
+        assert!(!read.contains("chrome-use-sites"), "{read}");
+
+        let write = json!({"site": "twitter", "name": "like", "access": "write"});
+        let w = third_party_note("twitter/like", &write);
+        assert!(w.contains("not maintained by chrome-use"), "{w}");
+        assert!(w.contains("our own adapter is recommended"), "{w}");
+        assert!(w.contains("port it into chrome-use-sites"), "{w}");
+        // No declared access is treated as a write.
+        assert!(third_party_note("x/y", &Value::Null).contains("chrome-use-sites"));
+        assert!(!w.contains('\n'), "one line: {w}");
+    }
+
+    #[test]
+    fn json_data_marks_opencli_as_maintainer() {
+        let d = tagged_data("bilibili/feed", &entry(), json!([1]));
+        assert_eq!(d["result"], json!([1]));
+        assert_eq!(d["source"], "opencli");
+        assert_eq!(d["maintainedBy"], "opencli");
+        assert_eq!(d["readOnly"], true);
+        assert_eq!(d["notice"], third_party_note("bilibili/feed", &entry()));
+
+        let write = json!({"access": "write"});
+        let d = tagged_data("twitter/like", &write, Value::Null);
+        assert_eq!(d["readOnly"], false);
+        assert!(d["notice"].as_str().unwrap().contains("chrome-use-sites"));
     }
 }
