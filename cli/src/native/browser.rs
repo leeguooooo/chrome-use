@@ -2852,7 +2852,7 @@ fn relay_created_chrome_tabs(pages: &[PageInfo], created: &HashSet<String>) -> H
 /// source tab's group, while it reports the window's FRONT tab as
 /// `openerTabId`. A tab the user opens has no group and an opener that is not
 /// ours, so it is never picked either.
-fn relay_popup_candidate<'a>(
+pub(crate) fn relay_popup_candidate<'a>(
     tabs: &'a [Value],
     before: &HashSet<i64>,
     ours: &HashSet<i64>,
@@ -5082,7 +5082,20 @@ impl BrowserManager {
             )),
             Some(_) => None,
             None if self.on_relay() => {
-                relay_before.map(|b| (NewTabProbe::RelayTabs(b.tab_ids().clone()), None))
+                // The session's own tabs, plus the clicked tab even when it is
+                // a user tab taken with `tab adopt`: its pop-up still raises
+                // Chrome over the user's app.
+                let mut ours = self.relay_own_chrome_tabs();
+                ours.extend(self.active_session_id().ok().and_then(relay_chrome_tab_id));
+                relay_before.map(|b| {
+                    (
+                        NewTabProbe::RelayTabs {
+                            before: b.tab_ids().clone(),
+                            ours,
+                        },
+                        None,
+                    )
+                })
             }
             None => None,
         }

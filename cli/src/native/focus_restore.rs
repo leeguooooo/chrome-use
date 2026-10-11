@@ -9,9 +9,11 @@
 //! 1. Right before an agent click, read the frontmost app.
 //! 2. While the click's tab check runs (at most [`WINDOW`] after the click),
 //!    poll the frontmost app every [`POLL`]. When it becomes the browser and
-//!    the browser has a tab that did not exist before the click (the
-//!    `chrome.tabs` baseline over the relay, the target list for a browser
-//!    the daemon launched), re-activate the app that was in front before.
+//!    the browser has a tab that did not exist before the click (over the
+//!    relay: one the click's tab or a session tab opened, by group or
+//!    opener, as the click's tab check attributes pop-ups; for a browser the
+//!    daemon launched: a new page target), re-activate the app that was in
+//!    front before.
 //!
 //! It never acts when:
 //! - the browser was already in front before the click (the user is in
@@ -90,10 +92,13 @@ const BROWSER_BUNDLE_PREFIXES: &[&str] = &[
 ];
 
 /// Whether `app` is the browser chrome-use drives: the browser the daemon
-/// launched (`browser_pid`), or over the relay any Chromium-based browser.
+/// launched (`browser_pid`, matched by pid alone), or over the relay any
+/// Chromium-based browser.
 pub fn is_browser(app: &App, browser_pid: Option<i32>) -> bool {
-    if browser_pid == Some(app.pid) {
-        return true;
+    // A launched browser is that process only: the user's own Chrome beside
+    // it is another app.
+    if let Some(pid) = browser_pid {
+        return app.pid == pid;
     }
     let Some(id) = app.bundle_id.as_deref() else {
         return false;
@@ -207,8 +212,14 @@ pub fn raised_note(note: &str, status: Option<&Status>) -> String {
 
 /// How the watch tells that the browser has a tab the click opened.
 pub enum NewTabProbe {
-    /// Over the relay: Chrome tab ids (`chrome.tabs.query`) before the click.
-    RelayTabs(HashSet<i64>),
+    /// Over the relay: Chrome tab ids (`chrome.tabs.query`) before the click,
+    /// and the session's tabs a pop-up from the click can be attributed to
+    /// (its own tabs and the clicked one). A tab the user or another session
+    /// opened meanwhile does not count.
+    RelayTabs {
+        before: HashSet<i64>,
+        ours: HashSet<i64>,
+    },
     /// A browser the daemon launched: page target ids before the click.
     Targets(HashSet<String>),
 }
@@ -217,7 +228,7 @@ impl NewTabProbe {
     async fn new_tab_exists(&self, client: &CdpClient) -> bool {
         let fut = async {
             match self {
-                NewTabProbe::RelayTabs(before) => {
+                NewTabProbe::RelayTabs { before, ours } => {
                     let v = client
                         .send_command(
                             "ABExt.call",
@@ -226,8 +237,8 @@ impl NewTabProbe {
                         )
                         .await
                         .ok()?;
-                    let ids = relay_tab_ids(&v);
-                    Some(ids.iter().any(|id| !before.contains(id)))
+                    let tabs = v.get("result")?.as_array()?;
+                    Some(super::browser::relay_popup_candidate(tabs, before, ours).is_some())
                 }
                 NewTabProbe::Targets(before) => {
                     let v = client
@@ -244,19 +255,6 @@ impl NewTabProbe {
             .flatten()
             .unwrap_or(false)
     }
-}
-
-/// Tab ids in an `ABExt.call` `tabs.query` reply.
-fn relay_tab_ids(reply: &Value) -> Vec<i64> {
-    reply
-        .get("result")
-        .and_then(Value::as_array)
-        .map(|tabs| {
-            tabs.iter()
-                .filter_map(|t| t.get("id").and_then(Value::as_i64))
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// Whether a `Target.getTargets` reply has a page target not in `before`.
@@ -664,6 +662,8 @@ mod tests {
         // A launched browser is matched by pid, whatever its bundle.
         assert!(is_browser(&app(7, None), Some(7)));
         assert!(!is_browser(&app(8, None), Some(7)));
+        // ...and only by pid: the user's own Chrome next to it is not it.
+        assert!(!is_browser(&app(8, Some("com.google.Chrome")), Some(7)));
     }
 
     #[test]
@@ -678,11 +678,6 @@ mod tests {
         assert!(!new_page_target(&new_worker, &before));
         assert!(new_page_target(&new_page, &before));
         assert!(!new_page_target(&json!({}), &before));
-        assert_eq!(
-            relay_tab_ids(&json!({ "result": [{ "id": 3 }, { "id": 9 }, {}] })),
-            vec![3, 9]
-        );
-        assert!(relay_tab_ids(&json!({ "result": null })).is_empty());
     }
 
     #[test]
