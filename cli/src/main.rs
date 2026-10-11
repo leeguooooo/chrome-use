@@ -11,6 +11,7 @@ mod commands;
 mod connect;
 mod connection;
 mod cookie_export;
+mod diag;
 mod doctor;
 mod error_envelope;
 mod findurl;
@@ -1851,6 +1852,13 @@ fn main() {
             json: flags.json,
         };
         exit(doctor::run_doctor(opts));
+    }
+
+    // `diag pages` (#521): a read-only, versioned page report on its own
+    // diagnostic connection. It runs before any daemon or relay self-heal:
+    // it starts no daemon, opens no tab and restarts nothing.
+    if clean.first().map(|s| s.as_str()) == Some("diag") {
+        exit(diag::run(&clean[1..], &flags));
     }
 
     // Handle MCP stdio server mode. This must never share stdout with normal

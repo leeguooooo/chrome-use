@@ -5194,6 +5194,63 @@ Examples:
 "##
         }
 
+        // === Diag ===
+        "diag" => {
+            r##"
+chrome-use diag pages - Read-only page diagnostics for external tools (#521)
+
+Usage: chrome-use diag pages [--measure] [--watch <seconds>] [--force]
+                             [--limit <n>] [--json]
+
+Lists every real page of the connected Chrome profile (relay, or --cdp) on a
+diagnostic connection of its own: no daemon, no session tab, no relay
+self-heal. Per page: handle (relay chrome-tab:<id>, CDP targetId), targetId,
+url, title, windowId, tab index, active / visible / discarded where known,
+whether the extension holds it attached, and its owner: this session,
+session <name> (another chrome-use session, live or not) or the user. Also:
+the number of stale relay records, the extension version and whether it is
+behind the published one (with the update / reload hint doctor gives), the
+driving profile and the relay connection state.
+
+Without --measure nothing is attached, activated or read: the default never
+attaches to anything.
+
+  --measure          Per page: JSHeapUsedSize, JSHeapTotalSize, Nodes,
+                     JSEventListeners, Documents (Performance.getMetrics), and
+                     workers per site (Runtime.getHeapUsage). Measured as they
+                     are: this session's pages and pages chrome-use already
+                     holds attached that no other running session holds.
+                     Everything else is skipped and says why.
+  --force            With --measure / --watch: also measure the rest. A tab that
+                     is not attached is attached, measured and released at once
+                     (ab-connect 0.5.34+), never activated or focused; Chrome's
+                     debugging bar shows on it meanwhile. Workers' heaps need it
+                     too, except a measured CDP page's own dedicated workers.
+  --watch <seconds>  Two samples that far apart (implies --measure): per-page
+                     deltas and a leak class: listeners_growing_nodes_flat,
+                     heap_growing (>= 1.5 MiB/min), nodes_climbing, or none.
+  --limit <n>        Pages listed and measured (default 200, max 1000); titles
+                     are cut at 300 and urls at 2048 characters, and the reply
+                     says what it left out. rendererPid is always null.
+
+Exit codes:
+  0  Ok
+  1  Usage error, or an extension too old to list tabs (< 0.5.25)
+  2  The extension relay (or the --cdp endpoint) is not connected or does not
+     answer
+  3  --measure / --watch without --force, nothing was measured, and every page
+     of the profile is held by another running chrome-use session
+
+--json prints one object with "schema": 1; the shape is documented in the
+core skill's references/diag-pages.md (chrome-use skills get core --full).
+
+Examples:
+  chrome-use diag pages --json
+  chrome-use diag pages --measure --json
+  chrome-use diag pages --watch 60 --force --json
+"##
+        }
+
         // === Dashboard ===
         "dashboard" => {
             r##"
@@ -6316,6 +6373,10 @@ Setup:
                              idle timeout). Needs ab-connect 0.5.25+.
   upgrade [--check|--json]   Upgrade the CLI and installed skills
   doctor [--fix]             Diagnose install; auto-clean stale files
+  diag pages [--measure] [--watch <s>] [--force]
+                             Read-only page report for leak hunting (JSON schema 1):
+                             every page, owner, stale relay records, extension version;
+                             --measure adds heap/nodes/listeners, --watch leak classes
   dashboard start            Start the observability dashboard
   profiles                   List available Chrome profiles
 

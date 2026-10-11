@@ -56,6 +56,7 @@ const TOOL_UPLOAD: &str = "chrome_use_upload";
 const TOOL_DOWNLOAD: &str = "chrome_use_download";
 const TOOL_DOWNLOAD_URL: &str = "chrome_use_download_url";
 const TOOL_DOWNLOADS: &str = "chrome_use_downloads";
+const TOOL_DIAG_PAGES: &str = "chrome_use_diag_pages";
 
 /// Which set of `chrome_use_*` tools this server instance exposes, chosen at
 /// startup via `chrome-use mcp --tools <core|all>` (default `core`).
@@ -649,6 +650,16 @@ fn extended_tools() -> Vec<Value> {
                 ("clear", json!({ "type": "boolean", "description": "Erase Chrome download history instead of listing it." })),
             ]), &[]),
         }),
+        json!({
+            "name": TOOL_DIAG_PAGES,
+            "description": "Read-only page diagnostics (chrome-use diag pages, JSON schema 1): every real page of the connected Chrome profile with owner, window, active/visible/discarded, stale relay record count, extension version, profile and relay state. Without measure nothing is attached. measure adds JSHeapUsedSize, Nodes, JSEventListeners, Documents per page and worker heaps per site; watchSeconds takes two samples and classifies leaks (listeners_growing_nodes_flat, heap_growing, nodes_climbing, none). Exit code 2: relay not connected; 3: another running session holds every page.",
+            "inputSchema": build_schema(obj(&[
+                ("measure", json!({ "type": "boolean", "description": "Measure pages this session owns and pages already attached that no other running session holds (--measure)." })),
+                ("force", json!({ "type": "boolean", "description": "With measure or watchSeconds: also measure every other page, attaching it briefly and releasing it at once, never activating it; Chrome shows its debugging bar on it meanwhile. Only when the user asked for it (--force)." })),
+                ("watchSeconds", json!({ "type": "integer", "minimum": 1, "maximum": 3600, "description": "Two samples this many seconds apart, with per-page deltas and a leak class; implies measure (--watch)." })),
+                ("limit", json!({ "type": "integer", "minimum": 1, "maximum": 1000, "description": "Pages listed and measured (default 200) (--limit)." })),
+            ]), &[]),
+        }),
     ]
 }
 
@@ -697,6 +708,7 @@ fn is_known_tool(name: &str, profile: Profile) -> bool {
                 | TOOL_DOWNLOAD
                 | TOOL_DOWNLOAD_URL
                 | TOOL_DOWNLOADS
+                | TOOL_DIAG_PAGES
         )
 }
 
@@ -746,6 +758,7 @@ fn call_tool(params: Option<&Value>, profile: Profile) -> Result<Value, Protocol
         TOOL_DOWNLOAD => call_download(arguments),
         TOOL_DOWNLOAD_URL => call_download_url(arguments),
         TOOL_DOWNLOADS => call_downloads(arguments),
+        TOOL_DIAG_PAGES => call_diag_pages(arguments),
         _ => unreachable!("known MCP tool missing call handler: {}", name),
     }
 }
@@ -1701,6 +1714,42 @@ fn call_downloads(arguments: &Value) -> Result<Value, ProtocolError> {
     run_tool(arguments, args)
 }
 
+fn diag_pages_args(arguments: &Value) -> Result<Vec<String>, ProtocolError> {
+    let mut args = vec!["diag".to_string(), "pages".to_string()];
+    let watch = optional_u64(arguments, "watchSeconds")?;
+    if optional_bool(arguments, "measure")?.unwrap_or(false) && watch.is_none() {
+        args.push("--measure".to_string());
+    }
+    if let Some(secs) = watch {
+        args.push("--watch".to_string());
+        args.push(secs.to_string());
+    }
+    if optional_bool(arguments, "force")?.unwrap_or(false) {
+        args.push("--force".to_string());
+    }
+    if let Some(limit) = optional_u64(arguments, "limit")? {
+        args.push("--limit".to_string());
+        args.push(limit.to_string());
+    }
+    Ok(args)
+}
+
+/// `diag pages`: a watch runs for its interval, so the child gets that plus
+/// the usual budget unless the caller set one.
+fn call_diag_pages(arguments: &Value) -> Result<Value, ProtocolError> {
+    let args = diag_pages_args(arguments)?;
+    let mut arguments = arguments.clone();
+    if let Some(secs) = optional_u64(&arguments, "watchSeconds")? {
+        if arguments.get("timeoutMs").is_none_or(Value::is_null) {
+            if !arguments.is_object() {
+                arguments = json!({});
+            }
+            arguments["timeoutMs"] = json!(secs * 1000 + DEFAULT_TIMEOUT_MS);
+        }
+    }
+    run_tool(&arguments, args)
+}
+
 /// Build the final argv (command args + `--session`/global flags + `--json`)
 /// and run it as a child `chrome-use` process.
 fn run_tool(arguments: &Value, mut args: Vec<String>) -> Result<Value, ProtocolError> {
@@ -2080,6 +2129,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn diag_pages_maps_to_the_cli() {
+        assert_eq!(
+            diag_pages_args(&json!({})).ok().unwrap(),
+            vec!["diag", "pages"]
+        );
+        assert_eq!(
+            diag_pages_args(&json!({ "measure": true, "force": true, "limit": 20 }))
+                .ok()
+                .unwrap(),
+            vec!["diag", "pages", "--measure", "--force", "--limit", "20"]
+        );
+        assert_eq!(
+            diag_pages_args(&json!({ "measure": true, "watchSeconds": 30 }))
+                .ok()
+                .unwrap(),
+            vec!["diag", "pages", "--watch", "30"]
+        );
+    }
+
+    #[test]
     fn tabs_list_all_and_forced_close_map_to_the_cli() {
         assert_eq!(
             tabs_args(&json!({ "action": "list", "all": true, "limit": 30 }))
@@ -2185,6 +2254,7 @@ mod tests {
         TOOL_DOWNLOAD,
         TOOL_DOWNLOAD_URL,
         TOOL_DOWNLOADS,
+        TOOL_DIAG_PAGES,
     ];
 
     fn tool_names(tools: &[Value]) -> Vec<&str> {

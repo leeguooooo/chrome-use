@@ -188,6 +188,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "status",
     "daemon",
     "doctor",
+    "diag",
     "upgrade",
     "connect",
     "cookies",

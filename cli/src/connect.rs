@@ -2768,7 +2768,7 @@ pub struct UpdateNotice {
 /// The compact update facts from an `ABExt.state` reply: ab-connect 0.5.35+
 /// sends `update` (it applies once the relay is quiet), 0.5.34 only
 /// `updatePending` / `updateBlockedBy` (it applies only with no tab attached).
-fn extension_update_from_state(state: &serde_json::Value) -> Option<serde_json::Value> {
+pub(crate) fn extension_update_from_state(state: &serde_json::Value) -> Option<serde_json::Value> {
     use serde_json::json;
     if let Some(update) = state.get("update").filter(|v| v.is_object()) {
         let pick = |key: &str| update.get(key).cloned().unwrap_or(serde_json::Value::Null);
