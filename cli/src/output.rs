@@ -503,10 +503,9 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                     ));
                 }
                 eprintln!("   {}", color::dim(&line));
-                eprintln!(
-                    "   {}",
-                    color::dim(&format!("e.g. chrome-use site {} --json", cmds[0]))
-                );
+                if let Some(example) = crate::site::hint_example(&cmds) {
+                    eprintln!("   {}", color::dim(&format!("e.g. {example}")));
+                }
                 if let Some(pack) = cmds[0].split('/').next() {
                     eprintln!(
                         "   {}",
@@ -5871,7 +5870,8 @@ Usage:
                                        [--until-done] [--timeout <secs|Ns|Nm>]
   chrome-use site list                 List installed adapters (name/command)
   chrome-use site update               Fetch/refresh the adapter packs
-  chrome-use site info <name>          Show one pack's adapters and their args
+  chrome-use site info <name>/<command> Show one adapter's args and domain
+  chrome-use site info <name>          Show one pack's adapters, their args and usage
   chrome-use site analyze [url]        Find a page's API calls, embedded state and
                                        anti-bot vendors; recommend a data source
   chrome-use site verify <name>/<command> [args] [--write-fixture]
@@ -6287,6 +6287,7 @@ Site adapters:  turn a website into a structured-data CLI (runs as you, in your 
   site update                Fetch the community + official packs and configured extras
   site list                  List installed adapters (name/cmd)
   site info <name>/<cmd>     Show an adapter's @meta (args, domain, capabilities)
+  site info <name>           Show every adapter in one pack with its args and usage
   site <name>/<cmd> [args]   Run an adapter: navigate to its site + return JSON
                              e.g. site github/issues epiral/repo, site reddit/search rust
                              Positional args fill declared args in order; --key value overrides

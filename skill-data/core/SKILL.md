@@ -24,7 +24,7 @@ at the end only when the task or a symptom needs it.
 | Image, visual or canvas state | `screenshot` or `canvas capture` |
 
 When `siteAdapters` appears in JSON or on stderr, check the arguments with
-`site info <name>/<cmd>` and prefer the adapter for matching reads. When a
+`site info <name>/<cmd>` (or `site info <name>` for the whole pack) and prefer the adapter for matching reads. When a
 response carries `siteAdapterSuggestion`, ask the user before saving the steps
 you keep repeating on that site as an adapter (`core/site-adapters`). Adapters
 run as the logged-in user; call only operations within the task.

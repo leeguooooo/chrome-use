@@ -10,6 +10,7 @@ clean structured data — no clicking, no scraping, no screenshots. It's the sam
 chrome-use site update                       # one-time: fetch community + official packs
 chrome-use site list                         # what's installed (github/issues, reddit/search, …)
 chrome-use site info github/issues           # an adapter's args + which domain it runs on
+chrome-use site info github                  # every adapter in the pack, with args and a usage line
 chrome-use site github/issues owner/repo --json   # run it → JSON (navigates there for you)
 ```
 
@@ -52,7 +53,9 @@ chrome-use site github/issues owner/repo --json   # run it → JSON (navigates t
 > `open`/`navigate`/`snapshot`, and on any other command that lands you on a different site
 > (`tab new`/`tab <id>`, `back`/`forward`, a click that navigates, the first command on a tab you
 > didn't open). It prints a `site adapters for <domain>` line on stderr and adds a
-> `siteAdapters: {domain, commands}` field in `--json`. A session that stays on one site hears
+> `siteAdapters: {domain, commands}` field in `--json`. The stderr hint also prints an
+> `e.g.` call that runs as printed (an adapter with no required args, else `<arg>` placeholders) and
+> `args: chrome-use site info <pack>`, which lists every adapter in that pack with its args. A session that stays on one site hears
 > about it once, not on every command. **When you see that, prefer the listed `site <name>/<cmd>` over snapshot+click
 > for reading data** — it's the cheaper, more reliable path and it's already installed. You don't
 > need to run `site update` yourself; just use the command it names. (Only on a brand-new setup

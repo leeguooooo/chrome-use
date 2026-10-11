@@ -994,11 +994,10 @@ fn regex_escape(s: &str) -> String {
     out
 }
 
-/// How to call the adapter, attached to a `Missing argument` error: required
-/// args as positionals in declaration order, and where the full list lives.
-pub fn missing_arg_hint(adapter: &Adapter) -> String {
+/// The adapter's required args, in declaration order.
+pub fn required_args(adapter: &Adapter) -> Vec<String> {
     let decl = adapter.meta.get("args").and_then(|v| v.as_object());
-    let required: Vec<&str> = adapter
+    adapter
         .arg_order
         .iter()
         .filter(|k| {
@@ -1007,18 +1006,96 @@ pub fn missing_arg_hint(adapter: &Adapter) -> String {
                 .and_then(|v| v.as_bool())
                 == Some(true)
         })
-        .map(|k| k.as_str())
-        .collect();
-    let spec = &adapter.spec;
-    let mut usage = format!("chrome-use site {spec}");
-    for k in &required {
+        .cloned()
+        .collect()
+}
+
+/// `chrome-use site <spec> <req1> <req2>`: the shortest call that runs, with
+/// each required arg as a positional placeholder.
+pub fn usage_line(adapter: &Adapter) -> String {
+    let mut usage = format!("chrome-use site {}", adapter.spec);
+    for k in required_args(adapter) {
         usage.push_str(&format!(" <{k}>"));
     }
-    let named = required
+    usage
+}
+
+/// How to call the adapter, attached to a `Missing argument` error: required
+/// args as positionals in declaration order, and where the full list lives.
+pub fn missing_arg_hint(adapter: &Adapter) -> String {
+    let named = required_args(adapter)
         .first()
         .map(|k| format!(" (or --{k} <value>)"))
         .unwrap_or_default();
-    format!("Usage: {usage}{named}. All args: chrome-use site info {spec}")
+    format!(
+        "Usage: {}{named}. All args: chrome-use site info {}",
+        usage_line(adapter),
+        adapter.spec
+    )
+}
+
+/// The example call printed under the "site adapters for <domain>" hint. It
+/// prefers an adapter that needs no args, so the line runs as printed, and
+/// otherwise shows the first one's required args as `<placeholders>`; printing
+/// a bare `site hackernews/thread` sent agents straight into "Missing
+/// argument: id". OpenCLI-only commands (no local file) fall back to the name.
+pub fn hint_example(cmds: &[&str]) -> Option<String> {
+    let loaded: Vec<Option<Adapter>> = cmds.iter().map(|c| load_adapter(c).ok()).collect();
+    let call = loaded
+        .iter()
+        .flatten()
+        .find(|a| required_args(a).is_empty())
+        .or_else(|| loaded.first().and_then(|a| a.as_ref()))
+        .map(usage_line)
+        .or_else(|| cmds.first().map(|c| format!("chrome-use site {c}")))?;
+    Some(format!("{call} --json"))
+}
+
+/// `site info <pack>`: every adapter in one pack (ours from `~/.chrome-use/sites/<pack>/`,
+/// then OpenCLI commands of that site we don't have), each as its @meta plus a
+/// `usage` line. The site hint prints `site info <pack>`, so this has to work
+/// with a bare pack name, not only `<name>/<cmd>`.
+pub fn pack_info(pack: &str) -> Result<Value, String> {
+    if pack.is_empty() || pack.contains("..") || pack.contains('/') || pack.contains('\\') {
+        return Err(format!(
+            "site: expected <name> or <name>/<command>, got `{pack}`. Run `chrome-use site list` to see what's installed."
+        ));
+    }
+    let prefix = format!("{pack}/");
+    let ours: Vec<String> = list_adapters()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| s.starts_with(&prefix))
+        .collect();
+    let mut adapters: Vec<Value> = Vec::new();
+    for spec in &ours {
+        let Ok(a) = load_adapter(spec) else { continue };
+        let mut meta = a.meta.clone();
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert("name".to_string(), json!(spec));
+            obj.insert("usage".to_string(), json!(usage_line(&a)));
+        }
+        adapters.push(meta);
+    }
+    let mut theirs: Vec<Value> = crate::opencli::manifest()
+        .iter()
+        .filter(|e| {
+            crate::opencli::spec_of(e)
+                .map(|s| s.starts_with(&prefix) && !ours.contains(&s))
+                .unwrap_or(false)
+        })
+        .map(crate::opencli::info)
+        .collect();
+    theirs.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    theirs.dedup_by(|a, b| a["name"] == b["name"]);
+    adapters.extend(theirs);
+    if adapters.is_empty() {
+        return Err(format!(
+            "site: no adapters in pack `{pack}`. Run `chrome-use site update` to sync adapters, \
+             or `chrome-use site list` to see what's installed."
+        ));
+    }
+    Ok(json!({ "pack": pack, "count": adapters.len(), "adapters": adapters }))
 }
 
 /// List installed adapters as `name/cmd` strings (sorted).
@@ -2194,6 +2271,106 @@ pub fn map_args(adapter: &Adapter, positional: &[String], named: &[(String, Stri
 
 #[cfg(test)]
 mod tests {
+    /// A HOME holding `~/.chrome-use/sites/<pack>/<cmd>.js` adapters, each with
+    /// the given required args.
+    fn home_with_adapters(adapters: &[(&str, &[&str])]) -> std::path::PathBuf {
+        let home =
+            std::env::temp_dir().join(format!("cu-site-info-{}", uuid::Uuid::new_v4().simple()));
+        for (spec, required) in adapters {
+            let (name, cmd) = spec.split_once('/').unwrap();
+            let dir = home.join(".chrome-use").join("sites").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            // Written by hand: a serde_json map would sort the arg keys, and
+            // declaration order is what positional args follow.
+            let mut args: Vec<String> = required
+                .iter()
+                .map(|r| format!("\"{r}\": {{\"required\": true}}"))
+                .collect();
+            args.push("\"count\": {\"required\": false}".to_string());
+            let meta = format!(
+                "{{\"name\": \"{spec}\", \"domain\": \"news.ycombinator.com\", \"args\": {{{}}}}}",
+                args.join(", ")
+            );
+            std::fs::write(
+                dir.join(format!("{cmd}.js")),
+                format!("/* @meta\n{meta}\n*/\nasync function(args) {{ return {{}} }}\n"),
+            )
+            .unwrap();
+        }
+        home
+    }
+
+    #[test]
+    fn site_info_takes_a_bare_pack_name_as_the_site_hint_prints() {
+        let guard = crate::test_utils::EnvGuard::new(&["HOME", "AGENT_BROWSER_SITES_NO_OPENCLI"]);
+        guard.set("AGENT_BROWSER_SITES_NO_OPENCLI", "1");
+        let home = home_with_adapters(&[
+            ("hackernews/thread", &["id"]),
+            ("hackernews/top", &[]),
+            ("other/x", &[]),
+        ]);
+        guard.set("HOME", home.to_str().unwrap());
+
+        // `chrome-use site info hackernews` used to fail with
+        // "expected <name>/<command>, got `hackernews`".
+        let info = pack_info("hackernews").unwrap();
+        assert_eq!(info["pack"], "hackernews");
+        assert_eq!(info["count"], 2);
+        let names: Vec<&str> = info["adapters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["hackernews/thread", "hackernews/top"]);
+        assert_eq!(
+            info["adapters"][0]["usage"],
+            "chrome-use site hackernews/thread <id>"
+        );
+        assert_eq!(info["adapters"][0]["args"]["id"]["required"], true);
+        assert_eq!(
+            info["adapters"][1]["usage"],
+            "chrome-use site hackernews/top"
+        );
+
+        assert!(pack_info("nope")
+            .unwrap_err()
+            .contains("no adapters in pack `nope`"));
+        assert!(pack_info("../x").is_err());
+        assert!(pack_info("").is_err());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn site_hint_example_runs_as_printed() {
+        let guard = crate::test_utils::EnvGuard::new(&["HOME", "AGENT_BROWSER_SITES_NO_OPENCLI"]);
+        guard.set("AGENT_BROWSER_SITES_NO_OPENCLI", "1");
+        let home = home_with_adapters(&[
+            ("hackernews/thread", &["id"]),
+            ("hackernews/top", &[]),
+            ("github/issue", &["repo", "number"]),
+        ]);
+        guard.set("HOME", home.to_str().unwrap());
+
+        // An adapter that needs no args is preferred, even when listed second.
+        assert_eq!(
+            hint_example(&["hackernews/thread", "hackernews/top"]).as_deref(),
+            Some("chrome-use site hackernews/top --json")
+        );
+        // Otherwise the required args are shown, in declaration order.
+        assert_eq!(
+            hint_example(&["github/issue"]).as_deref(),
+            Some("chrome-use site github/issue <repo> <number> --json")
+        );
+        // A command with no local file (OpenCLI) falls back to its name.
+        assert_eq!(
+            hint_example(&["hackernews/best"]).as_deref(),
+            Some("chrome-use site hackernews/best --json")
+        );
+        assert_eq!(hint_example(&[]), None);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
     #[test]
     fn spec_of_keeps_runnable_adapters_only() {
         use std::path::Path;

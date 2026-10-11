@@ -2140,6 +2140,20 @@ fn main() {
             }
             Some("info") => {
                 let spec = clean.get(2).cloned().unwrap_or_default();
+                // `site info <pack>`: every adapter in the pack with its args (the
+                // site hint on navigation prints this form).
+                if !spec.is_empty() && !spec.contains('/') {
+                    match site::pack_info(&spec) {
+                        Ok(v) => {
+                            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default())
+                        }
+                        Err(e) => {
+                            eprintln!("{} {}", color::error_indicator(), e);
+                            exit(1);
+                        }
+                    }
+                    return;
+                }
                 if opencli::handles(&spec) {
                     if let Some(entry) = opencli::lookup(&spec) {
                         println!(
@@ -2310,7 +2324,7 @@ fn main() {
             _ => {
                 eprintln!(
                     "{} usage: chrome-use site <name>/<cmd> [args] | site analyze [url] | site verify <name>/<cmd> [args] [--write-fixture] | site update | site list | \
-                     site info <name>/<cmd> | site sources | site add|remove <source>",
+                     site info <name>[/<cmd>] | site sources | site add|remove <source>",
                     color::error_indicator()
                 );
                 exit(2);

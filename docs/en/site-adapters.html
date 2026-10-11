@@ -98,6 +98,7 @@
 <pre><code><span class="du-prompt">$</span> chrome-use site update                            <span class="du-cmt"># one-time: pull community, official, and extra sources</span>
 <span class="du-prompt">$</span> chrome-use site list                              <span class="du-cmt"># what's installed (github/issues, reddit/search…)</span>
 <span class="du-prompt">$</span> chrome-use site info github/issues                <span class="du-cmt"># an adapter's params + which domain it runs on</span>
+<span class="du-prompt">$</span> chrome-use site info github                       <span class="du-cmt"># every adapter in the pack, with params + usage</span>
 <span class="du-prompt">$</span> chrome-use site github/issues owner/repo <span class="du-flag">--json</span>   <span class="du-cmt"># run → JSON (navigates there for you)</span></code></pre>
       </div>
 
@@ -105,6 +106,7 @@
         <li><code>site update</code>: pulls adapters from the bb-sites community source, the chrome-use-sites official source, and any configured extras. Only needed once; after that chrome-use keeps them in sync automatically (see "Auto-triggering" below).</li>
         <li><code>site list</code>: lists every <code>&lt;name&gt;/&lt;cmd&gt;</code> installed locally, e.g. <code>github/issues</code>, <code>reddit/search</code>.</li>
         <li><code>site info &lt;name&gt;/&lt;cmd&gt;</code>: shows which params an adapter declares and which domain it runs on — check this before calling, and you'll know what to pass.</li>
+        <li><code>site info &lt;name&gt;</code>: the same for every adapter in one pack, each with a <code>usage</code> line showing its required args.</li>
         <li><code>site &lt;name&gt;/&lt;cmd&gt; [args] --json</code>: actually runs it. Add <code>--json</code> for one line of parseable structured output.</li>
       </ul>
 
@@ -250,7 +252,10 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use open https://github.com/epiral/bb-sites
 <span class="du-cmt"># … as the page opens, a line pops up on stderr:</span>
-site adapters for github.com: github/issues, github/pulls, github/repo …</code></pre>
+site adapters for github.com — prefer these for structured data:
+   github/issues, github/pulls, github/repo …
+   e.g. chrome-use site github/issues &lt;repo&gt; --json
+   args: chrome-use site info github</code></pre>
       </div>
 
       <div class="du-callout tip">

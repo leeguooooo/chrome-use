@@ -96,6 +96,7 @@
 <pre><code><span class="du-prompt">$</span> chrome-use site update                            <span class="du-cmt"># 一次性：拉取社区源、官方源及额外源</span>
 <span class="du-prompt">$</span> chrome-use site list                              <span class="du-cmt"># 已装了哪些（github/issues、reddit/search…）</span>
 <span class="du-prompt">$</span> chrome-use site info github/issues                <span class="du-cmt"># 某适配器的参数 + 在哪个域名上跑</span>
+<span class="du-prompt">$</span> chrome-use site info github                       <span class="du-cmt"># 整个 pack 的适配器，带参数和用法</span>
 <span class="du-prompt">$</span> chrome-use site github/issues owner/repo <span class="du-flag">--json</span>   <span class="du-cmt"># 运行 → JSON（自动帮你导航过去）</span></code></pre>
       </div>
 
@@ -103,6 +104,7 @@
         <li><code>site update</code>：默认从 bb-sites 社区源和 chrome-use-sites 官方源拉取适配器，并同步用户配置的额外源。只需一次；之后 chrome-use 会自动保持同步（见下方「自动触发」）。</li>
         <li><code>site list</code>：列出本地已安装的所有 <code>&lt;name&gt;/&lt;cmd&gt;</code>，例如 <code>github/issues</code>、<code>reddit/search</code>。</li>
         <li><code>site info &lt;name&gt;/&lt;cmd&gt;</code>：查一个适配器声明了哪些参数、以及它会在哪个域名上运行——调之前先看这个，就知道该传什么。</li>
+        <li><code>site info &lt;name&gt;</code>：同上，但列出一个 pack 里的全部适配器，每个都带一行 <code>usage</code>，写明必填参数。</li>
         <li><code>site &lt;name&gt;/&lt;cmd&gt; [args] --json</code>：真正运行。加 <code>--json</code> 拿一行可解析的结构化输出。</li>
       </ul>
 
@@ -243,7 +245,10 @@
         </div>
 <pre><code><span class="du-prompt">$</span> chrome-use open https://github.com/epiral/bb-sites
 <span class="du-cmt"># … 页面打开的同时，stderr 冒出一行：</span>
-site adapters for github.com: github/issues, github/pulls, github/repo …</code></pre>
+site adapters for github.com — prefer these for structured data:
+   github/issues, github/pulls, github/repo …
+   e.g. chrome-use site github/issues &lt;repo&gt; --json
+   args: chrome-use site info github</code></pre>
       </div>
 
       <div class="du-callout tip">
