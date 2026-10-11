@@ -482,6 +482,45 @@ which tab you touched. `chrome-tab:<id>` handles need ab-connect 0.5.30+.
 `--force` takes exact handles only (a `chrome-tab:<id>`, a targetId or a
 `t<N>`), never a URL fragment, so it cannot land on the wrong tab.
 
+### Page diagnostics for tools (`diag pages`)
+
+```bash
+chrome-use diag pages --json                     # every page, owner, stale relay records, extension version (attaches nothing)
+chrome-use diag pages --measure --json           # + heap / nodes / listeners of pages already attached
+chrome-use diag pages --watch 60 --force --json  # two samples 60 s apart, every page, leak class per page
+```
+
+`diag pages` is the stable, read-only report for programs that look for leaky
+pages (it replaces driving the relay with raw CDP). It runs on its own
+diagnostic connection: no daemon, no session tab, no relay restart. Per page:
+`handle`, `targetId`, url, title, `windowId`, `active` / `visible` /
+`discarded` (relay), `attached` and `owner` (`self`, `session`, `user`). On
+top: the count of stale relay records, the extension version and whether it is
+behind the published one (with the update / reload hint `doctor` gives), the
+profile and the relay connection state.
+
+- Without `--measure` it never attaches anything.
+- `--measure` adds `JSHeapUsedSize`, `JSHeapTotalSize`, `Nodes`,
+  `JSEventListeners`, `Documents` (`Performance.getMetrics`) for this
+  session's pages and pages chrome-use already holds attached that no other
+  running session holds; workers per site via `Runtime.getHeapUsage`.
+  Every other page is skipped with a reason.
+- `--force` (with `--measure` / `--watch`) measures the rest: a tab that is
+  not attached is attached, measured and released at once (ab-connect 0.5.34+),
+  never activated or focused. Chrome shows its debugging bar on it meanwhile,
+  so use it only when the user asked.
+- `--watch <s>` takes two samples `s` seconds apart and adds per-page deltas
+  and a leak class: `listeners_growing_nodes_flat`, `heap_growing`
+  (>= 1.5 MiB/min), `nodes_climbing` or `none`.
+- Bounded: `--limit` pages (default 200, max 1000), titles cut at 300 and urls
+  at 2048 characters; `omitted` says what was left out. `rendererPid` is null.
+- Exit codes: 0 ok, 1 usage, 2 the extension relay (or `--cdp` endpoint) is
+  not connected, 3 `--measure` without `--force` when every page is held by
+  another running chrome-use session.
+
+The JSON shape (`"schema": 1`) is written down in
+[diag-pages.md](diag-pages.md); readers can depend on it.
+
 `tab close` of one of several tabs reports `verifiedAbsent: true`; a tab still
 open or unconfirmed fails, stays in `tab list` and keeps its close right.
 `tab close` with no tab closes the active tab only when it resolves: if the

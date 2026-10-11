@@ -494,6 +494,37 @@
         needs ab-connect 0.5.34, an older extension keeps it attached until it restarts). <code>chrome-tab:</code>
         handles need ab-connect 0.5.30+.
       </p>
+      <h3 id="diag-pages">Page diagnostics: <code>diag pages</code></h3>
+      <div class="du-code">
+        <pre><code><span class="du-prompt">$</span> chrome-use diag pages <span class="du-flag">--json</span>                       <span class="du-cmt"># every page, owner, stale relay records, extension version (attaches nothing)</span>
+<span class="du-prompt">$</span> chrome-use diag pages <span class="du-flag">--measure</span> <span class="du-flag">--json</span>             <span class="du-cmt"># + heap / nodes / listeners of pages already attached</span>
+<span class="du-prompt">$</span> chrome-use diag pages <span class="du-flag">--watch</span> 60 <span class="du-flag">--force</span> <span class="du-flag">--json</span>    <span class="du-cmt"># two samples 60 s apart, a leak class per page</span></code></pre>
+      </div>
+      <p>
+        <code>diag pages</code> is the stable, read-only, versioned report (JSON <code>"schema": 1</code>) for tools that
+        look for leaky pages, such as Thermo, instead of driving the relay with raw CDP. It runs on its own diagnostic
+        connection: no daemon, no session tab, no relay restart. Per page: <code>handle</code>, <code>targetId</code>,
+        url, title, <code>windowId</code>, <code>active</code> / <code>visible</code> / <code>discarded</code> (relay),
+        <code>attached</code> and the owner (<code>self</code> / <code>session</code> / <code>user</code>). On top: the
+        count of stale relay records, the extension version and whether it is behind the published one (with the
+        update / reload hint <code>doctor</code> gives), the profile and the relay connection state.
+      </p>
+      <p>
+        Without <code>--measure</code> it never attaches anything. <code>--measure</code> adds <code>JSHeapUsedSize</code>,
+        <code>Nodes</code>, <code>JSEventListeners</code> and <code>Documents</code> (<code>Performance.getMetrics</code>) for
+        this session's pages and pages chrome-use already holds attached that no other running session holds, and
+        workers per site (<code>Runtime.getHeapUsage</code>); every other page is skipped with a reason.
+        <code>--force</code> (with <code>--measure</code> / <code>--watch</code>) measures the rest: a tab that is not
+        attached is attached, measured and released at once (ab-connect 0.5.34+), never activated or focused. Chrome
+        shows its debugging bar on it meanwhile, so use it only when the user asked. <code>--watch &lt;s&gt;</code> takes
+        two samples <code>s</code> seconds apart and adds per-page deltas and a leak class:
+        <code>listeners_growing_nodes_flat</code>, <code>heap_growing</code> (&ge; 1.5 MiB/min), <code>nodes_climbing</code> or
+        <code>none</code>. Output is bounded (<code>--limit</code> pages, default 200, max 1000; titles cut at 300 and urls at
+        2048 characters) and says what it left out. Exit codes: 0 ok, 1 usage, 2 the extension relay (or the
+        <code>--cdp</code> endpoint) is not connected, 3 <code>--measure</code> without <code>--force</code> when every page is
+        held by another running chrome-use session. The JSON shape is documented in the core skill's
+        <code>references/diag-pages.md</code>.
+      </p>
       <p>
         <code>tab close</code> on the session's only tab, when the session created it, ends the session the way
         <code>close</code> does (<code>sessionClosed: true</code>), so no separate <code>close</code> is needed. A tab
