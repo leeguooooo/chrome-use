@@ -216,7 +216,7 @@ impl Metrics {
         })
     }
 
-    pub fn to_json(&self) -> Value {
+    pub fn to_json(self) -> Value {
         json!({
             "JSHeapUsedSize": int(self.js_heap_used),
             "JSHeapTotalSize": int(self.js_heap_total),
