@@ -88,6 +88,8 @@
         and gives stable, usable <code>@ref</code> values — the proper entry point for driving clicks and typing.
       </div>
 
+      <p>Interactive snapshots add <code>context</code> only to repeated controls with the same role and name when named parent lines do not already distinguish them. Context omits the control’s own name and punctuation, stays within about 100 characters (60 for unnamed controls), and must differ between controls. Unique controls have no context; use a scoped or full snapshot for missing details such as a unique product’s price.</p>
+
       <h3>Keep input focused</h3>
       <p>Use <code>snapshot -i -c</code> when empty structural nodes add no context, and scope reads to the panel you need. Use a full tree when compact output omits necessary context. Re-read with <code>--diff</code> only when the previous observation leaves a question. Byte counts are not token counts; measure each separately.</p>
       <p>Text and refs are the default. For a visual question, add <code>--with-screenshot &lt;path&gt;</code> to a snapshot or observed action to capture pixels alongside the read. Do not capture images on every step when labels and values answer the question. See <a href="/en/waiting.html">settling and observation limits</a>.</p>

@@ -2135,6 +2135,7 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
 /// The result must actually separate them. If a sibling duplicate would get
 /// the same words, the context has told the reader nothing and is dropped:
 /// a second identical line is worse than a short one.
+#[cfg(test)]
 fn disambiguating_context(nodes: &[TreeNode], idx: usize) -> Option<String> {
     let me = &nodes[idx];
     if !context_candidate(me) {

@@ -3924,7 +3924,9 @@ references (like @e1, @e2) that can be used in subsequent commands.
 Designed for AI agents to understand page structure.
 
 Options:
-  -i, --interactive    Controls, local context, and status receipts
+  -i, --interactive    Controls, context for repeated names, and status receipts
+                       Context is omitted when named parents distinguish controls;
+                       use a scoped/full tree for other local text.
   -u, --urls           Include each link's absolute URL (url=...) for the first
                        400 links; a note says how many more were left without
                        one (scope with -s). For a flat list: `read --links`
