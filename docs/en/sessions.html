@@ -50,12 +50,8 @@
         </button>
       </div>
 
-      <p class="du-lede">
-        Log in once and <span class="mark">every later run starts logged in</span>; give each agent its own
-        isolated browser so they <span class="mark">never fight over tabs</span>. This page covers three things:
-        persisting session state to reuse it across runs, running multiple browsers in parallel with
-        <code>--session</code>, and cleanly resetting the session daemon when it gets stuck.
-      </p>
+      <p class="du-lede">On the Chrome extension relay, all AI sessions share one background window, with a separate tab group per session; the user keeps their own window. Login state belongs to the shared profile. Only browsers started separately with <code>--launch</code> have isolated cookies and storage.</p>
+      <p>Existing windows containing only verified agent tabs are reused, including fullscreen windows. Lost records recover an existing agent window before creating another. User tabs are never moved or deleted to reclaim a window. Mixed user/agent windows refuse new tabs until the user tabs are moved out; no second agent window is created. Failed placeholder cleanup retains its identity and reports failure. Even the first <code>tab list --all</code> call starts no daemon and creates no window, tab or page attachment.</p>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Know which path you're on</div>

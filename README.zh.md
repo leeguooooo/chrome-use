@@ -39,7 +39,7 @@
 
 **不用开新 Chrome。不用重新登录。不用跟"你是不是机器人"较劲。**
 
-chrome-use 让**任意** agent（Claude Code、Cursor、Codex、你自己的脚本）直接操作你**已经登录了所有网站**的那个 Chrome。它在**你的窗口里**点击，你看着它干活，撞到 2FA / 验证码的瞬间你接管一下，它接着跑。因为它**就是你的真实浏览器**（一键装的扩展、原生消息、无调试端口），在公开 CreepJS 测试中：**[CreepJS 实测 0% 机器人](#反检测)。**
+chrome-use 让**任意** agent（Claude Code、Cursor、Codex、你自己的脚本）直接操作你**已经登录了所有网站**的那个 Chrome。它在**AI 共用的后台窗口里**点击，你看着它干活，撞到 2FA / 验证码的瞬间你接管一下，它接着跑。因为它**就是你的真实浏览器**（一键装的扩展、原生消息、无调试端口），在公开 CreepJS 测试中：**[CreepJS 实测 0% 机器人](#反检测)。**
 
 **新建浏览器上下文**没有现有登录态。Playwright / Puppeteer 也支持持久化配置或已有浏览器连接，需要比较实际配置。**chrome-use** 连接你**现有**的 Chrome：cookies、会话、浏览器指纹全是真的，因为它**就是**你的真实浏览器。Chrome 136 限制默认配置文件的远程调试；授权要求随 Chrome 版本和连接方式而变。我们的扩展改用原生消息：**装一次，之后零确认。**
 
@@ -173,7 +173,9 @@ chrome-use status                 # 中继、profile、扩展与会话健康总�
 
 `extension install` 是一次性的安装步骤。`chrome-use extension connect`（别名 `chrome-use reconnect`）在扩展已装好的前提下重新连上它的中继，不重装任何东西。被 attach 的 agent 标签页上 Chrome 仍会显示「chrome-use started debugging this browser」提示条；`chrome-use extension connect --silent` 会带 `--silent-debugger-extension-api` 把 Chrome 重启一次来去掉它（标签和登录自动恢复；同时开着多个 Chrome 实例时不会重启）。`--keep-banner` 完全不碰浏览器；两个 flag 都不带时，交互终端里会先问一句。详见[静音提示条](https://chrome-use.leeguoo.com/debugger-banner-silence.html)。
 
-你的 Chrome profile 里必须开着一个窗口。chrome-use 从不自己开窗口：没有窗口时它会停下并报 `profile not open`（错误码 `profile_not_open`），先在那个 profile 里打开一个窗口再重跑。如果它判断不了有没有窗口，会报 `profile window unavailable`（错误码 `profile_window_unavailable`），判断不了就什么都不创建。第一个标签页清理相关的错误码见[故障排查](https://chrome-use.leeguoo.com/troubleshooting.html)。
+同一 Chrome profile 的所有 AI 会话共用一个后台专用窗口，每个会话有独立标签组；人使用自己的窗口。已有窗口只要标签归属都能确认是 AI，就会复用，全屏也不另开窗口。归属不明或空白占位页清理失败时会报错，避免继续增加窗口。不会为回收窗口而搬走或删除用户页。AI 窗口混入用户页且仍有 AI 标签时，会拒绝继续开页，提示把用户页移回自己的窗口，不另开第二个 AI 窗口。
+
+自动化开始前，你的 Chrome profile 里必须已经开着一个窗口：没有窗口时它会停下并报 `profile not open`（错误码 `profile_not_open`），先在那个 profile 里打开一个窗口再重跑。如果它判断不了有没有窗口，会报 `profile window unavailable`（错误码 `profile_window_unavailable`），判断不了就什么都不创建。第一个标签页清理相关的错误码见[故障排查](https://chrome-use.leeguoo.com/troubleshooting.html)。
 
 ### 多 profile 的 Chrome：读 ChooseBrowser 的规则
 
@@ -249,6 +251,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 
 | 命令 | 用途 |
 |---|---|
+| `--window dedicated`（默认）/ `--window user` | 扩展连接：同一 profile 的所有 AI 会话共用一个后台窗口，各有独立标签组；`user` 表示改用用户窗口 |
 | `chrome-use open <url>` | 连接你的 Chrome 并导航。25 秒后 `load` 仍没到、但标签页里的页面明显可用时算成功，附 ⚠ 警告；如果无法确认这个页面来自这次请求（走扩展中继时总是如此），返回里带 `commit: "unverified"` 和标签页的真实 URL。页面不可用时报 `navigation_incomplete:`，写明已知的信息（是否提交、readyState、候选资源） |
 | `chrome-use snapshot -i` | 读页面；每次交互的起点（`-u` 给每个链接带上绝对 URL） |
 | `chrome-use read --links` | 页面正文，外加一段有上限的 `## Links`：`[文字](绝对 URL)`（默认前 100 个，`--max-links <n>` 最多 1000） |
@@ -264,7 +267,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use click @e2 --follow` | 点击打开的新标签（`target=_blank`、`window.open`）以 `openedTab` 报告并归入会话；`--follow` 切过去。在你自己的 Chrome 里只接管由本会话标签打开的标签，并按标签 id 附加（需要 ab-connect 0.5.30+）；否则由 `openedTabWarning` / `openedTabStatus`（`unadopted`、`unknown`）说明原因。网页打开的标签会让 Chrome 跑到你的应用前面，`openedTabWarning` 会说明；在 macOS 上 chrome-use 会把你原来的应用切回前台（`focusRestored`；`AGENT_BROWSER_RESTORE_FOCUS=0` 关闭）。需主动开启的 `AGENT_BROWSER_BACKGROUND_LINKS=cross-site`（会话的 daemon 启动时读取）会把跨站的 `target=_blank` 链接改在后台标签打开（`openedTabMode: background`）；代价：重定向回当前站点的链接收不到 `SameSite=Strict` cookie |
 | `chrome-use tab list` · `tab select t2` · `tab adopt <url-substring\|targetId>` | 列出标签；选择已创建或已接管的标签；通过扩展或直接 CDP 连接，不导航地接管已打开的标签 |
 | `chrome-use tab new [url] --activate` · `tab select t2 --activate` · `tab adopt <targetId> --activate` | 在初始化或存活探针之前激活目标；`--front` 是别名 |
-| `chrome-use tab list --all [--limit <n>]` | 列出当前 Chrome profile 所有窗口里的全部标签，包括用户自己的和其他会话的：handle、窗口、是否当前标签、标题、URL、归属（本会话 / `session <名字>` / 用户）。只读，不 attach、不激活任何标签。URL 按 Chrome 原样给出，可能带 token |
+| `chrome-use tab list --all [--limit <n>]` | 列出当前 Chrome profile 所有窗口里的全部标签，包括用户自己的和其他会话的：handle、窗口、是否当前标签、标题、URL、归属（本会话 / `session <名字>` / 用户）。首次查询也只读，不启动 daemon、不开窗口或标签、不 attach 页面。URL 按 Chrome 原样给出，可能带 token |
 | `chrome-use --tab <handle> --force <命令>` · `tab close <handle> --force` | 在不属于本会话的标签（比如用户自己的）上原地、后台执行命令或关闭它，只在用户要求时使用。结果带 `forced: true` 和该标签的标题、URL；`close` 不会关掉 forced 标签 |
 | `chrome-use dialog status` · `dialog accept\|dismiss` | 处理点击触发的原生 `confirm()` / `prompt()` |
 | `chrome-use download @e2 ./video.mp4` | 用已登录浏览器的同一份 cookie 下载，且不导航当前标签页 |

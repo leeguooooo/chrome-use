@@ -2076,7 +2076,9 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             | "stream_enable"
             | "stream_disable"
             | "stream_status"
-    ) || (action == "read"
+    ) || (action == "tab_list"
+        && cmd.get("all").and_then(Value::as_bool) == Some(true))
+        || (action == "read"
         // `read <url>` (and --llms / --require-md) is a pure HTTP fetch — it
         // never touches the browser, so don't auto-launch. Only `read` with no
         // url reads the active tab and needs a browser.
@@ -26023,6 +26025,19 @@ mod tests {
         assert_eq!(result["success"], true);
         assert_eq!(result["data"]["requestCount"], 1);
         let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn all_tab_inventory_with_no_browser_never_auto_launches() {
+        let mut state = DaemonState::new();
+        let result = execute_command(
+            &json!({ "id": "inventory", "action": "tab_list", "all": true }),
+            &mut state,
+        )
+        .await;
+        assert_eq!(result["success"], false);
+        assert_eq!(result["error"], "Browser not launched");
+        assert!(state.browser.is_none());
     }
 
     #[tokio::test]

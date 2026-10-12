@@ -473,8 +473,11 @@
         <code>tab list --all</code> answers "which tabs do I have open?": every tab of the connected Chrome profile,
         across all windows, including the user's own and other chrome-use sessions'. It only observes (over the relay
         <code>chrome.tabs.query</code> and <code>ABExt.state</code>, ab-connect 0.5.25+; on direct CDP
-        <code>Target.getTargets</code> and <code>Browser.getWindowForTarget</code>): nothing is attached, activated,
-        focused, moved or reloaded, and no page content is read. Each row has a <code>handle</code>
+        <code>Target.getTargets</code> and <code>Browser.getWindowForTarget</code>): even the first call starts no daemon
+        and creates no window or tab. Nothing is attached, activated,
+        focused, moved or reloaded, and no page content is read. A running session keeps its existing browser.
+        A missing non-relay daemon needs <code>--cdp</code>; inventory refuses to launch a browser,
+        provision a provider or upgrade a daemon. Action-policy restrictions still apply. Each row has a <code>handle</code>
         (<code>chrome-tab:&lt;id&gt;</code> over the relay, the targetId on direct CDP), its window, whether it is the
         active tab of that window, pinned/incognito/discarded (relay), title, url, and its owner:
         <code>{kind: "self"}</code>, <code>{kind: "session", session, live}</code> or <code>{kind: "user"}</code>, also

@@ -1460,7 +1460,11 @@ pub(crate) fn finish_all_tabs_row(
             foreign
         }
         None => {
-            row["ownership"] = json!("foreign");
+            row["ownership"] = json!(if foreign == TabOwner::This {
+                "created"
+            } else {
+                "foreign"
+            });
             foreign
         }
     };
@@ -3599,26 +3603,39 @@ impl BrowserManager {
     }
 
     pub async fn connect_cdp(url: &str) -> Result<Self, String> {
-        Self::connect_cdp_inner(url, false, None).await
+        Self::connect_cdp_inner(url, false, None, false).await
+    }
+
+    /// Inventory-only connection: no discovery, attachments, page creation or
+    /// initialization. The relay must also suppress its reconnect replay.
+    pub async fn connect_cdp_for_inventory(url: &str) -> Result<Self, String> {
+        Self::connect_cdp_inner(
+            url,
+            false,
+            Some(vec![("x-chrome-use-diagnostic".into(), "1".into())]),
+            true,
+        )
+        .await
     }
 
     /// Connect to a provider CDP proxy where the WebSocket IS the page session.
     /// Skips browser-level Target.* commands that most proxies don't support.
     pub async fn connect_cdp_direct(url: &str) -> Result<Self, String> {
-        Self::connect_cdp_inner(url, true, None).await
+        Self::connect_cdp_inner(url, true, None, false).await
     }
 
     pub async fn connect_cdp_with_headers(
         url: &str,
         headers: Option<Vec<(String, String)>>,
     ) -> Result<Self, String> {
-        Self::connect_cdp_inner(url, false, headers).await
+        Self::connect_cdp_inner(url, false, headers, false).await
     }
 
     async fn connect_cdp_inner(
         url: &str,
         direct_page: bool,
         headers: Option<Vec<(String, String)>>,
+        inventory_only: bool,
     ) -> Result<Self, String> {
         let ws_url = resolve_cdp_url(url).await?;
         // Record the transport so a reappearing "Allow remote debugging?" modal
@@ -3657,6 +3674,10 @@ impl BrowserManager {
             lost_tab_refs: Vec::new(),
             capture_console: console_capture_enabled(),
         };
+
+        if inventory_only {
+            return Ok(manager);
+        }
 
         // First tabs a failed connection could not record (#486) are this
         // session's: count them as created again, and save them if possible.
@@ -4102,7 +4123,15 @@ impl BrowserManager {
                     .get("groupId")
                     .and_then(Value::as_i64)
                     .filter(|g| *g >= 0);
-                let owner = holdings.owner_of(id, group, records, live);
+                let owner = if holdings
+                    .attached
+                    .get(&id)
+                    .is_some_and(|target| self.created_targets.contains(target))
+                {
+                    TabOwner::This
+                } else {
+                    holdings.owner_of(id, group, records, live)
+                };
                 relay_all_tabs_row(
                     tab,
                     held.get(&id),
@@ -4169,8 +4198,11 @@ impl BrowserManager {
                     .iter()
                     .find(|p| p.target_id == t.target_id)
                     .map(|p| self.held_tab(p));
-                let owner =
-                    foreign_owner(false, records.get(&t.target_id).map(String::as_str), live);
+                let owner = if self.created_targets.contains(&t.target_id) {
+                    TabOwner::This
+                } else {
+                    foreign_owner(false, records.get(&t.target_id).map(String::as_str), live)
+                };
                 finish_all_tabs_row(&mut row, &t.title, &t.url, held.as_ref(), owner);
                 row
             })
@@ -12414,6 +12446,7 @@ mod first_tab_custody_tests {
     #[derive(Default)]
     struct Chrome {
         targets: Vec<String>,
+        methods: Vec<String>,
         created: u32,
         hang_close: bool,
         /// Relay mode: `ABExt.tabPresence` never answers for a target whose
@@ -12433,6 +12466,8 @@ mod first_tab_custody_tests {
 
     fn reply(chrome: &Shared, req: &Value) -> Option<Value> {
         let mut c = chrome.0.lock().unwrap();
+        c.methods
+            .push(req["method"].as_str().unwrap_or("").to_string());
         let params = &req["params"];
         Some(match req["method"].as_str().unwrap_or("") {
             "Target.getTargets" => json!({"targetInfos": c.targets.iter().map(|t| json!({
@@ -12543,6 +12578,32 @@ mod first_tab_custody_tests {
             }
         });
         (chrome, url)
+    }
+
+    #[tokio::test]
+    async fn fresh_inventory_connection_never_creates_or_attaches_a_page() {
+        for targets in [vec![], vec!["T1".to_string(), "T2".to_string()]] {
+            let (chrome, url) = start().await;
+            chrome.0.lock().unwrap().targets = targets.clone();
+            let manager = BrowserManager::connect_cdp_for_inventory(&url)
+                .await
+                .unwrap();
+            assert_eq!(manager.page_count(), 0);
+            let inventory = manager.list_all_tabs(200).await.unwrap();
+            assert_eq!(inventory["total"], targets.len());
+            let state = chrome.0.lock().unwrap();
+            assert_eq!(state.created, 0);
+            assert!(
+                state.methods.iter().all(|method| {
+                    matches!(
+                        method.as_str(),
+                        "Target.getTargets" | "Browser.getWindowForTarget"
+                    )
+                }),
+                "unexpected inventory commands: {:?}",
+                state.methods
+            );
+        }
     }
 
     /// The record cannot be written, the cleanup close hangs, and the connect

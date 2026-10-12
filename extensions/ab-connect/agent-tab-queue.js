@@ -37,7 +37,6 @@ export function createAgentTabQueue(deps) {
           throw error
         }
       }
-      const optional = (label, start) => step(label, () => Promise.resolve().then(start).catch(() => null))
       async function writeWindow(value) {
         persistedWindow = value
         const reconcile = async () => {
@@ -48,19 +47,29 @@ export function createAgentTabQueue(deps) {
         await step('persist agent window', () => chrome.storage.local.set(value), reconcile)
       }
       async function record() {
-        const got = await optional('read placeholder', () => chrome.storage.local.get(placeholderKey))
+        const got = await step('read placeholder', () => chrome.storage.local.get(placeholderKey))
         const rec = got?.[placeholderKey]
         return Number.isInteger(rec?.windowId) && Number.isInteger(rec?.tabId) ? rec : null
       }
       async function usable(id) {
-        const win = await optional('get agent window', () => chrome.windows.get(id))
+        const win = await step('get agent window', () => chrome.windows.get(id).catch(error => {
+          if (/no window with id|invalid window id/i.test(String(error.message || error))) return null
+          throw error
+        }))
         await step('load tab ownership', deps.loadOwnedTabs)
-        const tabs = win ? await optional('query agent window', () => chrome.tabs.query({ windowId: id })) : null
+        const tabs = win ? await step('query agent window', () => chrome.tabs.query({ windowId: id })) : null
         const rec = await record()
         await step('load agent popups', deps.loadAgentPopups)
-        const verdict = agentWindowStillOurs(win, tabs,
-          agentTabPredicate(deps.ownedTabs, deps.agentPopups), rec)
+        const isAgent = agentTabPredicate(deps.ownedTabs, deps.agentPopups)
+        const verdict = agentWindowStillOurs(win, tabs, isAgent, rec)
         if (!verdict.ours) deps.rejectWindow({ windowId: id, reason: verdict.reason })
+        if (['tabs-unknown', 'tab-unknown', 'contradictory'].includes(verdict.reason))
+          throw new Error('createTarget: agent window ownership is unknown; refusing to create another window')
+        const placeholder = tabs?.find(tab => tab.id === rec?.tabId)
+        if (placeholder && placeholderCleanup(placeholder, rec, id) === 'keep')
+          throw new Error('createTarget: placeholder navigation is unconfirmed; refusing to create another window')
+        if (verdict.reason === 'user-tab' && tabs.some(tab => isAgent(tab.id)))
+          throw new Error('createTarget: the shared agent window contains user tabs; move those tabs to your own window before continuing; refusing to create another agent window')
         if (rec?.windowId === id && Array.isArray(tabs) &&
             !isUntouchedPlaceholder(tabs.find(t => t?.id === rec.tabId), rec)) {
           // Keep the window being validated: after a worker restart the
@@ -82,21 +91,47 @@ export function createAgentTabQueue(deps) {
           if (saved != null && await usable(saved)) winId = saved
         }
         if (winId == null) {
+          // Recover an existing all-agent window before creating another one.
+          // A blank/user tab is never evidence of ownership, even in an old
+          // window that once held an agent session.
+          const windows = await step('find agent windows', () => chrome.windows.getAll({ windowTypes: ['normal'] }))
+          await step('load tab ownership', deps.loadOwnedTabs)
+          await step('load agent popups', deps.loadAgentPopups)
+          const isAgent = agentTabPredicate(deps.ownedTabs, deps.agentPopups)
+          for (const win of windows) {
+            const candidates = await step('query candidate window', () => chrome.tabs.query({ windowId: win.id }))
+            if (candidates.some(tab => isAgent(tab.id)) && await usable(win.id)) {
+              winId = win.id
+              await writeWindow({ [windowKey]: winId, [placeholderKey]: await record() })
+              break
+            }
+          }
+        }
+        if (winId == null) {
           if (!chrome.windows?.create) throw new Error('createTarget: chrome.windows API is unavailable')
           const win = await step('create agent window',
-            () => chrome.windows.create({ focused: false, url: 'about:blank' }), discardWindow)
+            () => chrome.windows.create({ focused: false, url }), discardWindow)
           if (win?.id == null) throw new Error('createTarget: chrome.windows.create returned no window')
           winId = win.id
+          // The window's initial tab is the requested agent page itself.
+          // There is no extra blank placeholder to leak or misclassify.
+          created = win.tabs?.[0]
+          if (!Number.isInteger(created?.id) || created.windowId !== winId)
+            throw new Error(`createTarget: window ${winId} was created but its initial tab identity is unknown; inspect tab list --all before retrying`)
+          await step('load tab ownership', deps.loadOwnedTabs)
+          deps.ownedTabs.add(created.id)
+          committed = true
+          await step('persist tab ownership', deps.persistOwnedTabs,
+            () => bounded(deps.persistOwnedTabs(), 'reconcile tab ownership'))
           // Publish only from the still-current transaction, never a late callback.
           deps.setWindowId(winId)
-          const placeholder = win.tabs?.[0]?.id
           await writeWindow({
             [windowKey]: winId,
-            [placeholderKey]: Number.isInteger(placeholder) ? { windowId: winId, tabId: placeholder } : null,
+            [placeholderKey]: null,
           })
         }
         deps.setWindowId(winId)
-        created = await step('create tab', () => chrome.tabs.create({ url, active: false, windowId: winId }), discard)
+        created ??= await step('create tab', () => chrome.tabs.create({ url, active: false, windowId: winId }), discard)
         if (created?.id == null) throw new Error('createTarget: chrome.tabs.create returned no tab')
         await step('load tab ownership', deps.loadOwnedTabs)
         // No await between the token check and the in-memory ownership commit.
@@ -106,9 +141,19 @@ export function createAgentTabQueue(deps) {
           () => bounded(deps.persistOwnedTabs(), 'reconcile tab ownership'))
         const rec = await record()
         if (rec?.windowId === winId) {
-          const tab = await optional('get placeholder', () => chrome.tabs.get(rec.tabId))
-          if (placeholderCleanup(tab, rec, winId) === 'remove') {
-            await optional('remove placeholder', () => chrome.tabs.remove(rec.tabId))
+          // A failed read or removal must keep the record for the next call.
+          // Forgetting it would make our own blank page look like a user tab,
+          // causing every later session to abandon this window.
+          const current = await step('query placeholder', () => chrome.tabs.query({ windowId: winId }))
+          const tab = current.find(tab => tab.id === rec.tabId)
+          const cleanup = placeholderCleanup(tab, rec, winId)
+          if (cleanup === 'keep')
+            throw new Error('createTarget: placeholder navigation is unconfirmed; its record was retained')
+          if (cleanup === 'remove') {
+            await step('remove placeholder', () => chrome.tabs.remove(rec.tabId))
+            const remaining = await step('verify placeholder removal', () => chrome.tabs.query({ windowId: winId }))
+            if (remaining.some(tab => tab.id === rec.tabId))
+              throw new Error('createTarget: placeholder removal is unconfirmed; its record was retained')
           }
           await writeWindow({ [windowKey]: winId, [placeholderKey]: null })
         }
@@ -118,8 +163,11 @@ export function createAgentTabQueue(deps) {
         // A tab published as owned can already have been adopted by another
         // request. Leave it discoverable; only uncommitted resources are reaped.
         if (created && !committed) void discard(created).catch(report)
-        deps.onError?.(String(error.message || error))
-        throw error
+        const failure = created && committed
+          ? new Error(`createTarget: agent tab ${created.id} was created in window ${created.windowId}, but setup is incomplete (${error.message || error}); its ownership was retained; inspect tab list --all before retrying`)
+          : error
+        deps.onError?.(String(failure.message || failure))
+        throw failure
       } finally {
         tx.active = false
       }

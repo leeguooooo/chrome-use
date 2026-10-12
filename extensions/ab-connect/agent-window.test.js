@@ -146,13 +146,13 @@ test('contradictory or missing tab metadata refuses', () => {
   assert.deepEqual(agentWindowStillOurs(win, [null], isOwned), { ours: false, reason: 'tab-unknown' })
 })
 
-test('a full-screen window is never the agent window', () => {
+test('an all-agent full-screen window remains the shared agent window', () => {
   const got = agentWindowStillOurs(
     { id: 9, state: 'fullscreen' },
     [{ id: 1, windowId: 9, url: 'https://example.com/' }],
     isOwned,
   )
-  assert.deepEqual(got, { ours: false, reason: 'fullscreen' })
+  assert.deepEqual(got, { ours: true, reason: null })
 })
 
 test('a missing window is not ours', () => {

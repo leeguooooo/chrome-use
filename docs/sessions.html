@@ -50,11 +50,8 @@
         </button>
       </div>
 
-      <p class="du-lede">
-        一次登录，<span class="mark">后续运行直接是登录态</span>；多个 agent 各开一个隔离浏览器，
-        <span class="mark">互不打架</span>。这一页讲三件事：把会话状态存下来跨运行复用、用
-        <code>--session</code> 并行跑多个浏览器、以及会话守护进程卡住时怎么干净地复位它。
-      </p>
+      <p class="du-lede">走 Chrome 扩展连接时，所有 AI 会话共用一个后台窗口，每个会话使用独立标签组；人使用自己的窗口。登录态由同一 profile 共享。用 <code>--launch</code> 单独启动的浏览器才有独立的 cookies 和存储。</p>
+      <p>归属都能确认是 AI 的已有窗口会继续复用，全屏也不另开窗口；窗口记录丢失时先寻找已有 AI 窗口。不会搬走或删除用户页来回收窗口。AI 窗口混入用户页且仍有 AI 标签时会拒绝继续开页，提示把用户页移回自己的窗口，不另开第二个 AI 窗口。空白占位页清理失败时保留归属记录并报错，避免后续会话继续开窗口。<code>tab list --all</code> 首次查询也不启动 daemon、不开窗口或标签、不 attach 页面。</p>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 先分清哪条路径</div>

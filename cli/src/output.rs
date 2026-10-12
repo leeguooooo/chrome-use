@@ -2669,9 +2669,9 @@ Global Options:
   --session <name>     Use specific session
   --headers <json>     Set HTTP headers (scoped to this origin)
   --headed             Show browser window (default; headless is forbidden — it's a bot tell)
-  --window <mode>      dedicated (default) = open agent tabs in a separate
-                       window (same profile) so they don't clutter your active
-                       window; user = interleave into your current window.
+  --window <mode>      dedicated (default) = all agent sessions share one
+                       background window per profile, with separate tab groups;
+                       your own window stays separate. user = interleave tabs.
                        Extension-relay path only; applies when the session starts.
                        Env: AGENT_BROWSER_DEDICATED_WINDOW=1 (on) / 0 (off).
   --enable react-devtools   Inject the React DevTools hook before any page JS
@@ -4482,6 +4482,7 @@ Operations:
 Every tab (`tab list --all`):
   Lists the tabs of the whole connected profile by observation only: nothing is
   attached, activated, focused, moved or reloaded, and no page content is read.
+  Even a fresh session starts no daemon and creates no window or tab.
   Each row has a `handle` (relay: `chrome-tab:<id>`; direct CDP: the targetId),
   its window, whether it is the active tab of that window (relay only), title,
   url, pinned/incognito/discarded (relay only) and its owner: this session,

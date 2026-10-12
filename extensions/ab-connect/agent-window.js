@@ -115,6 +115,8 @@ export function isUntouchedPlaceholder(tab, record) {
  */
 export function placeholderCleanup(tab, record, windowId) {
   if (!record || record.windowId !== windowId) return 'keep'
+  if (tab?.id === record.tabId && tab.windowId === record.windowId && !tab.url &&
+      (!tab.pendingUrl || tab.pendingUrl === 'about:blank')) return 'keep'
   return isUntouchedPlaceholder(tab, record) ? 'remove' : 'forget'
 }
 
@@ -130,7 +132,8 @@ export function placeholderCleanup(tab, record, windowId) {
  */
 export function agentWindowStillOurs(win, tabs, isOwned, placeholder = null) {
   if (!win || win.id == null) return { ours: false, reason: 'gone' }
-  if (win.state === 'fullscreen') return { ours: false, reason: 'fullscreen' }
+  // Presentation is not ownership: an all-agent fullscreen window stays the
+  // shared agent window. User tabs still refuse reuse below.
   if (!Array.isArray(tabs)) return { ours: false, reason: 'tabs-unknown' }
   for (const tab of tabs) {
     if (tab == null || !Number.isInteger(tab.id)) return { ours: false, reason: 'tab-unknown' }

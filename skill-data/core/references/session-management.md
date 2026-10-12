@@ -1,6 +1,19 @@
 # Session Management
 
-Multiple isolated browser sessions with state persistence and concurrent browsing.
+On the extension relay, sessions share one background agent window per Chrome
+profile. Each session has its own tab group and references; cookies and login
+state belong to the profile and are shared. Your own window stays separate.
+Full screen does not change agent ownership. A lost window record is recovered
+from verified agent tabs before creating a replacement; user tabs and unknown
+blank pages are never moved or deleted to reclaim a window. Mixed user/agent
+windows refuse new tabs until the user tabs are moved out, rather than creating
+a second agent window. Failed placeholder
+cleanup retains its identity and refuses success so the next call can retry.
+`tab list --all` uses a passive connection even in a fresh session: no daemon,
+window, tab or page attachment is created.
+
+The isolated cookies/storage described below apply to separately launched
+browsers (`--launch`), not to sessions in your real Chrome profile.
 
 **Related**: [authentication.md](authentication.md) for login patterns, [SKILL.md](../SKILL.md) for quick start.
 
@@ -20,10 +33,10 @@ Use `--session` flag to isolate browser contexts:
 
 ```bash
 # Session 1: Authentication flow
-chrome-use --session auth open https://app.example.com/login
+chrome-use --session auth --launch open https://app.example.com/login
 
 # Session 2: Public browsing (separate cookies, storage)
-chrome-use --session public open https://example.com
+chrome-use --session public --launch open https://example.com
 
 # Commands are isolated by session
 chrome-use --session auth fill @e1 "user@example.com"

@@ -2143,6 +2143,68 @@ fn emit(doc: &Value, json_out: bool) {
 // Entry
 // ---------------------------------------------------------------------------
 
+/// List all tabs before daemon bootstrap, using the same passive endpoint
+/// selection as diagnostics. Even the first invocation opens no agent tab.
+pub fn list_all_tabs(flags: &Flags, limit: usize, full: bool) -> Result<Value, String> {
+    if flags.force_launch || flags.provider.is_some() {
+        return Err("tab list --all is passive and cannot launch or provision a browser; use --cdp for an existing browser".to_string());
+    }
+    if flags.cdp.is_none()
+        && flags.browser.is_none()
+        && connection::session_relay_profile(&flags.session)?.is_none()
+        && (connection::session_was_launched(&flags.session)
+            || connection::created_target_count(&flags.session) > 0)
+    {
+        return Err("this session has a non-relay browser record but no running daemon; use --cdp to name its existing browser; refusing to list another profile".to_string());
+    }
+    // Moving inventory out of the daemon must not bypass its configured policy.
+    if let Some(path) = flags
+        .action_policy
+        .clone()
+        .or_else(|| std::env::var("AGENT_BROWSER_POLICY").ok())
+    {
+        use crate::native::policy::{ActionPolicy, PolicyResult};
+        match ActionPolicy::load(&path)?.check("tab_list") {
+            PolicyResult::Allow => {}
+            PolicyResult::Deny(reason) => {
+                return Err(format!("Action 'tab_list' denied by policy: {reason}"))
+            }
+            PolicyResult::RequiresConfirmation => return Err("tab list --all requires action-policy confirmation; passive inventory performed no query".to_string()),
+        }
+    }
+    if flags.confirm_actions.as_deref().is_some_and(|actions| {
+        actions
+            .split(',')
+            .any(|action| action.trim().eq_ignore_ascii_case("tab_list"))
+    }) {
+        return Err("tab list --all requires confirmation under confirm-actions; passive inventory performed no query".to_string());
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    runtime.block_on(async {
+        let endpoint = resolve_endpoint(flags).await.map_err(|e| match e {
+            Unresolved::NotConnected(message) | Unresolved::Invalid(message) => message,
+        })?;
+        let _ = crate::native::browser::DAEMON_SESSION.set(flags.session.clone());
+        let manager = tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            crate::native::browser::BrowserManager::connect_cdp_for_inventory(&endpoint.ws),
+        )
+        .await
+        .map_err(|_| "tab list --all: diagnostic connection timed out".to_string())??;
+        let mut out = tokio::time::timeout(Duration::from_secs(15), manager.list_all_tabs(limit))
+            .await
+            .map_err(|_| "tab list --all: inventory timed out".to_string())??;
+        if full {
+            out["full"] = json!(true);
+        }
+        Ok(out)
+    })
+}
+
 /// `chrome-use diag <args>`; returns the exit code.
 pub fn run(args: &[String], flags: &Flags) -> i32 {
     let opts = match parse_args(args) {
@@ -2284,6 +2346,27 @@ async fn sample_any(ctx: &Ctx<'_>, relay: bool) -> Result<Sample, SampleError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn passive_inventory_honors_policy_before_connecting() {
+        let policy = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(policy.path(), r#"{"deny":["tab_list"]}"#).unwrap();
+        let mut flags = crate::flags::parse_flags(&[]);
+        flags.cdp = Some("ws://127.0.0.1:1".to_string());
+        flags.action_policy = Some(policy.path().to_string_lossy().to_string());
+        assert!(list_all_tabs(&flags, 200, false)
+            .unwrap_err()
+            .contains("denied by policy"));
+        std::fs::write(policy.path(), r#"{"confirm":["tab_list"]}"#).unwrap();
+        assert!(list_all_tabs(&flags, 200, false)
+            .unwrap_err()
+            .contains("performed no query"));
+        flags.action_policy = None;
+        flags.confirm_actions = Some("tab_list".to_string());
+        assert!(list_all_tabs(&flags, 200, false)
+            .unwrap_err()
+            .contains("performed no query"));
+    }
 
     fn args(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()

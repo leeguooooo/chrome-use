@@ -155,6 +155,16 @@ loads clear it.
 
 ## Sessions and tabs
 
+On the extension relay, all AI sessions share one background agent window per
+Chrome profile, using separate tab groups. Keep the user's window separate.
+An all-agent fullscreen window is reused too. Lost window records recover only
+windows with verified agent tabs. If the agent window also holds user tabs,
+new tabs are refused until those user tabs are moved out; no second agent
+window is created.
+Uncertain ownership or placeholder cleanup refuses instead of opening more
+windows. `tab list --all` uses a passive connection: even a fresh session
+starts no daemon, opens no window or tab, and attaches to no page.
+
 Use one session name per task and reuse it. After "session unresponsive",
 make the one move it names. Do not close, navigate, or reconfigure tabs or
 sessions you did not create or adopt. `close` only your own session when done;

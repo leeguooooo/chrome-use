@@ -460,7 +460,7 @@
         <code>tab list --all</code> 用来回答“我开着哪些标签”：列出当前 Chrome profile 所有窗口里的全部标签，
         包括用户自己的和其他 chrome-use 会话的。它只做观察（走 relay 时读 <code>chrome.tabs.query</code> 和
         <code>ABExt.state</code>，需要 ab-connect 0.5.25+；直接 CDP 时读 <code>Target.getTargets</code> 和
-        <code>Browser.getWindowForTarget</code>）：不 attach、不激活、不聚焦、不移动、不刷新任何标签，也不读页面内容。
+        <code>Browser.getWindowForTarget</code>）：首次查询也不启动 daemon、不开窗口或标签。不 attach、不激活、不聚焦、不移动、不刷新任何标签，也不读页面内容。已有会话继续读取它连接的浏览器；非 relay 会话没有运行中的 daemon 时，需要用 <code>--cdp</code> 指定已有浏览器。查询不会启动浏览器、创建云端实例或升级 daemon，仍遵守 action-policy。
         每行有 <code>handle</code>（relay 下是 <code>chrome-tab:&lt;id&gt;</code>，直接 CDP 下是 targetId）、窗口、
         是否是该窗口的当前标签、pinned/incognito/discarded（relay）、标题、URL 和归属：
         <code>{kind: "self"}</code>、<code>{kind: "session", session, live}</code> 或 <code>{kind: "user"}</code>，

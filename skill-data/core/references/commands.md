@@ -429,10 +429,15 @@ chrome-use window new                       # New window
 
 `tab list --all` answers "which tabs do I have open?" and "find my tab with
 X": every tab of the connected Chrome profile, across all windows, including
-the user's own and other chrome-use sessions'. It only observes. Over the
+the user's own and other chrome-use sessions'. Even the first call starts no
+daemon and creates no window or tab. It only observes. Over the
 relay it reads `chrome.tabs.query` and `ABExt.state` (ab-connect 0.5.25+); on
 direct CDP, `Target.getTargets` and `Browser.getWindowForTarget`. Nothing is
 attached, activated, focused, moved or reloaded, and no page content is read.
+
+A running session keeps its existing browser. A missing non-relay daemon needs
+`--cdp`; inventory refuses to launch a browser, provision a provider or upgrade
+a daemon. Action-policy restrictions still apply.
 
 Each row of `browserTabs` has:
 

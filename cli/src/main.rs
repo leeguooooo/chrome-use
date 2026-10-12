@@ -3092,6 +3092,50 @@ fn main() {
         }
     }
 
+    // Inventory must bypass every bootstrap/launch path, including the first
+    // invocation in a fresh session. A read-only handler after launch is too late.
+    if cmd.get("action").and_then(|v| v.as_str()) == Some("tab_list")
+        && cmd.get("all").and_then(|v| v.as_bool()) == Some(true)
+    {
+        let inventory_response = |result: Result<serde_json::Value, String>| connection::Response {
+            success: result.is_ok(),
+            data: result.as_ref().ok().cloned(),
+            error: result.err(),
+            code: None,
+            retryable: None,
+            warning: None,
+            timing: None,
+        };
+        let resp = if connection::daemon_ready(&flags.session)
+            && !user_chose_cdp
+            && browser_selector.is_none()
+            && flags.provider.is_none()
+        {
+            // A live session may drive a launched browser or raw CDP, not
+            // the default relay profile. Read its existing browser without
+            // launching, reconnecting or ensuring a page in the daemon.
+            if connection::read_session_version(&flags.session).as_deref()
+                != Some(upgrade_handoff::build_version().as_str())
+            {
+                inventory_response(Err("tab list --all cannot upgrade a session daemon; run a normal session command first or name the existing browser with --cdp".to_string()))
+            } else {
+                connection::send_command(cmd.clone(), &flags.session)
+                    .unwrap_or_else(|error| inventory_response(Err(error)))
+            }
+        } else {
+            inventory_response(diag::list_all_tabs(
+                &flags,
+                cmd.get("limit")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize)
+                    .unwrap_or(native::browser::ALL_TABS_DEFAULT_LIMIT),
+                cmd.get("full").and_then(|v| v.as_bool()) == Some(true),
+            ))
+        };
+        print_response_with_opts(&resp, Some("tab_list"), &OutputOptions::from_flags(&flags));
+        exit(if resp.success { 0 } else { 1 });
+    }
+
     // Handle state management commands locally — these are pure file operations
     // that don't need a daemon, avoiding an unnecessary daemon startup that
     // would lack runtime config like session_name.

@@ -10,15 +10,18 @@ function fixture() {
   const removed = []
   const ownedTabs = new Set()
   const adopted = new Set()
+  const windowOptions = []
   const chrome = {
     storage: { local: {
       async get() { return { ...records } },
       async set(values) { Object.assign(records, values) },
     } },
     windows: {
+      async getAll() { return windowId == null ? [] : [{ id: windowId, state: 'normal' }] },
       async get(id) { return { id, type: 'normal', focused: false, state: 'normal' } },
-      async create() {
-        const tab = { id: nextTab++, windowId: 1, url: 'about:blank' }
+      async create(options) {
+        windowOptions.push(options)
+        const tab = { id: nextTab++, windowId: 1, url: options.url, active: true }
         tabMap.set(tab.id, tab)
         return { id: 1, tabs: [tab] }
       },
@@ -42,16 +45,22 @@ function fixture() {
     async loadOwnedTabs() {}, async loadAgentPopups() {}, async persistOwnedTabs() {},
     isAdopted: id => ownedTabs.has(id) || adopted.has(id), onCleanupError: e => errors.push(e),
   }
-  return { chrome, deps, removed, ownedTabs, adopted, errors, get windowId() { return windowId } }
+  return { chrome, deps, removed, ownedTabs, adopted, errors, windowOptions, get windowId() { return windowId } }
+}
+
+async function seedPlaceholder(f) {
+  const win = await f.chrome.windows.create({ url: 'about:blank' })
+  await f.chrome.storage.local.set({ window: win.id, placeholder: { windowId: win.id, tabId: win.tabs[0].id } })
 }
 
 test('expired tabs.create releases queue; late tab is closed without changing window identity', async () => {
   const f = fixture()
+  const create = createAgentTabQueue(f.deps)
+  await create('https://warm.test')
   const normal = f.chrome.tabs.create
   let finish
   let count = 0
   f.chrome.tabs.create = options => ++count === 1 ? new Promise(resolve => { finish = resolve }) : normal(options)
-  const create = createAgentTabQueue(f.deps)
   const first = assert.rejects(create('https://first.test'), /createTarget: create tab/)
   const second = create('https://second.test')
   await first
@@ -68,9 +77,10 @@ test('expired tabs.create releases queue; late tab is closed without changing wi
 
 test('late created tab adopted by another request is not closed', async () => {
   const f = fixture()
+  const create = createAgentTabQueue(f.deps)
+  await create('https://warm.test')
   let finish
   f.chrome.tabs.create = () => new Promise(resolve => { finish = resolve })
-  const create = createAgentTabQueue(f.deps)
   await assert.rejects(create('https://first.test'), /relay timeout/)
   f.adopted.add(99)
   finish({ id: 99 })
@@ -78,15 +88,99 @@ test('late created tab adopted by another request is not closed', async () => {
   assert.equal(f.removed.includes(99), false)
 })
 
-test('normal creation stays in background, marks ownership and removes only placeholder', async () => {
+test('normal creation uses the initial agent tab without a blank placeholder', async () => {
   const f = fixture()
   const create = createAgentTabQueue(f.deps)
   const first = await create('https://first.test')
   const second = await create('https://second.test')
-  assert.equal(first.active, false)
+  assert.deepEqual(f.windowOptions, [{ focused: false, url: 'https://first.test' }])
+  assert.equal(second.active, false)
   assert.equal(second.windowId, first.windowId)
   assert.deepEqual([...f.ownedTabs], [first.id, second.id])
-  assert.deepEqual(f.removed, [10])
+  assert.deepEqual(f.removed, [])
+  assert.equal((await f.chrome.storage.local.get()).placeholder, null)
+})
+
+test('failed placeholder removal retains identity and reuses the same window on retry', async () => {
+  const f = fixture()
+  await seedPlaceholder(f)
+  const remove = f.chrome.tabs.remove
+  let fail = true
+  f.chrome.tabs.remove = async id => {
+    if (fail) { fail = false; throw new Error('transient removal failure') }
+    return remove(id)
+  }
+  let created = 0
+  const normal = f.chrome.windows.create
+  f.chrome.windows.create = options => { created++; return normal(options) }
+  const create = createAgentTabQueue(f.deps)
+  await assert.rejects(create('https://first.test'), /transient removal failure/)
+  assert.deepEqual((await f.chrome.storage.local.get()).placeholder, { windowId: 1, tabId: 10 })
+  assert.equal((await create('https://second.test')).windowId, 1)
+  assert.equal(created, 0)
+  assert.equal((await f.chrome.storage.local.get()).placeholder, null)
+})
+
+test('concurrent sessions share one background agent window', async () => {
+  const f = fixture()
+  let windows = 0
+  const normal = f.chrome.windows.create
+  f.chrome.windows.create = options => { windows++; return normal(options) }
+  const create = createAgentTabQueue(f.deps)
+  const tabs = await Promise.all(Array.from({ length: 20 }, (_, i) => create(`https://agent.test/${i}`)))
+  assert.equal(windows, 1)
+  assert.equal(new Set(tabs.map(tab => tab.windowId)).size, 1)
+  assert.equal(f.ownedTabs.size, 20)
+})
+
+test('unconfirmed placeholder removal retains the record and refuses success', async () => {
+  const f = fixture()
+  await seedPlaceholder(f)
+  f.chrome.tabs.remove = async () => {}
+  await assert.rejects(createAgentTabQueue(f.deps)('https://agent.test'), /removal is unconfirmed/)
+  assert.deepEqual((await f.chrome.storage.local.get()).placeholder, { windowId: 1, tabId: 10 })
+})
+
+test('unsettled placeholder metadata is retained instead of becoming a user tab', async () => {
+  const f = fixture()
+  await seedPlaceholder(f)
+  const query = f.chrome.tabs.query
+  f.chrome.tabs.query = async options => (await query(options)).map(tab =>
+    tab.id === 10 ? { ...tab, url: '', pendingUrl: 'about:blank' } : tab)
+  const create = createAgentTabQueue(f.deps)
+  await assert.rejects(create('https://agent.test'), /placeholder navigation is unconfirmed/)
+  assert.deepEqual((await f.chrome.storage.local.get()).placeholder, { windowId: 1, tabId: 10 })
+  await assert.rejects(create('https://again.test'), /refusing to create another window/)
+  f.chrome.tabs.query = query
+  assert.equal((await create('https://settled.test')).windowId, 1)
+})
+
+test('missing window record recovers an all-agent window instead of opening another', async () => {
+  const f = fixture()
+  const existing = await f.chrome.tabs.create({ url: 'https://agent.test', windowId: 7 })
+  f.ownedTabs.add(existing.id)
+  f.chrome.windows.getAll = async () => [{ id: 7, state: 'normal' }]
+  f.chrome.windows.create = async () => { throw new Error('must reuse existing agent window') }
+  const create = createAgentTabQueue(f.deps)
+  assert.equal((await create('https://next.test')).windowId, 7)
+})
+
+test('unknown window tab inventory refuses instead of creating another window', async () => {
+  const f = fixture()
+  await f.chrome.storage.local.set({ window: 7 })
+  f.chrome.tabs.query = async () => { throw new Error('inventory unavailable') }
+  f.chrome.windows.create = async () => { throw new Error('must not create another window') }
+  await assert.rejects(createAgentTabQueue(f.deps)('https://next.test'), /inventory unavailable/)
+})
+
+test('user tabs in the shared agent window refuse rather than multiplying agent windows', async () => {
+  const f = fixture()
+  const create = createAgentTabQueue(f.deps)
+  await create('https://agent.test')
+  await f.chrome.tabs.create({ url: 'https://user.test', windowId: 1 })
+  f.chrome.windows.create = async () => { throw new Error('must not create a second agent window') }
+  await assert.rejects(create('https://next.test'), /shared agent window contains user tabs/)
+  assert.equal((await f.chrome.storage.local.get()).window, 1)
 })
 
 test('expired windows.create cannot publish late window and cleans only its created tabs', async () => {
@@ -117,10 +211,11 @@ for (const step of ['loadOwnedTabs', 'loadAgentPopups', 'persistOwnedTabs']) {
   })
 }
 
-for (const [api, method] of [['windows', 'get'], ['tabs', 'query'], ['tabs', 'get'], ['tabs', 'remove']]) {
+for (const [api, method] of [['windows', 'get'], ['windows', 'getAll'], ['tabs', 'query'], ['tabs', 'remove']]) {
   test(`queue deadline bounds chrome.${api}.${method}`, async () => {
     const f = fixture()
     const create = createAgentTabQueue(f.deps)
+    if (method === 'remove') await seedPlaceholder(f)
     if (method === 'get' && api === 'windows' || method === 'query') await create('https://warm.test')
     const normal = f.chrome[api][method]
     f.chrome[api][method] = () => new Promise(() => {})

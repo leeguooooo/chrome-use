@@ -193,7 +193,10 @@ async function isNativeDuplicateLifecycleEvent(tab) {
 // working in, instead of being interleaved with the user's own tabs. Per-session
 // colored tab groups still apply inside it. The id is persisted in
 // chrome.storage.local and re-validated on use, so a service-worker restart
-// reuses the SAME window instead of opening a second one. `null` = not resolved
+// reuses the SAME window instead of opening a second one. Lost records are
+// recovered only from windows whose tabs have verified agent ownership;
+// uncertain reads and placeholder cleanup failures never create replacements.
+// `null` = not resolved
 // yet this SW lifetime.
 const AGENT_WINDOW_KEY = 'ab_agent_window_id';
 let agentWindowId = null;
