@@ -2352,6 +2352,8 @@ mod tests {
         let policy = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(policy.path(), r#"{"deny":["tab_list"]}"#).unwrap();
         let mut flags = crate::flags::parse_flags(&[]);
+        flags.force_launch = false;
+        flags.provider = None;
         flags.cdp = Some("ws://127.0.0.1:1".to_string());
         flags.action_policy = Some(policy.path().to_string_lossy().to_string());
         assert!(list_all_tabs(&flags, 200, false)

@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.189
+## 1.5.190
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.38 for the shared-window fixes. Chrome Web Store publication follows Google review; CLI browser automation remains compatible with 0.5.35.
+
+### Bug Fixes
+
+- **One shared AI window.** All AI sessions in a Chrome profile reuse one background window with separate tab groups, leaving the user's window separate. New windows use the first task tab directly, without an extra blank placeholder. Lost records recover verified agent windows, and fullscreen does not create a replacement. Mixed user/agent windows and uncertain ownership refuse new tabs instead of multiplying windows (#545).
+- **Placeholder cleanup.** Older placeholders retain their identity when cleanup fails or cannot be confirmed. Incomplete setup names the tab already created so callers can inspect it before retrying (#545).
+- **Read-only tab inventory.** Even a fresh `tab list --all` starts no daemon and creates no window or tab. Existing sessions keep their own browser; missing non-relay endpoints and daemon version mismatches are explicit refusals rather than guesses (#545).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.189
+
 Requires extension ab-connect 0.5.37. Chrome Web Store publication follows Google review; CLI browser automation remains compatible with 0.5.35.
 
 ### New Features
@@ -26,7 +41,6 @@ Requires extension ab-connect 0.5.37. Chrome Web Store publication follows Googl
 
 - @leeguooooo
 - @mpeter
-<!-- release:end -->
 
 ## 1.5.188
 
