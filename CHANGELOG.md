@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.203
+## 1.5.204
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.49 for the conversation menu. Chrome Web Store publication follows Google review.
+
+### New Features
+
+- **Conversations for this site, or all of them.** The panel header opens a conversation menu with a "This site · x.com" / "All" switch. A conversation belongs to the main domain of the page its first message was sent from, so conversations started on mobile.x.com show on x.com. Each entry shows the agent, site and how long ago it was used, and the choice of view is remembered. Conversations from before this release have no site and appear under All.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.203
+
 Requires extension ab-connect 0.5.47 for the new rendering. Chrome Web Store publication follows Google review.
 
 ### Improvements
@@ -13,7 +26,6 @@ Requires extension ab-connect 0.5.47 for the new rendering. Chrome Web Store pub
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.202
 

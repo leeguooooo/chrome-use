@@ -24,13 +24,26 @@ h3 { font-size:14px; font-weight:600; }
 /* Header: one row, conversation picker reads as a title. */
 .toolbar { display:flex; align-items:center; gap:4px; padding:8px 10px; border-bottom:1px solid var(--line); }
 .toolbar img { margin:0 4px; }
-.conversation-picker { flex:1; border-color:transparent; background:transparent; font-weight:600; padding:5px 6px; text-overflow:ellipsis; }
+.conversation-picker { flex:1; min-width:0; display:flex; align-items:center; gap:6px; border-color:transparent; background:transparent; font-weight:600; padding:5px 6px; text-align:left; }
+.conversation-picker span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.conversation-picker svg { flex:none; color:var(--muted); }
+.conversation-menu { position:absolute; left:8px; right:8px; top:46px; z-index:5; background:var(--bg); border:1px solid var(--line); border-radius:12px; box-shadow:0 8px 24px rgb(0 0 0 / .14); padding:6px; max-height:min(70vh,480px); display:flex; flex-direction:column; }
+.scope { display:flex; gap:2px; padding:2px; margin-bottom:6px; background:var(--surface); border-radius:9px; }
+.scope button { flex:1; min-width:0; border:0; background:transparent; border-radius:7px; padding:4px 8px; font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; }
+.scope button[aria-selected="true"] { background:var(--bg); color:var(--ink); box-shadow:0 1px 2px rgb(0 0 0 / .1); }
+.conversation-items { overflow:auto; }
+.conversation-item { display:block; width:100%; text-align:left; border:0; background:transparent; border-radius:8px; padding:7px 10px; }
+.conversation-item:hover,.conversation-item.selected { background:var(--surface); }
+.conversation-item .title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+.conversation-item .meta { display:block; font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.conversation-item.new .title { color:var(--accent); font-weight:600; }
+.conversation-empty { padding:14px 10px; font-size:12px; color:var(--muted); text-align:center; }
 .conversation-picker:hover:not(:disabled) { background:var(--surface); }
 .connection { font-size:12px; color:var(--error); padding:8px 14px; background:var(--error-bg); }
 .connection.ok { display:none; }
 .notice { margin:8px 12px 0; padding:8px 10px; border-radius:8px; background:var(--error-bg); color:var(--error); white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
 
-.chat-view { flex:1; min-height:0; display:flex; flex-direction:column; }
+.chat-view { flex:1; min-height:0; display:flex; flex-direction:column; position:relative; }
 .conversation-status { display:flex; align-items:center; gap:8px; justify-content:space-between; padding:6px 14px; color:var(--muted); font-size:12px; }
 .conversation-status.idle { display:none; }
 .conversation-status.busy #phase::before { content:""; display:inline-block; width:7px; height:7px; margin-right:6px; border-radius:50%; background:var(--accent); animation:pulse 1.2s ease-in-out infinite; }

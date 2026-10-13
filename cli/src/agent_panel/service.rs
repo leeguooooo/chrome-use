@@ -774,6 +774,10 @@ async fn dispatch(
             };
             if let Some(page) = &p.page {
                 page.validate()?;
+                let chat = e.chat(&p.conversation_id)?;
+                if chat.site.is_none() {
+                    chat.site = page_site(&page.url);
+                }
             }
             let message = Message {
                 id: p.message_id.clone(),
@@ -1016,6 +1020,22 @@ async fn dispatch(
         }
         _ => Err("Unsupported conversation service operation".into()),
     }
+}
+
+/// The host a conversation is listed under: the page's host without `www.`.
+fn page_site(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    Some(
+        host.strip_prefix("www.")
+            .unwrap_or(&host)
+            .chars()
+            .take(253)
+            .collect(),
+    )
 }
 
 fn automatic_approval(method: &str, params: &Value) -> Option<Value> {

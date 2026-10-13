@@ -124,6 +124,9 @@ pub(super) struct Conversation {
     /// service). Older state has no field and keeps asking.
     #[serde(default)]
     pub full_access: bool,
+    /// Host of the page the conversation started from, for the per-site list.
+    #[serde(default)]
+    pub site: Option<String>,
 }
 
 impl Conversation {
@@ -165,10 +168,11 @@ impl Conversation {
             last_error: None,
             executable,
             full_access: false,
+            site: None,
         })
     }
     pub(super) fn summary(&self) -> Value {
-        json!({"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"fullAccess":self.full_access,"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}})
+        json!({"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"fullAccess":self.full_access,"site":self.site,"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}})
     }
     pub(super) fn queue_snapshot(&self) -> Value {
         Value::Array(

@@ -1379,6 +1379,7 @@ fn full_access_conversations_run_without_prompts_and_can_be_switched_mid_request
         .clone();
     assert_eq!(user["data"]["text"], "echo-input");
     assert_eq!(user["data"]["page"]["tabId"], 42);
+    assert_eq!(done["conversation"]["site"], "example.test");
     let bad = panel_reply(
         &mut host,
         &rx,

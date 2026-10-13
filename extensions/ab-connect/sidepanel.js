@@ -2,17 +2,34 @@ import { PanelTimeline, phaseLabels } from './panel-state.js';
 import { renderMarkdown } from './markdown.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
+// Main domain of a host: the last two labels, or three under common
+// second-level public suffixes (example.co.uk, example.com.cn).
+const secondLevel = new Set(['co.uk','org.uk','ac.uk','gov.uk','com.cn','net.cn','org.cn','gov.cn','edu.cn','com.hk','com.tw','co.jp','ne.jp','or.jp','ac.jp','co.kr','com.au','net.au','org.au','com.br','com.sg','co.in','co.nz','com.mx']);
+export function mainDomain(host) {
+  const clean = String(host || '').toLowerCase().replace(/^www\./, '').replace(/\.$/, '');
+  if (!clean || /^[\d.]+$/.test(clean) || clean.includes(':') || !clean.includes('.')) return clean;
+  const labels = clean.split('.');
+  return labels.slice(secondLevel.has(labels.slice(-2).join('.')) ? -3 : -2).join('.');
+}
+function relativeTime(at) {
+  const seconds = Math.max(0, (Date.now() - Number(at || 0)) / 1000);
+  if (!at || !Number.isFinite(seconds)) return '';
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
 const agentNames = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode', pi: 'Pi' };
 const chatAgents = new Set(Object.keys(agentNames));
 const fieldLabels = { model: 'Model', provider: 'Provider', effort: 'Reasoning effort', serviceTier: 'Service tier', smallModel: 'Small model', opusModel: 'Opus model', sonnetModel: 'Sonnet model', haikuModel: 'Haiku model' };
 
 export function createPanel({ document, runtime, storage, tabs, schedule = setTimeout, cancel = clearTimeout }) {
-  const ids = ['pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
+  const ids = ['pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
   let timeline = new PanelTimeline(), conversations = [], conversation = null, timer = null, polling = false;
   const pendingMessages = new Map(), drafts = new Map();
-  let modelEpoch = 0, newFullAccess = true, page = null, pageDetached = false;
+  let modelEpoch = 0, newFullAccess = true, page = null, pageDetached = false, scope = 'site';
   let sending = false, configuration = null, configEpoch = 0, preview = null, applied = null;
   const rendered = new Map(), requestNodes = new Map(), queuedNodes = new Map();
 
@@ -64,7 +81,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     nodes.retryPending.disabled = sending || !connected || typeof pending?.text !== 'string';
     nodes.clearPending.disabled = sending;
     const writable = panelSupport?.mode === 'full';
-    nodes.conversation.disabled = sending || !writable; nodes.newChat.disabled = sending || !writable;
+    nodes.conversation.disabled = sending || !writable; nodes.conversationButton.disabled = sending || !writable; nodes.newChat.disabled = sending || !writable;
     nodes.message.disabled = !writable; nodes.inspectAgent.disabled = !connected || !writable || !panelSupport?.modelInspection;
     nodes.agent.disabled = !writable; nodes.model.disabled = !writable; nodes.customModel.disabled = !writable; nodes.executable.disabled = !writable;
     nodes.newOptions.hidden = Boolean(selected); nodes.modelChip.hidden = Boolean(selected);
@@ -102,7 +119,37 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     nodes.conversation.firstElementChild.value = '';
     for (const chat of conversations) { const option = element('option', chat.title || 'Conversation'); option.value = chat.id; nodes.conversation.append(option); }
     nodes.conversation.value = selected;
+    renderConversationMenu();
   }
+  // The list can show every conversation or only those started on the main
+  // domain of the tab beside the panel (x.com covers mobile.x.com).
+  function currentDomain() {
+    try { return page ? mainDomain(new URL(page.url).hostname) : null; } catch { return null; }
+  }
+  function renderConversationMenu() {
+    const chat = conversations.find(c => c.id === selected);
+    nodes.conversationTitle.textContent = chat?.title || 'New conversation';
+    const domain = currentDomain(), siteScope = scope === 'site' && Boolean(domain);
+    nodes.scopeSite.textContent = domain ? `This site · ${domain}` : 'This site';
+    nodes.scopeSite.disabled = !domain;
+    nodes.scopeSite.setAttribute('aria-selected', String(siteScope)); nodes.scopeAll.setAttribute('aria-selected', String(!siteScope));
+    const shown = siteScope ? conversations.filter(c => c.site && mainDomain(c.site) === domain) : conversations;
+    const newItem = element('button', undefined, 'conversation-item new'); newItem.type = 'button';
+    newItem.append(element('span', '＋ New conversation', 'title'));
+    newItem.addEventListener('click', () => { closeConversationMenu(); nodes.conversation.value = ''; select(''); loadModels(); });
+    const items = [newItem];
+    for (const c of shown) {
+      const item = element('button', undefined, `conversation-item${c.id === selected ? ' selected' : ''}`); item.type = 'button';
+      item.setAttribute('role', 'option'); item.setAttribute('aria-selected', String(c.id === selected));
+      item.append(element('span', c.title || 'Conversation', 'title'), element('span', [agentNames[c.agentId] || c.agentId, !siteScope && c.site, relativeTime(c.updated)].filter(Boolean).join(' · '), 'meta'));
+      item.addEventListener('click', () => { closeConversationMenu(); select(c.id); });
+      items.push(item);
+    }
+    if (!shown.length) items.push(element('p', siteScope ? `No conversations on ${domain} yet.` : 'No conversations yet.', 'conversation-empty'));
+    nodes.conversationItems.replaceChildren(...items);
+  }
+  function closeConversationMenu() { nodes.conversationMenu.hidden = true; nodes.conversationButton.setAttribute('aria-expanded', 'false'); }
+  function setScope(next) { scope = next; storage?.local?.set({ ab_panel_conversation_scope: next }).catch(() => {}); renderConversationMenu(); }
   function select(id, duringCreate = false) {
     if (sending && !duringCreate) { nodes.conversation.value = selected; return; }
     drafts.set(selected, nodes.message.value);
@@ -111,7 +158,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     nodes.deleteConfirm.hidden = true;
     selected = id; selectionEpoch++; conversation = conversations.find(c => c.id === id) || null;
     timeline = new PanelTimeline(); queuedNodes.clear(); nodes.queuedMessages.replaceChildren(); nodes.queuedMessages.hidden = true; rendered.clear(); requestNodes.clear(); nodes.requests.replaceChildren();
-    nodes.transcript.replaceChildren(nodes.empty); nodes.empty.hidden = false; controls();
+    nodes.transcript.replaceChildren(nodes.empty); nodes.empty.hidden = false; controls(); renderConversationMenu();
     storage?.local?.set({ ab_panel_conversation: id }).catch(() => {});
     void poll().catch(error);
   }
@@ -373,7 +420,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     const [tab] = await tabs.query({ active: true, currentWindow: true });
     const next = tab && typeof tab.id === 'number' && /^https?:/.test(tab.url || '') ? { tabId: tab.id, url: tab.url, title: tab.title || tab.url } : null;
     if (next?.tabId !== page?.tabId) pageDetached = false;
-    page = next; renderPage();
+    page = next; renderPage(); renderConversationMenu();
   }
   // New conversations use the remembered choice; an existing one switches in
   // place, and the service answers requests that are already waiting.
@@ -533,6 +580,17 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   nodes.message.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void send(event.ctrlKey || event.metaKey).catch(error); } });
   nodes.sendDirect.addEventListener('click', () => void send(true).catch(error));
   nodes.conversation.addEventListener('change', () => select(nodes.conversation.value));
+  nodes.conversationButton.addEventListener('click', () => {
+    if (sending) return;
+    const open = nodes.conversationMenu.hidden; renderConversationMenu();
+    nodes.conversationMenu.hidden = !open; nodes.conversationButton.setAttribute('aria-expanded', String(open));
+  });
+  nodes.scopeSite.addEventListener('click', () => setScope('site'));
+  nodes.scopeAll.addEventListener('click', () => setScope('all'));
+  if (document.addEventListener) {
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') closeConversationMenu(); });
+    document.addEventListener('click', event => { if (!nodes.conversationMenu.hidden && !nodes.conversationMenu.contains(event.target) && !nodes.conversationButton.contains(event.target)) closeConversationMenu(); });
+  }
   nodes.newChat.addEventListener('click', () => { nodes.conversation.value = ''; select(''); loadModels(); });
   nodes.refresh.addEventListener('click', () => void refresh().catch(error));
   nodes.pageDetach.addEventListener('click', () => { pageDetached = true; renderPage(); });
@@ -567,10 +625,11 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
       else if (connected) void poll().catch(error);
     }
   });
-  controls();
+  controls(); closeConversationMenu();
   return { async start() {
     try {
-      const saved = await storage?.local?.get(['ab_panel_conversation', 'ab_panel_pending', 'ab_panel_full_access']);
+      const saved = await storage?.local?.get(['ab_panel_conversation', 'ab_panel_pending', 'ab_panel_full_access', 'ab_panel_conversation_scope']);
+      if (saved?.ab_panel_conversation_scope === 'all') scope = 'all';
       selected = saved?.ab_panel_conversation || '';
       if (saved?.ab_panel_full_access === false) newFullAccess = false;
       for (const [id, messageId] of Object.entries(saved?.ab_panel_pending || {}).slice(0, 64)) {

@@ -472,3 +472,32 @@ test('Agents & models never runs more than two CLI probes at once', async () => 
   assert.ok(lines.every(line => line.startsWith('v1.0.0')), lines.join(' | '));
   f.panel.close();
 });
+
+test('the conversation menu shows this site or everything, by main domain', async () => {
+  const chats = [{ ...chat('x1'), title: 'reply on x', site: 'x.com', agentId: 'codex' }, { ...chat('x2'), title: 'mobile x', site: 'mobile.x.com', agentId: 'pi' }, { ...chat('gh'), title: 'repos', site: 'github.com', agentId: 'claude' }, { ...chat('old'), title: 'no site' }];
+  const tabs = { async query() { return [{ id: 3, url: 'https://x.com/someone/status/1', title: 'post' }]; } };
+  const f = await fixture({ tabs, status: () => ({connected:true, agentPanel:{...fullSupport, pageContext:true}}), conversationList: () => ({ success: true, result: { conversations: chats } }) });
+  await settle();
+  const titles = () => f.nodes.get('conversationItems').children.slice(1).map(item => item.children[0]?.textContent);
+  f.nodes.get('conversationButton').fire('click');
+  assert.equal(f.nodes.get('conversationMenu').hidden, false);
+  assert.equal(f.nodes.get('scopeSite').textContent, 'This site · x.com');
+  assert.deepEqual(titles(), ['reply on x', 'mobile x']);
+  f.nodes.get('scopeAll').fire('click');
+  assert.deepEqual(titles(), ['reply on x', 'mobile x', 'repos', 'no site']);
+  assert.ok(f.writes.some(w => w.ab_panel_conversation_scope === 'all'));
+  f.nodes.get('conversationItems').children[3].fire('click'); await settle();
+  assert.equal(f.nodes.get('conversation').value, 'gh');
+  assert.equal(f.nodes.get('conversationTitle').textContent, 'repos');
+  assert.equal(f.nodes.get('conversationMenu').hidden, true);
+  f.panel.close();
+});
+
+test('main domains group subdomains and keep two-level public suffixes', async () => {
+  const { mainDomain } = await import('./sidepanel.js');
+  assert.equal(mainDomain('mobile.x.com'), 'x.com');
+  assert.equal(mainDomain('www.bbc.co.uk'), 'bbc.co.uk');
+  assert.equal(mainDomain('news.sina.com.cn'), 'sina.com.cn');
+  assert.equal(mainDomain('localhost'), 'localhost');
+  assert.equal(mainDomain('127.0.0.1'), '127.0.0.1');
+});

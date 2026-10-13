@@ -11,12 +11,20 @@
     <header class="toolbar">
       <img src="icons/icon32.png" width="20" height="20" alt="">
       <label class="sr-only" for="conversation">Conversation</label>
-      <select id="conversation" class="conversation-picker"><option value="">New conversation</option></select>
+      <button id="conversationButton" class="conversation-picker" type="button" aria-haspopup="listbox" aria-expanded="false"><span id="conversationTitle">New conversation</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+      <select id="conversation" class="sr-only" tabindex="-1" aria-hidden="true"><option value="">New conversation</option></select>
       <button id="newChat" class="icon" type="button" title="New conversation" aria-label="New conversation">＋</button>
       <button id="deleteChat" class="icon" type="button" title="Delete conversation" aria-label="Delete conversation" hidden><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg></button>
       <button id="refresh" class="icon" type="button" title="Refresh" aria-label="Refresh">↻</button>
       <button id="agentsTab" class="icon" type="button" title="Agents &amp; models" aria-label="Agents and models" aria-pressed="false">⚙</button>
     </header>
+    <div id="conversationMenu" class="conversation-menu" hidden>
+      <div class="scope" role="tablist" aria-label="Which conversations">
+        <button id="scopeSite" type="button" role="tab">This site</button>
+        <button id="scopeAll" type="button" role="tab">All</button>
+      </div>
+      <div id="conversationItems" class="conversation-items" role="listbox" aria-label="Conversations"></div>
+    </div>
     <p id="connection" class="connection" role="status">Checking local connection…</p>
     <div id="notice" class="notice" role="alert" hidden></div>
     <section id="deleteConfirm" class="delete-confirm" role="alertdialog" aria-label="Delete conversation" hidden>
