@@ -42,6 +42,8 @@ struct Browser {
     relay: bool,
     tabs: Vec<Tab>,
     created: u32,
+    /// Reproduce a mixed user/agent window refusing the first target.
+    refuse_create: bool,
     /// Capabilities the extension announces.
     caps: Vec<String>,
     /// Every method received, with its params.
@@ -274,6 +276,9 @@ impl Fake {
                 }
             }
             "Target.createTarget" => {
+                if b.refuse_create {
+                    return Err("createTarget: the shared agent window contains user tabs; refusing to create another agent window".to_string());
+                }
                 b.created += 1;
                 let n = b.created;
                 let id = format!("MINE{n}");
@@ -611,6 +616,108 @@ fn relay_profile() -> Vec<Tab> {
 
 const CAPS_0534: &[&str] = &["call:call-v1", "state", "attachTabById", "releaseTab"];
 const CAPS_0533: &[&str] = &["call:call-v1", "state", "attachTabById"];
+
+#[test]
+fn refused_first_open_keeps_passive_inventory_available() {
+    let (fake, url) = Fake::start(true, relay_profile(), CAPS_0534);
+    fake.0.lock().unwrap().refuse_create = true;
+    let d = Daemon::start("at-refused", &url, true);
+    let failed = d.json(&["open", "https://example.com"]);
+    assert_eq!(failed["success"], false, "{failed}");
+    assert!(
+        failed["error"]
+            .as_str()
+            .unwrap()
+            .contains("shared agent window"),
+        "{failed}"
+    );
+    assert_eq!(fake.0.lock().unwrap().created, 0);
+
+    // Omit CDP on this invocation so the real CLI reads its existing daemon,
+    // exactly as the documented recovery command after the refused open.
+    let mark = fake.mark();
+    let mut command = Command::new(BIN);
+    let out = d
+        .env(&mut command)
+        .env_remove("AGENT_BROWSER_CDP")
+        .env_remove("AGENT_BROWSER_SESSION")
+        .args([
+            "--session",
+            &d.session,
+            "--json",
+            "tab",
+            "list",
+            "--all",
+            "--limit",
+            "2",
+            "--full",
+        ])
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(out.status.success(), "{v}");
+    assert_eq!(v["data"]["source"], "relay:chrome.tabs.query", "{v}");
+    assert_eq!(v["data"]["readOnly"], true, "{v}");
+    assert_eq!(v["data"]["full"], true, "{v}");
+    assert_eq!(v["data"]["total"], 4, "{v}");
+    assert_eq!(rows(&v).len(), 2, "{v}");
+    no_touch(&fake.since(mark), "inventory after refused open");
+    assert_eq!(fake.0.lock().unwrap().created, 0);
+
+    // Inventory must not install a driving connection or bypass the refusal.
+    let failed_again = d.json(&["open", "https://example.com"]);
+    assert_eq!(failed_again["success"], false, "{failed_again}");
+    assert_eq!(fake.0.lock().unwrap().created, 0);
+
+    // A pinned profile's restarted relay takes precedence over the daemon's
+    // old endpoint. A missing pin must not fall back to that old endpoint.
+    let (restarted, restarted_url) = Fake::start(
+        true,
+        vec![tab("RESTARTED", 901, 3, 0, "https://bound.example/")],
+        CAPS_0534,
+    );
+    std::fs::write(
+        d.sock.path().join(format!("{}.relay-profile", d.session)),
+        "bound",
+    )
+    .unwrap();
+    let sidecar = d.relay.path().join("relay-cdp-url-bound");
+    std::fs::write(&sidecar, restarted_url).unwrap();
+    std::fs::write(
+        d.relay.path().join("relay-ext-profile-bound"),
+        json!({"id":"bound","email":null}).to_string(),
+    )
+    .unwrap();
+    let mark = fake.mark();
+    let restarted_mark = restarted.mark();
+    // Send directly to the live daemon to exercise its pin handling rather
+    // than CLI endpoint selection, which also refuses a disconnected pin.
+    let query = || {
+        use std::io::{BufRead, BufReader};
+        let mut stream = std::os::unix::net::UnixStream::connect(d.sock_path()).unwrap();
+        writeln!(
+            stream,
+            "{}",
+            json!({"id":"recovery-inventory","action":"tab_list","all":true})
+        )
+        .unwrap();
+        let mut line = String::new();
+        BufReader::new(stream).read_line(&mut line).unwrap();
+        serde_json::from_str::<Value>(&line).unwrap()
+    };
+    let pinned = query();
+    assert_eq!(pinned["success"], true, "{pinned}");
+    assert_eq!(rows(&pinned)[0]["handle"], "chrome-tab:901", "{pinned}");
+    assert!(fake.since(mark).is_empty(), "queried the old endpoint");
+    no_touch(
+        &restarted.since(restarted_mark),
+        "bound inventory after relay restart",
+    );
+    std::fs::remove_file(sidecar).unwrap();
+    let pinned_down = query();
+    assert_eq!(pinned_down["success"], false, "{pinned_down}");
+    assert!(fake.since(mark).is_empty(), "fell back to the old endpoint");
+}
 
 #[test]
 fn relay_listing_shows_every_tab_by_owner_and_touches_nothing() {

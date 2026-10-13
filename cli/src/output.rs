@@ -4488,6 +4488,8 @@ Every tab (`tab list --all`):
   Lists the tabs of the whole connected profile by observation only: nothing is
   attached, activated, focused, moved or reloaded, and no page content is read.
   Even a fresh session starts no daemon and creates no window or tab.
+  After a refused first open, inventory uses the same bound endpoint passively;
+  it creates no driving connection and does not bypass window ownership guards.
   Each row has a `handle` (relay: `chrome-tab:<id>`; direct CDP: the targetId),
   its window, whether it is the active tab of that window (relay only), title,
   url, pinned/incognito/discarded (relay only) and its owner: this session,

@@ -53,6 +53,8 @@
       <p class="du-lede">On the Chrome extension relay, all AI sessions share one background window, with a separate tab group per session; the user keeps their own window. Login state belongs to the shared profile. Only browsers started separately with <code>--launch</code> have isolated cookies and storage.</p>
       <p>Existing windows containing only verified agent tabs are reused, including fullscreen windows. Lost records recover an existing agent window before creating another. User tabs are never moved or deleted to reclaim a window. Mixed user/agent windows refuse new tabs until the user tabs are moved out; no second agent window is created. Failed placeholder cleanup retains its identity and reports failure. Even the first <code>tab list --all</code> call starts no daemon and creates no window, tab or page attachment.</p>
 
+      <p>After a refused first <code>open</code>, <code>tab list --all</code> can still inspect the session's bound profile or configured CDP endpoint passively. It creates no driving connection and does not bypass mixed-window guards.</p>
+
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Know which path you're on</div>
         <code>state save</code> / <code>--state</code> / <code>--session-name</code> are for the browsers chrome-use

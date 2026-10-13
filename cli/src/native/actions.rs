@@ -13237,7 +13237,25 @@ async fn handle_keyboard(cmd: &Value, state: &DaemonState) -> Result<Value, Stri
 // ---------------------------------------------------------------------------
 
 async fn handle_tab_list(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
-    let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
+    // A refused first connection leaves a live daemon without a browser.
+    // Recover inventory through its bound endpoint, without connecting a
+    // driving session, creating a target, or choosing another profile.
+    let mut passive = None;
+    if cmd.get("all").and_then(Value::as_bool) == Some(true) && state.browser.is_none() {
+        let endpoint = match crate::connection::session_relay_profile(&state.session_id)? {
+            Some(id) => crate::connect::relay_endpoint_for_profile(&id)
+                .map_err(|e| format!("tab list --all: bound profile {id}: {e}"))?,
+            None => env::var("AGENT_BROWSER_CDP").map_err(|_| {
+                "Browser not launched; tab list --all needs the session's existing endpoint or an explicit --cdp".to_string()
+            })?,
+        };
+        passive = Some(BrowserManager::connect_cdp_for_inventory(&endpoint).await?);
+    }
+    let mgr = state
+        .browser
+        .as_mut()
+        .or(passive.as_mut())
+        .ok_or("Browser not launched")?;
     // `tab list --all`: every tab in the profile, by observation only. It
     // must not run `resync_targets`, which attaches to targets it has not
     // seen on a direct CDP connection.

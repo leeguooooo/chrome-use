@@ -439,6 +439,10 @@ A running session keeps its existing browser. A missing non-relay daemon needs
 `--cdp`; inventory refuses to launch a browser, provision a provider or upgrade
 a daemon. Action-policy restrictions still apply.
 
+After a refused first `open`, a running daemon with no driving connection can
+still read inventory through its bound profile or configured CDP endpoint.
+This does not create a driving connection or bypass mixed-window guards.
+
 Each row of `browserTabs` has:
 
 - `handle`: what to pass to `--tab` or `tab adopt`. Relay: `chrome-tab:<id>`
