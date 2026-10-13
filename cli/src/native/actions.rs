@@ -13245,9 +13245,7 @@ async fn handle_tab_list(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         let endpoint = match crate::connection::session_relay_profile(&state.session_id)? {
             Some(id) => crate::connect::relay_endpoint_for_profile(&id)
                 .map_err(|e| format!("tab list --all: bound profile {id}: {e}"))?,
-            None => env::var("AGENT_BROWSER_CDP").map_err(|_| {
-                "Browser not launched; tab list --all needs the session's existing endpoint or an explicit --cdp".to_string()
-            })?,
+            None => env::var("AGENT_BROWSER_CDP").map_err(|_| "Browser not launched".to_string())?,
         };
         passive = Some(BrowserManager::connect_cdp_for_inventory(&endpoint).await?);
     }
