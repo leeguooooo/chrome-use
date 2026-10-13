@@ -142,6 +142,7 @@ function worker({ tabs = [], storage = {} } = {}) {
     tabs: new Map(tabs),
     childSessionToTab: new Map(),
     ownedTabs: new Set(),
+    port: {},
     withRelayTimeout: (p) => p,
     postToHost: (msg) => calls.posted.push(msg),
     scheduleKeepalivePing() {},
