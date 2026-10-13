@@ -2502,6 +2502,60 @@ fn status_summary(nodes: &[TreeNode], idx: usize) -> String {
     text
 }
 
+/// References actually rendered in the returned tree. Names, values and
+/// context use JSON strings; bracket-like page text inside them is not a ref.
+/// The renderer emits one real ref attribute per node line, after its name.
+pub fn rendered_ref_ids(tree: &str) -> std::collections::HashSet<String> {
+    let mut refs = std::collections::HashSet::new();
+    for line in tree.lines() {
+        let trimmed = line.trim_start();
+        let node_line = trimmed
+            .strip_prefix("+ ")
+            .map(str::trim_start)
+            .unwrap_or(trimmed);
+        if !node_line.starts_with("- ") || node_line.starts_with("- note:") {
+            continue;
+        }
+        let bytes = line.as_bytes();
+        let (mut quoted, mut escaped, mut i) = (false, false, 0);
+        let mut candidate = None;
+        while i < bytes.len() {
+            let byte = bytes[i];
+            if quoted {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    quoted = false;
+                }
+                i += 1;
+                continue;
+            }
+            if byte == b'"' {
+                quoted = true;
+                i += 1;
+                continue;
+            }
+            if (i == 0 || bytes[i - 1].is_ascii_whitespace()) && bytes[i..].starts_with(b"[ref=e") {
+                let start = i + 5;
+                let mut end = start + 1;
+                while end < bytes.len() && bytes[end].is_ascii_digit() {
+                    end += 1;
+                }
+                if end > start + 1 && matches!(bytes.get(end), Some(b']' | b',')) {
+                    candidate = Some(line[start..end].to_string());
+                }
+            }
+            i += 1;
+        }
+        if let Some(id) = candidate {
+            refs.insert(id);
+        }
+    }
+    refs
+}
+
 /// Ref attributes can be followed by context, modal, or future metadata.
 /// Match the attribute boundary so e2 never selects e20.
 fn find_snapshot_ref(output: &str, ref_id: &str) -> Option<usize> {
@@ -3216,6 +3270,25 @@ fn collect_backend_node_ids(node: &Value, ids: &mut std::collections::HashSet<i6
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rendered_refs_ignore_page_text_and_match_complete_attribute_ids() {
+        let tree = r##"- button "Fake [ref=e99], escaped \" quote" [ref=e2, disabled] context="Not [ref=e88]"
+- role [ref=e100] "Name" [ref=e20]
+- alert: "Message [ref=e77]"
+- textbox "Name" [ref=e3] value="Text [ref=e66]"
+- button "No real ref"
+- note: use [ref=e50] later
++     - button "New child" [ref=e5]"##;
+        assert_eq!(
+            rendered_ref_ids(tree),
+            std::collections::HashSet::from([
+                "e2".to_string(),
+                "e20".to_string(),
+                "e3".to_string(),
+                "e5".to_string()
+            ])
+        );
+    }
 
     #[test]
     fn test_interactive_roles() {

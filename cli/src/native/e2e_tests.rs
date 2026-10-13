@@ -13625,3 +13625,103 @@ async fn e2e_semantic_click_names_covering_overlay() {
     let closed = execute_command(&json!({"id":"5","action":"close"}), &mut state).await;
     assert_success(&closed);
 }
+
+/// Scoped/budgeted reads must not return the full ref roster in JSON, but
+/// filtering output must not invalidate live refs held by the caller.
+#[tokio::test]
+#[ignore]
+async fn e2e_snapshot_excerpt_ref_metadata() {
+    let mut state = DaemonState::new();
+    let launched = execute_command(
+        &json!({"id":"scope-launch","action":"launch","headless":true}),
+        &mut state,
+    )
+    .await;
+    assert_success(&launched);
+    let mut html = String::from("<html><body><div id='scope'><button>Inside</button></div>");
+    for n in 0..300 {
+        html.push_str(&format!(
+            "<button onclick='window.choice={n}'>Outside {n}</button>"
+        ));
+    }
+    html.push_str("<script>window.choice=-1</script></body></html>");
+    let page = execute_command(
+        &json!({"id":"scope-page","action":"setcontent","html":html}),
+        &mut state,
+    )
+    .await;
+    assert_success(&page);
+    let full = execute_command(
+        &json!({"id":"scope-full","action":"snapshot","interactive":true}),
+        &mut state,
+    )
+    .await;
+    assert_success(&full);
+    let old = get_data(&full)["refs"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .find(|(_, r)| r["name"] == "Outside 299")
+        .unwrap()
+        .0
+        .clone();
+    let scoped = execute_command(
+        &json!({"id":"scope-read","action":"snapshot","interactive":true,"selector":"#scope"}),
+        &mut state,
+    )
+    .await;
+    assert_success(&scoped);
+    assert_eq!(
+        get_data(&scoped)["refs"].as_object().unwrap().len(),
+        1,
+        "{scoped}"
+    );
+    assert!(
+        state.ref_map.get(&old).is_some(),
+        "output filtering must not drop a live ref"
+    );
+    let mut legacy_scoped = get_data(&scoped).clone();
+    let legacy_refs: serde_json::Map<String, Value> = state
+        .ref_map
+        .entries_sorted()
+        .into_iter()
+        .map(|(id, entry)| (id, json!({"role":entry.role,"name":entry.name})))
+        .collect();
+    legacy_scoped["refs"] = json!(legacy_refs);
+    println!(
+        "EXCERPT_REFS {}",
+        json!({"legacyScopedJsonBytes":serde_json::to_vec(&legacy_scoped).unwrap().len(),"fullJsonBytes":serde_json::to_vec(get_data(&full)).unwrap().len(),"scopedJsonBytes":serde_json::to_vec(get_data(&scoped)).unwrap().len(),"scopedTextBytes":get_data(&scoped)["snapshot"].as_str().unwrap().len(),"totalLiveRefs":state.ref_map.entries_sorted().len(),"returnedRefs":get_data(&scoped)["refs"].as_object().unwrap().len()})
+    );
+    let budget = execute_command(
+        &json!({"id":"scope-budget","action":"snapshot","interactive":true,"maxBytes":250}),
+        &mut state,
+    )
+    .await;
+    assert_success(&budget);
+    let rendered =
+        super::snapshot::rendered_ref_ids(get_data(&budget)["snapshot"].as_str().unwrap());
+    assert_eq!(
+        get_data(&budget)["refs"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>(),
+        rendered
+    );
+    let clicked = execute_command(
+        &json!({"id":"scope-click","action":"click","selector":format!("@{old}")}),
+        &mut state,
+    )
+    .await;
+    assert_success(&clicked);
+    let receipt = execute_command(
+        &json!({"id":"scope-receipt","action":"eval","expression":"window.choice"}),
+        &mut state,
+    )
+    .await;
+    assert_success(&receipt);
+    assert_eq!(get_data(&receipt)["result"], 299);
+    let closed = execute_command(&json!({"id":"scope-close","action":"close"}), &mut state).await;
+    assert_success(&closed);
+}

@@ -68,6 +68,8 @@
         each carrying a <code>ref</code>. Pass it as <code>@eN</code> to a following command to act on it.
       </p>
 
+      <p>For scoped, depth-limited, regex-filtered or budgeted snapshots, JSON <code>refs</code> contains only references rendered in the returned excerpt. The session keeps its complete live ref map; narrowing output does not invalidate a previously captured ref. Sparse-page detection still uses the complete map.</p>
+
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>

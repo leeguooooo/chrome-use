@@ -7196,7 +7196,7 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
 
     let url = mgr.get_url().await.unwrap_or_default();
 
-    let refs: serde_json::Map<String, Value> = state
+    let mut refs: serde_json::Map<String, Value> = state
         .ref_map
         .entries_sorted()
         .into_iter()
@@ -7282,7 +7282,21 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         None => tree,
     };
 
+    // Sparse-page detection uses the complete live map, not an intentionally
+    // limited excerpt. Filtering output metadata must not trigger screenshots.
     let ref_count = refs.len();
+    let limited = options.selector.is_some()
+        || options.depth.is_some()
+        || budget.is_some()
+        || from > 0
+        || cmd
+            .get("filter")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty());
+    if limited {
+        let displayed = snapshot::rendered_ref_ids(&tree);
+        refs.retain(|id, _| displayed.contains(id));
+    }
     let mut out = json!({ "snapshot": tree, "origin": url, "refs": refs });
     out["settle"] = settled.to_json();
     // A tree read off a page that was still moving is not the page's answer.

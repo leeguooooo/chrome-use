@@ -15,6 +15,8 @@ chrome-use snapshot -i --json          # machine-readable output
 chrome-use snapshot -i --reveal-values # print card / password / code values
 ```
 
+For scoped, depth-limited, regex-filtered or budgeted snapshots, JSON `refs` contains only references rendered in the returned excerpt. The session keeps its complete live ref map; narrowing output does not invalidate a previously captured ref. Sparse-page detection still uses the complete map.
+
 ## Keep model input focused
 
 Use `snapshot -i -c` when empty structural nodes add no context. Use a scoped
