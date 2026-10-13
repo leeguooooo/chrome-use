@@ -313,6 +313,7 @@ pub(super) fn call(
 
 struct Job {
     generation: u64,
+    full_access: bool,
     sender: mpsc::Sender<BackendCommand>,
 }
 struct Engine {
@@ -325,6 +326,33 @@ struct Engine {
 }
 
 impl Engine {
+    /// Answer every waiting approval for a full-access conversation exactly as
+    /// the panel's "Allow once" would. Questions still go to the user.
+    fn approve_pending(&mut self, id: &str) {
+        let Some(sender) = self.jobs.get(id).map(|j| j.sender.clone()) else {
+            return;
+        };
+        for ((chat, _), (request_id, method, original, sent)) in self.requests.iter_mut() {
+            if chat != id || *sent {
+                continue;
+            }
+            let Some(result) = automatic_approval(method, original) else {
+                continue;
+            };
+            if validate_reply(method, original, &result).is_err() {
+                continue;
+            }
+            if sender
+                .try_send(BackendCommand::Reply {
+                    id: request_id.clone(),
+                    result,
+                })
+                .is_ok()
+            {
+                *sent = true;
+            }
+        }
+    }
     fn chat(&mut self, id: &str) -> Result<&mut Conversation, String> {
         if !self.chats.contains_key(id) {
             if self.chats.len() >= 32 {
@@ -433,6 +461,9 @@ impl Engine {
                 if self.chat(id)?.phase != Phase::Stopping {
                     self.chat(id)?.phase = Phase::WaitingInput;
                 }
+                if self.chat(id)?.full_access {
+                    self.approve_pending(id);
+                }
             }
             "requestResolved" => {
                 let key = serde_json::to_string(&notice.data["requestId"])
@@ -511,6 +542,14 @@ struct Create {
     agent_id: String,
     model: Option<String>,
     executable: Option<PathBuf>,
+    #[serde(default)]
+    full_access: bool,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SetAccess {
+    conversation_id: String,
+    full_access: bool,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -621,7 +660,8 @@ async fn dispatch(
             if p.executable.as_ref().is_some_and(|p| !p.is_absolute()) {
                 return Err("A custom agent executable must be an absolute path".into());
             }
-            let chat = Conversation::new(&p.agent_id, p.model, p.executable)?;
+            let mut chat = Conversation::new(&p.agent_id, p.model, p.executable)?;
+            chat.full_access = p.full_access;
             let mut e = engine.lock().await;
             e.store.create(&chat)?;
             let result = chat.summary();
@@ -778,6 +818,86 @@ async fn dispatch(
                 json!({"schemaVersion":1,"conversation":summary,"message":{"id":p.message_id,"accepted":added,"replayed":false}}),
             )
         }
+        "conversationSetAccess" => {
+            let p: SetAccess = serde_json::from_value(params.clone())
+                .map_err(|_| "conversationSetAccess requires conversationId and fullAccess")?;
+            let mut e = engine.lock().await;
+            e.chat(&p.conversation_id)?.full_access = p.full_access;
+            e.persist(&p.conversation_id)?;
+            // Requests already waiting are answered now; the agent process is
+            // restarted with matching flags before its next turn.
+            if p.full_access {
+                e.approve_pending(&p.conversation_id);
+            }
+            Ok(json!({"schemaVersion":1,"conversation":e.chat(&p.conversation_id)?.summary()}))
+        }
+        "conversationDelete" => {
+            let p: Identify = serde_json::from_value(params.clone())
+                .map_err(|_| "conversationDelete requires only conversationId")?;
+            let id = p.conversation_id;
+            let mut e = engine.lock().await;
+            if e.chat(&id)?.phase.busy() {
+                return Err("Stop the response before deleting this conversation".into());
+            }
+            // Files are removed only after the agent process is confirmed gone.
+            if let Some(job) = e.jobs.get(&id) {
+                job.sender
+                    .try_send(BackendCommand::Shutdown)
+                    .map_err(|_| "Agent shutdown was not dispatched; nothing was deleted")?;
+                drop(e);
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                loop {
+                    let locked = engine.lock().await;
+                    if !locked.jobs.contains_key(&id) {
+                        e = locked;
+                        break;
+                    }
+                    drop(locked);
+                    if tokio::time::Instant::now() > deadline {
+                        return Err("The agent process has not exited yet; nothing was deleted. Try again shortly.".into());
+                    }
+                    tokio::time::sleep(Duration::from_millis(30)).await;
+                }
+            }
+            // Real deletion also removes the CLI's own session history and the
+            // conversation's browser session. Both run without the engine lock.
+            let (agent_id, session_id) = {
+                let chat = e.chat(&id)?;
+                (chat.agent_id.clone(), chat.session_id.clone())
+            };
+            let profile = e.profile.clone();
+            drop(e);
+            let mut removed = Vec::new();
+            let mut failed = Vec::new();
+            let mut history_error = None;
+            if let Some(session_id) = &session_id {
+                match super::cli_session_files(&agent_id, session_id) {
+                    Ok(paths) => {
+                        for path in paths {
+                            match super::remove_session_path(&path) {
+                                Ok(()) => removed.push(path),
+                                Err(_) => failed.push(path),
+                            }
+                        }
+                    }
+                    Err(error) => history_error = Some(error),
+                }
+            }
+            let browser = close_browser_session(&profile, &format!("panel-{id}")).await;
+            let mut e = engine.lock().await;
+            if e.jobs.contains_key(&id) {
+                return Err(
+                    "The conversation started again while it was being deleted; delete it again"
+                        .into(),
+                );
+            }
+            e.chats.remove(&id);
+            e.requests.retain(|(chat, _), _| chat != &id);
+            e.store.delete(&id)?;
+            Ok(
+                json!({"schemaVersion":1,"deleted":{"id":id,"cliHistory":{"agentId":agent_id,"sessionId":session_id,"removed":removed,"failed":failed,"error":history_error},"browserSession":browser}}),
+            )
+        }
         "conversationStop" | "conversationResumeQueue" => {
             let p: Identify = serde_json::from_value(params.clone())
                 .map_err(|_| "Conversation control requires only conversationId")?;
@@ -858,6 +978,22 @@ async fn dispatch(
     }
 }
 
+fn automatic_approval(method: &str, params: &Value) -> Option<Value> {
+    match method {
+        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+            Some(json!({"decision":"accept"}))
+        }
+        "item/permissions/requestApproval" => Some(
+            json!({"permissions":params.get("permissions").cloned().unwrap_or(json!({})),"scope":"turn"}),
+        ),
+        "mcpServer/elicitation/request" => Some(json!({"action":"accept","content":{}})),
+        "can_use_tool" if params["tool_name"] != "AskUserQuestion" => Some(
+            json!({"behavior":"allow","updatedInput":params.get("input").cloned().unwrap_or(json!({}))}),
+        ),
+        _ => None,
+    }
+}
+
 fn validate_reply(method: &str, original: &Value, result: &Value) -> Result<(), String> {
     if original["truncated"] == true {
         return Err("The request is too large to review through this surface".into());
@@ -934,6 +1070,17 @@ fn start<'a>(
 {
     Box::pin(async move {
         let mut e = engine.lock().await;
+        let wanted = e.chat(id)?.full_access;
+        // An idle process started with other permission flags is replaced.
+        // Bumping the generation first makes its exit notice stale, so it
+        // cannot fail the turn that is about to start.
+        if e.jobs.get(id).is_some_and(|job| job.full_access != wanted) {
+            if let Some(job) = e.jobs.remove(id) {
+                let _ = job.sender.try_send(BackendCommand::Shutdown);
+            }
+            e.chat(id)?.generation += 1;
+            e.requests.retain(|(chat, _), _| chat != id);
+        }
         if let Some(job) = e.jobs.get(id) {
             let sender = job.sender.clone();
             drop(e);
@@ -1017,6 +1164,7 @@ fn start<'a>(
             id.into(),
             Job {
                 generation,
+                full_access: chat.full_access,
                 sender: commands.clone(),
             },
         );
@@ -1030,6 +1178,7 @@ fn start<'a>(
             model: chat.requested_model,
             mcp_executable: std::env::current_exe()
                 .map_err(|_| "Cannot locate browser tools executable")?,
+            full_access: chat.full_access,
         };
         drop(e);
         let owner = engine.clone();
@@ -1161,5 +1310,35 @@ mod approval_tests {
         let mut needed = original;
         needed["requestedSchema"]["properties"] = json!({"answer":{"type":"string"}});
         assert!(validate_reply(method, &needed, &json!({"action":"accept","content":{}})).is_err());
+    }
+}
+
+/// Close a deleted conversation's own chrome-use browser session (its tabs).
+/// A session with no daemon and no tabs returns at once without starting one.
+async fn close_browser_session(profile: &str, session: &str) -> Value {
+    let Ok(executable) = std::env::current_exe() else {
+        return json!({"session":session,"closed":false,"error":"Cannot locate chrome-use"});
+    };
+    let mut command = tokio::process::Command::new(executable);
+    command
+        .arg("close")
+        .env("AGENT_BROWSER_BROWSER", profile)
+        .env("AGENT_BROWSER_SESSION", session)
+        .env("CHROME_USE_NO_UPDATE_CHECK", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    match tokio::time::timeout(Duration::from_secs(20), command.status()).await {
+        Ok(Ok(status)) if status.success() => json!({"session":session,"closed":true}),
+        Ok(Ok(_)) => {
+            json!({"session":session,"closed":false,"error":"chrome-use close reported a failure"})
+        }
+        Ok(Err(_)) => {
+            json!({"session":session,"closed":false,"error":"chrome-use close could not start"})
+        }
+        Err(_) => {
+            json!({"session":session,"closed":false,"error":"chrome-use close did not finish in 20 s"})
+        }
     }
 }

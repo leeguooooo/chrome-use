@@ -62,3 +62,11 @@ test('a legacy relay is connected without falsely advertising panel capabilities
  assert.equal(state.receive(port,{method:'pong',params:{agentPanel:{schemaVersion:1,mode:'readOnly',modelInspection:false}}}),true);
  assert.equal(state.snapshot().agentPanel.mode,'readOnly');state.end(port);assert.equal(state.snapshot().agentPanel,null);
 });
+
+test('conversation deletion is advertised only when the host reports it', () => {
+ const state=new HostConnectionState(),port={};state.begin(port);
+ state.receive(port,{method:'pong',params:{agentPanel:{schemaVersion:1,mode:'full',modelInspection:true}}});
+ assert.equal(state.snapshot().agentPanel.conversationDelete,false);
+ assert.equal(state.receive(port,{method:'pong',params:{agentPanel:{schemaVersion:1,mode:'full',modelInspection:true,conversationDelete:true}}}),true);
+ assert.equal(state.snapshot().agentPanel.conversationDelete,true);
+});

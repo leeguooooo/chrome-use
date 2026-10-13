@@ -1,8 +1,34 @@
 # Changelog
 
-## 1.5.192
+## 1.5.194
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.41 for the access control. Chrome Web Store publication follows Google review.
+
+### New Features
+
+- **Full access mode.** A panel conversation can run without permission prompts. Codex starts with `approvalPolicy=never` and the full-access sandbox; Claude Code starts with `bypassPermissions` and its full tool set. Any approval request that still arrives is answered as "Allow once"; questions still go to the user. New conversations default to full access and remember the last choice. An existing conversation can switch in place, and the approval card's "Allow all in this conversation" releases requests that are already waiting. The next turn restarts the agent with matching flags.
+- **Composer layout.** Agent, the access toggle and the model now sit in the input box's bottom row, following the Codex and Claude apps.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.193
+
+Requires extension ab-connect 0.5.40 for the delete control. Chrome Web Store publication follows Google review.
+
+### New Features
+
+- **Delete a conversation.** The panel header has a delete button with a confirmation card. Deleting stops the conversation's agent and waits for it to exit, then removes the panel history, the agent CLI's own session history and the conversation's browser tabs. CLI history is matched by exact session id under `CODEX_HOME` / `CLAUDE_CONFIG_DIR`: Codex rollout files in `sessions/` and `archived_sessions/`, and Claude Code `projects/*/<session>.jsonl` with its folder. Anything that could not be removed is listed in the panel. Codex 0.162 also caches thread metadata and items in its own SQLite databases; those rows are left alone, and Codex no longer lists or opens the thread once its rollout is gone.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.192
+
 ### Bug Fixes
 
 - **Panel agents run the same CLI as your terminal.** Chrome starts the native host with a minimal PATH, so a wrapper such as a version-manager shim could launch an older agent build than the terminal does. Codex 0.145.0 started instead of 0.162.1, and that older build rejected the configured model as "not supported". Agent conversations and the Agents & models check now run with the directories discovery searches, in the same order.
@@ -11,7 +37,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.191
 

@@ -166,6 +166,70 @@ struct AgentInstallation {
     warnings: Vec<String>,
 }
 
+/// An agent CLI's own history files for one session, found by exact session id
+/// in the file name under that agent's home (`CODEX_HOME` / `CLAUDE_CONFIG_DIR`
+/// honored). Matching the id rather than a working directory keeps every other
+/// session out of reach. Symlinks are reported as links, never followed.
+pub(super) fn cli_session_files(agent_id: &str, session_id: &str) -> Result<Vec<PathBuf>, String> {
+    uuid::Uuid::parse_str(session_id).map_err(|_| "The agent session id is not a UUID")?;
+    let spec = AGENTS
+        .iter()
+        .copied()
+        .find(|s| s.id == agent_id && ["codex", "claude"].contains(&s.id))
+        .ok_or("This agent has no known session history layout")?;
+    let root = DiscoveryContext::current()?.root(spec);
+    let mut found = Vec::new();
+    fn walk(directory: &Path, depth: u8, suffix: &str, found: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if meta.is_dir() && depth > 0 {
+                walk(&path, depth - 1, suffix, found);
+            } else if !meta.is_dir() && name.starts_with("rollout-") && name.ends_with(suffix) {
+                found.push(path);
+            }
+        }
+    }
+    if agent_id == "codex" {
+        let suffix = format!("-{session_id}.jsonl");
+        for base in ["sessions", "archived_sessions"] {
+            walk(&root.join(base), 4, &suffix, &mut found);
+        }
+    } else if let Ok(projects) = fs::read_dir(root.join("projects")) {
+        for project in projects.flatten() {
+            if !fs::symlink_metadata(project.path()).is_ok_and(|m| m.is_dir()) {
+                continue;
+            }
+            for candidate in [
+                project.path().join(format!("{session_id}.jsonl")),
+                project.path().join(session_id),
+            ] {
+                if fs::symlink_metadata(&candidate).is_ok() {
+                    found.push(candidate);
+                }
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// Remove one path found by [`cli_session_files`]: a directory recursively, a
+/// file or symlink itself.
+pub(super) fn remove_session_path(path: &Path) -> std::io::Result<()> {
+    if fs::symlink_metadata(path)?.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
+}
+
 /// PATH for agent CLIs the panel starts. Chrome launches the native host with a
 /// minimal PATH, so a wrapper such as a version-manager shim would resolve a
 /// different, often older, program than the user's terminal does. Use the
@@ -424,7 +488,7 @@ pub fn handle(operation: &str, params: &Value) -> Result<Value, String> {
 /// Profile identity is supplied by the native host's extension handshake,
 /// never by a panel request. Public reads need no persisted profile store.
 pub fn capabilities() -> Value {
-    json!({"schemaVersion":1,"mode":if cfg!(windows) {"readOnly"} else {"full"},"modelInspection":cfg!(unix)})
+    json!({"schemaVersion":1,"mode":if cfg!(windows) {"readOnly"} else {"full"},"modelInspection":cfg!(unix),"conversationDelete":cfg!(unix),"fullAccess":cfg!(unix)})
 }
 
 fn operation_allowed(operation: &str, read_only: bool) -> bool {
@@ -463,6 +527,8 @@ pub fn handle_for_profile(
         | "conversationStop"
         | "conversationResumeQueue"
         | "conversationRespond"
+        | "conversationDelete"
+        | "conversationSetAccess"
         | "serviceHealth"
         | "serviceStop" => service::call(operation, params, profile),
         _ => Err(format!("Unsupported agent panel operation: {operation}")),

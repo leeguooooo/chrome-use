@@ -205,3 +205,13 @@ test('conversation replies must match both chat and message identities', async (
     await assert.rejects(pending, /Malformed/);
   }
 });
+
+test('delete replies must name the requested conversation and report what was removed', async () => {
+  const good = {id:'chat',cliHistory:{removed:['/x'],failed:[]},browserSession:{session:'panel-chat',closed:true}};
+  for (const [deleted, valid] of [[good,true],[{...good,id:'other'},false],[{id:'chat'},false],[{...good,browserSession:{}},false]]) {
+    const {bridge,messages}=setup();
+    const pending=bridge.request('conversationDelete',{conversationId:'chat'});
+    bridge.receive({method:'agentPanelReply',requestId:messages[0].requestId,result:{schemaVersion:1,deleted}});
+    if (valid) assert.equal((await pending).deleted.id,'chat'); else await assert.rejects(pending,/Malformed/);
+  }
+});

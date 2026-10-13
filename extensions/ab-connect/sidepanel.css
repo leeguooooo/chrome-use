@@ -1,4 +1,4 @@
-:root { color-scheme:light dark; --bg:#fff; --surface:#f4f5f7; --bubble:#e8f0fe; --ink:#1f1f1f; --muted:#6b6f76; --line:#e2e4e8; --accent:#1a5fd0; --accent-ink:#fff; --warning:#8f5400; --error:#b3261e; --error-bg:#fdecea; }
+:root { color-scheme:light dark; --bg:#fff; --surface:#f4f5f7; --bubble:#e8f0fe; --ink:#1f1f1f; --muted:#6b6f76; --line:#e2e4e8; --accent:#1a5fd0; --accent-ink:#fff; --warning:#8f5400; --error:#b3261e; --error-bg:#fdecea; --full:#d9480f; }
 * { box-sizing:border-box; }
 [hidden] { display:none !important; }
 html,body { margin:0; height:100%; }
@@ -10,6 +10,7 @@ button:disabled { opacity:.45; cursor:default; }
 button.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
 button.primary:hover:not(:disabled) { filter:brightness(.94); background:var(--accent); }
 button.quiet { border-color:transparent; background:transparent; color:var(--accent); padding:4px 8px; }
+button.icon svg { vertical-align:middle; }
 button.icon { border:0; background:transparent; color:var(--muted); width:30px; height:30px; padding:0; border-radius:8px; font-size:16px; line-height:30px; }
 button.icon:hover:not(:disabled) { color:var(--ink); }
 :focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
@@ -35,6 +36,11 @@ h3 { font-size:14px; font-weight:600; }
 .conversation-status.busy #phase::before { content:""; display:inline-block; width:7px; height:7px; margin-right:6px; border-radius:50%; background:var(--accent); animation:pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity:.25; } }
 #effectiveModel { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+
+/* Delete confirmation */
+.delete-confirm { margin:8px 12px 0; padding:10px 12px; border:1px solid var(--error); border-radius:10px; display:grid; gap:4px; }
+.delete-confirm .actions { display:flex; gap:8px; margin-top:6px; }
+button.danger { background:var(--error); border-color:var(--error); color:var(--bg); }
 
 /* Transcript */
 .transcript { flex:1; min-height:80px; overflow:auto; padding:4px 14px 14px; display:flex; flex-direction:column; }
@@ -84,26 +90,31 @@ details summary { cursor:pointer; color:var(--muted); font-size:12px; }
 .queued-message textarea { margin-top:6px; font-size:12px; }
 .queued-message .actions { display:flex; gap:8px; margin-top:4px; }
 
-/* Composer: options chips sit above a single rounded input box. */
-.composer { padding:8px 12px 12px; }
-.new-options { display:flex; align-items:center; gap:6px; margin-bottom:6px; position:relative; }
-.chip select,.chip input { border-radius:14px; padding:3px 10px; font-size:12px; background:var(--surface); border-color:transparent; }
-.chip.model { flex:1; max-width:200px; }
-.more { margin-left:auto; }
-.more summary { list-style:none; width:28px; text-align:center; border-radius:8px; font-size:16px; line-height:24px; }
+/* Composer: one rounded box; agent, access and model sit in its bottom row. */
+.composer { padding:8px 12px 12px; position:relative; }
+.input-box { border:1px solid var(--line); border-radius:16px; padding:8px 8px 6px 12px; background:var(--bg); box-shadow:0 1px 3px rgb(0 0 0 / .05); }
+.input-box:focus-within { border-color:var(--accent); }
+.input-box textarea { border:0; padding:2px 0; resize:none; min-height:44px; max-height:200px; outline:none; field-sizing:content; }
+.composer-controls { display:flex; align-items:center; gap:4px; margin-top:4px; }
+.composer-controls #queue { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.new-options { display:flex; align-items:center; gap:2px; }
+.chip select,.chip input { border-radius:12px; padding:3px 8px; font-size:12px; background:transparent; border-color:transparent; }
+.chip select:hover,.chip input:hover,.chip input:focus { background:var(--surface); }
+.chip.model { width:118px; }
+.chip.model input { text-align:right; }
+.more summary { list-style:none; width:28px; height:28px; text-align:center; border-radius:50%; font-size:15px; line-height:28px; color:var(--muted); }
 .more summary::-webkit-details-marker { display:none; }
-.more summary:hover { background:var(--surface); }
-.more-body { position:absolute; left:0; right:0; bottom:calc(100% + 6px); z-index:2; display:grid; gap:8px; padding:12px; background:var(--bg); border:1px solid var(--line); border-radius:10px; box-shadow:0 4px 16px rgb(0 0 0 / .12); }
+.more summary:hover { background:var(--surface); color:var(--ink); }
+.more-body { position:absolute; left:12px; right:12px; bottom:calc(100% - 4px); z-index:2; display:grid; gap:8px; padding:12px; background:var(--bg); border:1px solid var(--line); border-radius:12px; box-shadow:0 4px 16px rgb(0 0 0 / .12); }
 .more-body label { font-size:12px; color:var(--muted); }
 .more-body input { margin-top:3px; font-size:13px; }
 .more-body #inspectAgent { justify-self:start; padding-left:0; }
-.input-box { border:1px solid var(--line); border-radius:14px; padding:6px 6px 6px 10px; background:var(--bg); }
-.input-box:focus-within { border-color:var(--accent); }
-.input-box textarea { border:0; padding:4px 0; resize:none; min-height:44px; max-height:200px; outline:none; field-sizing:content; }
-.composer-controls { display:flex; align-items:center; gap:4px; }
-.composer-controls #queue { flex:1; }
-button.send,button.stop { width:30px; height:30px; padding:0; border-radius:50%; font-weight:700; line-height:28px; }
+button.access { display:inline-flex; align-items:center; gap:4px; border:0; background:transparent; padding:3px 6px; border-radius:12px; font-size:12px; color:var(--muted); }
+button.access[aria-pressed="true"] { color:var(--full); }
+button.access:hover:not(:disabled) { background:var(--surface); }
+button.send,button.stop { width:30px; height:30px; flex:none; padding:0; border-radius:50%; font-weight:700; line-height:28px; }
 button.stop { background:var(--ink); border-color:var(--ink); color:var(--bg); font-size:11px; }
+.request .actions { flex-wrap:wrap; }
 
 /* Agents & models */
 .agents-view { flex:1; min-height:0; display:flex; flex-direction:column; }
@@ -129,5 +140,5 @@ button.stop { background:var(--ink); border-color:var(--ink); color:var(--bg); f
 #configResult { font-size:12px; margin:8px 0; white-space:pre-wrap; }
 
 .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
-@media(prefers-color-scheme:dark) { :root { --bg:#1f1f1f; --surface:#2b2c2f; --bubble:#2a3a55; --ink:#e8eaed; --muted:#a8acb3; --line:#3c3f44; --accent:#8ab4f8; --accent-ink:#1f1f1f; --warning:#fdd663; --error:#f2b8b5; --error-bg:#3a2523; } }
+@media(prefers-color-scheme:dark) { :root { --bg:#1f1f1f; --surface:#2b2c2f; --bubble:#2a3a55; --ink:#e8eaed; --muted:#a8acb3; --line:#3c3f44; --accent:#8ab4f8; --accent-ink:#1f1f1f; --warning:#fdd663; --error:#f2b8b5; --error-bg:#3a2523; --full:#ff8a50; } }
 @media(prefers-reduced-motion:reduce) { * { animation:none !important; transition:none !important; } }

@@ -18,6 +18,7 @@ pub(super) struct Setup {
     pub backend_session: Option<String>,
     pub model: Option<String>,
     pub mcp_executable: PathBuf,
+    pub full_access: bool,
 }
 pub(super) enum Command {
     Start(Message),
@@ -125,8 +126,6 @@ async fn drive(
                 "stream-json",
                 "--verbose",
                 "--include-partial-messages",
-                "--tools",
-                "AskUserQuestion",
                 "--strict-mcp-config",
                 "--mcp-config",
             ])
@@ -135,12 +134,20 @@ async fn drive(
                 "--append-system-prompt",
                 prompt,
                 "--permission-mode",
-                "default",
+                if setup.full_access {
+                    "bypassPermissions"
+                } else {
+                    "default"
+                },
                 "--permission-prompts",
                 "host",
                 "--permission-prompt-tool",
                 "stdio",
             ]);
+        // Without full access only the question tool is available besides MCP.
+        if !setup.full_access {
+            command.args(["--tools", "AskUserQuestion"]);
+        }
         if let Some(session) = &setup.backend_session {
             command.arg("--resume").arg(session);
         }
@@ -324,7 +331,7 @@ async fn protocol(
                                 servers.insert("chrome_use".into(),json!({"command":setup.mcp_executable,"args":["mcp","--tools","all"],"env":browser_env,"enabled":true}));
                                 next_id+=1;
                                 let method=if session.is_some(){"thread/resume"}else{"thread/start"};
-                                let mut params=json!({"cwd":setup.workspace,"approvalPolicy":"on-request","sandbox":"read-only","developerInstructions":prompt,"config":{"web_search":"disabled","features":{"apps":false,"goals":false,"multi_agent":false,"image_generation":false},"mcp_servers":servers}});
+                                let mut params=json!({"cwd":setup.workspace,"approvalPolicy":if setup.full_access {"never"} else {"on-request"},"sandbox":if setup.full_access {"danger-full-access"} else {"read-only"},"developerInstructions":prompt,"config":{"web_search":"disabled","features":{"apps":false,"goals":false,"multi_agent":false,"image_generation":false},"mcp_servers":servers}});
                                 if let Some(s)=&session {params["threadId"]=s.clone().into();params["excludeTurns"]=true.into();}
                                 if let Some(model)=&setup.model {params["model"]=model.clone().into();}
                                 requests.insert(next_id,method.into());write(stdin,json!({"id":next_id,"method":method,"params":params})).await?;

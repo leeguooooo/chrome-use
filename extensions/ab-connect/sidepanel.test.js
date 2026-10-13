@@ -302,3 +302,79 @@ test('a failure on the CLI-configured model offers its configuration instead of 
   assert.ok(f.calls.some(call => call.operation === 'configRead' && call.params.agentId === 'codex'));
   f.panel.close();
 });
+
+test('deleting asks first, then forgets the conversation and its unsent draft', async () => {
+  const support = {...fullSupport, conversationDelete: true};
+  const f = await fixture({
+    status: () => ({connected:true, agentPanel:support}),
+    conversationDelete: params => ({ success: true, result: { deleted: { id: params.conversationId, cliHistory: { removed: [], failed: [] }, browserSession: { closed: true } } } }),
+  }, { ab_panel_conversation: 'b' });
+  await settle();
+  assert.equal(f.nodes.get('deleteChat').hidden, false);
+  f.nodes.get('message').value = 'unsent';
+  f.nodes.get('deleteChat').fire('click');
+  assert.equal(f.nodes.get('deleteConfirm').hidden, false);
+  assert.ok(!f.calls.some(call => call.operation === 'conversationDelete'));
+  f.chats.splice(1, 1);
+  f.nodes.get('confirmDelete').fire('click'); await settle(); await settle();
+  assert.deepEqual(f.calls.filter(call => call.operation === 'conversationDelete').map(call => call.params), [{ conversationId: 'b' }]);
+  assert.equal(f.nodes.get('conversation').value, '');
+  assert.equal(f.nodes.get('message').value, '');
+  assert.equal(f.nodes.get('deleteConfirm').hidden, true);
+  assert.equal(f.nodes.get('deleteChat').hidden, true);
+  f.panel.close();
+});
+
+test('hosts that do not report deletion never show the delete control', async () => {
+  const f = await fixture({}, { ab_panel_conversation: 'b' });
+  await settle();
+  assert.equal(f.nodes.get('deleteChat').hidden, true);
+  f.panel.close();
+});
+
+test('new conversations default to full access, and the remembered choice is sent at creation', async () => {
+  const support = {...fullSupport, fullAccess: true};
+  const created = [];
+  const overrides = {
+    status: () => ({connected:true, agentPanel:support}),
+    conversationCreate: params => { created.push(params); return { success: true, result: { conversation: chat('n') } }; },
+    conversationSend: () => ({ success: true, result: { conversation: chat('n', 'running') } }),
+  };
+  const f = await fixture(overrides);
+  assert.equal(f.nodes.get('access').hidden, false);
+  assert.equal(f.nodes.get('accessLabel').textContent, 'Full access');
+  f.nodes.get('message').value = 'go'; await f.panel.send(); await settle();
+  assert.equal(created[0].fullAccess, true);
+  f.panel.close();
+  const g = await fixture(overrides, { ab_panel_full_access: false });
+  assert.equal(g.nodes.get('accessLabel').textContent, 'Ask first');
+  g.nodes.get('access').fire('click'); await settle();
+  assert.equal(g.nodes.get('accessLabel').textContent, 'Full access');
+  assert.ok(g.writes.some(w => w.ab_panel_full_access === true));
+  g.panel.close();
+});
+
+test('an existing conversation switches access in place and approvals offer allow-all', async () => {
+  const support = {...fullSupport, fullAccess: true};
+  const waiting = { ...chat('a', 'waitingInput'), fullAccess: false };
+  const changes = [];
+  const f = await fixture({
+    status: () => ({connected:true, agentPanel:support}),
+    conversationList: () => ({ success: true, result: { conversations: [waiting] } }),
+    conversationRead: () => ({ success: true, result: { conversation: waiting, journal: { events: [{ sequence: 1, kind: 'request', data: { requestId: 3, method: 'item/commandExecution/requestApproval', params: { command: 'ls' } } }], cursor: 1, more: false } } }),
+    conversationSetAccess: params => { changes.push(params); waiting.fullAccess = params.fullAccess; return { success: true, result: { conversation: { ...waiting, fullAccess: params.fullAccess } } }; },
+  }, { ab_panel_conversation: 'a' });
+  await settle();
+  assert.equal(f.nodes.get('accessLabel').textContent, 'Ask first');
+  const allowAll = f.nodes.get('requests').querySelectorAll('button').find(node => node.textContent === 'Allow all in this conversation');
+  assert.ok(allowAll); allowAll.fire('click'); await settle();
+  assert.deepEqual(changes, [{ conversationId: 'a', fullAccess: true }]);
+  assert.equal(f.nodes.get('accessLabel').textContent, 'Full access');
+  f.panel.close();
+});
+
+test('hosts without full-access support hide the control and never send the option', async () => {
+  const f = await fixture();
+  assert.equal(f.nodes.get('access').hidden, true);
+  f.panel.close();
+});
