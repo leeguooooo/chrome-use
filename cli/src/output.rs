@@ -5496,6 +5496,15 @@ extension ids does not prove one profile; disable one only if both share a profi
 Update an older published extension; newer live extensions need chrome-use upgrade.
 Only installType development identifies a development build. Doctor shows system
 load and CPU count; high load also adds hints to relay/CDP timeout errors.
+After a native host disconnect, the extension schedules its first retry after
+one second. Repeated failures back off to at most 30 seconds. Confirmation
+resets the backoff; Chrome's alarm remains the worker-restart fallback.
+Disconnected command and event waits fail instead of surviving the dead socket.
+Old replies are discarded, not replayed into the new host. Inspect the page
+before repeating a write whose outcome was interrupted.
+Failed sends or lost command replies report action_outcome_unknown and
+retryable: false, since earlier parts of the operation may already have run.
+
 JSON health: transportResponsive, hostDiagnostic, nativeHostVersion, debugger,
 extensionHealth. nativeHostVersion comes from the running host handshake, null
 when unavailable. Missing/mismatched versions warn; hostLauncherHealthy checks

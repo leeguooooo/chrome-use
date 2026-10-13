@@ -1,6 +1,62 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { HostConnectionState } from './host-connection.js'
+import { HostConnectionState, HostReconnectScheduler } from './host-connection.js'
+
+function reconnectFixture() {
+  let now = 0, nextId = 0, attempts = 0
+  const timers = new Map(), cancelled = []
+  const scheduler = new HostReconnectScheduler({
+    retry: () => { attempts++ }, now: () => now,
+    setTimer: (fn, delay) => { const id = nextId++; timers.set(id, { fn, due: now + delay }); return id },
+    clearTimer: id => { cancelled.push(timers.get(id)); timers.delete(id) },
+  })
+  return { scheduler, timers, cancelled, attempts: () => attempts, now: () => now, elapse: ms => { now += ms },
+    advance: ms => { now += ms; for (const [id, timer] of [...timers]) if (timer.due <= now) { timers.delete(id); timer.fn() } },
+  }
+}
+
+test('a disconnect retries at one second without waiting for a browser alarm', () => {
+  const f = reconnectFixture()
+  f.scheduler.failed()
+  f.advance(999); assert.equal(f.attempts(), 0)
+  f.advance(1); assert.equal(f.attempts(), 1)
+})
+
+test('early alarms do not create duplicate retries, confirmation cancels late callbacks', () => {
+  const f = reconnectFixture()
+  f.scheduler.failed()
+  for (let i = 0; i < 5; i++) assert.equal(f.scheduler.canAttempt(), false)
+  assert.equal(f.timers.size, 1)
+  f.scheduler.confirmed()
+  assert.equal(f.timers.size, 0)
+  f.cancelled[0].fn(); f.advance(1000)
+  assert.equal(f.attempts(), 0)
+})
+
+test('failed installations back off to thirty seconds and a confirmed host resets them', () => {
+  const f = reconnectFixture()
+  for (const delay of [1000, 2000, 4000, 8000, 16000, 30000, 30000]) {
+    f.scheduler.failed()
+    const [timer] = f.timers.values()
+    assert.equal(timer.due - f.now(), delay)
+    f.advance(delay)
+  }
+  assert.equal(f.attempts(), 7)
+  f.scheduler.confirmed(); f.scheduler.failed()
+  f.advance(999); assert.equal(f.attempts(), 7)
+  f.advance(1); assert.equal(f.attempts(), 8)
+})
+
+test('an explicit due retry invalidates the older queued callback', () => {
+  const f = reconnectFixture()
+  f.scheduler.failed()
+  const [timer] = f.timers.values()
+  f.elapse(1000)
+  assert.equal(f.scheduler.canAttempt(), true)
+  f.scheduler.retry()
+  timer.fn()
+  assert.equal(f.attempts(), 1)
+})
 
 test('creating a Port never claims the native host is connected', () => {
   const state = new HostConnectionState()

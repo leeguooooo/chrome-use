@@ -56,6 +56,7 @@
       <p>首次 <code>open</code> 被拒绝后，仍可用 <code>tab list --all</code> 通过会话绑定的 profile 或已配置的 CDP 地址只读查询。查询不建立页面驱动连接，也不绕过混合窗口保护。</p>
 
       <div class="du-callout note">
+        <p>ab-connect 0.5.47+ 在 native host 断线后，首次重试定时为 1 秒；连续失败按 2、4、8、16 秒退避，最多 30 秒，确认连接后重置。Chrome alarm 仍用于恢复重启的 worker。旧 socket 关闭时，命令与事件等待会结束，session 或 inspector 保留旧 client 也不会维持失效的事件流。旧回复不重放到新 host，重连时重建当前已核验的标签记录。发送失败或回复丢失报告 <code>action_outcome_unknown</code> 和 <code>retryable: false</code>。中断的写操作须先检查页面，再决定是否重复。</p>
         <p>旧归属记录只有 targetId、没有标签身份，导致 close 一直无法完成时，可显式运行 <code>close --forget-untracked</code>。它仅放弃两次有效 Chrome registry 查询都未列出的无身份记录，不猜测或关闭其他标签。JSON 的 <code>ownershipDropped</code> 列出放弃的记录，<code>verifiedAbsent: false</code> 和 <code>tabClosureUnverified: true</code> 表示原来的标签未被确认关闭。普通 close 仍保留严格核验。该选项仅用于扩展中继，不能与单个标签或 <code>--all</code> 合用。</p>
         <div class="du-callout-title">ℹ️ 先分清哪条路径</div>
         <code>state save</code> / <code>--state</code> / <code>--session-name</code> 是给 chrome-use <strong>自己启动的浏览器</strong>和 <code>--session</code> <strong>隔离浏览器</strong>用的——它们开局没有登录态，得靠状态文件跨运行续上。走<strong>扩展连接</strong>驱动你<strong>真实 Chrome</strong> 时用不到这些：登录态本来就在你真实 profile 里、原生持久化，重启也还在。见 <a href="/real-chrome.html">真实 Chrome</a>。

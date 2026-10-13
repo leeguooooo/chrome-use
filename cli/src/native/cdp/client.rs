@@ -76,8 +76,10 @@ pub struct CdpClient {
     >,
     next_id: AtomicU64,
     pending: PendingMap,
-    event_tx: broadcast::Sender<CdpEvent>,
-    raw_tx: broadcast::Sender<RawCdpMessage>,
+    // Only the reader owns strong senders: a dead transport must close event
+    // subscriptions even while a BrowserManager or inspector holds this client.
+    event_tx: broadcast::WeakSender<CdpEvent>,
+    raw_tx: broadcast::WeakSender<RawCdpMessage>,
     _reader_handle: tokio::task::JoinHandle<()>,
     _keepalive_handle: tokio::task::JoinHandle<()>,
 }
@@ -287,8 +289,8 @@ impl CdpClient {
             ws_tx,
             next_id: AtomicU64::new(1),
             pending,
-            event_tx,
-            raw_tx,
+            event_tx: event_tx.downgrade(),
+            raw_tx: raw_tx.downgrade(),
             _reader_handle: reader_handle,
             _keepalive_handle: keepalive_handle,
         })
@@ -336,17 +338,20 @@ impl CdpClient {
             pending.insert(id, tx);
         }
 
-        {
+        let sent = {
             let mut ws_tx = self.ws_tx.lock().await;
-            ws_tx
-                .send(Message::Text(json))
-                .await
-                .map_err(|e| format!("Failed to send CDP command: {}", e))?;
+            ws_tx.send(Message::Text(json)).await
+        };
+        if let Err(error) = sent {
+            // The reader may already have exited before this request was
+            // registered. A failed write must not leave an orphaned sender.
+            self.pending.lock().await.remove(&id);
+            return Err(format!("action_outcome_unknown: Failed to send CDP command ({method}): {error}. The operation may have run in part; inspect the page before repeating it."));
         }
 
         let response = match tokio::time::timeout(budget, rx).await {
             Ok(Ok(resp)) => resp,
-            Ok(Err(_)) => return Err("CDP response channel closed".to_string()),
+            Ok(Err(_)) => return Err(format!("action_outcome_unknown: CDP response channel closed after {method}; no confirmed reply was received. The operation may have run in part; inspect the page before repeating it.")),
             Err(_) => {
                 self.pending.lock().await.remove(&id);
                 return Err(crate::system_load::annotate_timeout(format!(
@@ -368,13 +373,13 @@ impl CdpClient {
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<CdpEvent> {
-        self.event_tx.subscribe()
+        subscribe_while_alive(&self.event_tx)
     }
 
     /// Subscribe to all raw incoming CDP messages (responses + events).
     /// Used by the inspect proxy to forward traffic to the DevTools frontend.
     pub fn subscribe_raw(&self) -> broadcast::Receiver<RawCdpMessage> {
-        self.raw_tx.subscribe()
+        subscribe_while_alive(&self.raw_tx)
     }
 
     /// Create a lightweight handle for the inspect WebSocket proxy.
@@ -435,7 +440,7 @@ type WsTx = Arc<
 /// the cloneable parts of CdpClient needed for bidirectional message forwarding.
 pub struct InspectProxyHandle {
     ws_tx: WsTx,
-    raw_tx: broadcast::Sender<RawCdpMessage>,
+    raw_tx: broadcast::WeakSender<RawCdpMessage>,
 }
 
 impl InspectProxyHandle {
@@ -448,8 +453,17 @@ impl InspectProxyHandle {
     }
 
     pub fn subscribe_raw(&self) -> broadcast::Receiver<RawCdpMessage> {
-        self.raw_tx.subscribe()
+        subscribe_while_alive(&self.raw_tx)
     }
+}
+
+fn subscribe_while_alive<T: Clone>(sender: &broadcast::WeakSender<T>) -> broadcast::Receiver<T> {
+    if let Some(sender) = sender.upgrade() {
+        return sender.subscribe();
+    }
+    let (sender, receiver) = broadcast::channel(1);
+    drop(sender);
+    receiver
 }
 
 /// Enable TCP SO_KEEPALIVE on the underlying socket of a WebSocket connection.
@@ -642,6 +656,79 @@ mod tests {
 mod malformed_reply_tests {
     use super::*;
     use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn disconnected_commands_fail_promptly_and_failed_writes_leave_no_pending_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let received = Arc::new(AtomicU64::new(0));
+        let count = received.clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            if let Some(Ok(Message::Text(_))) = ws.next().await {
+                count.fetch_add(1, Ordering::SeqCst);
+                ws.close(None).await.unwrap();
+            }
+        });
+        let client = CdpClient::connect(&format!("ws://{address}"))
+            .await
+            .unwrap();
+        let mut events = client.subscribe();
+        let inspector = client.inspect_handle();
+        let mut raw = inspector.subscribe_raw();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.send_command(
+                "Runtime.evaluate",
+                Some(serde_json::json!({"expression":"window.counter++"})),
+                None,
+            ),
+        )
+        .await
+        .expect("disconnect waited for the command timeout");
+        let error = result.unwrap_err();
+        assert_eq!(
+            crate::error_envelope::classify_error(&error).code,
+            "action_outcome_unknown"
+        );
+        assert!(!crate::error_envelope::classify_error(&error).retryable);
+        assert_eq!(received.load(Ordering::SeqCst), 1);
+        server.await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !client._reader_handle.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            matches!(
+                events.try_recv(),
+                Err(broadcast::error::TryRecvError::Closed)
+            ),
+            "event waiter survived a dead transport"
+        );
+        while raw.try_recv().is_ok() {}
+        assert!(
+            matches!(raw.try_recv(), Err(broadcast::error::TryRecvError::Closed)),
+            "inspector kept the dead stream alive"
+        );
+        assert!(matches!(
+            client.subscribe().try_recv(),
+            Err(broadcast::error::TryRecvError::Closed)
+        ));
+        for _ in 0..5 {
+            assert!(client
+                .send_command("Browser.getVersion", None, None)
+                .await
+                .is_err());
+            assert!(
+                client.pending.lock().await.is_empty(),
+                "failed write leaked an in-flight request"
+            );
+        }
+    }
 
     #[test]
     fn only_positive_integer_ids_are_replies() {

@@ -62,7 +62,7 @@ import {
 } from './relay-records.js';
 import { createAgentTabQueue } from './agent-tab-queue.js';
 import { createAttachmentHealth, sendTabCommand } from './tab-command.js';
-import { HostConnectionState } from './host-connection.js';
+import { HostConnectionState, HostReconnectScheduler } from './host-connection.js';
 import { isDebuggerAccessDenied, debuggerAccessError } from './debugger-access.js';
 import {
   IDLE_DETACH_DEFAULT_SECS,
@@ -102,7 +102,7 @@ let port = null;
 /** Whether the native-messaging host (the local chrome-use CLI) is linked.
  *  Read by the popup status page. */
 const hostConnection = new HostConnectionState();
-let nextHostAttemptAt = 0;
+const hostReconnect = new HostReconnectScheduler({ retry: () => connectHost() });
 /** tabId -> { sessionId, targetId } */
 const tabs = new Map();
 /** tabId -> reload history, retained across debugger/process re-attachments. */
@@ -662,14 +662,14 @@ function publishHostStatus() {
 }
 
 function connectHost() {
-  if (port || Date.now() < nextHostAttemptAt) return;
+  if (port || !hostReconnect.canAttempt()) return;
   try {
     port = chrome.runtime.connectNative(HOST_NAME);
     hostConnection.begin(port);
   } catch (e) {
     port = null;
     hostConnection.end(null, String(e?.message || e));
-    nextHostAttemptAt = Date.now() + 1000;
+    hostReconnect.failed();
     publishHostStatus();
     return;
   }
@@ -678,6 +678,7 @@ function connectHost() {
     if (port !== connectedPort) return;
     if (agentPanelBridge.receive(msg)) return;
     if (hostConnection.receive(connectedPort, msg)) {
+      hostReconnect.confirmed();
       notifyConnChange(true);
       publishHostStatus();
     }
@@ -692,7 +693,7 @@ function connectHost() {
     hostConnection.end(connectedPort, error);
     agentPanelBridge.disconnect(error);
     port = null;
-    nextHostAttemptAt = Date.now() + 1000;
+    hostReconnect.failed();
     publishHostStatus();
     if (wasConnected) notifyConnChange(false);
     // Retain tab records; the new host will rediscover them after reconnect.
