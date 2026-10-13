@@ -86,6 +86,10 @@ pub(super) struct Conversation {
     pub next_sequence: u64,
     pub last_error: Option<String>,
     pub executable: Option<PathBuf>,
+    /// Run the agent without permission prompts (approvals answered by the
+    /// service). Older state has no field and keeps asking.
+    #[serde(default)]
+    pub full_access: bool,
 }
 
 impl Conversation {
@@ -126,10 +130,11 @@ impl Conversation {
             next_sequence: 1,
             last_error: None,
             executable,
+            full_access: false,
         })
     }
     pub(super) fn summary(&self) -> Value {
-        json!({"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}})
+        json!({"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"fullAccess":self.full_access,"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}})
     }
     pub(super) fn queue_snapshot(&self) -> Value {
         Value::Array(
@@ -364,6 +369,29 @@ impl Store {
         }
         private_tree(&folder)?;
         self.save(chat)
+    }
+    /// Remove one conversation's index entry, then its own folder. The index is
+    /// written first, so an interrupted delete leaves an unlisted folder rather
+    /// than a listed conversation without history. Only `<store>/<uuid>` is
+    /// ever removed.
+    pub(super) fn delete(&mut self, id: &str) -> Result<(), String> {
+        let folder = self.folder(id)?;
+        if self.index.remove(id).is_none() {
+            return Err("Conversation was not found in this profile".into());
+        }
+        atomic_write(
+            &self.directory.join("index.json"),
+            &serde_json::to_vec(&self.index).map_err(|_| "Cannot encode conversation index")?,
+            None,
+        )?;
+        if let Ok(mut cursors) = self.cursors.lock() {
+            cursors.remove(id);
+        }
+        match fs::remove_dir_all(&folder) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err("The conversation was removed from the list, but its local folder could not be deleted".into()),
+        }
     }
     pub(super) fn load(&mut self, id: &str) -> Result<Conversation, String> {
         if !self.index.contains_key(id) {

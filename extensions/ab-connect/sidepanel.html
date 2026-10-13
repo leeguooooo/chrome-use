@@ -13,11 +13,17 @@
       <label class="sr-only" for="conversation">Conversation</label>
       <select id="conversation" class="conversation-picker"><option value="">New conversation</option></select>
       <button id="newChat" class="icon" type="button" title="New conversation" aria-label="New conversation">＋</button>
+      <button id="deleteChat" class="icon" type="button" title="Delete conversation" aria-label="Delete conversation" hidden><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg></button>
       <button id="refresh" class="icon" type="button" title="Refresh" aria-label="Refresh">↻</button>
       <button id="agentsTab" class="icon" type="button" title="Agents &amp; models" aria-label="Agents and models" aria-pressed="false">⚙</button>
     </header>
     <p id="connection" class="connection" role="status">Checking local connection…</p>
     <div id="notice" class="notice" role="alert" hidden></div>
+    <section id="deleteConfirm" class="delete-confirm" role="alertdialog" aria-label="Delete conversation" hidden>
+      <p><strong>Delete this conversation?</strong></p>
+      <p class="hint">Removes its panel history, the agent CLI's own session files and its browser tabs from this computer. This cannot be undone.</p>
+      <div class="actions"><button id="confirmDelete" class="danger" type="button">Delete</button><button id="cancelDelete" class="quiet" type="button">Keep</button></div>
+    </section>
     <div id="status" class="conversation-status"><span id="phase">Ready</span><span id="effectiveModel"></span></div>
     <div id="transcript" class="transcript" tabindex="0" aria-label="Conversation transcript">
       <div id="empty" class="empty">
@@ -34,25 +40,26 @@
       <button id="clearPending" class="quiet" type="button">Clear send warning</button>
     </section>
     <form id="composer" class="composer">
-      <section id="newOptions" class="new-options" aria-label="New conversation options">
-        <label class="chip"><span class="sr-only">Agent</span><select id="agent"><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label>
-        <label class="chip model"><span class="sr-only">Model</span><input id="model" list="modelList" placeholder="Default model" autocomplete="off"></label>
-        <datalist id="modelList"></datalist>
-        <details class="more">
-          <summary title="More options" aria-label="More options">⋯</summary>
-          <div class="more-body">
-            <button id="inspectAgent" class="quiet" type="button">Read models from CLI</button>
-            <p id="modelStatus" class="hint">CLI model access has not been checked.</p>
-            <label>Custom program<input id="executable" placeholder="Use the discovered program" autocomplete="off"></label>
-            <p class="hint">Your CLI may send tasks and page observations to its configured model service. Conversation history stays on this computer.</p>
-          </div>
-        </details>
-      </section>
       <div class="input-box">
         <label class="sr-only" for="message">Message</label>
         <textarea id="message" rows="2" placeholder="Describe a browser task…" maxlength="32768" title="Enter to send · Ctrl/⌘+Enter to stop and send · Shift+Enter for a new line"></textarea>
         <div class="composer-controls">
+          <span id="newOptions" class="new-options" aria-label="New conversation options">
+            <details class="more">
+              <summary title="More options" aria-label="More options">＋</summary>
+              <div class="more-body">
+                <button id="inspectAgent" class="quiet" type="button">Read models from CLI</button>
+                <p id="modelStatus" class="hint">CLI model access has not been checked.</p>
+                <label>Custom program<input id="executable" placeholder="Use the discovered program" autocomplete="off"></label>
+                <p class="hint">Your CLI may send tasks and page observations to its configured model service. Conversation history stays on this computer.</p>
+              </div>
+            </details>
+            <label class="chip"><span class="sr-only">Agent</span><select id="agent"><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label>
+          </span>
+          <button id="access" class="access" type="button" hidden aria-pressed="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M12 8v5M12 16h.01"/></svg><span id="accessLabel">Full access</span></button>
           <span id="queue" class="hint"></span>
+          <label id="modelChip" class="chip model"><span class="sr-only">Model</span><input id="model" list="modelList" placeholder="Default model" autocomplete="off"></label>
+          <datalist id="modelList"></datalist>
           <button id="resume" class="quiet" type="button" hidden>Resume queue</button>
           <button id="sendDirect" class="quiet" type="button" hidden>Stop &amp; send</button>
           <button id="stop" class="stop" type="button" disabled title="Stop" aria-label="Stop">■</button>

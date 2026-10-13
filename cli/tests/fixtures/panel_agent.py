@@ -10,7 +10,7 @@ if "--version" in sys.argv:
 
 codex = "app-server" in sys.argv
 inspection = "--no-session-persistence" in sys.argv
-session = "synthetic-codex-thread" if codex else "synthetic-claude-session"
+session = str(__import__("uuid").uuid4()) if os.environ.get("PANEL_FIXTURE_UUID_SESSION") else ("synthetic-codex-thread" if codex else "synthetic-claude-session")
 turn = None
 pending = None
 
@@ -56,6 +56,7 @@ for line in sys.stdin:
             assert mcp["chrome_use"]["env"]["CHROME_USE_RELAY_DIR"] == os.environ["CHROME_USE_RELAY_DIR"]
             if method == "thread/resume":
                 assert params["threadId"] == session
+            policy = f'{params.get("approvalPolicy")}/{params.get("sandbox")}'
             emit({"id": message["id"], "result": {"thread": {"id": session}, "model": "synthetic-codex-model"}})
         elif method == "turn/start":
             assert not inspection, "Metadata inspection sent a prompt"
@@ -68,6 +69,9 @@ for line in sys.stdin:
             if text == "approval":
                 pending = 17
                 emit({"id": pending, "method": "item/commandExecution/requestApproval", "params": {"threadId": session, "turnId": turn, "itemId": "fixture-tool", "command": "synthetic command, never executed"}})
+                continue
+            if text == "policy":
+                complete("policy: " + policy, "completed")
                 continue
             if text == "fail":
                 time.sleep(0.4)
