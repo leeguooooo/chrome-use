@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
+import { createTabAttachmentQueue } from './tab-attachment.js'
 
 import {
   REMOVED_TAB_LIMIT,
@@ -132,6 +133,7 @@ function workerFixture() {
   let pending = Promise.resolve()
   const context = {
     console,
+    createTabAttachmentQueue,
     posted,
     tabs: new Map(),
     sessionToTab: new Map(),
@@ -186,10 +188,11 @@ function workerFixture() {
   vm.createContext(context)
   for (const [start, end] of [
     ['function detachTab(', 'function eligible('],
-    ['async function attachTab(', 'function rememberReplayable('],
+    ['const attachTab = createTabAttachmentQueue', 'function rememberReplayable('],
     ['async function announceAttachedTab(', 'async function reannounceAttachedTabs('],
     ['chrome.tabs.onRemoved.addListener(', '// `tabs.onUpdated`'],
   ]) vm.runInContext(slice(start, end), context)
+  vm.runInContext('globalThis.attachTab = attachTab;', context)
   return {
     context,
     posted,

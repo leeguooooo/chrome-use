@@ -28,6 +28,7 @@ import {
   migratePopupRecord,
 } from './agent-window.js';
 import { attachTabById } from './attach-by-id.js';
+import { createTabAttachmentQueue } from './tab-attachment.js';
 import { releaseTab } from './release-tab.js';
 import { removeAgentTab } from './remove-agent-tab.js';
 import { shouldForwardEvent } from './cdp-event-filter.js';
@@ -1541,7 +1542,11 @@ async function dispatchToTab(tabId, method, params, childSid) {
 
 // ---- attach / detach ------------------------------------------------------
 
-async function attachTab(tabId, transactionIsActive) {
+// Include target discovery and announcement in the shared attachment, so a
+// second caller cannot replace an entry whose commands are already in flight.
+const attachTab = createTabAttachmentQueue(attachTabOnce);
+
+async function attachTabOnce(tabId, transactionIsActive) {
   const existing = tabs.get(tabId);
   if (existing && existing.attached !== false) return existing;
   if (existing) return await reattachTab(tabId, existing);
@@ -1981,13 +1986,15 @@ chrome.debugger.onDetach.addListener(
       if (reason === 'canceled_by_user' || reason === 'replaced_with_devtools') return;
       if (!port) return;
       if (nativeDuplicateTabs.has(tabId)) return;
+      const detached = await chrome.tabs.get(tabId).catch(() => null);
+      if (!detached || !eligible(detached) || detached.discarded) return;
       // The swapped-in process needs a moment to settle; retry with backoff.
       for (let i = 0; i < 6; i++) {
         await new Promise((r) => setTimeout(r, 250 + i * 200));
         if (tabs.get(tabId)?.attached) return; // already re-attached (e.g. via onUpdated)
         if (nativeDuplicateTabs.has(tabId)) return;
         const tab = await chrome.tabs.get(tabId).catch(() => null);
-        if (!tab || !eligible(tab)) return; // tab gone or now a restricted page
+        if (!tab || !eligible(tab) || tab.discarded) return; // gone, restricted or discarded
         try {
           await attachTab(tabId);
           return;
