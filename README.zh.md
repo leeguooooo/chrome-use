@@ -284,6 +284,8 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 
 新原生主机会确认诊断连接并跳过 `attachAll`。仍在运行的旧主机会像以前一样执行一次 `attachAll`；诊断提示会建议升级后重新加载扩展以启动新主机。疑似重复扩展检测读取 sidecar 身份，并发执行最多一秒的 TCP 存活检查，不进行 WebSocket 握手。同账号、同浏览器且扩展 id 不同不能证明属于同一 Chrome profile；只有确认同一 profile 安装了两份时才禁用其中一份。
 
+同一标签页的并发附加共享完整初始化。自动重连跳过 Chrome 已废弃（discarded）的标签页。可选的闲置 debugger 释放（`ab_idle_detach_secs`，默认关闭）保留每个窗口的当前标签，并在释放后台标签前再次检查是否有命令正在执行。
+
 JSON 健康摘要只包含 `transportResponsive`、`hostDiagnostic`、`debugger` 和 `extensionHealth`（`windowMs`、`workerAgeMs`、`answered`、`timedOut`、`lastTimeout`，或 null），保留 `connectedProfiles` 和 `warnings`。`extension status --json` 的 `relayUp` 仍表示存在中继地址，`status --json` 则表示收到扩展传输回复。旧扩展在有已发布新版时更新扩展；当前扩展比 CLI 预期更新时运行 `chrome-use upgrade`。仅 `installType: development` 表示开发版。macOS/Linux 上 doctor 显示一分钟负载和 CPU 数；负载超过 CPU 数两倍时警告，并在 relay/CDP 超时错误中附带负载提示。
 
 输入框里显示了你的文字，不代表页面已经记下。`fill` 发现表单的保存/提交按钮在填写前后都处于禁用时会警告；

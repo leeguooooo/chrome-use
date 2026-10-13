@@ -21,3 +21,16 @@ export function createTabAttachmentQueue(attach) {
     return operation.promise
   }
 }
+
+/** Retry only a transient attachment of a tab already created by this command. */
+export async function attachCreatedTab(tabId, { attach, wait, permanent }) {
+  const delays = [0, 25, 50, 100]
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    if (delays[attempt]) await wait(delays[attempt])
+    try {
+      return await attach(tabId)
+    } catch (error) {
+      if (permanent(error) || attempt === delays.length - 1) throw error
+    }
+  }
+}

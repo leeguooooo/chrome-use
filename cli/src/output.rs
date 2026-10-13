@@ -6128,6 +6128,8 @@ Navigation:
   reload                     Reload page
   On the extension relay, a renderer-blocked Page.navigate falls back to
   browser-level navigation instead of restarting the whole session.
+  Concurrent attachment to one tab shares initialization. Automatic recovery
+  skips discarded tabs; optional idle debugger release preserves active tabs.
   Child-frame access/detach errors do not detach the parent tab.
   Re-read the page before retrying a failed frame action.
   action_outcome_unknown means an interrupted action may have executed; it was

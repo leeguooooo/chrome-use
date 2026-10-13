@@ -6,6 +6,8 @@
 
 New native hosts acknowledge diagnostic connections and skip `attachAll`. A still-running older host performs its usual `attachAll` once; the diagnostic notice recommends reloading the extension after upgrading to start the new host. Possible duplicate extensions are identified from sidecar identities and concurrent TCP liveness checks with a one-second limit and no WebSocket handshake. Matching account/browser with distinct extension ids does not prove a shared Chrome profile: disable one only if both are installed in the same profile.
 
+Concurrent requests attaching the same tab share one complete attachment. Automatic detach recovery skips tabs discarded by Chrome. Optional idle debugger release (`ab_idle_detach_secs`, disabled by default) preserves active tabs in every window and rechecks command activity before releasing a background tab.
+
 JSON health contains only `transportResponsive`, `hostDiagnostic`, `debugger`, and `extensionHealth` (`windowMs`, `workerAgeMs`, `answered`, `timedOut`, `lastTimeout`, or null). `connectedProfiles` and `warnings` remain available. `extension status --json` retains `relayUp` as endpoint presence; `status --json` uses an extension transport reply. Update an older extension when a newer version is published; if the live extension is newer than this CLI expects, run `chrome-use upgrade`. Only `installType: development` identifies a development install. On macOS/Linux, doctor shows one-minute system load and CPU count; load above twice the CPU count warns and adds a hint to relay/CDP timeout errors.
 
 **"Ref not found" / "Element not found: @eN"**

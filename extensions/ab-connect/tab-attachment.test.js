@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
-import { createTabAttachmentQueue } from './tab-attachment.js'
+import { attachCreatedTab, createTabAttachmentQueue } from './tab-attachment.js'
 
 const source = readFileSync(new URL('./background.js', import.meta.url), 'utf8')
 function section(start, end) {
@@ -100,6 +100,67 @@ test('an expired recovery cannot cancel or share an ordinary attachment', async 
   assert.equal(await ordinary, 'attached')
   await rejected
   assert.deepEqual(calls, [undefined])
+})
+
+test('a newly created target attaches as soon as a transient startup gap ends (#554)', async () => {
+  let elapsed = 0
+  let attempts = 0
+  const result = await attachCreatedTab(1, {
+    attach: async id => { attempts++; if (elapsed < 30) throw new Error('not ready'); return { targetId: `T${id}` } },
+    wait: async ms => { elapsed += ms }, permanent: () => false,
+  })
+  assert.equal(result.targetId, 'T1')
+  assert.equal(elapsed, 75)
+  assert.equal(attempts, 3)
+})
+
+test('created-tab attachment retries are bounded and permanent failures never retry', async () => {
+  for (const permanent of [false, true]) {
+    let attempts = 0
+    let elapsed = 0
+    await assert.rejects(attachCreatedTab(1, {
+      attach: async () => { attempts++; throw new Error('refused') },
+      wait: async ms => { elapsed += ms }, permanent: () => permanent,
+    }), /refused/)
+    assert.equal(attempts, permanent ? 1 : 4)
+    assert.equal(elapsed, permanent ? 0 : 175)
+  }
+  let waited = false
+  await attachCreatedTab(1, { attach: async () => ({}), wait: async () => { waited = true }, permanent: () => false })
+  assert.equal(waited, false)
+})
+
+test('real createTarget announces the requested group before replying even if visual grouping fails (#550)', async () => {
+  const gate = deferred()
+  const announcing = deferred()
+  const creatingTabGroups = new Map()
+  let initialGroup
+  const context = {
+    attachCreatedTab, creatingTabGroups, tabs: new Map(),
+    chrome: { tabs: { create: async () => ({ id: 1 }), get: async () => ({ id: 1, groupId: -1 }) } },
+    markOwned: async id => { assert.equal(creatingTabGroups.get(id), 'agent-a') },
+    groupTabInto: async () => { throw new Error('Chrome visual grouping unavailable') },
+    isPermanentAttachError: () => true,
+    attachTab: async id => {
+      initialGroup = (await context.tabScopeHints(id)).abGroup
+      announcing.resolve()
+      await gate.promise
+      return { targetId: 'T1' }
+    },
+  }
+  vm.createContext(context)
+  vm.runInContext(section('async function tabScopeHints(', '// Resolve a stable identifier'), context)
+  vm.runInContext('async function createTarget(params) { const method = "Target.createTarget";\n' +
+    section("  if (method === 'Target.createTarget') {", "  if (method === 'Target.closeTarget') {") + '\n}', context)
+  const pending = context.createTarget({ url: 'https://example.com', agentGroup: 'agent-a' })
+  await announcing.promise
+  assert.equal(initialGroup, 'agent-a', 'the first announcement must be scoped while the command is still pending')
+  gate.resolve()
+  assert.equal((await pending).targetId, 'T1')
+  assert.equal(creatingTabGroups.size, 0)
+  context.attachTab = async () => { throw new Error('attach refused') }
+  await assert.rejects(context.createTarget({ agentGroup: 'agent-a' }), /attach refused/)
+  assert.equal(creatingTabGroups.size, 0, 'failed creation must not leak scope hints')
 })
 
 function detachWorker(sequence) {

@@ -1,7 +1,46 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
+import vm from 'node:vm'
 
 import { idleDetachMsFrom, rememberReplayable, selectIdleTabs } from './idle-detach.js'
+
+const background = readFileSync(new URL('./background.js', import.meta.url), 'utf8')
+
+function idleWorker(getTab) {
+  const released = []
+  const context = {
+    tabs: new Map([[1, { attached: true, inflight: 0, lastActivity: 0 }]]),
+    Date: { now: () => 100000 }, idleDetachMs: 30000, selectIdleTabs,
+    chrome: { tabs: { get: getTab } },
+    softDetachTab: id => released.push(id),
+  }
+  vm.createContext(context)
+  const start = background.indexOf('async function sweepIdleTabs(')
+  const end = background.indexOf('function detachTab(', start)
+  assert.ok(start >= 0 && end > start)
+  vm.runInContext(background.slice(start, end), context)
+  return { context, released }
+}
+
+test('real idle sweep preserves active tabs and unknown status, but releases quiet background tabs (#548)', async () => {
+  for (const status of [{ active: true }, null, { active: false }]) {
+    const w = idleWorker(async () => status)
+    await w.context.sweepIdleTabs()
+    assert.deepEqual(w.released, status?.active === false ? [1] : [])
+  }
+  const failed = idleWorker(async () => { throw new Error('tab status unavailable') })
+  await failed.context.sweepIdleTabs()
+  assert.deepEqual(failed.released, [])
+})
+
+test('idle sweep rechecks activity and in-flight commands after reading Chrome tab status', async () => {
+  for (const update of [entry => { entry.inflight = 1 }, entry => { entry.lastActivity = 100000 }]) {
+    const w = idleWorker(async () => { update(w.context.tabs.get(1)); return { active: false } })
+    await w.context.sweepIdleTabs()
+    assert.deepEqual(w.released, [])
+  }
+})
 
 test('idle setting parses seconds, 0 disables, garbage falls back to the default (#201)', () => {
   assert.equal(idleDetachMsFrom(45), 45000)
