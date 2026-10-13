@@ -13638,7 +13638,7 @@ async fn e2e_snapshot_excerpt_ref_metadata() {
     )
     .await;
     assert_success(&launched);
-    let mut html = String::from("<html><body><div id='scope'><button>Inside</button></div>");
+    let mut html = String::from("<html><body><div id='scope'><button>Inside</button><label><input type='checkbox'>Agree</label></div>");
     for n in 0..300 {
         html.push_str(&format!(
             "<button onclick='window.choice={n}'>Outside {n}</button>"
@@ -13673,7 +13673,7 @@ async fn e2e_snapshot_excerpt_ref_metadata() {
     assert_success(&scoped);
     assert_eq!(
         get_data(&scoped)["refs"].as_object().unwrap().len(),
-        1,
+        2,
         "{scoped}"
     );
     assert!(

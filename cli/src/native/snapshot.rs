@@ -2506,54 +2506,86 @@ fn status_summary(nodes: &[TreeNode], idx: usize) -> String {
 /// context use JSON strings; bracket-like page text inside them is not a ref.
 /// The renderer emits one real ref attribute per node line, after its name.
 pub fn rendered_ref_ids(tree: &str) -> std::collections::HashSet<String> {
-    let mut refs = std::collections::HashSet::new();
-    for line in tree.lines() {
-        let trimmed = line.trim_start();
-        let node_line = trimmed
-            .strip_prefix("+ ")
-            .map(str::trim_start)
-            .unwrap_or(trimmed);
-        if !node_line.starts_with("- ") || node_line.starts_with("- note:") {
-            continue;
-        }
-        let bytes = line.as_bytes();
-        let (mut quoted, mut escaped, mut i) = (false, false, 0);
-        let mut candidate = None;
-        while i < bytes.len() {
-            let byte = bytes[i];
-            if quoted {
-                if escaped {
-                    escaped = false;
-                } else if byte == b'\\' {
-                    escaped = true;
-                } else if byte == b'"' {
-                    quoted = false;
-                }
-                i += 1;
-                continue;
-            }
-            if byte == b'"' {
-                quoted = true;
-                i += 1;
-                continue;
-            }
-            if (i == 0 || bytes[i - 1].is_ascii_whitespace()) && bytes[i..].starts_with(b"[ref=e") {
-                let start = i + 5;
-                let mut end = start + 1;
-                while end < bytes.len() && bytes[end].is_ascii_digit() {
-                    end += 1;
-                }
-                if end > start + 1 && matches!(bytes.get(end), Some(b']' | b',')) {
-                    candidate = Some(line[start..end].to_string());
-                }
-            }
-            i += 1;
-        }
-        if let Some(id) = candidate {
-            refs.insert(id);
+    tree.lines().filter_map(rendered_line_ref).collect()
+}
+
+fn rendered_line_ref(line: &str) -> Option<String> {
+    let mut line = line.trim_start();
+    if let Some(rest) = line.strip_prefix("+ ") {
+        line = rest.trim_start();
+    }
+    if let Some(rest) = line.strip_prefix("- ") {
+        if rest.trim_start().starts_with("- ") {
+            line = rest.trim_start();
         }
     }
-    refs
+    let line = line.strip_prefix("- ")?;
+    let bytes = line.as_bytes();
+    let mut i = bytes.iter().position(|b| b.is_ascii_whitespace())?;
+    while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+        i += 1;
+    }
+    // The renderer puts the optional JSON-quoted name before its one attribute list.
+    if bytes.get(i) == Some(&b'"') {
+        i += 1;
+        let mut escaped = false;
+        let mut closed = false;
+        while let Some(&b) = bytes.get(i) {
+            i += 1;
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                closed = true;
+                break;
+            }
+        }
+        if !closed {
+            return None;
+        }
+        while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+            i += 1;
+        }
+    }
+    if bytes.get(i) != Some(&b'[') {
+        return None;
+    }
+    i += 1;
+    let mut token = i;
+    let (mut quoted, mut escaped, mut nested) = (false, false, 0usize);
+    while let Some(&b) = bytes.get(i) {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                quoted = false;
+            }
+        } else if b == b'"' {
+            quoted = true;
+        } else if b == b'[' {
+            nested += 1;
+        } else if b == b']' && nested > 0 {
+            nested -= 1;
+        } else if nested == 0 && matches!(b, b',' | b']') {
+            if let Some(id) = line[token..i].trim().strip_prefix("ref=") {
+                if id
+                    .strip_prefix('e')
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                {
+                    return Some(id.to_string());
+                }
+            }
+            if b == b']' {
+                return None;
+            }
+            token = i + 1;
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Ref attributes can be followed by context, modal, or future metadata.
@@ -3273,19 +3305,22 @@ mod tests {
     #[test]
     fn rendered_refs_ignore_page_text_and_match_complete_attribute_ids() {
         let tree = r##"- button "Fake [ref=e99], escaped \" quote" [ref=e2, disabled] context="Not [ref=e88]"
-- role [ref=e100] "Name" [ref=e20]
+- button "Name" [ref=e20] url=[ref=e100]
 - alert: "Message [ref=e77]"
 - textbox "Name" [ref=e3] value="Text [ref=e66]"
 - button "No real ref"
 - note: use [ref=e50] later
-+     - button "New child" [ref=e5]"##;
++     - button "New child" [ref=e5]
+- checkbox "Agree" [checked=false, ref=e6] value=[ref=e44]
+- button "No ref" [value=[ref=e55]]"##;
         assert_eq!(
             rendered_ref_ids(tree),
             std::collections::HashSet::from([
                 "e2".to_string(),
                 "e20".to_string(),
                 "e3".to_string(),
-                "e5".to_string()
+                "e5".to_string(),
+                "e6".to_string()
             ])
         );
     }
