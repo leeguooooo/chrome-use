@@ -113,6 +113,26 @@ test('a reply under the limit is delivered unchanged', async () => {
   assert.equal(JSON.stringify(w.delivered), JSON.stringify([{ id: 42, result: { ok: 1 } }]))
 })
 
+test('late success and error replies cannot cross a native-host connection boundary (#560)', async () => {
+  for (const fail of [false, true]) {
+    const w = worker(1000)
+    let finish
+    w.context.handleForwardCdpCommand = () => new Promise((resolve, reject) => {
+      finish = () => fail ? reject(new Error('old request failed')) : resolve({ old: true })
+    })
+    const old = w.context.onHostMessage({ id: 42, method: 'forwardCDPCommand', params: { method: 'Page.navigate' } })
+    const replacementReplies = []
+    w.context.port = { postMessage: msg => replacementReplies.push(msg) }
+    finish()
+    await old
+    assert.deepEqual(w.delivered, [])
+    assert.deepEqual(replacementReplies, [])
+    w.context.handleForwardCdpCommand = async () => ({ current: true })
+    await w.context.onHostMessage({ id: 42, method: 'forwardCDPCommand', params: { method: 'Runtime.evaluate' } })
+    assert.equal(JSON.stringify(replacementReplies), JSON.stringify([{ id: 42, result: { current: true } }]))
+  }
+})
+
 test('an oversized event is dropped without breaking anything', () => {
   const w = worker(100)
   w.context.postToHost({ method: 'forwardCDPEvent', params: { big: 'x'.repeat(500) } })

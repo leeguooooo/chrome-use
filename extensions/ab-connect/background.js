@@ -763,6 +763,9 @@ async function onHostMessage(msg) {
     return;
   }
   if (typeof msg.id !== 'undefined' && msg.method === 'forwardCDPCommand') {
+    // Request ids belong to the host connection that issued them. A new host
+    // may reuse those ids, so a late result must never be replayed onto it.
+    const commandPort = port;
     // A pending update never reloads under a running command, tab-bound or
     // not (Target.createTarget, ABExt.*), nor right after one (#524). A state
     // read (`status`, `doctor`) is not a session working and does not count.
@@ -774,9 +777,10 @@ async function onHostMessage(msg) {
     const method = String(msg?.params?.method || '');
     try {
       const result = await handleForwardCdpCommand(msg);
-      postToHost({ id: msg.id, result }, method);
+      if (port === commandPort) postToHost({ id: msg.id, result }, method);
     } catch (err) {
-      postToHost({ id: msg.id, error: err instanceof Error ? err.message : String(err) }, method);
+      if (port === commandPort)
+        postToHost({ id: msg.id, error: err instanceof Error ? err.message : String(err) }, method);
     } finally {
       if (counts) {
         hostCommandsInFlight = Math.max(0, hostCommandsInFlight - 1);
