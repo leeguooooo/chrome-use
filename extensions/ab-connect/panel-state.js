@@ -33,6 +33,7 @@ export class PanelTimeline {
         let row = this.items.get(key);
         if (!row) { row = { key, type: 'tool', text: '', at: event.at }; this.items.set(key, row); this.rows.push(row); }
         row.name = toolName(item);
+        row.hint = toolHint(item);
         row.failed = item.is_error === true || item.status === 'failed' || Boolean(item.error);
         row.completed = data.completed === true;
         row.text = describeTool(item);
@@ -70,7 +71,24 @@ function shownTool(item) {
   if (hiddenItems.has(item.type)) return false;
   return Boolean(item.tool || item.name || item.type);
 }
+// chrome_use tools arrive under several spellings (Codex `chrome_use_open`,
+// Pi `mcp__chrome_use__chrome_use_open`, Claude `mcp__chrome_use__...`).
+function browserTool(name) {
+  const match = /^(?:mcp__chrome_use__)?chrome_use[_.]([a-z_]+)$/.exec(name || '');
+  return match ? match[1].replace(/_/g, ' ') : null;
+}
+function toolHint(item) {
+  const args = item.arguments ?? item.input ?? item.rawInput ?? {};
+  if (item.type === 'commandExecution' && item.command) return String(item.command).replace(/^\/bin\/\w+ -lc /, '').slice(0, 80);
+  if (!args || typeof args !== 'object') return '';
+  for (const key of ['url', 'action', 'query', 'ref', 'selector', 'text', 'tabId', 'path', 'command', 'code']) {
+    if (typeof args[key] === 'string' && args[key].trim()) return args[key].trim().split('\n')[0].slice(0, 80);
+  }
+  return '';
+}
 function toolName(item) {
+  const browser = browserTool(item.tool || item.name);
+  if (browser) return `Browser · ${browser}`;
   if (item.type === 'commandExecution') return 'Ran a command';
   if (item.type === 'fileChange') return 'Changed files';
   if (item.type === 'webSearch') return 'Searched the web';

@@ -81,6 +81,8 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v1.5.203</strong>（2026-10-13）：扩展 0.5.47 让侧栏回复按 Markdown 显示：标题、加粗斜体、行内和多行代码、列表、引用、表格和链接都会渲染，不再显示原始符号；回复内容不会被当作 HTML，只有 http(s) 链接可以点击。浏览器工具行显示为“Browser · open”并附上访问的网址、操作或命令，不再显示 <code>mcp__chrome_use__chrome_use_open</code> 这类内部名称；只有空行的回复不再留下空白。扩展商店需等待 Google 审核。贡献者：@leeguooooo。</li>
+        <li><strong>v1.5.202</strong>（2026-10-13）：删除侧栏会话时会清理它的浏览器 session。会话里可能有 <code>close</code> 永远无法确认的标签页记录（旧的 target id，或 Chrome 重启前打开的标签页），删除后会话进程仍在运行。现在删除会依次尝试 <code>close</code>、<code>close --forget-untracked</code>、<code>session stop --force</code>，只针对这个会话自己的 session；只有普通 close 成功才报告标签页已关闭，否则侧栏提示 AI 窗口里可能留下一个标签页。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.201</strong>（2026-10-13）：扩展 0.5.46 修复侧栏慢操作被直接断开：本地面板服务给每个请求限时 10 秒，超时后不回任何内容就关掉连接；OpenCode 冷启动时的模型检查会超过这个时间，首次打开时模型菜单可能读不出来，删除会话时等 agent 退出再关浏览器标签页也可能超时。现在模型检查限时 30 秒、删除 45 秒，超时会返回错误，上一层的等待时间都比下一层长。扩展商店需等待 Google 审核。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.200</strong>（2026-10-13）：扩展 0.5.45 修复 Agents &amp; models 里部分 agent 显示“状态不可用”：本地服务同时最多跑两个 CLI 检查，四个可对话 agent 同时检查时有两个会失败；现在侧栏让检查排队。扩展商店需等待 Google 审核。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.199</strong>（2026-10-13）：侧栏的 Pi 模型菜单接受 <code>openrouter/~anthropic/claude-opus-latest</code> 这类 OpenRouter 别名；个别仍无法使用的模型 id 会被跳过，不再让整个菜单失败。贡献者：@leeguooooo。</li>

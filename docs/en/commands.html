@@ -904,6 +904,13 @@ JS</code></pre>
 <span class="du-prompt">$</span> chrome-use extension install <span class="du-flag">--no-profile</span>
 <span class="du-prompt">$</span> chrome-use extension install <span class="du-flag">--all-profiles</span>   <span class="du-cmt"># open the Store page in each missing profile</span></code></pre>
       </div>
+      <p>
+        Extension 0.5.48 adds a guarded native-tab-group operation for Thermo. It accepts only a
+        reviewed plan, rechecks each tab, preserves existing/current/pinned/audible/private/agent
+        tabs, and never crosses windows or profiles. It journals before mutation, verifies the
+        result, and supports one-shot undo without replaying uncertainty. Normal chrome-use
+        session ownership rules are unchanged.
+      </p>
       <div class="du-callout note">
         <div class="du-callout-title">⚠ The macOS policy profile means a managed Chrome</div>
         The setup wizard's "silent, every profile at once" route makes Chrome "managed by your organization":

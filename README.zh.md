@@ -288,12 +288,14 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use session list` · `session stop [name]` | 管理会话 worker |
 | `chrome-use auth login --bwu [--item <id\|name>]` | 从 Bitwarden 填写当前登录页，处理 TOTP 和支持的 passkey 两步验证 |
 | `chrome-use auth login --bwu --passkey` | 在 `--launch` 浏览器中用 passkey 登录（bwu 0.9.0+） |
-| `chrome-use status` | 中继传输、近期 debugger 超时、重复扩展、版本偏差与会话健康总览。ab-connect 0.5.47+ 的 host 断线后首次重试定时为 1 秒，连续失败逐步退避到 30 秒。旧 socket 的命令与事件等待会结束，旧回复不重放；发送失败或回复丢失报告 action_outcome_unknown 和 retryable: false；中断的写操作须先检查页面再决定是否重复 |
+| `chrome-use status` | 中继传输、近期 debugger 超时、重复扩展、版本偏差与会话健康总览。ab-connect 0.5.49+ 的 host 断线后首次重试定时为 1 秒，连续失败逐步退避到 30 秒。旧 socket 的命令与事件等待会结束，旧回复不重放；发送失败或回复丢失报告 action_outcome_unknown 和 retryable: false；中断的写操作须先检查页面再决定是否重复 |
 | `chrome-use close --forget-untracked` | 显式恢复：仅放弃没有标签身份、且两次有效 Chrome registry 查询都未列出的旧归属记录。返回 ownershipDropped，不声称原来的标签已关闭。不能与单个标签或 --all 合用 |
 
 升级磁盘上的程序不会替换正在运行的 native host。升级时 Chrome 已打开的，等 agent 会话空闲后，在 chrome://extensions 重新加载 chrome-use 扩展。重连会话 daemon 不会替换 host。status 的 health.nativeHostVersion 来自运行中 host 的握手，无法取得时为 null；与磁盘 CLI 版本及 hostLauncherHealthy 分开显示，无法核实或版本不一致时给出警告。
 
 `status`、`extension status` 和 doctor 的中继检查使用一个诊断连接读取 `ABExt.state`，总预算为 10 秒；收到错误回复时，在同一连接上回退到 `ABExt.inspectTab`，不发送 debugger 命令。debugger 摘要被动统计最近十分钟的已回答命令（包括非超时错误）和超时次数；完整窗口显示“in the last 10 min”，否则显示“since the extension worker started <age> ago”；不足 120 秒使用整数秒（如“45s”），否则使用整数分钟（如“3 min”）。没有样本时显示“not exercised”，旧扩展没有健康数据时明确说明。计数使用有界的一秒桶，service worker 重启后清空。命令持续失败时，在 `chrome://extensions` 重新加载 chrome-use 扩展或重启 Chrome。
+
+扩展 0.5.48 增加 Thermo 使用的原生标签组操作。它只接受已明确预览的标签清单，逐页重查，保留已有标签组和当前、固定、音频、隐私、agent 标签，不跨窗口或 profile；执行前记录，执行后核对，并支持一次性撤销，不重放结果不明确的操作。普通 chrome-use 会话仍不能修改不属于自己的标签。
 
 新原生主机会确认诊断连接并跳过 `attachAll`。仍在运行的旧主机会像以前一样执行一次 `attachAll`；诊断提示会建议升级后重新加载扩展以启动新主机。疑似重复扩展检测读取 sidecar 身份，并发执行最多一秒的 TCP 存活检查，不进行 WebSocket 握手。同账号、同浏览器且扩展 id 不同不能证明属于同一 Chrome profile；只有确认同一 profile 安装了两份时才禁用其中一份。
 

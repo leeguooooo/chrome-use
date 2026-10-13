@@ -435,6 +435,12 @@ relay it reads `chrome.tabs.query` and `ABExt.state` (ab-connect 0.5.25+); on
 direct CDP, `Target.getTargets` and `Browser.getWindowForTarget`. Nothing is
 attached, activated, focused, moved or reloaded, and no page content is read.
 
+ab-connect 0.5.48 also exposes a guarded native grouping capability to Thermo.
+It is not a general chrome-use command and does not loosen foreign-tab rules:
+Thermo must submit an explicit reviewed plan, and the extension rechecks
+identity and protection flags, journals before mutation, verifies the group,
+and makes an uncertain result non-retryable.
+
 A running session keeps its existing browser. A missing non-relay daemon needs
 `--cdp`; inventory refuses to launch a browser, provision a provider or upgrade
 a daemon. Action-policy restrictions still apply.

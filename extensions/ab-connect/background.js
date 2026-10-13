@@ -79,6 +79,7 @@ import {
 } from './update-check.js';
 import { attachedTargetsFrom } from './attached-targets.js';
 import { executeCall, policySummary, POLICY_VERSION } from './api-passthrough.js';
+import { createUserTabOrganizer, USER_TAB_GROUPS_VERSION } from './user-tab-organizer.js';
 import {
   followReplacement,
   forgetReplacement,
@@ -86,6 +87,25 @@ import {
   reviveDiscardedTab,
 } from './tab-replacement.js';
 
+let userTabOrganizer;
+async function getUserTabOrganizer() {
+  await loadOwnedTabs();
+  await loadAgentPopups();
+  userTabOrganizer ??= createUserTabOrganizer({
+    tabs: chrome.tabs, groups: chrome.tabGroups, storage: chrome.storage.local,
+    isAgent: id => ownedTabs.has(id) || agentPopups.has(id) || tabs.get(id)?.attached === true,
+    isAgentWindow: id => id === agentWindowId,
+  });
+  return userTabOrganizer;
+}
+// The Web Store package strips `key`. This hook exists only in unpacked/signed development builds
+// so acceptance can exercise the exact background integration against an isolated Chrome profile.
+if (chrome.runtime.getManifest().key) {
+  globalThis.__chromeUseAcceptance = {
+    organizeUserTabs: async params => (await getUserTabOrganizer()).organize(params),
+    undoOrganizeUserTabs: async params => (await getUserTabOrganizer()).undo(params),
+  };
+}
 const HOST_NAME = 'com.agent_browser.connect';
 let agentPanelEntry = { ready: false, error: 'Side panel entry is being configured.' };
 void configureAgentPanel(chrome).then(result => { agentPanelEntry = result; });
@@ -725,6 +745,7 @@ function connectHost() {
         // `releaseTab` (0.5.34): detach from a tab a session took with
         // `--force` (the user's own) when that session ends.
         capabilities: [
+          'userTabGroupsV1',
           'nativeTabDuplicate',
           'downloadsApi',
           `call:${POLICY_VERSION}`,
@@ -1305,6 +1326,20 @@ async function handleForwardCdpCommand(msg) {
   // no extension release. Ownership for mutations is the persisted
   // `ownedTabs` set only: adopted tabs are readable through here but not
   // closable or movable, same as `close` treats them.
+  if (method === 'ABExt.userTabMetadata') {
+    const all = await chrome.tabs.query({});
+    // Titles and URLs come from the native browser inventory; no large URL/content payload here.
+    return { version: 1, tabs: all.map(t => ({
+      id:t.id,windowId:t.windowId,index:t.index,active:t.active,pinned:t.pinned,
+      audible:t.audible,incognito:t.incognito,groupId:t.groupId,
+    })) };
+  }
+
+  if (method === 'ABExt.organizeUserTabs' || method === 'ABExt.undoOrganizeUserTabs') {
+    const organizer = await getUserTabOrganizer();
+    return method === 'ABExt.organizeUserTabs' ? organizer.organize(params) : organizer.undo(params);
+  }
+
   if (method === 'ABExt.call') {
     // After a service-worker restart the persisted ownership set is loaded
     // lazily; a mutation arriving before that would be refused as "not owned".
@@ -1327,6 +1362,7 @@ async function handleForwardCdpCommand(msg) {
       version: chrome.runtime.getManifest().version,
       relayHealth: getRelayHealth(),
       policy: policySummary(),
+      userTabGroupsVersion: USER_TAB_GROUPS_VERSION,
       connected: port != null,
       attachedTargets: attachedTargetsFrom(tabs.entries()),
       ownedTabs: [...ownedTabs],

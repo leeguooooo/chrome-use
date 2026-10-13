@@ -1,4 +1,5 @@
 import { PanelTimeline, phaseLabels } from './panel-state.js';
+import { renderMarkdown } from './markdown.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
 const agentNames = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode', pi: 'Pi' };
@@ -125,8 +126,8 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
       if (!view) {
         if (row.type === 'tool') {
           const container = element('details', undefined, 'tool-row'); const title = element('summary');
-          const name = element('span'); const state = element('span', undefined, 'tool-state'); title.append(name, state);
-          const content = element('pre'); container.append(title, content); view = { container, name, state, content };
+          const name = element('span', undefined, 'tool-name'); const hint = element('span', undefined, 'tool-hint'); const state = element('span', undefined, 'tool-state'); title.append(name, hint, state);
+          const content = element('pre'); container.append(title, content); view = { container, name, hint, state, content };
         } else {
           const container = element('article', undefined, `message-row ${row.type}`);
           const speaker = element('div', row.type === 'user' ? 'You' : row.type === 'assistant' ? 'Assistant' : 'Response status', 'speaker');
@@ -144,9 +145,14 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
         }
         rendered.set(row.key, view); nodes.transcript.append(view.container);
       }
-      if (view.content.textContent !== row.text) view.content.textContent = row.text;
+      if (view.text !== row.text) {
+        view.text = row.text;
+        // Agent replies are Markdown; user text and tool output stay literal.
+        if (row.type === 'assistant') { renderMarkdown(document, view.content, row.text.trim()); view.container.hidden = !row.text.trim(); }
+        else view.content.textContent = row.text;
+      }
       if (row.type === 'user') view.speaker.textContent = row.queueStatus || '';
-      if (row.type === 'tool') { view.name.textContent = row.name; view.state.textContent = row.failed ? 'Error' : row.completed ? '' : 'Running…'; view.container.classList.toggle('failed', row.failed); }
+      if (row.type === 'tool') { view.name.textContent = row.name; view.hint.textContent = row.hint || ''; view.state.textContent = row.failed ? 'Error' : row.completed ? '' : 'Running…'; view.container.classList.toggle('failed', row.failed); }
     }
     if (follow) nodes.transcript.scrollTop = nodes.transcript.scrollHeight;
     nodes.latest.hidden = follow || timeline.rows.length === 0;

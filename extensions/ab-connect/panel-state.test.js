@@ -63,7 +63,7 @@ test('commands show their command line and output; reasoning is not a tool row',
     event(3,'tool',{messageId:'m',completed:true,item:{id:'t',type:'mcpToolCall',tool:'chrome_use_read',arguments:{tabId:'chrome-tab:7'},result:{content:[{type:'text',text:'page text'}]}}}),
     event(4,'tool',{messageId:'m',completed:true,item:{}}),
   ],4);
-  assert.deepEqual(timeline.rows.map(r=>r.name),['Ran a command','chrome_use_read']);
+  assert.deepEqual(timeline.rows.map(r=>r.name),['Ran a command','Browser · read']); assert.deepEqual(timeline.rows.map(r=>r.hint),['ls','chrome-tab:7']);
   assert.equal(timeline.rows[0].text,'$ ls\n\na.txt');
   assert.match(timeline.rows[1].text,/chrome-tab:7[\s\S]*page text/);
 });

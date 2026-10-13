@@ -12,7 +12,7 @@ cleanup retains its identity and refuses success so the next call can retry.
 `tab list --all` uses a passive connection even in a fresh session: no daemon,
 window, tab or page attachment is created.
 
-With ab-connect 0.5.47+, native-host disconnect schedules a first connection retry after 1 second.
+With ab-connect 0.5.49+, native-host disconnect schedules a first connection retry after 1 second.
 Repeated failures back off through 2, 4, 8, 16 and at most 30 seconds; a
 confirmed host resets the backoff. The Chrome alarm still recovers a restarted
 worker. Command and event waits end when their socket closes, even if a session

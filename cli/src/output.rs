@@ -6429,6 +6429,8 @@ Setup:
                              Agent panel conversations/configuration writes support
                              macOS/Linux; Windows panel discovery/config reads are
                              read-only. Legacy native hosts require a CLI upgrade.
+                             Extension 0.5.48 adds guarded native user-tab grouping
+                             for Thermo; session ownership rules remain unchanged.
   extension uninstall        Remove the native-messaging host (+ tells you how to drop
                              the policy profile and leave managed mode)
   extension call <ns.method> [json-args]

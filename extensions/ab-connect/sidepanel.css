@@ -65,10 +65,34 @@ button.danger { background:var(--error); border-color:var(--error); color:var(--
 .tool-row[open] summary::before { transform:rotate(90deg); }
 .tool-row summary:hover { background:var(--surface); }
 .tool-row pre { max-height:240px; overflow:auto; white-space:pre-wrap; word-break:break-word; font:11px/1.5 ui-monospace,"SFMono-Regular",Consolas,monospace; margin:2px 0 8px 16px; padding:8px; background:var(--surface); border-radius:6px; color:var(--ink); }
-.tool-state { margin-left:auto; }
+.tool-name { flex:none; }
+.tool-hint { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:.75; }
+.tool-state { margin-left:auto; flex:none; padding-left:6px; }
 .tool-row.failed .tool-state { color:var(--error); }
 details summary { cursor:pointer; color:var(--muted); font-size:12px; }
 .latest { align-self:center; margin:-40px 0 8px; position:relative; font-size:12px; border-radius:14px; box-shadow:0 1px 4px rgb(0 0 0 / .12); }
+
+/* Markdown in agent replies */
+.message-row.assistant .content { white-space:normal; }
+.message-row.assistant .content > :first-child { margin-top:0; }
+.message-row.assistant .content > :last-child { margin-bottom:0; }
+.content p { margin:0 0 8px; }
+.content .md-heading { font-size:14px; font-weight:650; margin:14px 0 6px; }
+.content h3.md-heading { font-size:15px; }
+.content ul,.content ol { margin:0 0 8px; padding-left:20px; }
+.content li { margin:2px 0; }
+.content li > ul,.content li > ol { margin:2px 0 0; }
+.content code { font:12px/1.4 ui-monospace,"SFMono-Regular",Consolas,monospace; background:var(--surface); padding:1px 4px; border-radius:4px; overflow-wrap:anywhere; }
+.content pre.md-code { margin:0 0 8px; padding:8px 10px; background:var(--surface); border-radius:8px; overflow:auto; max-height:320px; }
+.content pre.md-code code { padding:0; background:none; white-space:pre; }
+.content blockquote { margin:0 0 8px; padding-left:10px; border-left:3px solid var(--line); color:var(--muted); }
+.content hr { border:0; border-top:1px solid var(--line); margin:12px 0; }
+.content a { color:var(--accent); text-decoration:none; overflow-wrap:anywhere; }
+.content a:hover { text-decoration:underline; }
+.content .md-table { overflow-x:auto; margin:0 0 8px; }
+.content table { border-collapse:collapse; font-size:12px; }
+.content th,.content td { border:1px solid var(--line); padding:4px 8px; text-align:left; vertical-align:top; }
+.content th { background:var(--surface); font-weight:600; }
 
 /* Agent requests and queue */
 .requests { padding:0 12px; max-height:42vh; overflow:auto; }

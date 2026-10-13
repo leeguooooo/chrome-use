@@ -170,6 +170,8 @@ window is created.
 Uncertain ownership or placeholder cleanup refuses instead of opening more
 windows. `tab list --all` uses a passive connection: even a fresh session
 starts no daemon, opens no window or tab, and attaches to no page.
+Extension 0.5.48 has a separate guarded native-grouping capability for Thermo;
+it does not grant chrome-use sessions ownership of the user's tabs.
 
 Use one session name per task and reuse it. After "session unresponsive",
 make the one move it names. Do not close, navigate, or reconfigure tabs or

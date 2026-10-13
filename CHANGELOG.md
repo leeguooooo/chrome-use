@@ -1,8 +1,32 @@
 # Changelog
 
-## 1.5.201
+## 1.5.203
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.47 for the new rendering. Chrome Web Store publication follows Google review.
+
+### Improvements
+
+- **Markdown in panel replies.** Agent replies render headings, bold and italic text, inline and fenced code, lists, quotes, tables and links instead of showing raw Markdown. Nothing in a reply is treated as HTML, and only http(s) links are clickable.
+- **Readable tool rows.** Browser tool calls read "Browser · open" with the URL, action or command they acted on, instead of internal names such as `mcp__chrome_use__chrome_use_open`. Replies that contain only blank lines no longer leave an empty gap.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.202
+
+### Bug Fixes
+
+- **Deleting a panel conversation cleans up its browser session.** A session could keep a tab record that `close` can never verify, such as an old target id or a tab opened before Chrome restarted, so the delete left the session daemon running. Delete now tries `close`, then `close --forget-untracked`, then `session stop --force` for that conversation's own session. Only a plain close reports the tabs as closed; otherwise the panel says a tab may remain in the AI window.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.201
+
 Requires extension ab-connect 0.5.46 for the longer panel waits. Chrome Web Store publication follows Google review.
 
 ### Bug Fixes
@@ -12,7 +36,6 @@ Requires extension ab-connect 0.5.46 for the longer panel waits. Chrome Web Stor
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.200
 

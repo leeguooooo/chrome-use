@@ -1378,28 +1378,37 @@ async fn close_browser_session(profile: &str, session: &str) -> Value {
     let Ok(executable) = std::env::current_exe() else {
         return json!({"session":session,"closed":false,"error":"Cannot locate chrome-use"});
     };
-    let mut command = tokio::process::Command::new(executable);
-    command
-        .arg("close")
-        .env("AGENT_BROWSER_BROWSER", profile)
-        .env("AGENT_BROWSER_SESSION", session)
-        .env("CHROME_USE_NO_UPDATE_CHECK", "1")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    match tokio::time::timeout(Duration::from_secs(20), command.status()).await {
-        Ok(Ok(status)) if status.success() => json!({"session":session,"closed":true}),
-        Ok(Ok(_)) => {
-            json!({"session":session,"closed":false,"error":"chrome-use close reported a failure"})
+    let run = |args: Vec<&str>, seconds: u64| {
+        let mut command = tokio::process::Command::new(&executable);
+        command
+            .args(&args)
+            .env("AGENT_BROWSER_BROWSER", profile)
+            .env("AGENT_BROWSER_SESSION", session)
+            .env("CHROME_USE_NO_UPDATE_CHECK", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        async move {
+            matches!(
+                tokio::time::timeout(Duration::from_secs(seconds), command.status()).await,
+                Ok(Ok(status)) if status.success()
+            )
         }
-        Ok(Err(_)) => {
-            json!({"session":session,"closed":false,"error":"chrome-use close could not start"})
-        }
-        Err(_) => {
-            json!({"session":session,"closed":false,"error":"chrome-use close did not finish in 20 s"})
-        }
+    };
+    // A normal close verifies every tab it closes. A record that can no longer
+    // be identified (an old target id, or tabs opened before a Chrome restart)
+    // keeps that close incomplete forever, so the deleted conversation's
+    // session then drops untracked records, and finally its whole record,
+    // which stops its daemon. Only the first step claims the tabs are closed.
+    if run(vec!["close"], 12).await {
+        return json!({"session":session,"closed":true});
     }
+    if run(vec!["close", "--forget-untracked"], 10).await {
+        return json!({"session":session,"closed":true,"ownershipDropped":true});
+    }
+    let stopped = run(vec!["session", "stop", session, "--force"], 8).await;
+    json!({"session":session,"closed":false,"recordDropped":stopped,"error":if stopped {"chrome-use could not confirm the session's tabs closed; its record was dropped and its daemon stopped"} else {"chrome-use could not close or drop the session"}})
 }
 
 #[cfg(test)]
