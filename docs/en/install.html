@@ -88,6 +88,7 @@
       </p>
 
       <div class="du-callout note">
+        <p>Installed-file checks do not replace a running native host. After upgrading with Chrome open, reload the extension at chrome://extensions when agent sessions are idle. Reconnecting a session daemon does not replace the host. Status reads <code>health.nativeHostVersion</code> from the actual host handshake (null when unavailable), warns on unverified or mismatched versions, and reports installed launcher health separately as <code>hostLauncherHealthy</code>.</p>
         <div class="du-callout-title">ℹ️ One binary</div>
         There's no separate "stealth executable"; anti-detection is runtime behavior. Connecting to your real Chrome applies zero patches, and only <code>--launch</code> (opening a fresh browser) applies the full patch set. See
         <a href="/en/real-chrome.html">Connecting to your real Chrome</a>.

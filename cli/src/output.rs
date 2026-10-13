@@ -1885,6 +1885,10 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                     "Nothing to close: this session has no browser connection and no tabs of its own"
                         .to_string()
                 }
+                _ if data.get("ownershipDropped").and_then(|v| v.as_array()).is_some_and(|a| !a.is_empty()) => {
+                    let count = data["ownershipDropped"].as_array().unwrap().len();
+                    format!("Session closed; {count} stale ownership record(s) dropped. The original Chrome tabs could not be identified and were not reported closed.")
+                }
                 _ => format!("Browser closed{verified}"),
             };
             println!("{} {}", color::success_indicator(), label);
@@ -4044,6 +4048,10 @@ Options:
                        other Claude sessions' work); add --force to close
                        them anyway
   --force, --yes       With --all: close every session, not only yours
+  --forget-untracked  Explicit recovery: drop only stale ownership records with
+                      no tab identity after two valid registry absence reads.
+                      No tab closure is claimed for dropped records. Refuses
+                      with --all or a tab argument; requires the relay.
 
 Global Options:
   --json               Output as JSON
@@ -4052,6 +4060,7 @@ Global Options:
 Examples:
   chrome-use close
   chrome-use close --session mysession
+  chrome-use close --forget-untracked
   chrome-use close --all
   chrome-use close --all --force
 "##
@@ -5487,7 +5496,11 @@ extension ids does not prove one profile; disable one only if both share a profi
 Update an older published extension; newer live extensions need chrome-use upgrade.
 Only installType development identifies a development build. Doctor shows system
 load and CPU count; high load also adds hints to relay/CDP timeout errors.
-JSON health: transportResponsive, hostDiagnostic, debugger, extensionHealth.
+JSON health: transportResponsive, hostDiagnostic, nativeHostVersion, debugger,
+extensionHealth. nativeHostVersion comes from the running host handshake, null
+when unavailable. Missing/mismatched versions warn; hostLauncherHealthy checks
+installed files only. Reload the extension when agent sessions are idle after
+an upgrade; reconnecting a daemon does not replace a running native host.
 connectedProfiles and warnings remain available. status relayUp means transport
 answered; extension status relayUp retains endpoint-presence semantics.
 A down status hides cached profile/version information. Transport health alone
@@ -6128,6 +6141,8 @@ Core Commands:
                              tab group (so scratch tabs get cleaned, this one stays)
   close [--all]              Close browser (--all closes every session; refuses
                              while other sessions are live unless --force)
+  close --forget-untracked   Explicitly abandon verified stale target records;
+                             no tab closure is claimed for those records
 
 Navigation:
   back                       Go back

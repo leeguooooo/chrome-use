@@ -12,6 +12,9 @@ pub(super) fn check(checks: &mut Vec<Check>) {
     let category = "Native host";
     let r = native_host_report();
 
+    checks.push(Check::new("native_host.runtimeScope", category, Status::Info,
+        "Manifest and launcher checks verify installed files, not an already-running native host. After upgrading with Chrome open, reload the extension when agent sessions are idle; status reports the live host version when supported."));
+
     if r.manifests.is_empty() {
         // Not registered at all — a different, already-handled state (the
         // connect flow writes it on demand). Report as info, not failure.

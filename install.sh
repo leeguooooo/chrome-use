@@ -139,6 +139,7 @@ fi
 # One read-only pass so the user sees binary/extension/skill status at a glance,
 # then a copy-paste prompt that exercises the whole chain in their agent.
 info "self-check..."
+info "Installed-file checks do not refresh running native hosts. If Chrome was open during this upgrade, reload the chrome-use extension at chrome://extensions when agent sessions are idle; reconnect alone does not replace the host."
 "$bindir/${BIN_NAME}" doctor --quick --offline || err "self-check failed; resolve the doctor failures above"
 [ "$extension_setup_failed" -eq 0 ] || err "extension setup failed; rerun ${BIN_NAME} extension install"
 printf '\n\033[36m==>\033[0m %s\n\n    %s\n\n' \

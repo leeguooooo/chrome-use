@@ -2736,6 +2736,8 @@ async fn diagnostic_socket(
 pub struct RelayHealth {
     pub transport_responsive: bool,
     pub host_diagnostic: bool,
+    /// Version reported by the running host's handshake, not its launcher.
+    pub native_host_version: Option<String>,
     pub debugger: String,
     pub extension_health: Option<serde_json::Value>,
     /// A downloaded extension update and what holds it back (#524); `None`
@@ -2749,6 +2751,7 @@ impl Default for RelayHealth {
         Self {
             transport_responsive: false,
             host_diagnostic: false,
+            native_host_version: None,
             debugger: "debugger: unknown (relay transport did not answer)".into(),
             extension_health: None,
             extension_update: None,
@@ -2980,10 +2983,22 @@ impl RelayHealth {
             > 0
     }
 
-    pub fn host_notice(&self) -> Option<&'static str> {
-        (self.transport_responsive && !self.host_diagnostic).then_some(
-            "the running native host predates diagnostic connections, so this check triggered its usual attachAll as earlier versions did; reload the chrome-use extension at chrome://extensions after upgrading to start the new host"
-        )
+    pub fn host_notice(&self) -> Option<String> {
+        if !self.transport_responsive {
+            return None;
+        }
+        let installed = env!("CARGO_PKG_VERSION");
+        let reason = match self.native_host_version.as_deref() {
+            Some(live) if live != installed => {
+                format!("running native host {live} differs from installed CLI {installed}")
+            }
+            None => "running native host version could not be verified".to_string(),
+            _ if !self.host_diagnostic => {
+                "running native host did not confirm diagnostic mode".to_string()
+            }
+            _ => return None,
+        };
+        Some(format!("{reason}; when agent sessions are idle, reload the chrome-use extension at chrome://extensions to start the installed host. Reconnecting a session daemon does not replace the native host."))
     }
 }
 
@@ -3062,6 +3077,17 @@ async fn probe_relay_health(url: &str, budget: std::time::Duration) -> RelayHeal
     let _ = tokio::time::timeout(budget, async {
         let (mut ws, response) = diagnostic_socket(url).await?;
         health.host_diagnostic = response.headers().contains_key("x-chrome-use-diagnostic");
+        health.native_host_version = response
+            .headers()
+            .get("x-chrome-use-host-version")
+            .and_then(|v| v.to_str().ok())
+            .filter(|v| {
+                !v.is_empty()
+                    && v.len() <= 64
+                    && v.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+'))
+            })
+            .map(str::to_string);
         ws.send(Message::Text(
             serde_json::json!({"id":1,"method":"ABExt.state","params":{}}).to_string(),
         ))
@@ -4353,6 +4379,10 @@ async fn handle_cdp_client(
                 resp.headers_mut()
                     .insert("x-chrome-use-diagnostic", "1".parse().unwrap());
             }
+            resp.headers_mut().insert(
+                "x-chrome-use-host-version",
+                env!("CARGO_PKG_VERSION").parse().unwrap(),
+            );
             Ok(resp)
         } else {
             let mut reject = tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(
@@ -4408,6 +4438,28 @@ async fn handle_cdp_client(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn live_host_notice_distinguishes_installed_and_running_versions() {
+        let mut health = super::RelayHealth {
+            transport_responsive: true,
+            host_diagnostic: true,
+            native_host_version: Some(env!("CARGO_PKG_VERSION").into()),
+            ..Default::default()
+        };
+        assert!(health.host_notice().is_none());
+        health.native_host_version = Some("1.5.75".into());
+        assert!(health
+            .host_notice()
+            .unwrap()
+            .contains("running native host 1.5.75 differs"));
+        health.native_host_version = None;
+        assert!(health
+            .host_notice()
+            .unwrap()
+            .contains("could not be verified"));
+        health.transport_responsive = false;
+        assert!(health.host_notice().is_none());
+    }
     use super::*;
     use serde_json::json;
     use std::path::Path;
@@ -4626,7 +4678,8 @@ mod tests {
             }
         }
         let serialized = serde_json::to_value(RelayHealth::default()).unwrap();
-        assert_eq!(serialized.as_object().unwrap().len(), 4);
+        assert_eq!(serialized.as_object().unwrap().len(), 5);
+        assert_eq!(serialized["nativeHostVersion"], json!(null));
         assert!(serialized.get("state").is_none());
         assert_eq!(serialized["extensionHealth"], json!(null));
         assert_eq!(serialized["hostDiagnostic"], false);
@@ -4679,7 +4732,10 @@ mod tests {
                         |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
                          mut resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
                             assert_eq!(req.headers()["x-chrome-use-diagnostic"], "1");
-                            if diagnostic_host { resp.headers_mut().insert("x-chrome-use-diagnostic", "1".parse().unwrap()); }
+                            if diagnostic_host {
+                                resp.headers_mut().insert("x-chrome-use-diagnostic", "1".parse().unwrap());
+                                resp.headers_mut().insert("x-chrome-use-host-version", env!("CARGO_PKG_VERSION").parse().unwrap());
+                            }
                             Ok(resp)
                         }).await.unwrap();
                     let cmd: serde_json::Value =
@@ -4719,6 +4775,10 @@ mod tests {
                 let health = probe_relay_health(&url, std::time::Duration::from_secs(1)).await;
                 assert!(health.transport_responsive);
                 assert_eq!(health.host_diagnostic, diagnostic_host);
+                assert_eq!(
+                    health.native_host_version.as_deref(),
+                    diagnostic_host.then_some(env!("CARGO_PKG_VERSION"))
+                );
                 assert_eq!(health.host_notice().is_some(), !diagnostic_host);
                 assert_eq!(health.extension_health.is_none(), fallback);
                 // An extension that predates update reporting says nothing.
@@ -4794,6 +4854,10 @@ mod tests {
             assert_eq!(
                 response.headers().get("x-chrome-use-diagnostic").is_some(),
                 diagnostic
+            );
+            assert_eq!(
+                response.headers()["x-chrome-use-host-version"],
+                env!("CARGO_PKG_VERSION")
             );
             if diagnostic {
                 assert!(tokio::time::timeout(

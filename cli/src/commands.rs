@@ -2504,12 +2504,18 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
 
         // === Close ===
         "close" | "quit" | "exit" => {
+            let forget = rest.contains(&"--forget-untracked");
+            if forget && rest.iter().any(|a| !a.starts_with("--") || *a == "--all") {
+                return Err(ParseError::InvalidValue {message: "--forget-untracked applies only to this session's close, not a tab or --all".to_string(), usage:"close --forget-untracked"});
+            }
             // `close <tab>` closes only that tab (and the output says "Tab
             // closed"); bare `close` closes the browser/session. `close --all` is
             // intercepted earlier in the dispatcher. Previously `close t12` still
             // ran a browser close and alarmingly printed "Browser closed" (#26).
             if let Some(tab_ref) = rest.iter().find(|a| !a.starts_with("--")) {
                 Ok(json!({ "id": id, "action": "tab_close", "tabId": tab_ref }))
+            } else if forget {
+                Ok(json!({ "id": id, "action": "close", "forgetUntracked": true }))
             } else {
                 Ok(json!({ "id": id, "action": "close" }))
             }
@@ -7597,6 +7603,13 @@ mod tests {
         assert_eq!(tab["tabId"], "t12");
         let browser = parse_command(&args("close"), &default_flags()).unwrap();
         assert_eq!(browser["action"], "close");
+        assert_eq!(
+            parse_command(&args("close --forget-untracked"), &default_flags()).unwrap()
+                ["forgetUntracked"],
+            true
+        );
+        assert!(parse_command(&args("close t12 --forget-untracked"), &default_flags()).is_err());
+        assert!(parse_command(&args("close --all --forget-untracked"), &default_flags()).is_err());
         // `quit`/`exit` aliases still browser-close.
         assert_eq!(
             parse_command(&args("quit"), &default_flags()).unwrap()["action"],

@@ -299,6 +299,9 @@ For an authorized task, the bundled skill tells the agent to inspect and attempt
 | `chrome-use auth login --bwu [--item <id\|name>]` | Fill the current login page from Bitwarden; handles TOTP and supported passkey second factors |
 | `chrome-use auth login --bwu --passkey` | Sign in with a vault passkey in `--launch` mode (bwu 0.9.0+) |
 | `chrome-use status` | Relay transport, recent debugger timeouts, duplicate installs, extension version skew, and session health |
+| `chrome-use close --forget-untracked` | Explicit recovery for stale ownership records with no tab identity. Requires two valid registry absence reads; reports ownershipDropped and does not claim those Chrome tabs were closed. Cannot be combined with a tab or --all |
+
+Upgrading installed files does not replace an already-running native host. With Chrome open during an upgrade, reload the chrome-use extension at chrome://extensions when agent sessions are idle. Reconnecting a session daemon does not replace the host. Status reports health.nativeHostVersion from the live handshake (null when unavailable), separately from the installed CLI and hostLauncherHealthy; unavailable or mismatched runtime versions produce warnings.
 
 After a refused first `open`, `tab list --all` can still inspect the session's bound profile or configured CDP endpoint passively. It creates no driving connection and does not bypass mixed-window guards.
 
@@ -308,7 +311,7 @@ New native hosts acknowledge diagnostic connections and skip `attachAll`. A stil
 
 Concurrent requests attaching the same tab share one complete attachment. Replies from an old native-host connection are never replayed onto its replacement; reconnect re-announces the current tab state. Automatic detach recovery skips tabs discarded by Chrome. Optional idle debugger release (`ab_idle_detach_secs`, disabled by default) preserves active tabs in every window and rechecks command activity before releasing a background tab.
 
-JSON health contains only `transportResponsive`, `hostDiagnostic`, `debugger`, and `extensionHealth` (`windowMs`, `workerAgeMs`, `answered`, `timedOut`, `lastTimeout`, or null). `connectedProfiles` and `warnings` remain available. `extension status --json` retains `relayUp` as endpoint presence; `status --json` uses an extension transport reply. Update an older extension when a newer version is published; if the live extension is newer than this CLI expects, run `chrome-use upgrade`. Only `installType: development` identifies a development install. On macOS/Linux, doctor shows one-minute system load and CPU count; load above twice the CPU count warns and adds a hint to relay/CDP timeout errors.
+JSON health contains `transportResponsive`, `hostDiagnostic`, `nativeHostVersion`, `debugger`, and `extensionHealth` (`windowMs`, `workerAgeMs`, `answered`, `timedOut`, `lastTimeout`, or null). `connectedProfiles` and `warnings` remain available. `extension status --json` retains `relayUp` as endpoint presence; `status --json` uses an extension transport reply. Update an older extension when a newer version is published; if the live extension is newer than this CLI expects, run `chrome-use upgrade`. Only `installType: development` identifies a development install. On macOS/Linux, doctor shows one-minute system load and CPU count; load above twice the CPU count warns and adds a hint to relay/CDP timeout errors.
 
 A field that shows your text is not proof the page saved it. `fill` warns
 when the form's Save/Submit was disabled before the edit and still is,

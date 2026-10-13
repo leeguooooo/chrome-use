@@ -25,6 +25,8 @@ const CLOSE_TOTAL_BUDGET: Duration = Duration::from_secs(15);
 
 #[derive(Default)]
 struct Browser {
+    presence_reads: std::collections::HashMap<String, usize>,
+    reappear_on_second_read: bool,
     relay: bool,
     /// Open tabs: (target id, Chrome tab id, url).
     tabs: Vec<(String, i64, String)>,
@@ -243,6 +245,13 @@ impl Fake {
                     ));
                 }
                 let target = params["targetId"].as_str().unwrap_or("").to_string();
+                let count = b.presence_reads.entry(target.clone()).or_default();
+                *count += 1;
+                let second = *count == 2;
+                if b.reappear_on_second_read && second {
+                    b.tabs
+                        .push((target.clone(), 999, "https://reappeared/".into()));
+                }
                 let asked = params["tabId"].as_i64();
                 if b.api_error.contains(&target) {
                     json!({"tabPresenceVersion": 1, "targetId": target, "tabId": asked,
@@ -267,7 +276,7 @@ impl Fake {
                     reply
                 } else {
                     json!({"tabPresenceVersion": 1, "targetId": target, "tabId": null,
-                           "presence": "unknown", "error": "no tab id to confirm"})
+                           "presence": "unknown", "listed":false, "error": "no tab id to confirm"})
                 }
             }
             "Target.getTargetInfo" => {
@@ -487,6 +496,87 @@ fn closed_targets(r: &Value) -> Vec<String> {
         .collect();
     ids.sort();
     ids
+}
+
+#[test]
+fn explicit_untracked_recovery_drops_records_without_claiming_tab_closure() {
+    use sha2::{Digest, Sha256};
+    for mode in ["gone", "error", "old", "reappeared"] {
+        let (fake, url) = Fake::start(true);
+        fake.0
+            .lock()
+            .unwrap()
+            .tabs
+            .push(("USER".into(), 88, "https://user.example/".into()));
+        let mut d = Daemon::start(&format!("hc-ghost-{mode}"), &url, true);
+        std::fs::write(d.record_path(),json!({"endpoint_sha256":format!("{:x}",Sha256::digest(url.trim_end_matches('/').as_bytes())),"target_ids":["PHANTOM"]}).to_string()).unwrap();
+        let ordinary = d.send(json!({"id":"ordinary","action":"close"}));
+        assert_eq!(ordinary["success"], false, "{ordinary}");
+        assert!(d.alive());
+        let before = fake.close_requests();
+        {
+            let mut b = fake.0.lock().unwrap();
+            b.presence_reads.clear();
+            match mode {
+                "error" => {
+                    b.api_error.insert("PHANTOM".into());
+                }
+                "old" => b.old_extension = true,
+                "reappeared" => b.reappear_on_second_read = true,
+                _ => {}
+            }
+        }
+        let output = d.cli(&["close", "--forget-untracked"]);
+        let recovery: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(fake.close_requests(), before, "recovery sent a tab close");
+        assert!(fake.open_targets().contains(&"USER".to_string()));
+        if mode == "gone" {
+            assert!(output.status.success(), "{recovery}");
+            assert_eq!(recovery["data"]["ownershipDropped"], json!(["PHANTOM"]));
+            assert_eq!(recovery["data"]["verifiedAbsent"], false);
+            assert!(closed_targets(&recovery).is_empty());
+            assert!(!d.record_path().exists());
+            assert_eq!(fake.0.lock().unwrap().presence_reads["PHANTOM"], 2);
+            assert!(d.wait_exit());
+        } else {
+            assert!(!output.status.success(), "{recovery}");
+            assert!(d.alive());
+            assert!(std::fs::read_to_string(d.record_path())
+                .unwrap()
+                .contains("PHANTOM"));
+        }
+    }
+}
+
+#[test]
+fn partial_untracked_recovery_reports_dropped_records_and_keeps_live_ownership() {
+    use sha2::{Digest, Sha256};
+    let (fake, url) = Fake::start(true);
+    let mut d = Daemon::start("hc-ghost-partial", &url, true);
+    std::fs::write(d.record_path(),json!({"endpoint_sha256":format!("{:x}",Sha256::digest(url.as_bytes())),"target_ids":["PHANTOM"]}).to_string()).unwrap();
+    let _ = d.tabs();
+    let real = fake
+        .open_targets()
+        .into_iter()
+        .find(|t| t.starts_with('T'))
+        .unwrap();
+    fake.lie_about(&real);
+    let out = d.cli(&["close", "--forget-untracked"]);
+    let reply: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(!out.status.success(), "{reply}");
+    assert!(
+        reply["error"]
+            .as_str()
+            .unwrap()
+            .contains("already dropped ownership records"),
+        "{reply}"
+    );
+    assert!(reply["error"].as_str().unwrap().contains("PHANTOM"));
+    let saved = std::fs::read_to_string(d.record_path()).unwrap();
+    assert!(!saved.contains("PHANTOM"));
+    assert!(saved.contains(&real));
+    assert!(fake.open_targets().contains(&real));
+    assert!(d.alive());
 }
 
 /// A session with one tab of its own (T1), the way the first command opens it.

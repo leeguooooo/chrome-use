@@ -1159,6 +1159,9 @@ fn run_status(session: &str, json_mode: bool) {
     let (health, connected_profiles) = connect::relay_health_and_profiles();
     let relay_up = health.transport_responsive;
     let mut warnings = connect::duplicate_extension_warnings(&connected_profiles);
+    if let Some(notice) = health.host_notice() {
+        warnings.push(notice);
+    }
     if health.debugger_warns() {
         warnings.push(health.debugger.clone());
     }
@@ -1223,6 +1226,7 @@ fn run_status(session: &str, json_mode: bool) {
                 "extension": {
                     "hostInstalled": host_installed,
                     "hostHealthy": host_healthy,
+                    "hostLauncherHealthy": host_healthy,
                     "relayUp": relay_up,
                     "health": health,
                     "connectedProfiles": connected_profiles,
@@ -1247,6 +1251,14 @@ fn run_status(session: &str, json_mode: bool) {
 
     println!("chrome-use {}", env!("CARGO_PKG_VERSION"));
     println!(
+        "Native host: live {}, installed {}",
+        health
+            .native_host_version
+            .as_deref()
+            .unwrap_or("unverified"),
+        env!("CARGO_PKG_VERSION")
+    );
+    println!(
         "Extension relay: {}{}",
         if relay_up { "up" } else { "down" },
         if !host_installed {
@@ -1262,9 +1274,6 @@ fn run_status(session: &str, json_mode: bool) {
     }
     for warning in &warnings {
         println!("WARN {warning}");
-    }
-    if let Some(notice) = health.host_notice() {
-        println!("INFO {notice}");
     }
     if let Some(notice) = &update {
         if !notice.blocked {
@@ -3001,6 +3010,9 @@ fn main() {
         Some("close") | Some("quit") | Some("exit")
     ) && clean.iter().any(|a| a == "--all")
     {
+        if clean.iter().any(|a| a == "--forget-untracked") {
+            fail_command(&flags, "--forget-untracked cannot be combined with --all");
+        }
         run_close_all(&flags, close_all_forced(&clean));
         return;
     }

@@ -56,6 +56,7 @@
       <p>After a refused first <code>open</code>, <code>tab list --all</code> can still inspect the session's bound profile or configured CDP endpoint passively. It creates no driving connection and does not bypass mixed-window guards.</p>
 
       <div class="du-callout note">
+        <p>For stale ownership records with only a targetId and no tab identity, <code>close --forget-untracked</code> explicitly abandons untracked records omitted by two valid Chrome registry reads. It never guesses another tab to close. JSON <code>ownershipDropped</code> names those records; <code>verifiedAbsent: false</code> and <code>tabClosureUnverified: true</code> mean the original tabs were not confirmed closed. Ordinary close remains strict. Requires the extension relay and refuses a tab argument or <code>--all</code>.</p>
         <div class="du-callout-title">ℹ️ Know which path you're on</div>
         <code>state save</code> / <code>--state</code> / <code>--session-name</code> are for the browsers chrome-use
         <strong>launches itself</strong> and for <code>--session</code> <strong>isolated browsers</strong> — those

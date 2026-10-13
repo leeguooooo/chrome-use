@@ -12,6 +12,23 @@ cleanup retains its identity and refuses success so the next call can retry.
 `tab list --all` uses a passive connection even in a fresh session: no daemon,
 window, tab or page attachment is created.
 
+If `close` remains incomplete because an old ownership record has only a
+targetId and no tab identity, `close --forget-untracked` explicitly abandons
+only untracked records omitted by two valid Chrome target-registry reads.
+It never guesses a tab to close. JSON `ownershipDropped` names the records;
+`verifiedAbsent: false` and `tabClosureUnverified: true` mean the original
+Chrome tabs were not identified or reported closed. Defaults stay strict.
+The option requires the relay and cannot be combined with a tab or `--all`.
+
+After upgrading with Chrome open, the running native host may still be the
+previous binary. Installed-file checks do not refresh it. When agent sessions
+are idle, reload the chrome-use extension at `chrome://extensions` to replace
+the host; reconnecting a session daemon does not do that. `status` reports
+`health.nativeHostVersion` from the live handshake (null when unavailable),
+separately from the installed CLI and `hostLauncherHealthy`. Missing or
+mismatched runtime versions produce warnings. Missing call capability can
+come from the host or extension; check both before deciding which to update.
+
 The isolated cookies/storage described below apply to separately launched
 browsers (`--launch`), not to sessions in your real Chrome profile.
 

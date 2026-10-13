@@ -6480,6 +6480,59 @@ async fn note_upgrade_without_handoff(
 }
 
 async fn handle_close(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let mut ownership_dropped = Vec::new();
+    if cmd.get("forgetUntracked").and_then(Value::as_bool) == Some(true) {
+        if cmd.get("all").and_then(Value::as_bool) == Some(true)
+            || cmd.get("tabId").is_some()
+            || cmd.get("tab").is_some()
+        {
+            return Err(
+                "--forget-untracked applies only to this session, not a tab or --all".into(),
+            );
+        }
+        // This opt-in abandons only records with no page/tab identity and two
+        // valid absence reads. It does not claim the original tab was closed.
+        if state.browser.is_none() && crate::connection::has_created_targets(&state.session_id) {
+            let endpoint = match crate::connection::session_relay_profile(&state.session_id)? {
+                Some(id) => {
+                    crate::connect::relay_endpoint_for_profile(&id).map_err(|e| e.to_string())?
+                }
+                None => endpoint_matching_created_record(&state.session_id, "")
+                    .or_else(|| env::var("AGENT_BROWSER_CDP").ok())
+                    .ok_or(
+                        "--forget-untracked needs the original browser options or bound profile",
+                    )?,
+            };
+            let observer = BrowserManager::connect_cdp_for_inventory(&endpoint).await?;
+            if observer.created_target_ids().is_empty() {
+                return Err(
+                    "The browser does not match saved ownership; nothing was forgotten".into(),
+                );
+            }
+            state.browser = Some(observer);
+        }
+        if let Some(mgr) = state.browser.as_mut() {
+            ownership_dropped = mgr.forget_untracked_records().await?;
+        }
+    }
+    match handle_close_after_recovery(cmd, state).await {
+        Ok(mut out) => {
+            if !ownership_dropped.is_empty() {
+                out["ownershipDropped"] = json!(ownership_dropped);
+                out["verifiedAbsent"] = json!(false);
+                out["tabClosureUnverified"] = json!(true);
+            }
+            Ok(out)
+        }
+        Err(error) if !ownership_dropped.is_empty() => Err(format!("{error}. Explicit recovery already dropped ownership records {:?}; their original Chrome tabs were not identified or reported closed.", ownership_dropped)),
+        Err(error) => Err(error),
+    }
+}
+
+async fn handle_close_after_recovery(
+    cmd: &Value,
+    state: &mut DaemonState,
+) -> Result<Value, String> {
     // A closed session is no longer a launched one; the next command picks its
     // browser from its own flags again.
     crate::connection::clear_session_launched(&state.session_id);
@@ -14302,9 +14355,11 @@ const GENERIC_CALL_MIN_EXTENSION_VERSION: &str = "0.5.25";
 
 fn generic_call_unsupported(what: &str) -> String {
     format!(
-        "{what} requires ab-connect {GENERIC_CALL_MIN_EXTENSION_VERSION} or newer (the extension \
-         did not announce the `call` capability). Update it from chrome://extensions and retry; \
-         `chrome-use extension status` shows the installed and the store version."
+        "{what} requires ab-connect {GENERIC_CALL_MIN_EXTENSION_VERSION} or newer and a current native host \
+         (the relay did not announce the `call` capability). Check `chrome-use status` for the live host \
+         and `chrome-use extension status` for the extension. If the extension is already current, \
+         reload it at chrome://extensions when agent sessions are idle to replace a host left running \
+         before an upgrade; reconnecting the session daemon does not replace that host."
     )
 }
 

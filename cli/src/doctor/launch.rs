@@ -250,7 +250,7 @@ fn relay_checks(checks: &mut Vec<Check>, health: &crate::connect::RelayHealth) {
         checks.push(Check::new(
             "relay.hostDiagnostic",
             "Launch test",
-            Status::Info,
+            Status::Warn,
             notice,
         ));
     }

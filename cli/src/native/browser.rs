@@ -72,6 +72,14 @@ pub(crate) fn first_tab_save_fails_for_test(fails: bool) {
 /// proves a tab gone.
 const TAB_PRESENCE_VERSION: u64 = 1;
 
+fn untracked_registry_absence(v: &Value, target: &str) -> bool {
+    v.get("tabPresenceVersion").and_then(Value::as_u64) == Some(TAB_PRESENCE_VERSION)
+        && v.get("targetId").and_then(Value::as_str) == Some(target)
+        && v.get("tabId") == Some(&Value::Null)
+        && v.get("presence").and_then(Value::as_str) == Some("unknown")
+        && v.get("listed").and_then(Value::as_bool) == Some(false)
+}
+
 /// First ab-connect build that answers `ABExt.tabPresence`.
 pub const TAB_PRESENCE_MIN_EXTENSION_VERSION: &str = "0.5.33";
 
@@ -186,6 +194,9 @@ impl CloseReport {
                      newer",
                     TAB_PRESENCE_MIN_EXTENSION_VERSION
                 ));
+            }
+            if self.unverified.iter().any(|t| t.get("tabId").is_none()) {
+                parts.push("for an untracked ownership record, `close --forget-untracked` can explicitly abandon it after two valid registry absence reads; this does not close or verify its original Chrome tab".into());
             }
         }
         format!(
@@ -5967,6 +5978,74 @@ impl BrowserManager {
         tabs
     }
 
+    /// Explicit recovery of stale ownership only. Two authoritative registry
+    /// reads must omit the exact target and supply no Chrome tab identity.
+    /// No close or attach is sent, and no physical tab closure is claimed.
+    pub async fn forget_untracked_records(&mut self) -> Result<Vec<String>, String> {
+        if !self.on_relay() {
+            return Err("--forget-untracked requires the extension relay".into());
+        }
+        let known = self.known_chrome_tabs();
+        let mut candidates: Vec<String> = self
+            .created_targets
+            .iter()
+            .filter(|t| !known.contains_key(*t) && !self.pages.iter().any(|p| &p.target_id == *t))
+            .cloned()
+            .collect();
+        candidates.sort();
+        if candidates.is_empty() {
+            return Ok(candidates);
+        }
+        let endpoint = match crate::connection::session_relay_profile(
+            DAEMON_SESSION
+                .get()
+                .map(String::as_str)
+                .unwrap_or("default"),
+        )? {
+            Some(id) => {
+                crate::connect::relay_endpoint_for_profile(&id).map_err(|e| e.to_string())?
+            }
+            None => self.ws_url.clone(),
+        };
+        let deadline = tokio::time::Instant::now() + CLOSE_TOTAL_BUDGET;
+        let observer = within_deadline(deadline, Self::connect_cdp_for_inventory(&endpoint))
+            .await
+            .ok_or("Cannot forget untracked ownership: diagnostic connection timed out")??;
+        for target in &candidates {
+            for _ in 0..2 {
+                let reply = within_deadline(
+                    deadline,
+                    observer.client.send_command_typed::<_, Value>(
+                        "ABExt.tabPresence",
+                        &json!({"targetId":target,"tabId":null}),
+                        None,
+                    ),
+                )
+                .await;
+                if !reply.as_ref().is_some_and(|r| {
+                    r.as_ref()
+                        .is_ok_and(|v| untracked_registry_absence(v, target))
+                }) {
+                    return Err(format!("Cannot forget untracked target {target}: two valid target-registry absence reads were not obtained. Ownership was retained; no Chrome tab was closed."));
+                }
+            }
+        }
+        let session = DAEMON_SESSION
+            .get()
+            .ok_or("Cannot forget ownership without a session identity")?;
+        let old = self.created_targets.clone();
+        for target in &candidates {
+            self.created_targets.remove(target);
+        }
+        if let Err(error) =
+            crate::connection::write_created_targets(session, &endpoint, &self.created_targets)
+        {
+            self.created_targets = old;
+            return Err(error);
+        }
+        Ok(candidates)
+    }
+
     /// `{tabId, label, targetId, url}` of a target, as far as the session
     /// knows it.
     fn tab_descriptor(&self, target: &str) -> Value {
@@ -10183,6 +10262,25 @@ mod relay_popup_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn untracked_absence_requires_exact_authoritative_identity() {
+        let good = serde_json::json!({"tabPresenceVersion":1,"targetId":"OLD","tabId":null,"presence":"unknown","listed":false});
+        assert!(super::untracked_registry_absence(&good, "OLD"));
+        for (field, value) in [
+            ("targetId", serde_json::json!("OTHER")),
+            ("tabPresenceVersion", serde_json::json!(2)),
+            ("tabId", serde_json::json!(9)),
+            ("presence", serde_json::json!("present")),
+            ("listed", serde_json::json!(true)),
+        ] {
+            let mut bad = good.clone();
+            bad[field] = value;
+            assert!(!super::untracked_registry_absence(&bad, "OLD"));
+            let mut missing = good.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(!super::untracked_registry_absence(&missing, "OLD"));
+        }
+    }
 
     #[test]
     fn foreground_conflict_warning_names_the_session_and_tab() {

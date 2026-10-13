@@ -86,6 +86,7 @@
       </p>
 
       <div class="du-callout note">
+        <p>安装检查核验磁盘文件，不会替换正在运行的 native host。升级时 Chrome 已打开的，等 agent 会话空闲后在 chrome://extensions 重新加载扩展。重连会话 daemon 不会替换 host。status 的 <code>health.nativeHostVersion</code> 来自实际 host 握手，无法取得时为 null；无法核实或与 CLI 版本不一致时给出警告，<code>hostLauncherHealthy</code> 只表示磁盘启动器正常。</p>
         <div class="du-callout-title">ℹ️ 一个二进制</div>
         没有单独的「stealth 可执行文件」；反检测是运行时行为，连你的真实 Chrome 就零补丁，<code>--launch</code> 开新浏览器才上全套补丁。详见
         <a href="/real-chrome.html">连接真实 Chrome</a>。
