@@ -339,6 +339,8 @@ split across nodes (React `{a} - {b}`) or nested in a child never matches; use
 snapshot `@ref`. "Element not found" keeps the selector plus the resolver's
 diagnosis, and an XPath with `text()` that matched nothing explains this.
 
+Semantic clicks report the covering element with a bounded tag, id/class and text description. If the hit-test cannot confirm the target, the click fails without guessing a blocker or dispatching input.
+
 `click` auto-scrolls into view. If something else covers the target (a cookie
 banner, a modal backdrop, a sticky header), the click is **refused** with an
 error naming what covers it, because a click there would hit the cover, not the

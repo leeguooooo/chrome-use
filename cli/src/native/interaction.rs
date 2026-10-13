@@ -312,7 +312,7 @@ pub async fn click_reporting(
                 && click_count == 1
                 && parse_ref(selector_or_ref).is_none()
             {
-                point_misses_element(client, &effective_session_id, selector_or_ref).await
+                point_misses_element(client, &effective_session_id, selector_or_ref).await?
             } else {
                 None
             };
@@ -350,14 +350,11 @@ pub async fn click_reporting(
             if super::element::semantic_pin_active(selector_or_ref) {
                 let object =
                     super::element::resolve_semantic_pin(client, &effective_session_id).await?;
-                let check = client.send_command("Runtime.callFunctionOn", Some(serde_json::json!({
-                    "objectId":object,"functionDeclaration":"function(x,y){const hit=this.ownerDocument.elementFromPoint(x,y);return hit===this || this.contains(hit);}",
-                    "arguments":[{"value":tx},{"value":ty}],"returnByValue":true
-                })),Some(&effective_session_id)).await?;
-                if check["result"]["value"] != true {
-                    return Err(
-                        "semantic target moved or is covered at dispatch; refusing click".into(),
-                    );
+                if let Some(cover) =
+                    semantic_hit_test(client, &effective_session_id, &object, Some((tx, ty)))
+                        .await?
+                {
+                    return Err(occluded_refusal(selector_or_ref, &cover));
                 }
             }
             dispatch_click(client, &effective_session_id, tx, ty, button, click_count).await?;
@@ -422,6 +419,50 @@ fn occluded_refusal(target: &str, cover: &str) -> String {
     )
 }
 
+const SEMANTIC_HIT_JS: &str = r#"function(x,y) {
+    const r = this.getBoundingClientRect();
+    if (typeof x !== 'number') x = r.x+r.width/2;
+    if (typeof y !== 'number') y = r.y+r.height/2;
+    const hit = this.ownerDocument.elementFromPoint(x,y);
+    if (hit === this || this.contains(hit)) return true;
+    if (!hit) return null;
+    let d = '<' + hit.tagName.toLowerCase();
+    if (hit.id) d += ' id="' + hit.id.slice(0,80) + '"';
+    const cls = typeof hit.className === 'string' ? hit.className.trim().split(/\s+/).slice(0,2).join(' ').slice(0,80) : '';
+    if (cls) d += ' class="' + cls + '"';
+    d += '>';
+    const text = (hit.innerText || '').trim().replace(/\s+/g,' ').slice(0,40);
+    return text ? d + ' "' + text + '"' : d;
+}"#;
+
+async fn semantic_hit_test(
+    client: &CdpClient,
+    session: &str,
+    object: &str,
+    point: Option<(f64, f64)>,
+) -> Result<Option<String>, String> {
+    let arguments = point
+        .map(|(x, y)| serde_json::json!([{"value":x},{"value":y}]))
+        .unwrap_or_else(|| serde_json::json!([]));
+    let reply = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(serde_json::json!({
+                "objectId": object, "functionDeclaration": SEMANTIC_HIT_JS,
+                "arguments": arguments, "returnByValue": true
+            })),
+            Some(session),
+        )
+        .await?;
+    if reply["result"]["value"] == true {
+        return Ok(None);
+    }
+    if let Some(cover) = reply["result"]["value"].as_str().filter(|s| !s.is_empty()) {
+        return Ok(Some(cover.to_string()));
+    }
+    Err("semantic hit-test could not confirm the target; refusing click".into())
+}
+
 /// What covers the selector's centre, when a coordinate click there would land
 /// on something OTHER than the element (an overlay on top). `None` when not
 /// occluded, the element is missing, or the probe fails (so we never block a
@@ -430,17 +471,10 @@ async fn point_misses_element(
     client: &CdpClient,
     session_id: &str,
     selector: &str,
-) -> Option<String> {
+) -> Result<Option<String>, String> {
     if super::element::semantic_pin_active(selector) {
-        let object = match super::element::resolve_semantic_pin(client, session_id).await {
-            Ok(o) => o,
-            Err(_) => return Some("semantic target changed".into()),
-        };
-        let reply=client.send_command("Runtime.callFunctionOn",Some(serde_json::json!({"objectId":object,"functionDeclaration":"function(){const r=this.getBoundingClientRect();const hit=this.ownerDocument.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return hit===this || this.contains(hit);}","returnByValue":true})),Some(session_id)).await;
-        return match reply {
-            Ok(r) if r["result"]["value"] == true => None,
-            _ => Some("semantic target is covered".into()),
-        };
+        let object = super::element::resolve_semantic_pin(client, session_id).await?;
+        return semantic_hit_test(client, session_id, &object, None).await;
     }
     let js = format!(
         r#"(() => {{
@@ -463,25 +497,27 @@ async fn point_misses_element(
         }})()"#,
         sel = serde_json::to_string(selector).unwrap_or_default()
     );
-    match client
-        .send_command_typed::<_, EvaluateResult>(
-            "Runtime.evaluate",
-            &EvaluateParams {
-                expression: js,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(session_id),
-        )
-        .await
-    {
-        Ok(r) => r
-            .result
-            .value
-            .and_then(|v| v.as_str().map(String::from))
-            .filter(|s| !s.is_empty()),
-        Err(_) => None,
-    }
+    Ok(
+        match client
+            .send_command_typed::<_, EvaluateResult>(
+                "Runtime.evaluate",
+                &EvaluateParams {
+                    expression: js,
+                    return_by_value: Some(true),
+                    await_promise: Some(false),
+                },
+                Some(session_id),
+            )
+            .await
+        {
+            Ok(r) => r
+                .result
+                .value
+                .and_then(|v| v.as_str().map(String::from))
+                .filter(|s| !s.is_empty()),
+            Err(_) => None,
+        },
+    )
 }
 
 /// Best-effort scroll-into-view before a coordinate click. Uses Chrome's

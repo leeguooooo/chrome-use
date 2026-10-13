@@ -2795,6 +2795,9 @@ A button that wraps a checkbox, switch or radio shows in `snapshot` as
 `[toggles=checkbox(checked=true)]`: clicking it flips that control. Treat such
 a button as a setting, not a navigation or language link (issue #358).
 
+Semantic clicks name a confirmed covering element. An unconfirmed hit-test
+fails without dispatching input. Dismiss the blocker before clicking again.
+
 A bare-number argument is treated as a viewport coordinate, not a
 selector — `click 449 320` clicks the pixel point (no element needed).
 

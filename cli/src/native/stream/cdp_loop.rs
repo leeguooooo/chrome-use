@@ -96,6 +96,7 @@ pub(super) async fn cdp_event_loop(
                 });
                 let _ = frame_tx.send(status.to_string());
 
+                let mut frame_acks = FrameAcks::new();
                 loop {
                     tokio::select! {
                         changed = shutdown_rx.changed() => {
@@ -141,11 +142,15 @@ pub(super) async fn cdp_event_loop(
                                         }
                                     } else if evt.method == "Page.screencastFrame" {
                                         if let Some(sid) = evt.params.get("sessionId").and_then(|v| v.as_i64()) {
-                                            let _ = client_arc.send_command(
-                                                "Page.screencastFrameAck",
-                                                Some(json!({ "sessionId": sid })),
-                                                evt.session_id.as_deref(),
-                                            ).await;
+                                            let client = Arc::clone(&client_arc);
+                                            let session = evt.session_id.clone();
+                                            frame_acks.submit(async move {
+                                                let _ = client.send_command(
+                                                    "Page.screencastFrameAck",
+                                                    Some(json!({ "sessionId": sid })),
+                                                    session.as_deref(),
+                                                ).await;
+                                            }).await;
                                         }
 
                                         if let Some(data) = evt.params.get("data").and_then(|v| v.as_str()) {
@@ -322,4 +327,59 @@ pub async fn ack_screencast_frame(
         )
         .await?;
     Ok(())
+}
+
+/// Pipeline acknowledgements without spawning an unbounded task per frame.
+/// Dropping a connection's pipeline aborts its outstanding requests.
+struct FrameAcks {
+    tasks: tokio::task::JoinSet<()>,
+}
+impl FrameAcks {
+    const LIMIT: usize = 8;
+    fn new() -> Self {
+        Self {
+            tasks: tokio::task::JoinSet::new(),
+        }
+    }
+    async fn submit(&mut self, ack: impl std::future::Future<Output = ()> + Send + 'static) {
+        while self.tasks.try_join_next().is_some() {}
+        if self.tasks.len() >= Self::LIMIT {
+            let _ = self.tasks.join_next().await;
+        }
+        self.tasks.spawn(ack);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn slow_frame_ack_does_not_block_frame_processing_and_pipeline_is_bounded() {
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let mut acks = FrameAcks::new();
+        for _ in 0..FrameAcks::LIMIT {
+            let gate = gate.clone();
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                acks.submit(async move {
+                    let _permit = gate.acquire().await.unwrap();
+                }),
+            )
+            .await
+            .expect("submission must not await the acknowledgement");
+        }
+        assert_eq!(acks.tasks.len(), FrameAcks::LIMIT);
+        {
+            let submit = acks.submit(async {});
+            tokio::pin!(submit);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(10), &mut submit)
+                    .await
+                    .is_err()
+            );
+            gate.add_permits(1);
+            submit.await;
+        }
+        assert!(acks.tasks.len() <= FrameAcks::LIMIT);
+    }
 }

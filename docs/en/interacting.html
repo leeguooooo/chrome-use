@@ -62,9 +62,10 @@
 
       <!-- ============ Clicking &amp; pointer ============ -->
       <h2>Clicking &amp; pointer</h2>
+      <p>Semantic clicks report the covering element with a bounded tag, id/class and text description. If the hit-test cannot confirm the target, the click fails without guessing a blocker or dispatching input.</p>
       <p>
         The most-used group of verbs, all acting on a single <code>@ref</code>. <code>click</code> auto-scrolls the
-        element into the viewport, and if the coordinate click is occluded it falls back to the DOM's <code>.click()</code>.
+        element into the viewport and refuses a covered target by default. <code>--allow-dom</code> explicitly opts into a DOM click.
       </p>
 
       <div class="du-code">

@@ -83,6 +83,8 @@ pub struct RelayState {
     /// is forwarded too — and so they're never mistaken for a tab in
     /// `getTargets` (they're not added to `targets`). (OAuth/OOPIF support)
     oopif_sessions: HashSet<String>,
+    /// Child iframe session -> parent session, for event routing.
+    oopif_parents: HashMap<String, String>,
 }
 
 /// What to do with a raw CDP command received from a `CdpClient`.
@@ -102,6 +104,8 @@ pub enum RelayOut {
     /// Send this raw CDP message to clients. `to = Some(id)` targets one client
     /// (a command reply); `to = None` broadcasts (a CDP event).
     ToClient { to: Option<ClientId>, msg: Value },
+    /// Page event for an identified session group; legacy clients still receive it.
+    GroupEvent { group: String, msg: Value },
     /// Send this envelope message back to the extension.
     ToExt(Value),
 }
@@ -109,6 +113,61 @@ pub enum RelayOut {
 impl RelayState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Clients with a different announced group must not parse this page event.
+    /// Clients without a group keep the legacy discovery behavior.
+    pub fn excluded_clients_for_group(&self, group: &str) -> HashSet<ClientId> {
+        self.client_groups
+            .iter()
+            .filter(|(_, g)| g.as_str() != group)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    fn group_for_session(&self, session: Option<&str>) -> Option<String> {
+        let mut current = session?;
+        let mut seen = HashSet::new();
+        while seen.insert(current) {
+            if let Some((target, entry)) =
+                self.targets.iter().find(|(_, e)| e.session_id == current)
+            {
+                if let Some(group) = self.target_group.get(target) {
+                    return Some(group.clone());
+                }
+                current = entry.parent_session.as_deref()?;
+            } else {
+                current = self.oopif_parents.get(current)?.as_str();
+            }
+        }
+        None
+    }
+
+    fn forget_iframe_children(&mut self, session: &str) {
+        let mut gone = HashSet::from([session.to_string()]);
+        loop {
+            let children: Vec<String> = self
+                .oopif_parents
+                .iter()
+                .filter(|(_, parent)| gone.contains(*parent))
+                .map(|(id, _)| id.clone())
+                .collect();
+            if children.is_empty() {
+                break;
+            }
+            for child in children {
+                self.oopif_parents.remove(&child);
+                self.oopif_sessions.remove(&child);
+                gone.insert(child);
+            }
+        }
+    }
+
+    fn page_event(&self, session: Option<&str>, msg: Value) -> RelayOut {
+        match self.group_for_session(session) {
+            Some(group) => RelayOut::GroupEvent { group, msg },
+            None => RelayOut::ToClient { to: None, msg },
+        }
     }
 
     pub fn set_extension_capabilities<I, S>(&mut self, capabilities: I)
@@ -404,12 +463,16 @@ impl RelayState {
                     if is_oopif {
                         if let Some(sid) = inner_params.get("sessionId").and_then(|s| s.as_str()) {
                             self.oopif_sessions.insert(sid.to_string());
+                            if let Some(parent) = session_id {
+                                self.oopif_parents
+                                    .insert(sid.to_string(), parent.to_string());
+                            }
                         }
                         let mut ev = json!({ "method": inner_method, "params": inner_params });
                         if let Some(sid) = session_id {
                             ev["sessionId"] = json!(sid);
                         }
-                        return vec![RelayOut::ToClient { to: None, msg: ev }];
+                        return vec![self.page_event(session_id, ev)];
                     }
                     if let Some(info) = inner_params.get("targetInfo") {
                         if let Some(tid) = info.get("targetId").and_then(|t| t.as_str()) {
@@ -488,10 +551,14 @@ impl RelayState {
                             if let Some(sid) = session_id {
                                 ev["sessionId"] = json!(sid);
                             }
-                            return vec![RelayOut::ToClient { to: None, msg: ev }];
+                            let routed = self.page_event(session_id.or(Some(g)), ev);
+                            self.oopif_parents.remove(g);
+                            self.forget_iframe_children(g);
+                            return vec![routed];
                         }
                     }
                     if let Some(gone) = gone {
+                        self.forget_iframe_children(gone);
                         // The session's own record, and every child target
                         // (worker) its tab carried: those die with the tab and
                         // Chrome sends no detach for them (#519).
@@ -550,7 +617,7 @@ impl RelayState {
             if let Some(sid) = session_id {
                 ev["sessionId"] = json!(sid);
             }
-            return vec![RelayOut::ToClient { to: None, msg: ev }];
+            return vec![self.page_event(session_id, ev)];
         }
 
         vec![]
@@ -571,7 +638,9 @@ impl RelayState {
             .map(|(tid, _)| tid.clone())
             .collect();
         for tid in dropped {
-            self.targets.remove(&tid);
+            if let Some(entry) = self.targets.remove(&tid) {
+                self.forget_iframe_children(&entry.session_id);
+            }
             self.target_group.remove(&tid);
         }
     }
@@ -867,6 +936,50 @@ mod tests {
             }
             _ => panic!("expected ToClient"),
         }
+    }
+
+    #[test]
+    fn grouped_page_events_exclude_foreign_groups_but_keep_legacy_clients() {
+        let mut s = RelayState::new();
+        create_in_group(&mut s, 1, "a", "T1", "S1");
+        create_in_group(&mut s, 2, "b", "T2", "S2");
+        let event = json!({"method":"forwardCDPEvent","params":{
+            "sessionId":"S1","method":"Page.loadEventFired","params":{}}});
+        assert_eq!(
+            s.handle_ext_message(&event, ""),
+            vec![RelayOut::GroupEvent {
+                group: "a".into(),
+                msg: json!({"sessionId":"S1","method":"Page.loadEventFired","params":{}})
+            }]
+        );
+        assert_eq!(s.excluded_clients_for_group("a"), HashSet::from([2]));
+        // Client 9 never announced a group; it is not excluded.
+        assert!(!s.excluded_clients_for_group("a").contains(&9));
+    }
+
+    #[test]
+    fn iframe_events_inherit_parent_group_and_drop_mappings_on_detach() {
+        let mut s = RelayState::new();
+        create_in_group(&mut s, 1, "a", "T1", "S1");
+        let attached = json!({"method":"forwardCDPEvent","params":{
+            "sessionId":"S1","method":"Target.attachedToTarget","params":{
+                "sessionId":"child","targetInfo":{"targetId":"I1","type":"iframe"}}}});
+        assert!(
+            matches!(&s.handle_ext_message(&attached, "")[0], RelayOut::GroupEvent {group,..} if group == "a")
+        );
+        let event = json!({"method":"forwardCDPEvent","params":{
+            "sessionId":"child","method":"Runtime.consoleAPICalled","params":{}}});
+        assert!(
+            matches!(&s.handle_ext_message(&event, "")[0], RelayOut::GroupEvent {group,..} if group == "a")
+        );
+        s.handle_ext_message(
+            &json!({"method":"forwardCDPEvent","params":{
+            "sessionId":"S1","method":"Target.detachedFromTarget","params":{"sessionId":"S1"}}}),
+            "",
+        );
+        assert!(s.oopif_parents.is_empty());
+        assert!(s.oopif_sessions.is_empty());
+        assert!(s.group_for_session(Some("child")).is_none());
     }
 
     #[test]

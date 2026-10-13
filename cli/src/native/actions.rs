@@ -8831,9 +8831,14 @@ async fn handle_fill(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         };
         let mut commit_after = probe().await;
         // Validation is often debounced: give a still-disabled button one
-        // short grace period before calling it unmoved.
-        if commit_after.as_ref().is_some_and(|c| c.disabled) {
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // bounded grace period, returning early once the button reacts.
+        let grace = tokio::time::Instant::now() + std::time::Duration::from_millis(300);
+        while commit_after.as_ref().is_some_and(|c| c.disabled) {
+            let remaining = grace.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            tokio::time::sleep(remaining.min(std::time::Duration::from_millis(50))).await;
             commit_after = probe().await;
         }
         if let (Some(b), Some(a)) = (&commit_before, &commit_after) {

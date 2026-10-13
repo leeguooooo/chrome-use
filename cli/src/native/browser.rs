@@ -7885,20 +7885,46 @@ impl BrowserManager {
         // scratch so the session's tab group isn't left showing a stray blank
         // page beside the work tab (every group otherwise carried one).
         if target_url != "about:blank" {
+            // Subscribe before probing so an event between the read and wait
+            // cannot be lost. A bounded fallback covers a relay missing events.
+            let mut ready_events = self.client.subscribe();
             let ready_check = async {
-                for _ in 0..50 {
+                let mut fallback = Duration::from_millis(100);
+                loop {
                     if let Ok(val) = self.evaluate_simple("document.readyState").await {
-                        if let Some(s) = val.as_str() {
-                            if s == "complete" || s == "interactive" {
-                                break;
-                            }
+                        if val
+                            .as_str()
+                            .is_some_and(|s| s == "complete" || s == "interactive")
+                        {
+                            break;
                         }
                     }
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    let signal = async {
+                        loop {
+                            match ready_events.recv().await {
+                                Ok(event)
+                                    if event.session_id.as_deref()
+                                        == Some(attach.session_id.as_str())
+                                        && matches!(
+                                            event.method.as_str(),
+                                            "Page.domContentEventFired" | "Page.loadEventFired"
+                                        ) =>
+                                {
+                                    break
+                                }
+                                Err(broadcast::error::RecvError::Closed) => break,
+                                _ => {}
+                            }
+                        }
+                    };
+                    tokio::select! {
+                        _ = signal => {},
+                        _ = tokio::time::sleep(fallback) => {},
+                    }
+                    fallback = (fallback * 2).min(Duration::from_secs(1));
                 }
             };
-            let _ =
-                tokio::time::timeout(tokio::time::Duration::from_millis(5000), ready_check).await;
+            let _ = tokio::time::timeout(Duration::from_secs(5), ready_check).await;
 
             let current_url = self
                 .get_url()

@@ -4270,6 +4270,17 @@ async fn nm_host_main() {
                         }
                     }
                 }
+                RelayOut::GroupEvent { group, msg } => {
+                    // Never hold the state lock while acquiring the client registry.
+                    let excluded = state.lock().await.excluded_clients_for_group(&group);
+                    let text = msg.to_string();
+                    let cls = clients.lock().await;
+                    for (cid, tx) in cls.iter() {
+                        if !excluded.contains(cid) {
+                            let _ = tx.send(text.clone());
+                        }
+                    }
+                }
                 RelayOut::ToExt(m) => {
                     let _ = to_ext.send(m.to_string().into_bytes()).await;
                 }

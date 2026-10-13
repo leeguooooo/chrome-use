@@ -13587,3 +13587,41 @@ document.getElementById('open').addEventListener('click', () => {{
     server.abort();
     popup_server.abort();
 }
+
+/// A semantic click must name its blocker and must not click through it (#561).
+#[tokio::test]
+#[ignore]
+async fn e2e_semantic_click_names_covering_overlay() {
+    let mut state = DaemonState::new();
+    let launched = execute_command(
+        &json!({"id":"1","action":"launch","headless":true}),
+        &mut state,
+    )
+    .await;
+    assert_success(&launched);
+    let page = execute_command(&json!({"id":"2","action":"setcontent","html":r##"<html><body>
+        <button style="position:absolute;left:100px;top:100px;width:150px;height:50px" onclick="window.clicked=true">Confirm</button>
+        <div id="cookie-cover" style="position:fixed;inset:0;background:white;z-index:999">Cookie consent</div>
+        <script>window.clicked=false</script></body></html>"##}), &mut state).await;
+    assert_success(&page);
+    let argv: Vec<String> = [
+        "find", "role", "button", "click", "--name", "Confirm", "--exact",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    let flags = crate::flags::parse_flags(&argv);
+    let cmd = crate::commands::parse_command(&argv, &flags).unwrap();
+    let refused = execute_command(&cmd, &mut state).await;
+    assert_eq!(refused["success"], false, "{refused}");
+    assert!(refused.to_string().contains("cookie-cover"), "{refused}");
+    let checked = execute_command(
+        &json!({"id":"4","action":"eval","expression":"window.clicked"}),
+        &mut state,
+    )
+    .await;
+    assert_success(&checked);
+    assert_eq!(get_data(&checked)["result"], false);
+    let closed = execute_command(&json!({"id":"5","action":"close"}), &mut state).await;
+    assert_success(&closed);
+}
