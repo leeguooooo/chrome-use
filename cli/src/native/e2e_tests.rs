@@ -6646,7 +6646,7 @@ async fn e2e_snapshot_refs_stable_across_modal_churn() {
         &json!({
             "id": "4",
             "action": "eval",
-            "expression": "document.body.insertAdjacentHTML('afterbegin', '<dialog open id=\"modal\"><button>ModalButton</button></dialog>')"
+            "expression": "document.body.insertAdjacentHTML('afterbegin', '<dialog open id=\"modal\" data-__ab-top=\"site-value\"><button>ModalButton</button></dialog>'); window.topWrites=0; window.topObserver=new MutationObserver(rs=>window.topWrites+=rs.length); window.topObserver.observe(document.body,{attributes:true,subtree:true,attributeFilter:['data-__ab-top']})"
         }),
         &mut state,
     )
@@ -6665,6 +6665,27 @@ async fn e2e_snapshot_refs_stable_across_modal_churn() {
     assert_eq!(
         second, first,
         "modal insertion must not renumber an existing node"
+    );
+
+    let modal_line = get_data(&resp)["snapshot"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .find(|line| line.contains("ModalButton"))
+        .unwrap();
+    assert!(
+        modal_line.contains("modal"),
+        "top-layer controls must still be marked: {modal_line}"
+    );
+    let inspected = execute_command(
+        &json!({"id":"5a","action":"eval","expression":"JSON.stringify([window.topWrites,document.querySelector('#modal').getAttribute('data-__ab-top')])"}),
+        &mut state,
+    ).await;
+    assert_success(&inspected);
+    assert_eq!(
+        get_data(&inspected)["result"],
+        json!("[0,\"site-value\"]"),
+        "modal inspection must preserve page attributes and produce no top-layer writes"
     );
 
     let resp = execute_command(

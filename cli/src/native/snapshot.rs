@@ -1755,8 +1755,8 @@ async fn find_control_label_fallbacks(
 /// and interactive underneath an open overlay, so the AX tree (and thus the flat
 /// snapshot) mixes drawer controls with background controls. We pick the topmost
 /// visible modal container by effective z-index (DOM order breaks ties — a later
-/// popup stacks on top), tag its whole subtree, and resolve the backend ids with
-/// the same batch dance the label/cursor scans use. Best-effort: any CDP failure
+/// popup stacks on top), return its node handle, and describe its subtree
+/// without modifying page attributes. Best-effort: any CDP failure
 /// yields an empty set (snapshot just omits the marker).
 async fn find_top_layer_backend_ids(
     client: &CdpClient,
@@ -1764,7 +1764,7 @@ async fn find_top_layer_backend_ids(
 ) -> Result<std::collections::HashSet<i64>, String> {
     let js = r#"
 (function() {
-    if (!document.body) return 0;
+    if (!document.body) return null;
     var SEL = '[role=dialog],[aria-modal="true"],dialog[open],' +
               '.el-dialog,.el-drawer,.el-message-box,.ant-modal,.ant-drawer';
     function vis(el){
@@ -1779,7 +1779,7 @@ async fn find_top_layer_backend_ids(
         for (var m = 0; m < modals.length; m++)
             if (cands.indexOf(modals[m]) < 0 && vis(modals[m])) cands.push(modals[m]);
     } catch (e) {}
-    if (!cands.length) return 0;
+    if (!cands.length) return null;
     function zed(el){
         var z = 0, n = el;
         while (n && n !== document.body) {
@@ -1797,10 +1797,7 @@ async fn find_top_layer_backend_ids(
         var z = zed(cands[i]);
         if (z >= topZ) { topZ = z; top = cands[i]; }
     }
-    var all = [top].concat([].slice.call(top.querySelectorAll('*')));
-    var n = 0;
-    for (var j = 0; j < all.length; j++) all[j].setAttribute('data-__ab-top', String(n++));
-    return n;
+    return top;
 })()
 "#
     .to_string();
@@ -1810,20 +1807,35 @@ async fn find_top_layer_backend_ids(
             "Runtime.evaluate",
             &EvaluateParams {
                 expression: js,
-                return_by_value: Some(true),
+                return_by_value: Some(false),
                 await_promise: Some(false),
             },
             Some(session_id),
         )
         .await?;
 
-    let count = result.result.value.and_then(|v| v.as_i64()).unwrap_or(0);
-    if count == 0 {
+    let Some(object_id) = result.result.object_id else {
         return Ok(std::collections::HashSet::new());
-    }
-
-    let idx_to_backend = resolve_tagged_backend_ids(client, session_id, "data-__ab-top").await;
-    Ok(idx_to_backend.into_values().collect())
+    };
+    // Inspect the node handle directly. A snapshot must not add attributes to
+    // the page, even temporarily: MutationObservers see both write and cleanup.
+    let described = client
+        .send_command(
+            "DOM.describeNode",
+            Some(serde_json::json!({ "objectId": object_id, "depth": -1 })),
+            Some(session_id),
+        )
+        .await;
+    let _ = client
+        .send_command(
+            "Runtime.releaseObject",
+            Some(serde_json::json!({ "objectId": object_id })),
+            Some(session_id),
+        )
+        .await;
+    let mut ids = std::collections::HashSet::new();
+    collect_backend_node_ids(&described?["node"], &mut ids);
+    Ok(ids)
 }
 
 /// Resolve the `backendNodeId` for every element previously tagged with a
