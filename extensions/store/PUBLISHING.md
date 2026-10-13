@@ -13,7 +13,11 @@ version; nobody has to upload anything by hand.
 
 CI does the rest. A version the store already has (published or in review) is
 skipped. If a publish fails, CI opens an issue labelled `cws-publish`; the next
-successful run closes it.
+successful submission closes it. A draft upload does not close the issue.
+
+The workflow also checks every six hours. If another version is pending review,
+it defers uploading and keeps the failure issue open. Once review ends, it
+retries the latest package on main. A deferred run is not a successful upload.
 
 Check the store from a laptop: `python3 scripts/cws.py status`.
 

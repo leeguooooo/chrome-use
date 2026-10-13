@@ -14,6 +14,8 @@
 name: Publish extension (Chrome Web Store)
 
 on:
+  schedule:
+    - cron: "23 */6 * * *"
   push:
     branches: [main]
     paths: ["extensions/ab-connect.zip"]
@@ -47,7 +49,30 @@ jobs:
           assert "key" not in z, "the upload zip must not contain the manifest key"
           print(f"ab-connect {m} ready to publish")
           PY
+      - name: Check whether another version is in review
+        id: review
+        env:
+          CWS_SA_KEY: ${{ secrets.CWS_SA_KEY }}
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+        run: |
+          python3 scripts/cws.py status > store-status.json
+          python3 - <<'PYTHON'
+          import json, os
+          status = json.load(open("store-status.json"))
+          waiting = (status.get("submitted_state") == "PENDING_REVIEW"
+                     and status.get("submitted") != status["packaged"])
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"ready={str(not waiting).lower()}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write(json.dumps(status, indent=2) + "\n")
+              if waiting:
+                  out.write("Upload deferred while another version is in review; retry in six hours.\n")
+          PYTHON
       - name: Publish
+        if: steps.review.outputs.ready == 'true'
         env:
           CWS_SA_KEY: ${{ secrets.CWS_SA_KEY }}
           CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
@@ -82,7 +107,7 @@ jobs:
             gh issue create --title "Chrome Web Store publish failed (ab-connect $ver)" --label cws-publish --body "$body"
           fi
       - name: Close a resolved failure issue
-        if: success()
+        if: success() && steps.review.outputs.ready == 'true' && inputs.draft != true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
