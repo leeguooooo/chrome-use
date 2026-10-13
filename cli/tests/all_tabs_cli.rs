@@ -628,7 +628,7 @@ fn refused_first_open_keeps_passive_inventory_available() {
         failed["error"]
             .as_str()
             .unwrap()
-            .contains("shared agent window"),
+            .contains("agent window ownership is unknown"),
         "{failed}"
     );
     assert_eq!(fake.0.lock().unwrap().created, 0);
