@@ -68,8 +68,10 @@ export function createAgentTabQueue(deps) {
         const placeholder = tabs?.find(tab => tab.id === rec?.tabId)
         if (placeholder && placeholderCleanup(placeholder, rec, id) === 'keep')
           throw new Error('createTarget: placeholder navigation is unconfirmed; refusing to create another window')
-        if (verdict.reason === 'user-tab' && tabs.some(tab => isAgent(tab.id)))
-          throw new Error('createTarget: the shared agent window contains user tabs; move those tabs to your own window before continuing; refusing to create another agent window')
+        // A user tab makes the window the user's. Agent tabs already in it stay
+        // owned and keep working; new agent tabs go to a fresh shared window.
+        // That adds at most one window each time the user mixes tabs in.
+        if (!verdict.ours) return false
         if (rec?.windowId === id && Array.isArray(tabs) &&
             !isUntouchedPlaceholder(tabs.find(t => t?.id === rec.tabId), rec)) {
           // Keep the window being validated: after a worker restart the

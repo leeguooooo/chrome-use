@@ -277,7 +277,7 @@ impl Fake {
             }
             "Target.createTarget" => {
                 if b.refuse_create {
-                    return Err("createTarget: the shared agent window contains user tabs; refusing to create another agent window".to_string());
+                    return Err("createTarget: agent window ownership is unknown; refusing to create another window".to_string());
                 }
                 b.created += 1;
                 let n = b.created;

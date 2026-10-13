@@ -5,9 +5,9 @@ profile. Each session has its own tab group and references; cookies and login
 state belong to the profile and are shared. Your own window stays separate.
 Full screen does not change agent ownership. A lost window record is recovered
 from verified agent tabs before creating a replacement; user tabs and unknown
-blank pages are never moved or deleted to reclaim a window. Mixed user/agent
-windows refuse new tabs until the user tabs are moved out, rather than creating
-a second agent window. Failed placeholder
+blank pages are never moved or deleted to reclaim a window. A window the user
+mixed their own tabs into becomes theirs: its agent tabs keep working and new
+agent tabs go to one fresh agent window that later sessions share. Failed placeholder
 cleanup retains its identity and refuses success so the next call can retry.
 `tab list --all` uses a passive connection even in a fresh session: no daemon,
 window, tab or page attachment is created.

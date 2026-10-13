@@ -133,7 +133,7 @@ export function placeholderCleanup(tab, record, windowId) {
 export function agentWindowStillOurs(win, tabs, isOwned, placeholder = null) {
   if (!win || win.id == null) return { ours: false, reason: 'gone' }
   // Presentation is not ownership: an all-agent fullscreen window stays the
-  // shared agent window. User tabs still refuse reuse below.
+  // shared agent window. A user tab hands the window to the user below.
   if (!Array.isArray(tabs)) return { ours: false, reason: 'tabs-unknown' }
   for (const tab of tabs) {
     if (tab == null || !Number.isInteger(tab.id)) return { ours: false, reason: 'tab-unknown' }

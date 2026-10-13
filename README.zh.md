@@ -179,7 +179,7 @@ chrome-use status                 # 中继、profile、扩展与会话健康总�
 
 `extension install` 是一次性的安装步骤。`chrome-use extension connect`（别名 `chrome-use reconnect`）在扩展已装好的前提下重新连上它的中继，不重装任何东西。被 attach 的 agent 标签页上 Chrome 仍会显示「chrome-use started debugging this browser」提示条；`chrome-use extension connect --silent` 会带 `--silent-debugger-extension-api` 把 Chrome 重启一次来去掉它（标签和登录自动恢复；同时开着多个 Chrome 实例时不会重启）。`--keep-banner` 完全不碰浏览器；两个 flag 都不带时，交互终端里会先问一句。详见[静音提示条](https://chrome-use.leeguoo.com/debugger-banner-silence.html)。
 
-同一 Chrome profile 的所有 AI 会话共用一个后台专用窗口，每个会话有独立标签组；人使用自己的窗口。已有窗口只要标签归属都能确认是 AI，就会复用，全屏也不另开窗口。归属不明或空白占位页清理失败时会报错，避免继续增加窗口。不会为回收窗口而搬走或删除用户页。AI 窗口混入用户页且仍有 AI 标签时，会拒绝继续开页，提示把用户页移回自己的窗口，不另开第二个 AI 窗口。
+同一 Chrome profile 的所有 AI 会话共用一个后台专用窗口，每个会话有独立标签组；人使用自己的窗口。已有窗口只要标签归属都能确认是 AI，就会复用，全屏也不另开窗口。归属不明或空白占位页清理失败时会报错，避免继续增加窗口。不会为回收窗口而搬走或删除用户页。你在 AI 窗口里开了或拖进了自己的页面，这个窗口就归你：里面已有的 AI 标签照常工作，新的 AI 标签开到一个新的 AI 窗口，之后的会话共用它。
 
 自动化开始前，你的 Chrome profile 里必须已经开着一个窗口：没有窗口时它会停下并报 `profile not open`（错误码 `profile_not_open`），先在那个 profile 里打开一个窗口再重跑。如果它判断不了有没有窗口，会报 `profile window unavailable`（错误码 `profile_window_unavailable`），判断不了就什么都不创建。第一个标签页清理相关的错误码见[故障排查](https://chrome-use.leeguoo.com/troubleshooting.html)。
 

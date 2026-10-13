@@ -173,14 +173,36 @@ test('unknown window tab inventory refuses instead of creating another window', 
   await assert.rejects(createAgentTabQueue(f.deps)('https://next.test'), /inventory unavailable/)
 })
 
-test('user tabs in the shared agent window refuse rather than multiplying agent windows', async () => {
+test('user tabs in the shared agent window hand it to the user and open one fresh agent window', async () => {
   const f = fixture()
   const create = createAgentTabQueue(f.deps)
-  await create('https://agent.test')
+  const first = await create('https://agent.test')
   await f.chrome.tabs.create({ url: 'https://user.test', windowId: 1 })
-  f.chrome.windows.create = async () => { throw new Error('must not create a second agent window') }
-  await assert.rejects(create('https://next.test'), /shared agent window contains user tabs/)
-  assert.equal((await f.chrome.storage.local.get()).window, 1)
+  const normal = f.chrome.windows.create
+  let created = 0
+  f.chrome.windows.create = async options => {
+    created++
+    const win = await normal(options)
+    win.tabs[0].windowId = 2
+    return { id: 2, tabs: win.tabs }
+  }
+  const next = await create('https://next.test')
+  assert.equal(next.windowId, 2)
+  assert.equal((await f.chrome.storage.local.get()).window, 2)
+  assert.ok(f.ownedTabs.has(first.id), 'the agent tab left in the user window stays owned')
+  assert.equal((await create('https://third.test')).windowId, 2)
+  assert.equal(created, 1, 'later sessions share the fresh window')
+})
+
+test('window recovery skips a mixed window and finds the all-agent one', async () => {
+  const f = fixture()
+  for (const [url, windowId, owned] of [['https://old-agent.test', 1, true], ['https://user.test', 1, false], ['https://agent.test', 2, true]]) {
+    const tab = await f.chrome.tabs.create({ url, windowId })
+    if (owned) f.ownedTabs.add(tab.id)
+  }
+  f.chrome.windows.getAll = async () => [{ id: 1, state: 'normal' }, { id: 2, state: 'normal' }]
+  f.chrome.windows.create = async () => { throw new Error('must reuse the all-agent window') }
+  assert.equal((await createAgentTabQueue(f.deps)('https://next.test')).windowId, 2)
 })
 
 test('expired windows.create cannot publish late window and cleans only its created tabs', async () => {

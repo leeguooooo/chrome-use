@@ -164,9 +164,9 @@ loads clear it.
 On the extension relay, all AI sessions share one background agent window per
 Chrome profile, using separate tab groups. Keep the user's window separate.
 An all-agent fullscreen window is reused too. Lost window records recover only
-windows with verified agent tabs. If the agent window also holds user tabs,
-new tabs are refused until those user tabs are moved out; no second agent
-window is created.
+windows with verified agent tabs. If the user mixes their own tabs into the agent
+window, it becomes theirs: its agent tabs keep working and new agent tabs
+go to one fresh agent window that later sessions share.
 Uncertain ownership or placeholder cleanup refuses instead of opening more
 windows. `tab list --all` uses a passive connection: even a fresh session
 starts no daemon, opens no window or tab, and attaches to no page.

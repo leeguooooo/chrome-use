@@ -1,8 +1,22 @@
 # Changelog
 
-## 1.5.204
+## 1.5.205
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.51. Chrome Web Store publication follows Google review.
+
+### Bug Fixes
+
+- **Your own tabs in the agent window no longer block new sessions.** If you opened or dragged your own tabs into the shared agent window, every later `open` failed with "the shared agent window contains user tabs" until you moved them out. That window now becomes yours: agent tabs already in it keep working, and new agent tabs go to one fresh agent window that later sessions share. Your tabs are still never moved or closed.
+- **Recovery after a native host disconnect.** The extension retries the host after 1 second, backing off to at most 30 seconds, instead of waiting for Chrome's alarm. Command and event waits end when the old socket closes instead of hanging, and a lost reply reports `action_outcome_unknown` with `retryable: false`, so inspect the page before repeating an interrupted write. (#603)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.204
+
 Requires extension ab-connect 0.5.49 for the conversation menu. Chrome Web Store publication follows Google review.
 
 ### New Features
@@ -12,7 +26,6 @@ Requires extension ab-connect 0.5.49 for the conversation menu. Chrome Web Store
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.203
 
