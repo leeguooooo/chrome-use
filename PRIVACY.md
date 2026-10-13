@@ -1,6 +1,6 @@
 # chrome-use privacy policy
 
-Last updated: 2026-10-02
+Last updated: 2026-10-13
 
 chrome-use is an open-source command-line tool and skill published by Guo Li
 (leeguooooo). It controls the Chrome browser on your own computer.
@@ -40,10 +40,38 @@ under their own privacy policies. When you use chrome-use through an AI
 assistant, the page content the assistant reads becomes part of that
 conversation and is handled under the assistant provider's privacy policy.
 
+## Local agent side panel
+
+On macOS/Linux, the side panel uses your installed Codex, Claude Code, OpenCode
+or Pi CLI and its existing authentication/provider configuration. Codex uses
+app-server, Claude Code uses stream-json, OpenCode uses ACP, and Pi uses JSONL
+RPC. Conversation messages, replies and tool results are stored on this computer
+in a Chrome-profile-scoped journal under `~/.chrome-use/agent-panel`. The
+extension communicates with the local native host, not a model server directly.
+The chosen CLI may send tasks and requested page content to its configured model
+service, whose terms and privacy policy apply.
+
+The current-page tag sends the active webpage's title, URL and tab identifier
+with the next message unless you remove it with ×. Model menus use CLI catalogs;
+a custom model ID overrides the menu choice. Metadata does not prove execution
+access. Codex/Claude offer approval prompts or full access; OpenCode follows its
+own permission rules and may not ask. Pi's Browser only mode exposes only
+chrome_use MCP tools; full access enables the CLI's full tool set. Full access
+automatically answers supported permission requests.
+
+Deleting a stopped conversation removes its local panel history and browser
+session. It also removes matching Codex rollout or Claude session files, calls
+OpenCode session/delete, or removes Pi session files with the conversation
+folder. Codex's SQLite cache is not modified. Cleanup failures or unconfirmed
+tab closure are reported. The panel does not ask you for an agent API key. Login and credential setup
+remain with the chosen CLI; discovery does not return credential values.
+
 ## What it keeps on your computer
 
-chrome-use keeps no browsing history. Under `~/.chrome-use` it stores:
+chrome-use does not collect a general browsing history. Task-related page
+content can be retained in the local panel journal. Under `~/.chrome-use` it stores:
 
+- profile-scoped panel messages, replies, tool results and conversation workspaces;
 - small session bookkeeping files (which tabs a session opened; no page
   content);
 - installed site adapters and, if downloaded, Chrome for Testing;
@@ -52,8 +80,10 @@ chrome-use keeps no browsing history. Under `~/.chrome-use` it stores:
 - browser state you choose to export with `state save`, and screenshots,
   downloads or recordings you ask for, where you ask for them.
 
-Delete `~/.chrome-use` to remove all of it. Your browser's own data stays under
-your control in Chrome.
+Deleting `~/.chrome-use` removes chrome-use's local state. Agent-managed history
+and credentials remain in the CLI's own locations; use the panel's conversation
+delete action for the session cleanup described above. Your browser's own data
+stays under your control in Chrome.
 
 ## Contact
 

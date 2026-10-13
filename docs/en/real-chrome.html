@@ -71,7 +71,18 @@
         state lives is in <a href="/en/how-it-works.html">How It Works</a>.
       </p>
 
-      <p>Extension 0.5.37 opens a native agent side panel from the toolbar. Settings opens connection options. On macOS/Linux, Conversations uses your local Codex or Claude Code login; Agents &amp; models discovers installed agents and previews configuration changes. Browser-tool approvals show arguments and grant one call. Windows supports discovery and configuration reads only. Each conversation uses an independent browser session. The panel adds no webpage content script; opening it can change the page viewport.</p>
+      <h2 id="agent-panel">Local agent side panel</h2>
+      <p>Click the extension icon to open the side panel; <strong>Settings</strong> opens connection options. On macOS/Linux, choose Codex, Claude Code, OpenCode or Pi with your installed CLI's login. The host reports which agents it supports; older hosts may need an upgrade. Windows currently offers discovery and configuration reads only. Codex uses app-server, Claude Code uses stream-json, OpenCode uses ACP, and Pi uses JSONL RPC.</p>
+      <p>Each conversation has its own browser session. The page tag above the composer attaches the current webpage to your next message; click <strong>×</strong> to omit it. Model choices come from the selected CLI's catalog. <strong>Default model</strong> uses its configured model; <strong>Custom model ID</strong> in the <strong>＋</strong> menu overrides the choice. <strong>Reload models from CLI</strong> refreshes the catalog. A listed model or reported login does not prove execution access.</p>
+      <p>The permission switch applies to one conversation. New chats start with <strong>Full access</strong> unless you saved another choice.</p>
+      <ul>
+        <li><strong>Codex / Claude Code:</strong> turn full access off for <strong>Ask first</strong> and review approval requests. Full access runs without those prompts and automatically answers supported approvals. Agent questions still need your response.</li>
+        <li><strong>OpenCode:</strong> <strong>CLI permissions</strong> keeps its own rules, which may allow tools without asking. Incoming requests appear in the panel; full access answers with <strong>Allow once</strong> without changing stored rules.</li>
+        <li><strong>Pi:</strong> tools have no per-call approval mechanism. <strong>Browser only</strong> exposes only <code>chrome_use</code> MCP tools, without shell or file tools. Full access enables the CLI's full tool set.</li>
+      </ul>
+      <p>Replies stream into history, with tool rows that expand for details. Tool output does not prove the browser task succeeded. Messages sent during a response queue up; failure or interruption pauses the queue until <strong>Resume queue</strong>. <strong>Stop &amp; send</strong> or Ctrl/Cmd+Enter waits for confirmed interruption or process exit before sending ahead of the ordinary queue. Reconnect reads history without resending.</p>
+      <p>Stop the response before confirming deletion from the header. Deletion removes panel history and the conversation's browser session, plus Codex rollout files, Claude session files/directories, OpenCode history through <code>session/delete</code>, or Pi session files inside the conversation folder. Codex's SQLite cache is untouched. Cleanup failures or unconfirmed tab closure are reported.</p>
+      <p>History stays on this computer. The chosen CLI may send tasks and page content to its configured model service, whose privacy policy applies. The panel adds no webpage content script; opening it can change the viewport. <strong>Agents &amp; models</strong> discovers programs and previews configuration changes, with verified writes and restore that preserves later edits.</p>
       <h2>One-time install</h2>
       <p>
         Extension connect only needs to be set up once. First register the native-messaging host, then install the
@@ -533,7 +544,7 @@
         </a>
       </div>
 
-    <section><h2>Native conversation services</h2><p>The native service keeps Codex or Claude CLI sessions alive independently of the extension connection. Reconnect reads new events without resending messages; failed or interrupted turns pause the queue. Browser tools remain on the existing chrome-use path with an explicit profile and session, rather than another transport for progress display. Inspect recovered work whose outcome is unconfirmed. Synthetic protocol tests do not prove real account, page or stealth acceptance.</p></section>
+    <section><h2>Native conversation services</h2><p>The native service keeps Codex, Claude Code, OpenCode or Pi CLI sessions alive independently of the extension connection. Reconnect reads new events without resending messages; failed or interrupted turns pause the queue. Browser tools remain on the existing chrome-use path with an explicit profile and session, rather than another transport for progress display. Inspect recovered work whose outcome is unconfirmed. Synthetic protocol tests do not prove real account, page or stealth acceptance.</p></section>
 </main>
     <!-- ========================== /PAGE CONTENT =========================== -->
 

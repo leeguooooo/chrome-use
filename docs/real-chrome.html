@@ -69,7 +69,18 @@
         每一站说什么协议、状态放在谁手上，见 <a href="/how-it-works.html">它怎么工作</a>。
       </p>
 
-      <p>扩展 0.5.37 的工具栏图标会打开原生 agent 侧栏，Settings 打开连接设置。macOS/Linux 可在 Conversations 中使用本机 Codex 或 Claude Code 的已有登录，在 Agents &amp; models 中发现程序和预览配置改动。浏览器工具授权显示参数，只允许当前调用一次。Windows 暂时只支持发现和配置读取。每个会话使用独立浏览器 session。侧栏没有新增网页 content script；打开侧栏仍会改变页面视口。</p>
+      <h2 id="agent-panel">本机 agent 侧栏</h2>
+      <p>点击扩展图标打开侧栏，<strong>Settings</strong> 打开连接设置。macOS/Linux 可选择 Codex、Claude Code、OpenCode 或 Pi，沿用已安装 CLI 的登录。主机会报告支持哪些 agent，旧主机可能需要升级。Windows 目前仅支持发现和配置查看。Codex 走 app-server，Claude Code 走 stream-json，OpenCode 走 ACP，Pi 走 JSONL RPC。</p>
+      <p>每个会话使用独立浏览器 session。输入框上方的页面标签会随下一条消息附带当前网页，点 <strong>×</strong> 可去掉。模型下拉来自所选 CLI 的目录，<strong>Default model</strong> 沿用配置的模型，<strong>＋</strong> 菜单中的 <strong>Custom model ID</strong> 可覆盖选择，<strong>Reload models from CLI</strong> 重新读取目录。列出模型或报告已登录不代表实际调用可用。</p>
+      <p>权限开关只作用于当前会话。新会话默认开启 <strong>Full access</strong>，除非你保存过其他选择。</p>
+      <ul>
+        <li><strong>Codex / Claude Code：</strong>关闭后显示 <strong>Ask first</strong>，由你处理审批请求。完整权限模式不再逐次询问，并自动回复支持的审批；agent 提问仍需你回答。</li>
+        <li><strong>OpenCode：</strong><strong>CLI permissions</strong> 遵循它自己的规则，部分工具可能无需询问。收到的审批会显示在侧栏，完整权限模式按 <strong>Allow once</strong> 自动回复，不改保存的权限规则。</li>
+        <li><strong>Pi：</strong>没有逐次审批机制。<strong>Browser only</strong> 只开放 <code>chrome_use</code> MCP 工具，不开放 shell 或文件工具；完整权限模式使用 CLI 的完整工具集。</li>
+      </ul>
+      <p>历史显示流式回复，工具行可展开查看。工具返回不代表浏览器任务成功。回复中发送的消息进入队列，失败或中断后需点 <strong>Resume queue</strong> 恢复。<strong>Stop &amp; send</strong> 或 Ctrl/Cmd+Enter 等确认终止或进程退出后才优先发送，普通队列仍暂停。重连只读回历史，不重发。</p>
+      <p>删除前先停止回复，再点顶部删除按钮并确认。删除内容包括面板历史和该会话的浏览器 session，以及 Codex rollout 文件、Claude 会话文件及目录、通过 <code>session/delete</code> 删除的 OpenCode 历史，或会话文件夹内的 Pi 会话文件。Codex 的 SQLite 缓存不改动。清理失败或标签页关闭未确认时会提示。</p>
+      <p>历史保存在本机。所选 CLI 可能把任务和网页内容发送给它配置的模型服务，该服务的隐私政策适用。侧栏没有新增网页 content script，打开时仍可能改变页面视口。<strong>Agents &amp; models</strong> 可发现程序和预览配置改动，写入后读回，恢复时保留后来的修改。</p>
       <h2>一次性安装</h2>
       <p>
         扩展连接只需配置一次。先注册原生消息宿主（native-messaging host），再装上 <strong>chrome-use</strong> 扩展。
@@ -495,7 +506,7 @@
         </a>
       </div>
 
-    <section><h2>原生会话服务</h2><p>原生服务独立于扩展连接，保留 Codex 或 Claude 的 CLI 会话。断线后只读取新增事件，不重发旧消息；失败或停止后暂停消息队列。浏览器工具绑定 profile 和会话，沿用现有 chrome-use 链路，不为显示进度启用另一条浏览器控制通道。恢复中的任务结果未确认时需先检查。合成协议测试不代表真实账号、页面和隐身检测已通过。</p></section>
+    <section><h2>原生会话服务</h2><p>原生服务独立于扩展连接，保留 Codex、Claude Code、OpenCode 或 Pi 的 CLI 会话。断线后只读取新增事件，不重发旧消息；失败或停止后暂停消息队列。浏览器工具绑定 profile 和会话，沿用现有 chrome-use 链路，不为显示进度启用另一条浏览器控制通道。恢复中的任务结果未确认时需先检查。合成协议测试不代表真实账号、页面和隐身检测已通过。</p></section>
 </main>
     <!-- ========================== /PAGE CONTENT =========================== -->
 

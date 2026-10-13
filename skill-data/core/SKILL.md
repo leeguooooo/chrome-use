@@ -15,17 +15,23 @@ browser actions. Saved configuration proves file readback, not a model change
 in an existing session. Inspect current values after an unconfirmed write;
 never replay it automatically. Isolation and journal details: [connection](references/connection.md).
 
-Native conversations persist message IDs and event cursors. Reconnect reads
-events without resending a turn; failure or interruption pauses the queue.
-A CLI's completed response is not proof that the whole browser task succeeded.
-Browser-tool approvals show arguments and grant one call. Unconfirmed sends
-have explicit recovery controls; clearing a warning does not cancel delivery.
-Panel tasks and browser context may be sent to the configured CLI model service.
-The extension toolbar opens a packaged side panel with chat history, agent
-requests, queue controls and configuration previews. It adds no page content
-script. Unsupported/unconfirmed Chrome behavior retains the connection popup.
-New chats use independent browser sessions; do not assume they target the
-currently visible page. The panel's Settings button opens connection options.
+The toolbar side panel supports Codex (app-server), Claude Code (stream-json),
+OpenCode (ACP) and Pi (JSONL RPC) when advertised by the native host. It uses
+local CLI logins and adds no page content script. Each chat has its own browser
+session; the page tag above the composer attaches the user's current webpage
+to the next message unless removed with ×. Settings opens connection options.
+Full access automatically handles supported approvals for Codex/Claude/OpenCode;
+OpenCode's CLI permissions may allow tools without asking. Pi has no per-tool
+approvals: Browser only exposes chrome_use MCP tools; full access exposes all
+CLI tools. Agent questions still require user input. Model menus come from CLI
+catalogs; the ＋ menu accepts a custom model ID. Catalog metadata does not prove
+execution access. Panel history stays local, but the selected CLI may send tasks
+and page content to its configured model service. Deletion removes the panel
+history, the agent session history and the conversation's browser session;
+Codex's SQLite cache is untouched. Details: [connection](references/connection.md).
+Reconnect reads persisted events without resending a turn. Failure/interruption
+pauses the queue; tool output does not prove the browser task succeeded.
+Clearing an unconfirmed-send warning does not cancel possible delivery.
 
 Queued messages can be edited or removed only while still queued and matching
 the original text. Edits use a new ID; superseded IDs stay deduplicated. Long
@@ -34,7 +40,7 @@ the running turn. Stop & send or Ctrl/Cmd+Enter is a separate direct-send
 operation: it waits for terminal/owned-process-exit confirmation and leaves
 ordinary queued messages paused. Unconfirmed or recovered turns cannot release
 a pending direct message automatically.
-Read CLI models is an explicit metadata probe, separate from installation
+Reload models from CLI is a metadata probe, separate from installation
 discovery. It returns CLI-reported model suggestions and account state without
 identity or credentials, sends no prompt and does not verify model access.
 Missing or partial catalogs are explicit; typed model IDs remain available.

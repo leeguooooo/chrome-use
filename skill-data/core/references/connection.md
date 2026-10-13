@@ -207,7 +207,8 @@ private endpoint file; neither the endpoint nor its capability belongs in page
 scripts. The native host confirms service health and the exact executable hash
 before reusing it. An active service from another build is not silently replaced.
 
-Codex uses its app-server protocol; Claude uses its stream-json control protocol.
+Codex uses app-server, Claude Code uses stream-json, OpenCode uses ACP, and Pi
+uses JSONL RPC. The host advertises the available chat agents.
 Their processes stay open between turns. Browser tools use the same chrome-use
 binary with explicit `AGENT_BROWSER_BROWSER` and `AGENT_BROWSER_SESSION`, plus
 the relay registry override when present. No separate browser transport is
@@ -257,24 +258,19 @@ execution. The native service can restart the CLI after confirmed exit, retainin
 its backend session identity; startup failure reports recoveryRequired rather
 than dropping the selected message or pretending it ran.
 
-agentInspect runs the selected Codex/Claude executable in private scratch
+agentInspect runs the selected chat-agent executable in private scratch
 directories, separately from installation-only discover. It checks version
-output, then uses initialize and Codex model/list/account/read (refreshToken
-false) or Claude initialize metadata. Codex cursor pages are bounded and a
-remaining cursor marks the list partial. No thread or prompt is sent. Claude
-receives empty tools/MCP configuration, no-session-persistence and a
-disableAllHooks setting, with user settings retained for agent configuration.
-The response allow-lists model identifiers, labels and reasoning efforts.
-Codex returns reportedSignedIn/reportedSignedOut/unverified; Claude reports
-account metadata presence, not verified authentication. Email, organization and
-credential fields are never transported. modelAccessVerified remains false.
-Version output from a nonzero exit is not reported as a verified version.
-Two concurrent probes, bounded output, deadlines and owned process-group exit
-checks apply; unknown cleanup fails rather than returning successful metadata.
-The current adapter requires Unix ownership support. Windows ownership,
-persistent caches and additional adapters remain separate
-acceptance work. The panel discards results after agent/program selection changes
-and never overwrites a typed model ID or substitutes static aliases on failure.
+output and reads Codex model/list/account/read, Claude initialization metadata,
+OpenCode ACP configOptions, or Pi get_available_models. OpenCode creates a
+transient metadata session and deletes it before returning success. No prompt
+or browser task is sent. Codex cursor pages are bounded; remaining pages mark
+the list partial. Model identifiers, labels and supported reasoning efforts
+are allow-listed. Account state is reported metadata, not verified login;
+OpenCode and Pi return unverified. Email, organization and credentials are not
+transported; modelAccessVerified stays false. Two concurrent probes, bounded
+output/deadlines and owned-process exit checks apply. The panel discards stale
+selection results and does not substitute a static catalog after failure.
+Inspections require Unix ownership support; Windows panels remain read-only.
 
 The native hello reply advertises agentPanel schemaVersion/mode/modelInspection
 capabilities. Port liveness alone does not enable the panel; an older host without
@@ -298,3 +294,39 @@ Read/stop operations remain available against the old service; busy services are
 never automatically killed. Custom metadata executables must be absolute paths.
 Journal loading validates the last sequence in one pass; replay uses bounded
 byte-cursor caches, invalidated when an external file change is observed.
+
+### Side panel controls
+
+On macOS/Linux, select Codex, Claude Code, OpenCode or Pi from the host-advertised
+agent menu. Windows panels remain read-only. Use the installed CLI's own login
+and provider configuration. The model menu reads that CLI's catalog; Default
+model uses its configured model. A Custom model ID in the ＋ menu overrides the
+menu choice; Reload models from CLI refreshes metadata, not execution access.
+
+The page tag above the composer attaches the user's current webpage to the next
+message. Its tab id, URL and title tell the agent which tab “this page” means.
+Click × to omit it. A chat still has a separate browser session; an attached
+user tab is a specific target, not a transfer of all user tabs into that session.
+
+Full access is per conversation and starts enabled for new chats unless a
+previous choice was saved. Codex/Claude use Ask first when disabled and run
+without permission prompts when enabled; supported approval requests are
+answered automatically, while questions still require user input. OpenCode's
+CLI permissions preserve its own rules, which may already allow some tools;
+full access answers incoming permission requests with allow_once. Pi never
+asks before tools: Browser only exposes chrome_use MCP tools without shell or
+file tools; full access enables the CLI's full tool set.
+
+Stop a running reply before confirming deletion from the header. Deletion
+removes the panel journal/workspace and the conversation's browser session.
+Codex rollout files are matched by session id in sessions/ and archived_sessions/;
+Claude files/directories are matched in projects/; their configured roots are
+honored. OpenCode deletion uses the advertised ACP session/delete API. Pi's
+session files live inside the conversation workspace and are removed with it.
+Codex's SQLite cache is not edited. Cleanup errors and unconfirmed browser-tab
+closure are reported rather than treated as complete deletion.
+
+Panel history stays in the profile-scoped local journal. The chosen CLI may
+send tasks and page observations to its configured model provider; that
+provider's privacy policy applies. The extension does not contact a model
+server directly or manage the CLI's authentication credentials.

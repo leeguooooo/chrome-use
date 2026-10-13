@@ -36,12 +36,15 @@
 <body>
 <header>
   <h1>Privacy Policy — chrome-use</h1>
-  <div class="sub">Chrome extension (id <code>knfcmbamhjmaonkfnjhldjedeobeafmk</code>) · Last updated 2026-10-12</div>
+  <div class="sub">Chrome extension (id <code>knfcmbamhjmaonkfnjhldjedeobeafmk</code>) · Last updated 2026-10-13</div>
 </header>
 
-<p><strong>The extension has no analytics or tracking backend.</strong> It communicates with the locally installed chrome-use CLI through Chrome native messaging. It handles browser observations and automation commands requested by the user. In the agent side panel, the selected local Codex or Claude Code CLI may send the user's task and requested browser context to its configured model service. That service's terms and privacy policy apply.</p>
+<p><strong>The extension has no analytics or tracking backend.</strong> It communicates with the locally installed chrome-use CLI through Chrome native messaging. It handles browser observations and automation commands requested by the user. In the agent side panel, the selected local Codex, Claude Code, OpenCode or Pi CLI may send the user's task and requested browser context to its configured model service. That service's terms and privacy policy apply.</p>
 <h2>Local agent conversations</h2>
-<p>The side panel sends tasks to a local agent service through the native host. Conversation messages, replies and tool results are saved in a profile-scoped journal on the user's computer. The native service uses authenticated loopback IPC; the extension itself does not contact a model server. Chrome local storage keeps selection and message identifiers, not the conversation text. The panel does not request or store an agent API key. Existing CLI authentication and provider configuration remain with the chosen CLI.</p>
+<p>The side panel sends tasks to a local agent service through the native host. Conversation messages, replies and tool results are saved in a profile-scoped journal on the user's computer. The native service uses authenticated loopback IPC; the extension itself does not contact a model server. Chrome local storage keeps selection and message identifiers, not the conversation text. The panel does not ask you for an agent API key. Existing CLI authentication and provider configuration remain with the chosen CLI; discovery does not return credential values.</p>
+<p>The current-page tag includes the active webpage's title, URL and tab identifier with the next message unless removed with ×. Page observations requested by the agent may also become model context. The model menu comes from CLI metadata; a custom model ID selects a model through that CLI.</p>
+<p>Permissions depend on the agent: Codex/Claude use approval prompts or full access; OpenCode keeps CLI permission rules and can allow tools without asking; Pi exposes only chrome_use MCP tools in Browser only mode and its full tool set with full access. Full access automatically answers supported permission requests; it does not prevent task or page context from reaching the configured model service.</p>
+<p>Deleting a stopped conversation removes its local panel history and browser session, plus Codex rollout files, Claude session files/directories, OpenCode history through session/delete, or Pi session files in the conversation folder. Codex's SQLite cache is not modified. Cleanup failures and unconfirmed browser-tab closure are reported.</p>
 <h2>Data handling</h2>
 <table>
 <tr><th>Data</th><th>Purpose and destination</th></tr>

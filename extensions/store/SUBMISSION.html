@@ -60,7 +60,7 @@
 <pre>chrome-use</pre>
 
 <h3>简介 / Summary（≤132 字符）</h3>
-<pre>Let your own chrome-use CLI drive your logged-in Chrome — a local automation bridge. No remote server, no token.</pre>
+<pre>Drive your logged-in Chrome with the local chrome-use CLI or installed agents in the side panel.</pre>
 
 <h3>详细描述 / Description</h3>
 <pre>chrome-use is the in-browser half of the open-source chrome-use CLI. It lets the
@@ -73,9 +73,22 @@ How it works
 - When you run an automation command, the extension relays Chrome DevTools Protocol operations to
   the tab you target, then returns the result to the CLI.
 
+Local agent side panel (macOS/Linux)
+- Chat with installed Codex, Claude Code, OpenCode or Pi using the CLI's existing login.
+- Attach the current webpage with the page tag above the composer, or remove it with ×.
+- Choose models from the CLI catalog or enter a custom model ID in the ＋ menu.
+- Codex/Claude offer approval prompts or full access. OpenCode uses its own CLI permission
+  rules and may not ask. Pi offers Browser only (chrome_use MCP tools) or its full tool set.
+- Stream replies and tool rows, queue messages, stop responses and delete conversations.
+  Deletion removes panel history and the browser session, plus Codex rollout files, Claude
+  session files/directories, OpenCode history through session/delete, or Pi session files.
+  Codex's SQLite cache is not changed. Cleanup failures are reported.
+- Windows panels currently support discovery and configuration reads only.
+
 Privacy
-- No analytics, no trackers, no data collection.
-- Nothing is sent to any remote server. The only message peer is the local CLI.
+- No extension-operated analytics or tracking backend. Panel history is saved on this computer.
+- The extension talks to the local CLI; the selected CLI may send tasks and page content to
+  its configured model service. That service's privacy policy applies.
 - Source is open (Apache-2.0): https://github.com/leeguooooo/chrome-use
 
 You need the chrome-use CLI installed and paired (run: chrome-use extension install) for this
@@ -91,7 +104,8 @@ extension to do anything.</pre>
 
 <h3>Single purpose（单一用途）</h3>
 <pre>Bridge the user's locally-installed chrome-use CLI to their own logged-in Chrome so the CLI can
-automate pages the user is working with, entirely on the user's machine and at the user's command.</pre>
+automate pages at the user's command. Optional side-panel conversations use installed local agents,
+which may send task and page context to their configured model service.</pre>
 
 <h3>各权限理由 / Permission justifications</h3>
 <table>
@@ -101,7 +115,8 @@ automate pages the user is working with, entirely on the user's machine and at t
   <tr><td class="field">tabGroups</td><td>Organizes the tabs the local chrome-use CLI drives into a labeled, colored Chrome tab group per automation session, so the user can see at a glance which tabs are under automation and they stay visually separated from the user's own tabs.</td></tr>
   <tr><td class="field">downloads</td><td>Starts downloads explicitly requested by the local chrome-use CLI, reports completion and the local filename, and lets the user list or clear Chrome download history. Clearing history never deletes files. No download data is sent to a remote server.</td></tr>
   <tr><td class="field">nativeMessaging</td><td>The sole communication channel: a local native-messaging connection to the chrome-use CLI installed on the same machine. No network is used.</td></tr>
-  <tr><td class="field">storage</td><td>Persist small local pairing/configuration state for the extension.</td></tr>
+  <tr><td class="field">sidePanel</td><td>Display local-agent conversations, permission requests and configuration controls outside webpage DOM.</td></tr>
+  <tr><td class="field">storage</td><td>Persist small local pairing/configuration state, panel selections and message identifiers. Conversation text is kept in the native service journal.</td></tr>
   <tr><td class="field">alarms</td><td>Keep the MV3 service worker alive during longer automation sessions.</td></tr>
   <tr><td class="field">idle</td><td>Detect when the machine goes idle or wakes from sleep so the extension can clean up finished automation sessions and re-establish the local native-messaging connection. No idle data leaves the device.</td></tr>
   <tr><td class="field">webNavigation</td><td>Detect page loads/navigations so automation can wait for the right moment before acting.</td></tr>
