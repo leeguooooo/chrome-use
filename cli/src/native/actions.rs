@@ -26127,7 +26127,11 @@ mod tests {
         )
         .await;
         assert_eq!(result["success"], false);
-        assert_eq!(result["error"], "Browser not launched");
+        // The CLI reads this as "fall back to passive inventory" (#610).
+        assert_eq!(
+            result["error"],
+            super::super::browser::ALL_TABS_NO_BOUND_BROWSER
+        );
         assert!(state.browser.is_none());
     }
 
