@@ -1296,6 +1296,12 @@ fn is_disowned(target_id: &str) -> bool {
 
 /// Rows `tab list --all` returns unless `--limit` says otherwise.
 pub const ALL_TABS_DEFAULT_LIMIT: usize = 200;
+
+/// A session daemon's answer to `tab list --all` when it has no browser and
+/// no bound endpoint (a refused first `open` leaves exactly that). The CLI
+/// then reads the inventory passively itself, as for a fresh session (#610).
+pub const ALL_TABS_NO_BOUND_BROWSER: &str =
+    "tab list --all: this session has no browser or bound profile yet";
 /// The most rows `--limit` may ask for.
 pub const ALL_TABS_MAX_LIMIT: usize = 1000;
 /// Per-field caps, in characters. A page can set a multi-KB title and a

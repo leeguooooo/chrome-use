@@ -55,6 +55,7 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
             "first_tab_outcome_unknown",
             false,
         ),
+        ("first tab refused", "first_tab_refused", false),
         (
             "first tab cleanup incomplete",
             "first_tab_cleanup_incomplete",
@@ -233,6 +234,13 @@ mod tests {
             (
                 crate::native::first_tab::create_failure("CDP command timed out"),
                 "first_tab_outcome_unknown",
+                false,
+            ),
+            (
+                crate::native::first_tab::create_failure(
+                    "createTarget: agent window ownership is unknown; refusing to create another window",
+                ),
+                "first_tab_refused",
                 false,
             ),
             (

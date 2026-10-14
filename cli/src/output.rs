@@ -2641,7 +2641,8 @@ means nothing is created. Neither is retried automatically. If the first
 tab was created but its setup failed: first_tab_setup_failed means Chrome
 confirms the tab gone (rerun is safe); first_tab_cleanup_incomplete means it
 may still be open, so run `close` in the same session before opening again;
-first_tab_outcome_unknown means Chrome never confirmed the tab.
+first_tab_outcome_unknown means Chrome never confirmed the tab; first_tab_refused
+means the extension declined before opening anything.
 
 Waiting: `open` waits up to 25s for the page's `load` event
 (--wait-until <load|domcontentloaded|networkidle|none>). When that wait ends

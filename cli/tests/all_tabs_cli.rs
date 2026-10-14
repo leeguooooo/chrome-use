@@ -408,6 +408,12 @@ struct Daemon {
 
 impl Daemon {
     fn start(session: &str, cdp: &str, relay_mode: bool) -> Self {
+        Self::start_with(session, cdp, relay_mode, true)
+    }
+
+    /// `daemon_cdp: false` starts the daemon without `AGENT_BROWSER_CDP`, as
+    /// a daemon spawned for an auto-discovered relay runs.
+    fn start_with(session: &str, cdp: &str, relay_mode: bool, daemon_cdp: bool) -> Self {
         let home = tempfile::tempdir().unwrap();
         let sock = tempfile::Builder::new()
             .prefix("cua")
@@ -431,8 +437,14 @@ impl Daemon {
         };
         let _ = d.child.wait();
         let mut c = Command::new(BIN);
-        d.child = d
-            .env(&mut c)
+        d.env(&mut c);
+        if !daemon_cdp {
+            // A launch must fail rather than open a real browser window on
+            // the test host.
+            c.env_remove("AGENT_BROWSER_CDP")
+                .env("AGENT_BROWSER_EXECUTABLE_PATH", "/usr/bin/false");
+        }
+        d.child = c
             .env("AGENT_BROWSER_DAEMON", "1")
             .env("AGENT_BROWSER_SESSION", session)
             .stdin(Stdio::null())
@@ -612,6 +624,33 @@ fn relay_profile() -> Vec<Tab> {
     other.other_session = true;
     other.agent = true;
     vec![a, b, c, other]
+}
+
+/// #610: a refused first open leaves a live daemon with no browser and no
+/// bound profile. Its `tab list --all` failed with "Browser not launched";
+/// the CLI now falls back to the passive inventory a fresh session uses.
+#[test]
+fn a_daemon_without_a_browser_still_lists_tabs() {
+    let (fake, url) = Fake::start(true, relay_profile(), CAPS_0534);
+    let d = Daemon::start_with("at-nobrowser", &url, true, false);
+    let mark = fake.mark();
+    let mut command = Command::new(BIN);
+    let out = d
+        .env(&mut command)
+        .env_remove("AGENT_BROWSER_CDP")
+        .env_remove("AGENT_BROWSER_SESSION")
+        .args(["--session", &d.session, "--json", "tab", "list", "--all"])
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(out.status.success(), "{v}");
+    assert_eq!(v["data"]["readOnly"], true, "{v}");
+    assert_eq!(v["data"]["total"], 4, "{v}");
+    no_touch(
+        &fake.since(mark),
+        "inventory from a daemon without a browser",
+    );
+    assert_eq!(fake.0.lock().unwrap().created, 0);
 }
 
 const CAPS_0534: &[&str] = &["call:call-v1", "state", "attachTabById", "releaseTab"];

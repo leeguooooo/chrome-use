@@ -3118,6 +3118,16 @@ fn main() {
             warning: None,
             timing: None,
         };
+        let passive = || {
+            inventory_response(diag::list_all_tabs(
+                &flags,
+                cmd.get("limit")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize)
+                    .unwrap_or(native::browser::ALL_TABS_DEFAULT_LIMIT),
+                cmd.get("full").and_then(|v| v.as_bool()) == Some(true),
+            ))
+        };
         let resp = if connection::daemon_ready(&flags.session)
             && !user_chose_cdp
             && browser_selector.is_none()
@@ -3131,18 +3141,23 @@ fn main() {
             {
                 inventory_response(Err("tab list --all cannot upgrade a session daemon; run a normal session command first or name the existing browser with --cdp".to_string()))
             } else {
-                connection::send_command(cmd.clone(), &flags.session)
-                    .unwrap_or_else(|error| inventory_response(Err(error)))
+                let resp = connection::send_command(cmd.clone(), &flags.session)
+                    .unwrap_or_else(|error| inventory_response(Err(error)));
+                // A daemon left by a refused first open has nothing to read
+                // through; the passive path resolves the profile as a fresh
+                // session would, and still refuses a non-relay session.
+                if resp
+                    .error
+                    .as_deref()
+                    .is_some_and(|e| e.contains(native::browser::ALL_TABS_NO_BOUND_BROWSER))
+                {
+                    passive()
+                } else {
+                    resp
+                }
             }
         } else {
-            inventory_response(diag::list_all_tabs(
-                &flags,
-                cmd.get("limit")
-                    .and_then(|v| v.as_u64())
-                    .map(|n| n as usize)
-                    .unwrap_or(native::browser::ALL_TABS_DEFAULT_LIMIT),
-                cmd.get("full").and_then(|v| v.as_bool()) == Some(true),
-            ))
+            passive()
         };
         print_response_with_opts(&resp, Some("tab_list"), &OutputOptions::from_flags(&flags));
         exit(if resp.success { 0 } else { 1 });

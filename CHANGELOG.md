@@ -1,8 +1,20 @@
 # Changelog
 
-## 1.5.205
+## 1.5.206
 
 <!-- release:start -->
+### Bug Fixes
+
+- **A refused first tab says nothing was opened.** When the extension declines to open a tab before creating anything (for example `agent window ownership is unknown`), `open` now fails with `first tab refused … Nothing was opened or attached.` (code `first_tab_refused`). It used to report `first tab outcome unknown` and tell you to look for a blank tab that was never opened. (#609)
+- **`tab list --all` works after a refused `open`.** A refused first `open`, including `profile not open`, left a session daemon without a browser, and `tab list --all` in that session failed with `Browser not launched`. It now falls back to the same read-only listing a fresh session uses, still without attaching to or creating anything. (#610)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.205
+
 Requires extension ab-connect 0.5.51. Chrome Web Store publication follows Google review.
 
 ### Bug Fixes
@@ -13,7 +25,6 @@ Requires extension ab-connect 0.5.51. Chrome Web Store publication follows Googl
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.204
 

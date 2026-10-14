@@ -81,6 +81,7 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v1.5.206</strong>（2026-10-14）：扩展在开任何东西之前就拒绝开标签时，<code>open</code> 现在报 <code>first tab refused … Nothing was opened or attached.</code>（错误码 <code>first_tab_refused</code>），不再说“结果未知”、让你去找一个根本没开的空白标签页。首次 <code>open</code> 被拒（包括 <code>profile not open</code>）后，同一会话的 <code>tab list --all</code> 不再报 <code>Browser not launched</code>，会改走新会话那条只读列表路径，仍然不 attach、不创建任何东西。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.205</strong>（2026-10-13）：你在 AI 窗口里开了或拖进自己的页面后，之后的 <code>open</code> 不再报“the shared agent window contains user tabs”而失败。这个窗口改归你，里面已有的 AI 标签照常工作，新的 AI 标签开到一个新的 AI 窗口，之后的会话共用它；你的页面仍然不会被移动或关闭。native host 断线后扩展 1 秒后主动重连，连续失败最多退避到 30 秒，断线时命令和事件等待直接结束，不再卡住。需要扩展 0.5.51，扩展商店需等待 Google 审核。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.204</strong>（2026-10-13）：扩展 0.5.49 的侧栏会话列表可以在“本站 · x.com”和“全部”之间切换。会话归属于发第一条消息时所在页面的主域名，在 mobile.x.com 上开始的会话也会出现在 x.com 下。每条会话显示 agent、网站和最近使用时间，切换选择会被记住。这个版本之前的会话没有网站信息，只出现在“全部”里。扩展商店需等待 Google 审核。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.203</strong>（2026-10-13）：扩展 0.5.47 让侧栏回复按 Markdown 显示：标题、加粗斜体、行内和多行代码、列表、引用、表格和链接都会渲染，不再显示原始符号；回复内容不会被当作 HTML，只有 http(s) 链接可以点击。浏览器工具行显示为“Browser · open”并附上访问的网址、操作或命令，不再显示 <code>mcp__chrome_use__chrome_use_open</code> 这类内部名称；只有空行的回复不再留下空白。扩展商店需等待 Google 审核。贡献者：@leeguooooo。</li>

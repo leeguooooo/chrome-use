@@ -50,6 +50,7 @@ pub const PROFILE_NOT_OPEN: &str = "profile not open: the Chrome profile this se
 /// none of them is retried by the relay-revive loop: the relay answered.
 pub const PROFILE_WINDOW_UNAVAILABLE: &str = "profile window unavailable";
 pub const FIRST_TAB_OUTCOME_UNKNOWN: &str = "first tab outcome unknown";
+pub const FIRST_TAB_REFUSED: &str = "first tab refused";
 pub const FIRST_TAB_CLEANUP_INCOMPLETE: &str = "first tab cleanup incomplete";
 pub const FIRST_TAB_SETUP_FAILED: &str = "first tab setup failed";
 
@@ -59,6 +60,7 @@ pub fn is_first_tab_refusal(error: &str) -> bool {
         || [
             PROFILE_WINDOW_UNAVAILABLE,
             FIRST_TAB_OUTCOME_UNKNOWN,
+            FIRST_TAB_REFUSED,
             FIRST_TAB_CLEANUP_INCOMPLETE,
             FIRST_TAB_SETUP_FAILED,
         ]
@@ -138,6 +140,14 @@ pub fn profile_window_verdict(windows: Result<Value, String>) -> Result<(), Stri
 pub fn create_failure(error: &str) -> String {
     if error.contains("could not open the background agent window") {
         return error.to_string();
+    }
+    // ab-connect's agent-window check throws these before it creates any
+    // window or tab, so the answer proves nothing was opened (#609).
+    if error.contains("refusing to create another") {
+        return format!(
+            "{FIRST_TAB_REFUSED}: the chrome-use extension declined to open a tab ({error}). \
+             Nothing was opened or attached."
+        );
     }
     format!(
         "{FIRST_TAB_OUTCOME_UNKNOWN}: Chrome did not confirm the tab chrome-use asked for \
@@ -367,6 +377,20 @@ mod tests {
         assert!(!e.contains("Nothing was opened"), "{e}");
         let refusal = "createTarget: could not open the background agent window";
         assert_eq!(create_failure(refusal), refusal);
+    }
+
+    #[test]
+    fn an_explicit_extension_refusal_says_nothing_was_opened() {
+        for cause in [
+            "CDP error (Target.createTarget): createTarget: agent window ownership is unknown; refusing to create another window",
+            "CDP error (Target.createTarget): createTarget: the shared agent window contains user tabs; move those tabs to your own window before continuing; refusing to create another agent window",
+        ] {
+            let e = create_failure(cause);
+            assert!(e.starts_with(FIRST_TAB_REFUSED), "{e}");
+            assert!(e.contains("Nothing was opened or attached"), "{e}");
+            assert!(!e.contains("may have been opened"), "{e}");
+            assert!(is_first_tab_refusal(&e), "{e}");
+        }
     }
 
     #[test]
