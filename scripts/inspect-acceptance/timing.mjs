@@ -11,8 +11,11 @@ const r = await A.evaluate(page.sid, `(async () => {
   const out = {};
   for (const [k, u] of Object.entries(urls)) out[k] = [];
   for (let i = 0; i < 40; i++) for (const [k, u] of Object.entries(urls)) { const t = performance.now(); try { await fetch(u); } catch {} out[k].push(performance.now() - t); }
-  const stat = a => { a.sort((x, y) => x - y); return { median: +a[20].toFixed(2), p10: +a[4].toFixed(2), p90: +a[36].toFixed(2) }; };
-  return Object.fromEntries(Object.entries(out).map(([k, a]) => [k, stat(a)]));
+  const stat = a => { const s = [...a].sort((x, y) => x - y); return { n: s.length, min: s[0], p10: s[4], median: s[20], p90: s[36], max: s.at(-1) }; };
+  return { samples: out, stats: Object.fromEntries(Object.entries(out).map(([k, a]) => [k, stat(a)])) };
 })()`);
-console.log(label, JSON.stringify(r));
-server.close(); b.close(); process.exit(0);
+// Raw samples are kept; equal medians are an observation, not a proof.
+const dir = path.dirname(new URL(import.meta.url).pathname);
+fs.writeFileSync(path.join(dir, `timing-${label}.json`), JSON.stringify({ label, chrome: b.version, extensionVersion: JSON.parse(fs.readFileSync(path.join(extDir, 'manifest.json'), 'utf8')).version, zipSha256: process.env.ZIP_SHA256 || null, ...r }, null, 2));
+console.log(label, JSON.stringify(r.stats));
+server.close(); b.close(); fs.rmSync(ud, { recursive: true, force: true }); process.exit(0);

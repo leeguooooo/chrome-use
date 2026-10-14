@@ -1,0 +1,87 @@
+{
+  "label": "v0556-zip",
+  "chrome": "Chrome/155.0.8059.39",
+  "extensionVersion": "0.5.56",
+  "extensionTree": "8aeca05bc0ea90041aa14dec7ece493a8aef68e6ca6768f6588b4627093bdbe8",
+  "zipSha256": "214f64763c34834b2c488a6ae2895e7a39fc38471d95f1c0343d9b066fc4cef5",
+  "host": "/Users/leo/inspect-accept/bin/current",
+  "loadedVersion": "0.5.56",
+  "relayVersion": "0.5.56",
+  "probe": {
+    "real/inspect-frame.html": {
+      "fetch": "err:TypeError",
+      "script": "error",
+      "link": "error"
+    },
+    "real/inspect-frame.js": {
+      "fetch": "err:TypeError",
+      "script": "error",
+      "link": "error"
+    },
+    "real/inspect-frame.css": {
+      "fetch": "err:TypeError",
+      "script": "error",
+      "link": "error"
+    },
+    "real/inspect-format.js": {
+      "fetch": "err:TypeError",
+      "script": "error",
+      "link": "error"
+    },
+    "real/background.js": {
+      "fetch": "err:TypeError",
+      "script": "error",
+      "link": "error"
+    },
+    "real/manifest.json": {
+      "fetch": "err:TypeError",
+      "script": "error",
+      "link": "error"
+    },
+    "bogus/inspect-frame.html": {
+      "fetch": "err:TypeError",
+      "script": "error",
+      "link": "error"
+    },
+    "bogus/inspect-frame.js": {
+      "fetch": "err:TypeError",
+      "script": "error",
+      "link": "error"
+    },
+    "bogus/inspect-frame.css": {
+      "fetch": "err:TypeError",
+      "script": "error",
+      "link": "error"
+    },
+    "bogus/inspect-format.js": {
+      "fetch": "err:TypeError",
+      "script": "error",
+      "link": "error"
+    },
+    "bogus/background.js": {
+      "fetch": "err:TypeError",
+      "script": "error",
+      "link": "error"
+    },
+    "bogus/manifest.json": {
+      "fetch": "err:TypeError",
+      "script": "error",
+      "link": "error"
+    },
+    "domMarker": false
+  },
+  "distinguishable": [],
+  "benchExit": 0,
+  "bench": [
+    "== relay (your real Chrome, zero JS patches)",
+    "  PASS sannysoft                          no failed/warn rows",
+    "  PASS creepjs                            0% headless, 0% stealth",
+    "  PASS incolumitas new-tests              all OK",
+    "  PASS browserscan                        19 normal rows, none abnormal",
+    "  PASS worker languages                   same zh-CN",
+    "  PASS cloudflare managed challenge       passed after ~8s (attempt 1/1)",
+    "  PASS cf-status on embedded Turnstile    not reported as a challenge",
+    "stealth bench: all checks passed"
+  ],
+  "ok": true
+}
