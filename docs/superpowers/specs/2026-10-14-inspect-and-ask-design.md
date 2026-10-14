@@ -91,3 +91,14 @@ Esc / navigation cancels; IME composition never submits; multi-select needs an e
 - Source mapping: React fiber `_debugSource` (src/main/browser/grab-guest-react-script.ts), cleans webpack/turbopack prefixes, drops paths matching a secret check. No build plugin; React 19 removed `_debugSource`, Vue not covered → our plugin requirement stays.
 - Payload (src/renderer/.../annotate/browser-annotation-output.ts): Markdown per annotation — intent, selector, source, React component chain, bounds, classes, text/nearby text/elements, filtered computed styles, full DOM path, HTML in a fence longer than any backtick run inside, page text clamped to 2048 chars, sanitized URL. Worth borrowing.
 - UX: multiple annotations collect in a tray, optional markup drawing on the screenshot, send-target popover, in-flight hold so an annotation isn't sent twice, delivered ones removed.
+
+## Other prior art (surveyed 2026-10-14)
+- code-inspector-plugin (zh-lx/code-inspector, 3.0k★, MIT) has an AI mode since 2.0 (`behavior.ai: claudeCode | codex | opencode`): the dev server spawns its own CLI/SDK agent with `--resume` on its own session id; localhost dev server only; SDK mode defaults to `permissionMode: 'bypassPermissions'`. It does not reach sessions the user already runs.
+- React Grab (aidenybai/react-grab, 7.7k★, MIT): copy element HTML + component stack to clipboard; `primitives` for custom pickers (hit testing, `data-*-ignore`, freezing page state).
+- Agentation (benjitaylor/agentation, 5.0k★, PolyForm Shield): in-app React component, multi-select/area select, pause animations; selector-based Markdown, agent greps for code; delivery by clipboard or local MCP endpoint.
+- MCP Pointer (etsd-tech/mcp-pointer, 598★, MIT): Chrome extension, Option+Click → WebSocket → local MCP server; React fiber mapping, notes React 19 breakage.
+- Frontman (frontman-ai/frontman, 715★, Apache-2.0/AGPL-3.0): dev-server middleware as MCP server with its own BYOK agent.
+- Editor-only: LocatorJS, click-to-component (`_debugSource`, broken on React 19), vite-plugin-vue-inspector.
+- Closed / sandboxed: Cursor Design Mode, Windsurf/Devin "Send element", v0 Design Mode, Bolt Visual edits, Stagewise (now its own agentic IDE), Onlook.
+
+Common gaps we target: all assume a localhost dev server; delivery is clipboard, local MCP/WebSocket, or a newly spawned agent; none delivers to the CLI session the user already runs; page text reaching the prompt is largely unhandled.
