@@ -169,7 +169,7 @@ export class InspectController {
     const selection = (instance.selectionRevision || 0) + 1;
     instance.selectionRevision = selection;
     let probes = elements.map(() => null);
-    if (typeof probeAttribute === 'string' && /^data-cu-probe-[a-f0-9]{16}$/.test(probeAttribute) && elements.length) {
+    if (typeof probeAttribute === 'string' && /^data-[a-z]{12}$/.test(probeAttribute) && elements.length) {
       try {
         const [result] = await this.chrome.scripting.executeScript({
           target: { tabId: instance.tabId, frameIds: [0] }, world: 'MAIN', func: inspectProbe, args: [probeAttribute],

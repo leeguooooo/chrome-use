@@ -96,13 +96,13 @@ async function startOn(page) {
   assert.ok(tabId, 'tab id for ' + url);
   const started = await A.evaluate(sw.sid, `globalThis.__chromeUseAcceptance.startInspect(${tabId}).then(r => JSON.stringify(r), e => 'ERR ' + e.message)`);
   assert.equal(started, '{"started":true}', 'startInspect: ' + started);
-  await waitFor(() => A.evaluate(page.sid, 'document.querySelector("chrome-use-inspect") !== null'), { label: 'picker host element' }).catch(async error => {
+  await waitFor(() => A.evaluate(page.sid, '[...document.documentElement.children].some(e => /^[A-Z]{5}-[A-Z]{6}$/.test(e.tagName))'), { label: 'picker host element' }).catch(async error => {
     results.logs.push('STATE ' + JSON.stringify(await hook(`inspectState(${tabId})`)));
-    results.logs.push('PAGE ' + await A.evaluate(page.sid, '[...document.documentElement.children].map(e => e.tagName).join(",") + " q=" + String(document.querySelector("chrome-use-inspect"))'));
-    { const { root } = await b.send('DOM.getDocument', { depth: -1, pierce: true }, page.sid); const paths = []; const walk = (n, trail) => { const t = trail + '/' + n.nodeName + (n.frameId ? '[' + n.frameId.slice(0, 6) + ']' : ''); if (n.nodeName === 'IFRAME' || n.nodeName === 'CHROME-USE-INSPECT') paths.push(t); for (const c of [...(n.children || []), ...(n.shadowRoots || []), ...(n.contentDocument ? [n.contentDocument] : [])]) walk(c, t); }; walk(root, ''); results.logs.push('TREE ' + paths.join(' | ')); }
+    results.logs.push('PAGE ' + await A.evaluate(page.sid, '[...document.documentElement.children].map(e => e.tagName).join(",") + " q=" + String([...document.documentElement.children].some(e => /^[A-Z]{5}-[A-Z]{6}$/.test(e.tagName)))'));
+    { const { root } = await b.send('DOM.getDocument', { depth: -1, pierce: true }, page.sid); const paths = []; const walk = (n, trail) => { const t = trail + '/' + n.nodeName + (n.frameId ? '[' + n.frameId.slice(0, 6) + ']' : ''); if (n.nodeName === 'IFRAME' || /^[A-Z]{5}-[A-Z]{6}$/.test(n.nodeName)) paths.push(t); for (const c of [...(n.children || []), ...(n.shadowRoots || []), ...(n.contentDocument ? [n.contentDocument] : [])]) walk(c, t); }; walk(root, ''); results.logs.push('TREE ' + paths.join(' | ')); }
     results.logs.push('TABS ' + JSON.stringify(await A.evaluate(sw.sid, 'chrome.tabs.query({}).then(ts => ts.map(t => [t.id, t.windowId, t.url, t.active]))')) + ' tabId=' + tabId);
     results.logs.push('TARGETS ' + (await A.targets()).map(t => t.type + ':' + t.targetId.slice(0, 6) + ':' + t.url.slice(0, 50)).join(' | ') + ' page=' + page.targetId.slice(0, 6));
-    results.logs.push('RAW ' + JSON.stringify(await b.send('Runtime.evaluate', { expression: 'document.querySelector("chrome-use-inspect") !== null', returnByValue: true }, page.sid)));
+    results.logs.push('RAW ' + JSON.stringify(await b.send('Runtime.evaluate', { expression: '[...document.documentElement.children].some(e => /^[A-Z]{5}-[A-Z]{6}$/.test(e.tagName))', returnByValue: true }, page.sid)));
     throw error;
   });
   return tabId;
@@ -150,6 +150,9 @@ await scenario('react-local-enable-bind-send', async () => {
   await waitFor(async () => /Save order/.test(await frameText(reactFrame)), { label: 'annotation card' });
   const text = await frameText(reactFrame);
   assert.match(text, /OrderForm\.jsx:\d+/, 'source location shown');
+  // Stealth: while the picker is open, nothing the page can read names chrome-use.
+  const branded = await A.evaluate(reactPage.sid, '(() => { const h = document.documentElement.outerHTML.replace(/<meta name=\"chrome-use-revision\"[^>]*>/, ""); const m = /chrome-use|data-cu-/i.exec(h); return m ? h.slice(Math.max(0, m.index - 160), m.index + 80) : null; })()');
+  assert.equal(branded, null, 'no branded names in the page DOM: ' + branded);
   await waitFor(() => A.evaluate(reactFrame.sid, '!!document.querySelector("img.thumb")'), { label: 'screenshot thumbnail' });
   await bindFirst(reactPage, reactFrame);
   const before = dms().length;
@@ -212,7 +215,7 @@ await scenario('pick-does-not-trigger-page', async () => {
   // Esc leaves picking; the page works normally again.
   await A.key(page.sid, 'Escape', 'Escape', 27);
   await A.key(page.sid, 'Escape', 'Escape', 27);
-  await waitFor(() => A.evaluate(page.sid, 'document.querySelector("chrome-use-inspect") === null'), { label: 'picker closed' });
+  await waitFor(() => A.evaluate(page.sid, '![...document.documentElement.children].some(e => /^[A-Z]{5}-[A-Z]{6}$/.test(e.tagName))'), { label: 'picker closed' });
   await pick(page, '.count-button');
   await waitFor(() => A.evaluate(page.sid, 'window.__count === 1'), { label: 'page click works after exit' });
   return { ok: true };
@@ -404,7 +407,7 @@ await scenario('reload-revokes-frame', async () => {
   await sleep(1500);
   const state = await hook(`inspectState(${tabId})`);
   assert.equal(state.instance, null, 'instance revoked by navigation');
-  assert.equal(await A.evaluate(page.sid, 'document.querySelector("chrome-use-inspect")'), null);
+  assert.equal(await A.evaluate(page.sid, '[...document.documentElement.children].some(e => /^[A-Z]{5}-[A-Z]{6}$/.test(e.tagName))'), false);
   return state;
 });
 

@@ -127,8 +127,8 @@ test('a late probe result never rolls the selection back', async () => {
   controller.queueCapture = () => {};
   const gates = [];
   chrome.scripting.executeScript = () => new Promise(resolve => gates.push(resolve));
-  const a = controller.updateSelection(instance, { elements: [{ ...element, selector: 'a' }], probeAttribute: 'data-cu-probe-0123456789abcdef', selectionSeq: 1 });
-  const b = controller.updateSelection(instance, { elements: [{ ...element, selector: 'b' }], probeAttribute: 'data-cu-probe-0123456789abcdef', selectionSeq: 2 });
+  const a = controller.updateSelection(instance, { elements: [{ ...element, selector: 'a' }], probeAttribute: 'data-abcdefghijkl', selectionSeq: 1 });
+  const b = controller.updateSelection(instance, { elements: [{ ...element, selector: 'b' }], probeAttribute: 'data-abcdefghijkl', selectionSeq: 2 });
   gates[1]([{ result: [] }]);
   await b;
   gates[0]([{ result: [] }]);

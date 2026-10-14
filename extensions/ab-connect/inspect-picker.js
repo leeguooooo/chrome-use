@@ -37,6 +37,10 @@
   // capture belongs to.
   let selectionSeq = 0;
 
+  // Names the page could see while the picker is open carry no brand and
+  // change every session: a random custom-element tag and probe attribute.
+  const letters = n => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => String.fromCharCode(97 + (b % 26))).join('');
+
   const send = message => chrome.runtime.sendMessage({ ...message, instanceId });
 
   function el(name, style, text) {
@@ -47,7 +51,7 @@
   }
 
   function buildUi() {
-    host = document.createElement('chrome-use-inspect');
+    host = document.createElement(`${letters(5)}-${letters(6)}`);
     host.style.cssText = `all:initial;position:fixed;inset:0;pointer-events:none;z-index:${Z};display:block;`;
     root = host.attachShadow({ mode: 'closed' });
     box = el('div', 'position:fixed;pointer-events:none;border:2px solid #2563eb;background:rgba(37,99,235,.08);border-radius:3px;display:none;box-sizing:border-box;');
@@ -113,7 +117,7 @@
   }
 
   async function report() {
-    const attribute = 'data-cu-probe-' + Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('');
+    const attribute = 'data-' + letters(12);
     selected.forEach((node, i) => node.setAttribute(attribute, String(i)));
     try {
       const revision = document.querySelector('meta[name="chrome-use-revision"]')?.getAttribute('content') || null;

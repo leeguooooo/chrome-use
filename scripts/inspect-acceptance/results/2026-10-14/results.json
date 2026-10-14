@@ -1,12 +1,12 @@
 {
-  "startedAt": "2026-10-14T12:18:55.443Z",
+  "startedAt": "2026-10-14T15:17:35.054Z",
   "scenarios": [
     {
       "name": "react-local-enable-bind-send",
       "ok": true,
-      "ms": 4457,
+      "ms": 4440,
       "detail": {
-        "tabId": 1014647311,
+        "tabId": 310464727,
         "dm": [
           "[chrome-use Inspect & Ask] from the user's browser",
           "Instruction (typed by the user): Make the save button rounded and blue",
@@ -15,13 +15,13 @@
           "1. button \"Save order\" — src/OrderForm.jsx:6:5 (verified) <OrderForm>",
           "Revision: fixture-rev-1 (from page meta, unverified; may differ from your checkout)"
         ],
-        "ctxDir": "/Users/leo/inspect-accept/home/.chrome-use/inspect/ctx/7a268c2463ed71dee3daf92febd3e462"
+        "ctxDir": "/Users/leo/inspect-accept/home/.chrome-use/inspect/ctx/1ffa1c7a5c08f480b7653241d31d00b1"
       }
     },
     {
       "name": "multi-select-and-pause",
       "ok": true,
-      "ms": 6315,
+      "ms": 6325,
       "detail": {
         "cards": 2,
         "paused": false,
@@ -31,7 +31,7 @@
     {
       "name": "pick-does-not-trigger-page",
       "ok": true,
-      "ms": 17305,
+      "ms": 17285,
       "detail": {
         "ok": true
       }
@@ -39,7 +39,7 @@
     {
       "name": "copied-frame-and-flood-refused",
       "ok": true,
-      "ms": 1756,
+      "ms": 1762,
       "detail": {
         "frames": 2,
         "authorized": 1,
@@ -49,7 +49,7 @@
     {
       "name": "overlay-blocks-send",
       "ok": true,
-      "ms": 1074,
+      "ms": 1076,
       "detail": {
         "ok": true
       }
@@ -57,7 +57,7 @@
     {
       "name": "background-tab-capture-dropped",
       "ok": true,
-      "ms": 659,
+      "ms": 637,
       "detail": {
         "result": {
           "images": 1
@@ -67,9 +67,9 @@
     {
       "name": "unknown-delivery-not-resent",
       "ok": true,
-      "ms": 37916,
+      "ms": 37575,
       "detail": {
-        "tabId": 1014647323,
+        "tabId": 310464739,
         "text": [
           "Check status",
           "New batch",
@@ -80,7 +80,7 @@
     {
       "name": "stored-and-wake-shown-apart",
       "ok": true,
-      "ms": 408,
+      "ms": 564,
       "detail": {
         "ok": true
       }
@@ -88,7 +88,7 @@
     {
       "name": "note-only-immediate-send",
       "ok": true,
-      "ms": 1106,
+      "ms": 1108,
       "detail": {
         "ok": true
       }
@@ -96,7 +96,7 @@
     {
       "name": "vue-source-and-session",
       "ok": true,
-      "ms": 2466,
+      "ms": 2323,
       "detail": {
         "text": "Inspect & Ask\nlocal dev\n⏸\n✕\n1<CartCard> button \"Checkout\"\n/Users/leo/inspect-accept/vue-app/src/CartCard.vue:4:5\nOpen in editor\n attach screenshot\nremove\n→ codex-cccc3333 @ /Users/leo/inspect-accept/v"
       }
@@ -104,7 +104,7 @@
     {
       "name": "test-env-marks-and-revision",
       "ok": true,
-      "ms": 1817,
+      "ms": 1804,
       "detail": {
         "line": "1. button \"Save order\" — src/OrderForm.jsx:6:5 (verified)"
       }
@@ -112,7 +112,7 @@
     {
       "name": "prod-no-marks-consent-setup",
       "ok": true,
-      "ms": 1642,
+      "ms": 1785,
       "detail": {
         "dm": [
           "[chrome-use Inspect & Ask] from the user's browser",
@@ -125,7 +125,7 @@
     {
       "name": "copy-without-host",
       "ok": true,
-      "ms": 244,
+      "ms": 252,
       "detail": {
         "head": "## Inspect & Ask\n\n**Instruction (typed by the user):** Make the save button rounded and bluepStored only\n**Page:** `http"
       }
@@ -133,7 +133,7 @@
     {
       "name": "reload-revokes-frame",
       "ok": true,
-      "ms": 1878,
+      "ms": 1871,
       "detail": {
         "hostReady": true,
         "instance": null
@@ -152,6 +152,6 @@
     "LOG %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold"
   ],
   "extensionId": "ciiljdlhdpfckdcfkphgmfalanpdejep",
-  "finishedAt": "2026-10-14T12:20:19.419Z",
+  "finishedAt": "2026-10-14T15:18:58.448Z",
   "dms": 8
 }

@@ -71,7 +71,7 @@ export function api(b) {
     let found = null;
     const walk = (node, inPicker) => {
       if (!node || found) return;
-      const picker = inPicker || node.nodeName === 'CHROME-USE-INSPECT';
+      const picker = inPicker || /^[A-Z]{5}-[A-Z]{6}$/.test(node.nodeName);
       if (picker && node.nodeName === 'IFRAME') { found = node; return; }
       for (const child of [...(node.children || []), ...(node.shadowRoots || [])]) walk(child, picker);
     };
