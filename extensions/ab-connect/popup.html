@@ -55,7 +55,7 @@
     <div class="logo"><img src="icons/icon128.png" alt="" /></div>
     <div>
       <div class="title">chrome-use</div>
-      <div class="tag">Local browser automation bridge</div>
+      <div class="tag" data-i18n="popup_tagline">Local browser automation bridge</div>
     </div>
   </header>
 
@@ -63,32 +63,32 @@
     <div class="status">
       <span id="dot" class="dot"></span>
       <div class="grow">
-        <div class="label" id="statusLabel">Checking…</div>
-        <div class="sub" id="statusSub">saying hi to your local CLI</div>
+        <div class="label" id="statusLabel" data-i18n="popup_status_checking">Checking…</div>
+        <div class="sub" id="statusSub" data-i18n="popup_status_checking_detail">saying hi to your local CLI</div>
       </div>
       <span id="tabPill" class="pill hidden"></span>
     </div>
 
-    <p class="desc">Your local <strong>chrome-use</strong> CLI drives your own logged-in Chrome tabs, on this machine, only when you ask.</p>
+    <p class="desc"><span data-i18n="popup_desc_before_name">Your local </span><strong>chrome-use</strong><span data-i18n="popup_desc_after_name"> CLI drives your own logged-in Chrome tabs, on this machine, only when you ask.</span></p>
 
     <div class="hint" id="hint">
-      <span id="hintText">Check the local CLI connection:</span>
+      <span id="hintText" data-i18n="popup_hint_check">Check the local CLI connection:</span>
       <code id="hintCommand">chrome-use status</code>
     </div>
 
     <p class="desc" id="inspectError" hidden></p>
     <div class="actions">
-      <button class="primary" data-action="inspect" title="Pick an element on this page and send a change request to your coding agent (Alt+Shift+C)">Inspect element</button>
-      <button data-action="options">Settings</button>
+      <button class="primary" data-action="inspect" title="Pick an element on this page and send a change request to your coding agent (Alt+Shift+C)" data-i18n="popup_inspect" data-i18n-title="popup_inspect_title">Inspect element</button>
+      <button data-action="options" data-i18n="popup_settings">Settings</button>
     </div>
   </main>
 
   <footer>
-    <span class="privacy">Runs locally · no tracking</span>
-    <a data-href="https://chrome-use.leeguoo.com">Docs</a>
+    <span class="privacy" data-i18n="popup_privacy">Runs locally · no tracking</span>
+    <a data-href="https://chrome-use.leeguoo.com" data-i18n="popup_docs">Docs</a>
     <a id="repo" data-href="https://github.com/leeguooooo/chrome-use">GitHub</a>
   </footer>
 
-  <script src="popup.js"></script>
+  <script type="module" src="popup.js"></script>
 </body>
 </html>

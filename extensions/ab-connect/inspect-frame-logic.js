@@ -1,10 +1,12 @@
 // Pure helpers for the Inspect & Ask input frame (unit-tested in Node).
 
+import { t, messageMap } from './i18n.js';
+
 export function visibilityVerdict(reply) {
-  if (!reply || reply.timeout) return { ok: false, message: 'Could not confirm the panel is visible. Try again.' };
-  if (reply.isVisible === undefined) return { ok: false, message: 'This browser cannot confirm the panel is visible, so sending is off. Use Copy instead.' };
-  if (reply.documentVisibility !== 'visible') return { ok: false, message: 'The page is hidden. Bring it to the front and try again.' };
-  if (reply.isVisible !== true || !(reply.ratio >= 0.99)) return { ok: false, message: 'The panel is covered, faded or moved. Scroll, or press the shortcut again.' };
+  if (!reply || reply.timeout) return { ok: false, message: t('inspect_visibility_unconfirmed') };
+  if (reply.isVisible === undefined) return { ok: false, message: t('inspect_visibility_unsupported') };
+  if (reply.documentVisibility !== 'visible') return { ok: false, message: t('inspect_visibility_page_hidden') };
+  if (reply.isVisible !== true || !(reply.ratio >= 0.99)) return { ok: false, message: t('inspect_visibility_covered') };
   return { ok: true };
 }
 
@@ -45,22 +47,25 @@ export const LOCKED_STATES = ['sending', 'sent', 'stored', 'unknown', 'unconfirm
 // facts from ocs; "stored" never means the agent has read or acted on it.
 export function deliveryMessage(result) {
   const state = result?.state;
-  const wake = result?.wake ? ` (wake: ${result.wake})` : '';
+  const wake = result?.wake;
   switch (state) {
-    case 'sent': return { tone: 'ok', locked: true, text: `Sent to the session${wake}. It is in the agent's queue; watch the agent for its answer.${result?.warning ? ' Note: ' + result.warning : ''}` };
-    case 'stored': return { tone: 'warn', locked: true, text: `Stored in ocs, but the session was not woken${wake}. Do not resend; the agent sees it when it next reads its inbox.` };
-    case 'unknown': return { tone: 'warn', locked: true, text: `Outcome unknown: ocs may have stored it${result?.warning ? ` (${result.warning})` : ''}. Not resent. Check status before starting a new batch.` };
-    case 'unconfirmed': return { tone: 'warn', locked: true, text: `No confirmation from the native host${result?.error ? ` (${result.error})` : ''}. Not resent. Check status once chrome-use is connected.` };
-    case 'noBinding': return { tone: 'bad', locked: false, text: 'Pick a project for this site first.' };
-    case 'noSession': return { tone: 'bad', locked: false, text: 'No running agent session for this project. Start one, then press Check again.' };
-    case 'sessionChanged': return { tone: 'bad', locked: false, text: 'The bound session is gone or moved to another folder. Pick the session again.' };
-    case 'upgradeRequired': return { tone: 'bad', locked: false, text: 'This site has path-specific targets or a pending claim that this chrome-use version cannot apply. Nothing was sent. Upgrade with `chrome-use upgrade`.' };
+    case 'sent': {
+      const sent = wake ? t('inspect_delivery_sent_wake', wake) : t('inspect_delivery_sent');
+      return { tone: 'ok', locked: true, text: result?.warning ? t('inspect_delivery_with_note', sent, result.warning) : sent };
+    }
+    case 'stored': return { tone: 'warn', locked: true, text: wake ? t('inspect_delivery_stored_wake', wake) : t('inspect_delivery_stored') };
+    case 'unknown': return { tone: 'warn', locked: true, text: result?.warning ? t('inspect_delivery_unknown_warning', result.warning) : t('inspect_delivery_unknown') };
+    case 'unconfirmed': return { tone: 'warn', locked: true, text: result?.error ? t('inspect_delivery_unconfirmed_error', result.error) : t('inspect_delivery_unconfirmed') };
+    case 'noBinding': return { tone: 'bad', locked: false, text: t('inspect_delivery_no_binding') };
+    case 'noSession': return { tone: 'bad', locked: false, text: t('inspect_delivery_no_session') };
+    case 'sessionChanged': return { tone: 'bad', locked: false, text: t('inspect_delivery_session_changed') };
+    case 'upgradeRequired': return { tone: 'bad', locked: false, text: t('inspect_delivery_upgrade_required') };
     case 'targetChanged': return { tone: 'bad', locked: false, text: result?.reason === 'pageChanged'
-      ? 'The page moved to another path since you reviewed it. Nothing was sent. Check the target and the selected elements, then send again.'
-      : 'The target changed since the panel showed it (another session took over, it was unbound, or the dev server moved). Nothing was sent. Check the target, then send again.' };
-    case 'noOcs': return { tone: 'bad', locked: false, text: 'ocs is not installed. Install it with the command above, then send again.' };
-    case 'failed': return { tone: 'bad', locked: false, text: `Delivery failed${result?.error ? `: ${result.error}` : ''}. Nothing was stored.` };
-    default: return { tone: 'warn', locked: true, text: 'Unrecognized delivery result. Not resent.' };
+      ? t('inspect_delivery_page_changed')
+      : t('inspect_delivery_target_changed') };
+    case 'noOcs': return { tone: 'bad', locked: false, text: t('inspect_delivery_no_ocs') };
+    case 'failed': return { tone: 'bad', locked: false, text: result?.error ? t('inspect_delivery_failed_error', result.error) : t('inspect_delivery_failed') };
+    default: return { tone: 'warn', locked: true, text: t('inspect_delivery_unrecognized') };
   }
 }
 
@@ -76,45 +81,45 @@ export function scopeLabel(origin, pathScope) {
   return host + (pathScope && pathScope !== '/' ? pathScope : '');
 }
 
-const EVIDENCE = {
-  config: 'project config',
-  'config-wildcard': 'project config (wildcard)',
-  'dev-server-port': 'dev server',
-  'previous-binding': 'used before',
-  'ocs-session': 'agent session folder',
-};
+const EVIDENCE = messageMap({
+  config: 'inspect_evidence_config',
+  'config-wildcard': 'inspect_evidence_config_wildcard',
+  'dev-server-port': 'inspect_evidence_dev_server',
+  'previous-binding': 'inspect_evidence_previous',
+  'ocs-session': 'inspect_evidence_session_folder',
+});
 
 export function evidenceLabels(pair) {
   const out = (pair?.evidence || []).map(e => EVIDENCE[e] || e);
-  if (pair?.matchedPaths) out.push(`${pair.matchedPaths} source file${pair.matchedPaths === 1 ? '' : 's'} matched`);
+  if (pair?.matchedPaths) out.push(pair.matchedPaths === 1 ? t('inspect_evidence_matched_one', pair.matchedPaths) : t('inspect_evidence_matched_many', pair.matchedPaths));
   return out;
 }
 
 // Page revision is a hint; the relation is reported as git sees it locally.
 export function revisionText(revision) {
   switch (revision?.relation) {
-    case 'same': return 'deployed build is your local HEAD';
-    case 'ahead': return `local is ${revision.ahead} commit${revision.ahead === 1 ? '' : 's'} ahead of the deployed build`;
-    case 'behind': return `local is ${revision.behind} commit${revision.behind === 1 ? '' : 's'} behind the deployed build`;
-    case 'diverged': return `local and deployed build diverged (${revision.ahead} ahead, ${revision.behind} behind)`;
-    case 'unknown': return 'deployed build not found in this checkout';
+    case 'same': return t('inspect_revision_same');
+    case 'ahead': return revision.ahead === 1 ? t('inspect_revision_ahead_one', revision.ahead) : t('inspect_revision_ahead_many', revision.ahead);
+    case 'behind': return revision.behind === 1 ? t('inspect_revision_behind_one', revision.behind) : t('inspect_revision_behind_many', revision.behind);
+    case 'diverged': return t('inspect_revision_diverged', revision.ahead, revision.behind);
+    case 'unknown': return t('inspect_revision_unknown');
     default: return null;
   }
 }
 
 export function reasonText(reason, binding) {
-  const who = binding?.sessionLabel || binding?.sessionId || 'The session';
+  const who = binding?.sessionLabel || binding?.sessionId || t('inspect_reason_session_default');
   switch (reason) {
-    case 'sessionEnded': return `${who} is no longer running. Choose where requests go now.`;
-    case 'sessionMoved': return `${who} now works in another folder. Choose where requests go now.`;
-    case 'portMoved': return 'The dev server on this port now runs from another folder. Choose where requests go now.';
-    case 'rootMissing': return 'The bound project folder is gone or moved. Choose where requests go now.';
+    case 'sessionEnded': return t('inspect_reason_session_ended', who);
+    case 'sessionMoved': return t('inspect_reason_session_moved', who);
+    case 'portMoved': return t('inspect_reason_port_moved');
+    case 'rootMissing': return t('inspect_reason_root_missing');
     default: return null;
   }
 }
 
-export function targetLabel(t) {
-  return `${t?.sessionLabel || t?.sessionId || 'session'} @ ${t?.root || '?'}`;
+export function targetLabel(target) {
+  return `${target?.sessionLabel || target?.sessionId || t('inspect_session_fallback')} @ ${target?.root || '?'}`;
 }
 
 // A literal argument for the user's shell. Page URLs are page-controlled, so a

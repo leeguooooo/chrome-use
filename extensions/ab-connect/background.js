@@ -22,6 +22,7 @@ import { TurnNotifications, openFromNotification } from './turn-notifications.js
 import { AgentPanelBridge, isAgentPanelSender, INSPECT_OPERATIONS } from './agent-panel-bridge.js';
 import { InspectController } from './inspect-controller.js';
 import { configureAgentPanel } from './sidepanel-entry.js';
+import { t } from './i18n.js';
 import { extensionInstallIdentity } from './relay-identity.js';
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
 import {
@@ -717,10 +718,10 @@ function notifyConnChange(connected) {
     chrome.notifications.create('ab-conn-' + Date.now(), {
       type: 'basic',
       iconUrl: 'icons/icon128.png',
-      title: connected ? 'chrome-use connected' : 'chrome-use disconnected',
+      title: connected ? t('bg_notify_connected_title') : t('bg_notify_disconnected_title'),
       message: connected
-        ? 'Bridged to your local CLI — ready to drive your tabs.'
-        : 'The bridge to your local CLI dropped.',
+        ? t('bg_notify_connected_message')
+        : t('bg_notify_disconnected_message'),
       silent: true,
     });
   } catch {}

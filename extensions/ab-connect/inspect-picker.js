@@ -42,6 +42,8 @@
   const letters = n => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => String.fromCharCode(97 + (b % 26))).join('');
 
   const send = message => chrome.runtime.sendMessage({ ...message, instanceId });
+  // A content script cannot import i18n.js; chrome.i18n works here directly.
+  const t = (key, ...substitutions) => chrome.i18n.getMessage(key, substitutions.map(String)) || key;
 
   function el(name, style, text) {
     const node = document.createElement(name);
@@ -58,7 +60,7 @@
     tag = el('div', 'position:fixed;z-index:1;pointer-events:none;background:#111827;color:#f9fafb;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;padding:3px 7px;border-radius:4px;display:none;max-width:460px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;');
     marquee = el('div', 'position:fixed;z-index:1;pointer-events:none;border:1px dashed #2563eb;background:rgba(37,99,235,.06);display:none;');
     const hint = el('div', 'position:fixed;left:50%;top:12px;margin-left:-230px;width:460px;text-align:center;pointer-events:none;background:#111827;color:#f9fafb;font:12px/1.5 system-ui,sans-serif;padding:6px 10px;border-radius:6px;opacity:.92;',
-      'Click an element · Shift+click or drag to select several · ↑/↓ parent/child · P pause animations · Esc exit');
+      t('inspect_picker_hint'));
     hint.dataset.role = 'hint';
     root.append(box, tag, marquee, hint);
     document.documentElement.append(host);

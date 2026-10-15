@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Inspect &amp; Ask</title>
+  <title data-i18n="inspect_title">Inspect &amp; Ask</title>
   <link rel="stylesheet" href="inspect-frame.css">
 </head>
 <body>
   <main id="app" aria-live="polite">
     <header class="bar">
-      <strong>Inspect &amp; Ask</strong>
+      <strong data-i18n="inspect_title">Inspect &amp; Ask</strong>
       <span id="env" class="badge"></span>
       <span class="grow"></span>
-      <button id="pause" class="icon" title="Pause animations (P)" aria-pressed="false">⏸</button>
-      <button id="close" class="icon" title="Close (Esc)">✕</button>
+      <button id="pause" class="icon" title="Pause animations (P)" data-i18n-title="inspect_pause_title" aria-pressed="false">⏸</button>
+      <button id="close" class="icon" title="Close (Esc)" data-i18n-title="inspect_close_title">✕</button>
     </header>
-    <section id="connecting" class="pad muted">Connecting…</section>
+    <section id="connecting" class="pad muted" data-i18n="inspect_connecting">Connecting…</section>
     <section id="view" hidden></section>
   </main>
   <canvas id="drawCanvas" hidden></canvas>

@@ -1,7 +1,13 @@
+import './test-i18n.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
+import { t, applyI18n } from './i18n.js'
+
+// popup.js is a module; vm runs it as a script with its i18n import supplied.
+const source = readFileSync(new URL('./popup.js', import.meta.url), 'utf8')
+  .replace(/^import \{ t, applyI18n \} from '\.\/i18n\.js'\n/m, '')
 
 function popup(initial, extensionAvailable = true, deferred = false) {
   const callbacks = [], timers = []
@@ -21,9 +27,10 @@ function popup(initial, extensionAvailable = true, deferred = false) {
       onMessage: { addListener(fn) { changed = fn } },
     } },
     setTimeout(callback, delay) { timers.push({ callback, delay }) },
+    t, applyI18n,
   }
   if (!extensionAvailable) delete context.chrome
-  vm.runInNewContext(readFileSync(new URL('./popup.js', import.meta.url), 'utf8'), context)
+  vm.runInNewContext(source, context)
   return { nodes, change(state) { changed({ type: 'ab-host-state', ...state }) },
     reply(index, state) { callbacks[index](state) }, pollAgain() { timers.find(t => t.delay === 700).callback() } }
 }
@@ -76,4 +83,14 @@ test('an older query response cannot overwrite the latest query response', () =>
   p.reply(1, { connected: true, connectionState: 'connected' })
   p.reply(0, { connected: false, connectionState: 'disconnected' })
   assert.equal(p.nodes.get('statusLabel').textContent, 'Connected')
+})
+
+test('popup text follows the Chrome UI language', async () => {
+  const { installI18n } = await import('./test-i18n.js')
+  installI18n('zh_CN')
+  try {
+    const p = popup({ connected: true, connectionState: 'connected', tabCount: 2 })
+    assert.equal(p.nodes.get('statusLabel').textContent, '已连接')
+    assert.equal(p.nodes.get('tabPill').textContent, '2 个标签页')
+  } finally { installI18n('en') }
 })

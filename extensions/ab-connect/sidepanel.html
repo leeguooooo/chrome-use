@@ -3,99 +3,99 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>chrome-use assistant</title>
+  <title data-i18n="sidepanel_page_title">chrome-use assistant</title>
   <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
   <main id="chatView" class="chat-view">
     <header class="toolbar">
       <img src="icons/icon32.png" width="20" height="20" alt="">
-      <label class="sr-only" for="conversation">Conversation</label>
-      <button id="conversationButton" class="conversation-picker" type="button" aria-haspopup="listbox" aria-expanded="false"><span id="conversationTitle">New conversation</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
-      <select id="conversation" class="sr-only" tabindex="-1" aria-hidden="true"><option value="">New conversation</option></select>
-      <button id="newChat" class="icon" type="button" title="New conversation" aria-label="New conversation"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.4 3.6a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>
-      <button id="deleteChat" class="icon" type="button" title="Delete conversation" aria-label="Delete conversation" hidden><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg></button>
-      <button id="refresh" class="icon" type="button" title="Refresh" aria-label="Refresh"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg></button>
-      <button id="agentsTab" class="icon" type="button" title="Agents &amp; models" aria-label="Agents and models" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg></button>
+      <label class="sr-only" for="conversation" data-i18n="sidepanel_conversation_label">Conversation</label>
+      <button id="conversationButton" class="conversation-picker" type="button" aria-haspopup="listbox" aria-expanded="false"><span id="conversationTitle" data-i18n="sidepanel_new_conversation">New conversation</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+      <select id="conversation" class="sr-only" tabindex="-1" aria-hidden="true"><option value="" data-i18n="sidepanel_new_conversation">New conversation</option></select>
+      <button id="newChat" class="icon" type="button" title="New conversation" aria-label="New conversation" data-i18n-title="sidepanel_new_conversation" data-i18n-aria-label="sidepanel_new_conversation"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.4 3.6a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>
+      <button id="deleteChat" class="icon" type="button" title="Delete conversation" aria-label="Delete conversation" data-i18n-title="sidepanel_delete_conversation" data-i18n-aria-label="sidepanel_delete_conversation" hidden><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg></button>
+      <button id="refresh" class="icon" type="button" title="Refresh" aria-label="Refresh" data-i18n-title="sidepanel_refresh" data-i18n-aria-label="sidepanel_refresh"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg></button>
+      <button id="agentsTab" class="icon" type="button" title="Agents &amp; models" aria-label="Agents and models" data-i18n-title="sidepanel_agents_and_models_title" data-i18n-aria-label="sidepanel_agents_and_models_label" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg></button>
     </header>
     <div id="conversationMenu" class="conversation-menu" hidden>
-      <div class="scope" role="tablist" aria-label="Which conversations">
-        <button id="scopeSite" type="button" role="tab">This site</button>
-        <button id="scopeAll" type="button" role="tab">All</button>
+      <div class="scope" role="tablist" aria-label="Which conversations" data-i18n-aria-label="sidepanel_conversation_scope">
+        <button id="scopeSite" type="button" role="tab" data-i18n="sidepanel_scope_this_site">This site</button>
+        <button id="scopeAll" type="button" role="tab" data-i18n="sidepanel_scope_all">All</button>
       </div>
-      <div id="conversationItems" class="conversation-items" role="listbox" aria-label="Conversations"></div>
+      <div id="conversationItems" class="conversation-items" role="listbox" aria-label="Conversations" data-i18n-aria-label="sidepanel_conversations"></div>
     </div>
-    <p id="connection" class="connection" role="status">Checking local connection…</p>
+    <p id="connection" class="connection" role="status" data-i18n="sidepanel_checking_connection">Checking local connection…</p>
     <div id="notice" class="notice" role="alert" hidden></div>
-    <section id="deleteConfirm" class="delete-confirm" role="alertdialog" aria-label="Delete conversation" hidden>
-      <p><strong>Delete this conversation?</strong></p>
-      <p class="hint">Removes its panel history, the agent CLI's own session files and its browser tabs from this computer. This cannot be undone.</p>
-      <div class="actions"><button id="confirmDelete" class="danger" type="button">Delete</button><button id="cancelDelete" class="quiet" type="button">Keep</button></div>
+    <section id="deleteConfirm" class="delete-confirm" role="alertdialog" aria-label="Delete conversation" data-i18n-aria-label="sidepanel_delete_conversation" hidden>
+      <p><strong data-i18n="sidepanel_delete_confirm_title">Delete this conversation?</strong></p>
+      <p class="hint" data-i18n="sidepanel_delete_confirm_detail">Removes its panel history, the agent CLI's own session files and its browser tabs from this computer. This cannot be undone.</p>
+      <div class="actions"><button id="confirmDelete" class="danger" type="button" data-i18n="sidepanel_delete">Delete</button><button id="cancelDelete" class="quiet" type="button" data-i18n="sidepanel_keep">Keep</button></div>
     </section>
-    <div id="status" class="conversation-status"><span id="phase">Ready</span><span id="control" class="control" hidden></span><span id="effectiveModel"></span></div>
-    <div id="transcript" class="transcript" tabindex="0" aria-label="Conversation transcript">
+    <div id="status" class="conversation-status"><span id="phase" data-i18n="sidepanel_phase_ready">Ready</span><span id="control" class="control" hidden></span><span id="effectiveModel"></span></div>
+    <div id="transcript" class="transcript" tabindex="0" aria-label="Conversation transcript" data-i18n-aria-label="sidepanel_transcript">
       <div id="empty" class="empty">
         <img src="icons/icon48.png" width="40" height="40" alt="">
-        <h2>What should the browser do?</h2>
-        <p>Describe a page or a task. The agent works in its own browser session with your local CLI login.</p>
-        <div id="suggestions" class="suggestions" aria-label="Example tasks">
-          <button type="button" data-prompt="Summarize this page in a few bullet points.">Summarize this page</button>
-          <button type="button" data-prompt="Extract the main table or list on this page as a Markdown table.">Extract a table from this page</button>
-          <button type="button" data-prompt="Find the important links on this page and explain where each one goes.">Explain the links on this page</button>
+        <h2 data-i18n="sidepanel_empty_title">What should the browser do?</h2>
+        <p data-i18n="sidepanel_empty_detail">Describe a page or a task. The agent works in its own browser session with your local CLI login.</p>
+        <div id="suggestions" class="suggestions" aria-label="Example tasks" data-i18n-aria-label="sidepanel_example_tasks">
+          <button type="button" data-prompt="Summarize this page in a few bullet points." data-i18n="sidepanel_suggest_summarize">Summarize this page</button>
+          <button type="button" data-prompt="Extract the main table or list on this page as a Markdown table." data-i18n="sidepanel_suggest_table">Extract a table from this page</button>
+          <button type="button" data-prompt="Find the important links on this page and explain where each one goes." data-i18n="sidepanel_suggest_links">Explain the links on this page</button>
         </div>
       </div>
-      <div id="working" class="working" role="status" aria-label="The agent is working" hidden><span></span><span></span><span></span></div>
+      <div id="working" class="working" role="status" aria-label="The agent is working" data-i18n-aria-label="sidepanel_agent_working" hidden><span></span><span></span><span></span></div>
     </div>
-    <button id="latest" class="latest" type="button" hidden>↓ Latest</button>
-    <section id="requests" class="requests" aria-label="Agent requests"></section>
-    <section id="queuedMessages" class="queued-messages" aria-label="Queued messages" hidden></section>
+    <button id="latest" class="latest" type="button" data-i18n="sidepanel_jump_latest" hidden>↓ Latest</button>
+    <section id="requests" class="requests" aria-label="Agent requests" data-i18n-aria-label="sidepanel_agent_requests"></section>
+    <section id="queuedMessages" class="queued-messages" aria-label="Queued messages" data-i18n-aria-label="sidepanel_queued_messages" hidden></section>
     <section id="pendingRecovery" class="requests recovery" hidden>
-      <p class="hint">Delivery is unconfirmed. Retry uses the same message ID. Clearing this warning does not cancel a task that may have reached the agent.</p>
-      <button id="retryPending" class="quiet" type="button">Retry same message</button>
-      <button id="clearPending" class="quiet" type="button">Clear send warning</button>
+      <p class="hint" data-i18n="sidepanel_recovery_hint">Delivery is unconfirmed. Retry uses the same message ID. Clearing this warning does not cancel a task that may have reached the agent.</p>
+      <button id="retryPending" class="quiet" type="button" data-i18n="sidepanel_retry_same_message">Retry same message</button>
+      <button id="clearPending" class="quiet" type="button" data-i18n="sidepanel_clear_send_warning">Clear send warning</button>
     </section>
     <form id="composer" class="composer">
       <div class="input-box">
-        <div id="pageChip" class="page-chip" hidden><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg><span id="pageTitle"></span><button id="pageDetach" type="button" title="Don't send this page" aria-label="Don't send this page">×</button></div>
-        <div id="skillPicker" class="skill-picker" role="listbox" aria-label="Skills" hidden></div>
+        <div id="pageChip" class="page-chip" hidden><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg><span id="pageTitle"></span><button id="pageDetach" type="button" title="Don't send this page" aria-label="Don't send this page" data-i18n-title="sidepanel_page_detach" data-i18n-aria-label="sidepanel_page_detach">×</button></div>
+        <div id="skillPicker" class="skill-picker" role="listbox" aria-label="Skills" data-i18n-aria-label="sidepanel_skills" hidden></div>
         <div id="attachmentDrafts" class="attachment-images" hidden></div>
         <input id="imageFiles" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif" multiple hidden>
-        <label class="sr-only" for="message">Message</label>
-        <textarea id="message" rows="2" placeholder="Describe a browser task…" maxlength="32768" title="Enter to send · Ctrl/⌘+Enter to stop and send · Shift+Enter for a new line"></textarea>
+        <label class="sr-only" for="message" data-i18n="sidepanel_message_label">Message</label>
+        <textarea id="message" rows="2" placeholder="Describe a browser task…" maxlength="32768" title="Enter to send · Ctrl/⌘+Enter to stop and send · Shift+Enter for a new line" data-i18n-placeholder="sidepanel_message_placeholder" data-i18n-title="sidepanel_message_keys"></textarea>
         <div class="composer-controls">
-          <button id="attachImages" class="quiet" type="button" hidden>Attach images</button>
-          <span id="newOptions" class="new-options" aria-label="New conversation options">
+          <button id="attachImages" class="quiet" type="button" data-i18n="sidepanel_attach_images" hidden>Attach images</button>
+          <span id="newOptions" class="new-options" aria-label="New conversation options" data-i18n-aria-label="sidepanel_new_conversation_options">
             <details class="more">
-              <summary title="More options" aria-label="More options">＋</summary>
+              <summary title="More options" aria-label="More options" data-i18n-title="sidepanel_more_options" data-i18n-aria-label="sidepanel_more_options">＋</summary>
               <div class="more-body">
-                <label>Custom model ID<input id="customModel" placeholder="Overrides the model menu" autocomplete="off"></label>
-                <button id="inspectAgent" class="quiet" type="button">Reload models from CLI</button>
-                <p id="modelStatus" class="hint">CLI model access has not been checked.</p>
-                <label>Custom program<input id="executable" placeholder="Use the discovered program" autocomplete="off"></label>
-                <p class="hint">Your CLI may send tasks and page observations to its configured model service. Conversation history stays on this computer.</p>
+                <label><span data-i18n="sidepanel_custom_model">Custom model ID</span><input id="customModel" placeholder="Overrides the model menu" data-i18n-placeholder="sidepanel_custom_model_placeholder" autocomplete="off"></label>
+                <button id="inspectAgent" class="quiet" type="button" data-i18n="sidepanel_reload_models">Reload models from CLI</button>
+                <p id="modelStatus" class="hint" data-i18n="sidepanel_model_status_unchecked">CLI model access has not been checked.</p>
+                <label><span data-i18n="sidepanel_custom_program">Custom program</span><input id="executable" placeholder="Use the discovered program" data-i18n-placeholder="sidepanel_custom_program_placeholder" autocomplete="off"></label>
+                <p class="hint" data-i18n="sidepanel_privacy_hint">Your CLI may send tasks and page observations to its configured model service. Conversation history stays on this computer.</p>
               </div>
             </details>
-            <label class="chip"><span class="sr-only">Agent</span><select id="agent"><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label>
+            <label class="chip"><span class="sr-only" data-i18n="sidepanel_agent">Agent</span><select id="agent"><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label>
           </span>
-          <button id="access" class="access" type="button" hidden aria-pressed="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M12 8v5M12 16h.01"/></svg><span id="accessLabel">Full access</span></button>
+          <button id="access" class="access" type="button" hidden aria-pressed="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M12 8v5M12 16h.01"/></svg><span id="accessLabel" data-i18n="sidepanel_full_access">Full access</span></button>
           <details id="turnOptions" class="more" hidden>
-            <summary>Conversation options</summary>
+            <summary data-i18n="sidepanel_conversation_options">Conversation options</summary>
             <div class="more-body">
-              <label>Allowed tools<select id="turnAccess"><option value="">Follow permission switch</option></select></label>
-              <label id="turnEffortLabel">Reasoning effort<select id="turnEffort"><option value="">CLI default</option></select></label>
-              <label id="turnTierLabel">Service tier<select id="turnTier"><option value="">CLI default</option><option value="default">Standard</option><option value="priority">Priority</option></select></label>
-              <p class="hint">Applies to this conversation. Changes take effect on the next response without editing CLI settings.</p>
-              <button id="saveTurnOptions" class="quiet" type="button">Save conversation options</button>
+              <label><span data-i18n="sidepanel_allowed_tools">Allowed tools</span><select id="turnAccess"><option value="" data-i18n="sidepanel_follow_permission_switch">Follow permission switch</option></select></label>
+              <label id="turnEffortLabel"><span data-i18n="sidepanel_reasoning_effort">Reasoning effort</span><select id="turnEffort"><option value="" data-i18n="sidepanel_cli_default">CLI default</option></select></label>
+              <label id="turnTierLabel"><span data-i18n="sidepanel_service_tier">Service tier</span><select id="turnTier"><option value="" data-i18n="sidepanel_cli_default">CLI default</option><option value="default" data-i18n="sidepanel_tier_standard">Standard</option><option value="priority" data-i18n="sidepanel_tier_priority">Priority</option></select></label>
+              <p class="hint" data-i18n="sidepanel_turn_options_hint">Applies to this conversation. Changes take effect on the next response without editing CLI settings.</p>
+              <button id="saveTurnOptions" class="quiet" type="button" data-i18n="sidepanel_save_conversation_options">Save conversation options</button>
             </div>
           </details>
-          <label id="recordTaskLabel" class="chip record" title="Record the agent's browser tab for this message only. The recording stays on this computer." hidden><input id="recordTask" type="checkbox">Record this task</label>
+          <label id="recordTaskLabel" class="chip record" title="Record the agent's browser tab for this message only. The recording stays on this computer." data-i18n-title="sidepanel_record_task_hint" hidden><input id="recordTask" type="checkbox"><span data-i18n="sidepanel_record_task">Record this task</span></label>
           <span id="queue" class="hint"></span>
-          <label id="modelChip" class="chip model"><span class="sr-only">Model</span><select id="model"><option value="">Default model</option></select></label>
+          <label id="modelChip" class="chip model"><span class="sr-only" data-i18n="sidepanel_model">Model</span><select id="model"><option value="" data-i18n="sidepanel_default_model">Default model</option></select></label>
           <span class="composer-send">
-            <button id="resume" class="quiet" type="button" hidden>Resume queue</button>
-            <button id="sendDirect" class="quiet" type="button" hidden>Stop &amp; send</button>
-            <button id="stop" class="stop" type="button" disabled title="Stop" aria-label="Stop">■</button>
-            <button id="send" class="primary send" type="submit" title="Send" aria-label="Send message">↑</button>
+            <button id="resume" class="quiet" type="button" data-i18n="sidepanel_resume_queue" hidden>Resume queue</button>
+            <button id="sendDirect" class="quiet" type="button" data-i18n="sidepanel_stop_and_send" hidden>Stop &amp; send</button>
+            <button id="stop" class="stop" type="button" disabled title="Stop" aria-label="Stop" data-i18n-title="sidepanel_stop" data-i18n-aria-label="sidepanel_stop">■</button>
+            <button id="send" class="primary send" type="submit" title="Send" aria-label="Send message" data-i18n-title="sidepanel_send" data-i18n-aria-label="sidepanel_send_message">↑</button>
           </span>
         </div>
       </div>
@@ -103,62 +103,62 @@
   </main>
   <main id="agentsView" class="agents-view" hidden>
     <header class="toolbar">
-      <button id="chatTab" class="quiet back" type="button" aria-pressed="true">← Back</button>
-      <h1>Agents &amp; models</h1>
-      <button id="settings" class="quiet" type="button">Extension settings</button>
+      <button id="chatTab" class="quiet back" type="button" aria-pressed="true" data-i18n="sidepanel_back">← Back</button>
+      <h1 data-i18n="sidepanel_agents_and_models_title">Agents &amp; models</h1>
+      <button id="settings" class="quiet" type="button" data-i18n="sidepanel_extension_settings">Extension settings</button>
     </header>
     <div class="agents-body">
-      <nav class="scope settings-tabs" role="tablist" aria-label="Agent settings">
-        <button id="agentsSettingsTab" type="button" role="tab" aria-selected="true">Agents</button>
-        <button id="skillsSettingsTab" type="button" role="tab" aria-selected="false" hidden>Skills</button>
-        <button id="schedulesSettingsTab" type="button" role="tab" aria-selected="false" hidden>Schedules</button>
+      <nav class="scope settings-tabs" role="tablist" aria-label="Agent settings" data-i18n-aria-label="sidepanel_agent_settings">
+        <button id="agentsSettingsTab" type="button" role="tab" aria-selected="true" data-i18n="sidepanel_tab_agents">Agents</button>
+        <button id="skillsSettingsTab" type="button" role="tab" aria-selected="false" data-i18n="sidepanel_skills" hidden>Skills</button>
+        <button id="schedulesSettingsTab" type="button" role="tab" aria-selected="false" data-i18n="sidepanel_tab_schedules" hidden>Schedules</button>
       </nav>
       <section id="localAgents">
-      <header class="section-heading"><h2>Local agents</h2><button id="discover" class="quiet" type="button">Find again</button></header>
+      <header class="section-heading"><h2 data-i18n="sidepanel_local_agents">Local agents</h2><button id="discover" class="quiet" type="button" data-i18n="sidepanel_find_again">Find again</button></header>
       <div id="agentList"></div>
       </section>
       <section id="scheduleSettings" class="configuration" hidden>
-        <h2>Scheduled prompts</h2>
-        <p class="hint">Runs while the local agent service is running. Times use this host's local time zone. Missed periods run once. A run with an unknown outcome needs your review before another can start.</p>
-        <button id="reloadSchedules" class="quiet" type="button">Refresh schedules</button>
+        <h2 data-i18n="sidepanel_scheduled_prompts">Scheduled prompts</h2>
+        <p class="hint" data-i18n="sidepanel_schedules_hint">Runs while the local agent service is running. Times use this host's local time zone. Missed periods run once. A run with an unknown outcome needs your review before another can start.</p>
+        <button id="reloadSchedules" class="quiet" type="button" data-i18n="sidepanel_refresh_schedules">Refresh schedules</button>
         <div id="scheduleEntries"></div>
         <input id="scheduleId" type="hidden">
-        <label>Name<input id="scheduleName" maxlength="160"></label>
-        <label>Agent<select id="scheduleAgent"></select></label>
-        <label>Model<input id="scheduleModel" placeholder="CLI default"></label>
-        <label>Reasoning effort<input id="scheduleEffort" placeholder="CLI default; Codex or Claude only"></label>
-        <label>Service tier<select id="scheduleTier"><option value="">CLI default</option><option value="default">Standard (Codex)</option><option value="priority">Priority (Codex)</option></select></label>
-        <label>Allowed tools<select id="scheduleAccess"><option value="readFiles">Browser and file reads</option><option value="browserOnly">Browser only (Claude or Pi)</option><option value="writeFiles">Browser, file reads and writes</option><option value="runCommands">Browser, files and commands</option></select></label>
-        <label class="choice"><input id="scheduleAutomatic" type="checkbox">Allow permitted tools automatically</label>
-        <label>When<select id="scheduleKind"><option value="interval">Every N minutes</option><option value="daily">Daily at HH:MM</option><option value="weekdays">Weekdays at HH:MM</option><option value="cron">Five-field cron</option></select><input id="scheduleTiming" value="60" placeholder="60, 09:00 or 0 9 * * 1-5"></label>
-        <label>Skill<select id="scheduleSkill"><option value="">No skill</option></select></label>
-        <label>Prompt<textarea id="schedulePrompt" rows="5" maxlength="32768"></textarea></label>
-        <label class="choice"><input id="scheduleEnabled" type="checkbox" checked>Enabled</label>
-        <button id="saveSchedule" class="quiet" type="button">Save schedule</button>
-        <button id="newSchedule" class="quiet" type="button">New schedule</button>
+        <label><span data-i18n="sidepanel_schedule_name">Name</span><input id="scheduleName" maxlength="160"></label>
+        <label><span data-i18n="sidepanel_agent">Agent</span><select id="scheduleAgent"></select></label>
+        <label><span data-i18n="sidepanel_model">Model</span><input id="scheduleModel" placeholder="CLI default" data-i18n-placeholder="sidepanel_cli_default"></label>
+        <label><span data-i18n="sidepanel_reasoning_effort">Reasoning effort</span><input id="scheduleEffort" placeholder="CLI default; Codex or Claude only" data-i18n-placeholder="sidepanel_schedule_effort_placeholder"></label>
+        <label><span data-i18n="sidepanel_service_tier">Service tier</span><select id="scheduleTier"><option value="" data-i18n="sidepanel_cli_default">CLI default</option><option value="default" data-i18n="sidepanel_tier_standard_codex">Standard (Codex)</option><option value="priority" data-i18n="sidepanel_tier_priority_codex">Priority (Codex)</option></select></label>
+        <label><span data-i18n="sidepanel_allowed_tools">Allowed tools</span><select id="scheduleAccess"><option value="readFiles" data-i18n="sidepanel_access_read_files">Browser and file reads</option><option value="browserOnly" data-i18n="sidepanel_access_browser_only_claude_pi">Browser only (Claude or Pi)</option><option value="writeFiles" data-i18n="sidepanel_access_write_files">Browser, file reads and writes</option><option value="runCommands" data-i18n="sidepanel_access_run_commands">Browser, files and commands</option></select></label>
+        <label class="choice"><input id="scheduleAutomatic" type="checkbox"><span data-i18n="sidepanel_schedule_automatic">Allow permitted tools automatically</span></label>
+        <label><span data-i18n="sidepanel_schedule_when">When</span><select id="scheduleKind"><option value="interval" data-i18n="sidepanel_schedule_interval">Every N minutes</option><option value="daily" data-i18n="sidepanel_schedule_daily">Daily at HH:MM</option><option value="weekdays" data-i18n="sidepanel_schedule_weekdays">Weekdays at HH:MM</option><option value="cron" data-i18n="sidepanel_schedule_cron">Five-field cron</option></select><input id="scheduleTiming" value="60" placeholder="60, 09:00 or 0 9 * * 1-5" data-i18n-placeholder="sidepanel_schedule_timing_placeholder"></label>
+        <label><span data-i18n="sidepanel_skill">Skill</span><select id="scheduleSkill"><option value="" data-i18n="sidepanel_no_skill">No skill</option></select></label>
+        <label><span data-i18n="sidepanel_prompt">Prompt</span><textarea id="schedulePrompt" rows="5" maxlength="32768"></textarea></label>
+        <label class="choice"><input id="scheduleEnabled" type="checkbox" checked><span data-i18n="sidepanel_enabled">Enabled</span></label>
+        <button id="saveSchedule" class="quiet" type="button" data-i18n="sidepanel_save_schedule">Save schedule</button>
+        <button id="newSchedule" class="quiet" type="button" data-i18n="sidepanel_new_schedule">New schedule</button>
       </section>
       <section id="skillLibrary" class="configuration" hidden>
-        <h2>Skill library</h2><p class="hint">Library entries are shared by agents in this Chrome profile. Your existing skills are read-only here.</p>
-        <button id="reloadSkills" class="quiet" type="button">Refresh skills</button>
+        <h2 data-i18n="sidepanel_skill_library">Skill library</h2><p class="hint" data-i18n="sidepanel_skill_library_hint">Library entries are shared by agents in this Chrome profile. Your existing skills are read-only here.</p>
+        <button id="reloadSkills" class="quiet" type="button" data-i18n="sidepanel_refresh_skills">Refresh skills</button>
         <div id="skillEntries"></div>
-        <label>Library skill name<input id="skillName" placeholder="lowercase-name" autocomplete="off"></label>
+        <label><span data-i18n="sidepanel_library_skill_name">Library skill name</span><input id="skillName" placeholder="lowercase-name" data-i18n-placeholder="sidepanel_skill_name_placeholder" autocomplete="off"></label>
         <label>SKILL.md<textarea id="skillContent" rows="8" maxlength="98304"></textarea></label>
-        <button id="saveSkill" class="quiet" type="button">Save library skill</button>
-        <label>Import source<select id="skillImportKind"><option value="folder">Local folder</option><option value="archive">Local ZIP or .skill archive</option><option value="git">Git HTTPS URL</option></select><input id="skillImportSource" placeholder="Absolute path or repository URL"></label>
-        <button id="importSkill" class="quiet" type="button">Import skills</button>
+        <button id="saveSkill" class="quiet" type="button" data-i18n="sidepanel_save_library_skill">Save library skill</button>
+        <label><span data-i18n="sidepanel_import_source">Import source</span><select id="skillImportKind"><option value="folder" data-i18n="sidepanel_import_folder">Local folder</option><option value="archive" data-i18n="sidepanel_import_archive">Local ZIP or .skill archive</option><option value="git" data-i18n="sidepanel_import_git">Git HTTPS URL</option></select><input id="skillImportSource" placeholder="Absolute path or repository URL" data-i18n-placeholder="sidepanel_import_source_placeholder"></label>
+        <button id="importSkill" class="quiet" type="button" data-i18n="sidepanel_import_skills">Import skills</button>
       </section>
       <section id="configuration" class="configuration" hidden>
-        <h2 id="configTitle">Agent configuration</h2>
+        <h2 id="configTitle" data-i18n="sidepanel_agent_configuration">Agent configuration</h2>
         <p id="configPath" class="path"></p>
         <p id="configWarnings" class="hint"></p>
-        <form id="configForm"><div id="configFields"></div><button class="primary" type="submit">Preview changes</button></form>
+        <form id="configForm"><div id="configFields"></div><button class="primary" type="submit" data-i18n="sidepanel_preview_changes">Preview changes</button></form>
         <section id="configPreview" class="config-preview" hidden>
-          <h3>Changes to apply</h3><div id="configDiff"></div>
-          <p class="hint">Updates this agent's settings on the machine. Running conversations keep their current configuration.</p>
-          <button id="applyConfig" class="primary" type="button">Apply configuration</button>
-          <button id="discardConfig" class="quiet" type="button">Discard preview</button>
+          <h3 data-i18n="sidepanel_changes_to_apply">Changes to apply</h3><div id="configDiff"></div>
+          <p class="hint" data-i18n="sidepanel_apply_config_hint">Updates this agent's settings on the machine. Running conversations keep their current configuration.</p>
+          <button id="applyConfig" class="primary" type="button" data-i18n="sidepanel_apply_configuration">Apply configuration</button>
+          <button id="discardConfig" class="quiet" type="button" data-i18n="sidepanel_discard_preview">Discard preview</button>
         </section>
-        <button id="restoreConfig" class="quiet restore" type="button" hidden>Restore this change</button>
+        <button id="restoreConfig" class="quiet restore" type="button" data-i18n="sidepanel_restore_change" hidden>Restore this change</button>
         <p id="configResult" role="status"></p>
       </section>
     </div>

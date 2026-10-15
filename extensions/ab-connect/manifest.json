@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
   "name": "chrome-use",
-  "version": "0.5.58",
-  "description": "Browser automation with the local chrome-use CLI and your local Codex, Claude Code, OpenCode or Pi agent.",
+  "version": "0.5.59",
+  "description": "__MSG_ext_description__",
+  "default_locale": "en",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA6vQIyscGIPYPZdSpPwPL0+0gxUROyRgCpmvCSDoc8XUm4qm97VbKnD9Ijc1lV22lNWZtE78gaRjt6BeSfuMgnBymnhLKjN1gU6AI5QUU0mrJyeHdWKvrKQR5FmsM2A7Xr1ykE2SiiS8zNUS3Y/6O5l+Nva7wrVy6E4a2dkBVQkOsu+DV+nEZvhIyuDY5D5SPXqNwUTWTaglwj5mjvHz36xSwCWlPmrtJ+ED0AUyrb2z4GIOmvk4kqtBVrh/UD058klLo4CkYOnIybB5aV6WYuwarfPY4bF/dLggPem+ewLNTUNBuwrxj/A4nUv0LJTuRO8rR7f8WR9qnRCY0Ic5saQIDAQAB",
   "icons": {
     "16": "icons/icon16.png",
@@ -32,7 +33,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "chrome-use",
+    "default_title": "__MSG_ext_action_title__",
     "default_popup": "popup.html"
   },
   "side_panel": {
@@ -48,7 +49,7 @@
         "default": "Alt+Shift+C",
         "mac": "Alt+Shift+C"
       },
-      "description": "Inspect & Ask: pick an element and send a change request to your coding agent"
+      "description": "__MSG_ext_command_inspect_element__"
     }
   },
   "web_accessible_resources": [
@@ -58,7 +59,8 @@
         "inspect-frame.js",
         "inspect-frame.css",
         "inspect-frame-logic.js",
-        "inspect-format.js"
+        "inspect-format.js",
+        "i18n.js"
       ],
       "matches": [
         "<all_urls>"

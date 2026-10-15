@@ -1,6 +1,8 @@
 // Notify when a side-panel turn ends or waits for the user, unless the user is
 // already looking at that conversation. The cursor stores conversation ids and
 // turn tokens only, never titles, prompts or answers.
+import { t } from './i18n.js';
+
 const KEY = 'ab_turn_notifications';
 const ENDED = new Set(['idle', 'failed', 'interrupted']);
 const BUSY = new Set(['starting', 'running', 'stopping']);
@@ -30,11 +32,11 @@ function firstLine(text, max) {
 /** Plain-words outcome plus at most the first line of the redacted answer. */
 export function turnMessage(c, kind) {
   let text;
-  if (kind === 'completed') text = c.lastTurn?.preview ? `Done: ${c.lastTurn.preview}` : 'Done';
-  else if (kind === 'failed') text = c.lastError ? `Failed: ${firstLine(c.lastError, 80)}` : 'Failed';
-  else if (kind === 'interrupted') text = 'Stopped';
-  else if (kind === 'waiting') text = 'Needs your attention: waiting for your approval';
-  else text = 'Needs your attention: the outcome is unconfirmed';
+  if (kind === 'completed') text = c.lastTurn?.preview ? t('notify_turn_done_preview', c.lastTurn.preview) : t('notify_turn_done');
+  else if (kind === 'failed') text = c.lastError ? t('notify_turn_failed_error', firstLine(c.lastError, 80)) : t('notify_turn_failed');
+  else if (kind === 'interrupted') text = t('notify_turn_stopped');
+  else if (kind === 'waiting') text = t('notify_turn_waiting_approval');
+  else text = t('notify_turn_outcome_unconfirmed');
   return firstLine(text, 120);
 }
 

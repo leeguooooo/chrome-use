@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>chrome-use settings</title>
+<title data-i18n="options_page_title">chrome-use settings</title>
 <style>
   /* Same tokens as the side panel, so settings read as part of one product. */
   :root { color-scheme:light dark; --bg:#fff; --page:#f6f7f9; --surface:#f4f5f7; --ink:#1f1f1f; --muted:#6b6f76; --line:#e2e4e8;
@@ -74,22 +74,22 @@
   <header class="top">
     <div class="logo"><img src="icons/icon128.png" alt="" /></div>
     <div>
-      <h1>chrome-use settings</h1>
-      <div class="tag">Local browser automation bridge</div>
+      <h1 data-i18n="options_page_title">chrome-use settings</h1>
+      <div class="tag" data-i18n="options_tagline">Local browser automation bridge</div>
     </div>
     <span class="ver" id="ver">v—</span>
   </header>
 
   <!-- Connection -->
   <section class="card">
-    <h2>Connection</h2>
-    <p class="lead">Status of the bridge to your local chrome-use CLI.</p>
+    <h2 data-i18n="options_connection_heading">Connection</h2>
+    <p class="lead" data-i18n="options_connection_lead">Status of the bridge to your local chrome-use CLI.</p>
     <div class="row">
       <div class="statline grow">
         <span class="dot" id="dot"></span>
         <div>
-          <div class="name" id="statusLabel">Checking…</div>
-          <div class="hint" id="statusSub">saying hi to your local CLI</div>
+          <div class="name" id="statusLabel" data-i18n="options_status_checking">Checking…</div>
+          <div class="hint" id="statusSub" data-i18n="options_status_checking_detail">saying hi to your local CLI</div>
         </div>
       </div>
       <span class="pill" id="tabPill" style="display:none"></span>
@@ -98,19 +98,19 @@
 
   <!-- Notifications -->
   <section class="card">
-    <h2>Notifications</h2>
-    <p class="lead">A gentle heads-up when the bridge connects or drops, or a panel task finishes.</p>
+    <h2 data-i18n="options_notifications_heading">Notifications</h2>
+    <p class="lead" data-i18n="options_notifications_lead">A gentle heads-up when the bridge connects or drops, or a panel task finishes.</p>
     <div class="row">
       <div class="grow">
-        <div class="name">Connection notifications</div>
-        <div class="hint">Notify me when chrome-use links to or unlinks from Chrome.</div>
+        <div class="name" data-i18n="options_connection_notify_name">Connection notifications</div>
+        <div class="hint" data-i18n="options_connection_notify_hint">Notify me when chrome-use links to or unlinks from Chrome.</div>
       </div>
       <label class="toggle"><input type="checkbox" id="optNotify" /><span class="track"></span><span class="knob"></span></label>
     </div>
     <div class="row">
       <div class="grow">
-        <div class="name">Notify when a task finishes</div>
-        <div class="hint">When a side-panel task finishes, fails, stops or waits for your approval, show a
+        <div class="name" data-i18n="options_turn_notify_name">Notify when a task finishes</div>
+        <div class="hint" data-i18n="options_turn_notify_hint">When a side-panel task finishes, fails, stops or waits for your approval, show a
           notification and a count on the toolbar icon. Nothing is shown for the conversation the panel
           already has open in the focused window.</div>
       </div>
@@ -120,12 +120,12 @@
 
   <!-- Agent cursor -->
   <section class="card">
-    <h2>Agent cursor</h2>
-    <p class="lead">Watch a friendly cursor glide where the agent clicks.</p>
+    <h2 data-i18n="options_cursor_heading">Agent cursor</h2>
+    <p class="lead" data-i18n="options_cursor_lead">Watch a friendly cursor glide where the agent clicks.</p>
     <div class="row">
       <div class="grow">
-        <div class="name">Show the agent cursor</div>
-        <div class="hint">A soft cursor + click ripple while chrome-use drives a tab.
+        <div class="name" data-i18n="options_cursor_name">Show the agent cursor</div>
+        <div class="hint" data-i18n="options_cursor_hint">A soft cursor + click ripple while chrome-use drives a tab.
           Off by default — the cursor is a visible DOM overlay, so leaving it off
           keeps automation invisible to the page (stealth).</div>
       </div>
@@ -135,71 +135,71 @@
 
   <!-- Inspect & Ask -->
   <section class="card">
-    <h2>Inspect &amp; Ask</h2>
-    <p class="lead">Press the shortcut, click an element, and send a change request with its source
+    <h2 data-i18n="options_inspect_heading">Inspect &amp; Ask</h2>
+    <p class="lead" data-i18n="options_inspect_lead">Press the shortcut, click an element, and send a change request with its source
       location and a screenshot to the coding session working on that project (via ocs).</p>
     <div class="row">
       <div class="grow">
-        <div class="name">Enable Inspect &amp; Ask</div>
-        <div class="hint">Off by default. Nothing is injected into pages until you press the shortcut
-          (<span id="inspectShortcut">Alt+Shift+C</span>) or the popup button.
-          <a href="#" id="inspectShortcuts">Change the shortcut</a></div>
+        <div class="name" data-i18n="options_inspect_enable_name">Enable Inspect &amp; Ask</div>
+        <div class="hint"><span id="inspectEnableHint">Off by default. Nothing is injected into pages until you press the shortcut
+          (Alt+Shift+C) or the popup button.</span>
+          <a href="#" id="inspectShortcuts" data-i18n="options_inspect_change_shortcut">Change the shortcut</a></div>
       </div>
       <label class="toggle"><input type="checkbox" id="optInspect" /><span class="track"></span><span class="knob"></span></label>
     </div>
     <div class="row">
       <div class="grow">
-        <div class="name">"Open in editor" uses</div>
-        <div class="hint">Source links open the file at the line in this editor.</div>
+        <div class="name" data-i18n="options_inspect_editor_name">"Open in editor" uses</div>
+        <div class="hint" data-i18n="options_inspect_editor_hint">Source links open the file at the line in this editor.</div>
       </div>
-      <select id="optInspectEditor" aria-label="Editor for source links">
+      <select id="optInspectEditor" aria-label="Editor for source links" data-i18n-aria-label="options_inspect_editor_aria">
         <option value="vscode">VS Code</option>
         <option value="cursor">Cursor</option>
         <option value="windsurf">Windsurf</option>
         <option value="webstorm">WebStorm</option>
-        <option value="none">Do not show</option>
+        <option value="none" data-i18n="options_inspect_editor_none">Do not show</option>
       </select>
     </div>
-    <div class="name" style="margin-top:12px">Sites bound to projects</div>
-    <div class="hint" id="inspectBindingsHint">Loading…</div>
+    <div class="name" style="margin-top:12px" data-i18n="options_inspect_bindings_heading">Sites bound to projects</div>
+    <div class="hint" id="inspectBindingsHint" data-i18n="options_inspect_bindings_loading">Loading…</div>
     <div id="inspectBindings"></div>
   </section>
 
   <!-- Debugger banner -->
   <section class="card">
-    <h2>The “started debugging this browser” bar</h2>
-    <p class="lead">chrome-use drives Chrome via the DevTools protocol, so Chrome shows
+    <h2 data-i18n="options_debugger_heading">The “started debugging this browser” bar</h2>
+    <p class="lead" data-i18n="options_debugger_lead">chrome-use drives Chrome via the DevTools protocol, so Chrome shows
       that bar while an agent is driving a tab. Automatic debugger release is disabled by default
       (0 seconds). Set “Release idle tabs after” to a positive timeout to release
       idle tabs between tasks. A one-time restart with a startup flag removes it entirely (your tabs &amp; logins
       are restored automatically).</p>
     <div class="row">
       <div class="grow">
-        <div class="name">Release idle tabs after</div>
-        <div class="hint">Seconds without agent activity before the debugger detaches
+        <div class="name" data-i18n="options_idle_name">Release idle tabs after</div>
+        <div class="hint" data-i18n="options_idle_hint">Seconds without agent activity before the debugger detaches
           from a tab (the bar goes away). The next command re-attaches automatically.
           0 keeps tabs attached until the session ends.</div>
       </div>
-      <input type="number" id="optIdleSecs" min="0" max="3600" step="5" aria-label="Seconds before idle tabs are released" />
-      <span class="unit">sec</span>
+      <input type="number" id="optIdleSecs" min="0" max="3600" step="5" aria-label="Seconds before idle tabs are released" data-i18n-aria-label="options_idle_aria" />
+      <span class="unit" data-i18n="options_idle_unit">sec</span>
     </div>
     <div class="cmd">
       <code id="silentCmd">chrome-use extension connect --silent</code>
-      <button class="btn" id="copyCmd">Copy</button>
+      <button class="btn" id="copyCmd" data-i18n="options_copy">Copy</button>
     </div>
   </section>
 
 
   <footer>
-    <span class="privacy">Runs locally · no tracking · no cloud</span>
+    <span class="privacy" data-i18n="options_privacy">Runs locally · no tracking · no cloud</span>
     <span style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-      <span class="saved" id="saved">Saved ✓</span>
-      <a data-href="https://chrome-use.leeguoo.com">Docs ↗</a>
+      <span class="saved" id="saved" data-i18n="options_saved">Saved ✓</span>
+      <a data-href="https://chrome-use.leeguoo.com" data-i18n="options_docs">Docs ↗</a>
       <a id="repo" data-href="https://github.com/leeguooooo/chrome-use">GitHub ↗</a>
       <a data-href="https://leeguoo.com">leeguoo.com ↗</a>
     </span>
   </footer>
 </div>
-<script src="options.js"></script>
+<script type="module" src="options.js"></script>
 </body>
 </html>

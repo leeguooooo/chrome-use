@@ -31,7 +31,7 @@ trap 'rm -rf "$STAGE"' EXIT
 cp -R "$EXT/." "$STAGE/"
 # Unit tests are dev-only: they never run inside Chrome and every extra .js file
 # is one more script a Web Store reviewer has to read. Keep them out of the upload.
-find "$STAGE" -name '*.test.js' -delete
+find "$STAGE" \( -name '*.test.js' -o -name 'test-*.js' \) -delete
 python3 - "$STAGE/manifest.json" <<'PY'
 import json, sys
 p = sys.argv[1]

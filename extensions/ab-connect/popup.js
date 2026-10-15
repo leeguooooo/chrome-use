@@ -2,6 +2,10 @@
 // Asks the service worker whether the native-messaging link to the local
 // chrome-use CLI is live, and renders a paired / not-paired indicator.
 
+import { t, applyI18n } from './i18n.js'
+
+applyI18n(document)
+
 const dot = document.getElementById('dot')
 const label = document.getElementById('statusLabel')
 const sub = document.getElementById('statusSub')
@@ -19,25 +23,25 @@ function render(state) {
   dot.classList.remove('on', 'off')
   if (connected) {
     dot.classList.add('on')
-    label.textContent = 'Connected'
+    label.textContent = t('popup_status_connected')
     const n = state.tabCount | 0
-    sub.textContent = 'local CLI connection confirmed'
+    sub.textContent = t('popup_status_connected_detail')
     if (n > 0) {
-      tabPill.textContent = `${n} tab${n === 1 ? '' : 's'}`
+      tabPill.textContent = n === 1 ? t('popup_tab_count_one') : t('popup_tab_count', n)
       tabPill.classList.remove('hidden')
     } else {
       tabPill.classList.add('hidden')
     }
     hint.style.display = 'none'
   } else if (state?.connectionState === 'connecting') {
-    label.textContent = 'Connecting…'
-    sub.textContent = 'waiting for the local CLI to respond'
+    label.textContent = t('popup_status_connecting')
+    sub.textContent = t('popup_status_connecting_detail')
     tabPill.classList.add('hidden')
     hint.style.display = 'none'
   } else {
     dot.classList.add('off')
-    label.textContent = 'Not paired'
-    sub.textContent = state?.connectionError || 'no local chrome-use CLI linked'
+    label.textContent = t('popup_status_not_paired')
+    sub.textContent = state?.connectionError || t('popup_status_not_paired_detail')
     tabPill.classList.add('hidden')
     if (state?.standalone) {
       hint.style.display = 'none'
@@ -47,8 +51,8 @@ function render(state) {
     hint.style.display = 'block'
     const missingHost = (state?.connectionError || '').toLowerCase().includes('host not found')
     hintText.textContent = missingHost
-      ? 'Install the local host, then reopen this popup:'
-      : 'Check the local CLI, then reopen this popup to reconnect:'
+      ? t('popup_hint_install_host')
+      : t('popup_hint_check_and_reopen')
     hintCommand.textContent = missingHost ? 'chrome-use extension install' : 'chrome-use status'
   }
 }
@@ -56,7 +60,7 @@ function render(state) {
 function queryStatus() {
   // A standalone preview has no native connection to confirm.
   if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) {
-    render({ connected: false, standalone: true, connectionError: 'Open this popup from the chrome-use extension' })
+    render({ connected: false, standalone: true, connectionError: t('popup_standalone') })
     return
   }
   const queryEpoch = ++statusEpoch
@@ -98,7 +102,7 @@ document.querySelectorAll('[data-action="inspect"]').forEach((button) => {
     const response = await chrome.runtime.sendMessage({ type: 'ab-inspect-start' }).catch((error) => ({ success: false, error: String(error.message || error) }))
     if (response?.success) { window.close(); return }
     const note = document.getElementById('inspectError')
-    if (note) { note.hidden = false; note.textContent = response?.error || 'Could not start Inspect & Ask on this page.' }
+    if (note) { note.hidden = false; note.textContent = response?.error || t('popup_inspect_failed') }
   })
 })
 

@@ -1,3 +1,4 @@
+import './test-i18n.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { TurnNotifications, openFromNotification, turnEvent, turnMessage } from './turn-notifications.js';

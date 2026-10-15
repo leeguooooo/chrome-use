@@ -1,3 +1,5 @@
+import { t, messageMap } from './i18n.js';
+
 // Project a native journal into visible rows. All content remains text data;
 // duplicate cursors and completed-text chunks never duplicate a response.
 export class PanelTimeline {
@@ -99,7 +101,7 @@ export class PanelTimeline {
   apply(events, cursor) {
     for (const event of events) {
       if (event.sequence <= this.cursor) continue;
-      if (event.sequence !== this.cursor + 1) throw new Error('Conversation history has a gap. Refresh before relying on this view.');
+      if (event.sequence !== this.cursor + 1) throw new Error(t('timeline_error_history_gap'));
       const data = event.data || {};
       if (event.kind === 'user') {
         const row = { key: `user:${data.messageId}`, type: 'user', messageId: data.messageId, text: data.text || '', page: data.page || null, attachments: data.attachments || [], at: event.at };
@@ -109,7 +111,7 @@ export class PanelTimeline {
         this.lastUser = data.messageId;
       } else if (event.kind === 'queueEdited' || event.kind === 'queueRemoved') {
         const row = this.rows.find(row => row.type === 'user' && row.messageId === data.messageId);
-        if (row) { row.queueStatus = event.kind === 'queueRemoved' ? 'Removed from queue' : 'Edited before sending';
+        if (row) { row.queueStatus = event.kind === 'queueRemoved' ? t('timeline_queue_removed') : t('timeline_queue_edited');
           if (event.kind === 'queueEdited') { row.text = data.text; row.messageId = data.replacementId; }
         }
         // The replacement is the message that runs; replay gives one turn for it.
@@ -127,7 +129,7 @@ export class PanelTimeline {
         if (typeof data.role === 'string') this.turn(data.messageId, event.at).roles.set(key, data.role);
         if (event.kind === 'textFinal') {
           if (data.part === 0) { row.text = ''; row.finalPart = -1; }
-          if (data.part !== row.finalPart + 1) throw new Error('Completed response chunks arrived out of order.');
+          if (data.part !== row.finalPart + 1) throw new Error(t('timeline_error_chunks_out_of_order'));
           row.finalPart = data.part;
         }
         row.text += data.text || '';
@@ -157,7 +159,7 @@ export class PanelTimeline {
       else if (event.kind === 'terminal') {
         this.requests.clear(); this.requestKeys.clear();
         this.turn(data.messageId, event.at).legacyTerminal = data.status || null;
-        if (data.status !== 'completed') this.note({ key: `note:${event.sequence}`, type: 'note', failed: data.status === 'failed', ...readableError(data.error || (data.status === 'interrupted' ? 'Response interrupted. Queued messages are paused.' : 'Response failed. Queued messages are paused.')), at: event.at }, data);
+        if (data.status !== 'completed') this.note({ key: `note:${event.sequence}`, type: 'note', failed: data.status === 'failed', ...readableError(data.error || (data.status === 'interrupted' ? t('timeline_note_interrupted_queue_paused') : t('timeline_note_failed_queue_paused'))), at: event.at }, data);
       } else if (event.kind === 'exited' || event.kind === 'processUnconfirmed') {
         this.requests.clear(); this.requestKeys.clear();
         if (event.kind === 'processUnconfirmed' && data.messageId != null) this.turn(data.messageId, event.at).legacyTerminal = 'unknown';
@@ -165,7 +167,7 @@ export class PanelTimeline {
       } else this.turnEvent(event, data);
       this.cursor = event.sequence;
     }
-    if (cursor !== this.cursor) throw new Error('Conversation cursor did not match the received events.');
+    if (cursor !== this.cursor) throw new Error(t('timeline_error_cursor_mismatch'));
   }
   requestKey(requestId) { const id = JSON.stringify(requestId); return this.requestKeys.get(id) ?? id; }
   // An exit note after the turn's terminal has no messageId; it belongs to
@@ -179,17 +181,17 @@ export class PanelTimeline {
 
 // Wording is fixed here so every view says the same thing. The badge never
 // says "Verified": the host checks the agent's chosen predicates, nothing more.
-export const assessmentLabels = { checksPassed: "Agent's browser checks passed", someChecksPassed: 'Some checks passed', notChecked: 'Not checked', blocked: 'Blocked' };
+export const assessmentLabels = messageMap({ checksPassed: 'timeline_assessment_checks_passed', someChecksPassed: 'timeline_assessment_some_checks_passed', notChecked: 'timeline_assessment_not_checked', blocked: 'timeline_assessment_blocked' });
 export function assessmentLabel(turn) {
   const final = turn.assessment.final;
-  if (final) return assessmentLabels[final.status] || 'Not checked';
-  if (turn.recorded && turn.state !== 'ended') return 'Assessment pending';
-  return 'Checks not recorded';
+  if (final) return assessmentLabels[final.status] || t('timeline_assessment_not_checked');
+  if (turn.recorded && turn.state !== 'ended') return t('timeline_assessment_pending');
+  return t('timeline_assessment_not_recorded');
 }
-export const outcomeLabels = { completed: 'Completed', failed: 'Failed', interrupted: 'Interrupted', unknown: 'Outcome unknown' };
+export const outcomeLabels = messageMap({ completed: 'timeline_outcome_completed', failed: 'timeline_outcome_failed', interrupted: 'timeline_outcome_interrupted', unknown: 'timeline_outcome_unknown' });
 export function outcomeLabel(turn) {
-  if (turn.outcome) return outcomeLabels[turn.outcome] || 'Outcome unknown';
-  if (!turn.recorded && turn.legacyTerminal) return outcomeLabels[turn.legacyTerminal] || 'Outcome unknown';
+  if (turn.outcome) return outcomeLabels[turn.outcome] || t('timeline_outcome_unknown');
+  if (!turn.recorded && turn.legacyTerminal) return outcomeLabels[turn.legacyTerminal] || t('timeline_outcome_unknown');
   return '';
 }
 // Linked browser actions of one step, in claim order.
@@ -208,6 +210,9 @@ export function stepVerdict(timeline, turn, row) {
   if (!acting.length) return null;
   return acting.every(action => action.observed?.verdict === 'confirmed') ? 'Confirmed' : 'Not checked';
 }
+// stepVerdict returns stable English values that views key styles on; show
+// them through this table.
+export const verdictLabels = messageMap({ 'Confirmed': 'timeline_verdict_confirmed', 'Failed': 'timeline_verdict_failed', 'Not checked': 'timeline_verdict_not_checked', 'No browser record': 'timeline_verdict_no_browser_record', 'Page not recorded': 'timeline_verdict_page_not_recorded' });
 function sameTarget(a, b) { return (a.targetId && a.targetId === b.targetId) || (!a.targetId && !b.targetId && a.url === b.url); }
 // "Acted on" lists only pages the action's own reply named; cached daemon
 // state is where the tools were pointed, not proof of an effect. Pages the
@@ -269,12 +274,12 @@ function toolHint(item) {
 }
 function toolName(item) {
   const browser = browserTool(item.tool || item.name);
-  if (browser) return `Browser · ${browser}`;
-  if (item.type === 'commandExecution') return 'Ran a command';
-  if (item.type === 'fileChange') return 'Changed files';
-  if (item.type === 'webSearch') return 'Searched the web';
-  if (item.type === 'tool_result') return 'Tool result';
-  return item.tool || item.name || item.type || 'Tool';
+  if (browser) return t('timeline_tool_browser', browser);
+  if (item.type === 'commandExecution') return t('timeline_tool_ran_command');
+  if (item.type === 'fileChange') return t('timeline_tool_changed_files');
+  if (item.type === 'webSearch') return t('timeline_tool_searched_web');
+  if (item.type === 'tool_result') return t('timeline_tool_result');
+  return item.tool || item.name || item.type || t('timeline_tool_generic');
 }
 function resultText(result) {
   if (typeof result === 'string') return result;
@@ -283,7 +288,7 @@ function resultText(result) {
   return result == null ? '' : JSON.stringify(result, null, 2);
 }
 function describeTool(item) {
-  if (item.truncated) return `${item.preview || ''}\n[The tool preview was shortened]`;
+  if (item.truncated) return `${item.preview || ''}\n${t('timeline_tool_preview_shortened')}`;
   let text;
   if (item.type === 'commandExecution') text = [item.command && `$ ${item.command}`, item.aggregatedOutput].filter(Boolean).join('\n\n');
   else if (item.type === 'fileChange') text = (item.changes || []).map(change => `${change.kind?.type || change.kind || 'change'} ${change.path || ''}`).join('\n');
@@ -293,11 +298,11 @@ function describeTool(item) {
     const detail = item.arguments ?? item.input ?? item.content ?? item.result ?? item.output ?? '';
     text = typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2);
   }
-  return text.length > 6000 ? `${text.slice(0, 6000)}\n[The tool preview was shortened]` : text;
+  return text.length > 6000 ? `${text.slice(0, 6000)}\n${t('timeline_tool_preview_shortened')}` : text;
 }
 
-export const phaseLabels = {
-  idle: 'Ready', starting: 'Starting agent', running: 'Responding', waitingInput: 'Waiting for your input',
-  stopping: 'Waiting for stop confirmation', failed: 'Response failed', interrupted: 'Response interrupted',
-  recoveryRequired: 'Previous outcome unconfirmed',
-};
+export const phaseLabels = messageMap({
+  idle: 'timeline_phase_idle', starting: 'timeline_phase_starting', running: 'timeline_phase_running', waitingInput: 'timeline_phase_waiting_input',
+  stopping: 'timeline_phase_stopping', failed: 'timeline_phase_failed', interrupted: 'timeline_phase_interrupted',
+  recoveryRequired: 'timeline_phase_recovery_required',
+});

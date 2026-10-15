@@ -1,3 +1,4 @@
+import './test-i18n.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { layoutsMatch, cropPlan, captureVerdict } from './inspect-capture.js';

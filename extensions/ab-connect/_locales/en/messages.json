@@ -1,0 +1,2834 @@
+{
+  "bg_notify_connected_message": {
+    "message": "Bridged to your local CLI — ready to drive your tabs."
+  },
+  "bg_notify_connected_title": {
+    "message": "chrome-use connected"
+  },
+  "bg_notify_disconnected_message": {
+    "message": "The bridge to your local CLI dropped."
+  },
+  "bg_notify_disconnected_title": {
+    "message": "chrome-use disconnected"
+  },
+  "entry_error_popup_unavailable": {
+    "message": "Connection popup unavailable: $ERROR$",
+    "placeholders": {
+      "error": {
+        "content": "$1",
+        "example": "Invalid popup path"
+      }
+    }
+  },
+  "entry_error_side_panel_unconfirmed": {
+    "message": "Chrome did not confirm the side panel entry."
+  },
+  "entry_error_side_panel_unsupported": {
+    "message": "This Chrome version cannot open the agent side panel."
+  },
+  "ext_action_title": {
+    "message": "chrome-use"
+  },
+  "ext_command_inspect_element": {
+    "message": "Inspect & Ask: pick an element and send a change request to your coding agent"
+  },
+  "ext_description": {
+    "message": "Browser automation with the local chrome-use CLI and your local Codex, Claude Code, OpenCode or Pi agent."
+  },
+  "inspect_add_element": {
+    "message": "+ Add element"
+  },
+  "inspect_agree_setup": {
+    "message": "Agree, let my agent set it up"
+  },
+  "inspect_attach_screenshot": {
+    "message": "attach screenshot"
+  },
+  "inspect_bound_site": {
+    "message": "Requests from $scope$ now go to $target$.",
+    "placeholders": {
+      "scope": {
+        "content": "$1"
+      },
+      "target": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_bound_tab": {
+    "message": "This tab sends to $target$ until it reloads.",
+    "placeholders": {
+      "target": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_cancel": {
+    "message": "Cancel"
+  },
+  "inspect_cancelled_blur": {
+    "message": "Cancelled because the panel lost focus. Try again."
+  },
+  "inspect_candidate_files_found": {
+    "message": "$count$ source file(s) found",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_capture_moved": {
+    "message": "The page moved or resized during capture."
+  },
+  "inspect_capture_navigated": {
+    "message": "The page navigated during capture."
+  },
+  "inspect_capture_needs_visible_tab": {
+    "message": "Screenshots need the page to be the visible tab."
+  },
+  "inspect_capture_outside_view": {
+    "message": "Some elements were outside the visible area."
+  },
+  "inspect_capture_page_no_answer": {
+    "message": "The page did not answer."
+  },
+  "inspect_capture_prepare_failed": {
+    "message": "The page could not prepare a screenshot."
+  },
+  "inspect_capture_proportions": {
+    "message": "Screenshot proportions do not match the page viewport."
+  },
+  "inspect_capture_size_unknown": {
+    "message": "Screenshot or viewport size is unknown."
+  },
+  "inspect_capture_tab_changed": {
+    "message": "The visible tab changed during capture."
+  },
+  "inspect_capture_unavailable": {
+    "message": "Screenshot unavailable: $error$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_capture_zoom_changed": {
+    "message": "The tab, window or zoom changed during capture."
+  },
+  "inspect_change": {
+    "message": "change"
+  },
+  "inspect_change_project": {
+    "message": "Change project"
+  },
+  "inspect_check_again": {
+    "message": "Check again"
+  },
+  "inspect_check_status": {
+    "message": "Check status"
+  },
+  "inspect_checking_binding": {
+    "message": "Checking ocs and project binding…"
+  },
+  "inspect_checking_visible": {
+    "message": "Checking that the panel is visible…"
+  },
+  "inspect_checks_skipped": {
+    "message": "Some checks were skipped (time budget): $checks$",
+    "placeholders": {
+      "checks": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_choice_remembered": {
+    "message": "Chosen once and remembered for this site. Page data never changes this choice."
+  },
+  "inspect_choose_another": {
+    "message": "Choose another"
+  },
+  "inspect_choose_destination": {
+    "message": "Choose where requests from this page go:"
+  },
+  "inspect_claim_accepted": {
+    "message": "Claim accepted."
+  },
+  "inspect_claim_affects": {
+    "message": "Replace moves only $scope$ from: $targets$. Narrower paths bound elsewhere keep their target.",
+    "placeholders": {
+      "scope": {
+        "content": "$1"
+      },
+      "targets": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_claim_also_source": {
+    "message": "Also counts as source: $roots$",
+    "placeholders": {
+      "roots": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_claim_current": {
+    "message": "This page currently sends to: $target$.",
+    "placeholders": {
+      "target": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_claim_keep": {
+    "message": "Keep current"
+  },
+  "inspect_claim_kept": {
+    "message": "Kept the current target."
+  },
+  "inspect_claim_no_target": {
+    "message": "no target"
+  },
+  "inspect_claim_replace": {
+    "message": "Replace"
+  },
+  "inspect_claim_target": {
+    "message": "Claimed target: $root$ · session folder $folder$",
+    "placeholders": {
+      "root": {
+        "content": "$1"
+      },
+      "folder": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_claim_title": {
+    "message": "$session$ asks to take over $scope$",
+    "placeholders": {
+      "session": {
+        "content": "$1"
+      },
+      "scope": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_claude_command": {
+    "message": "Claude Code command"
+  },
+  "inspect_close_title": {
+    "message": "Close (Esc)"
+  },
+  "inspect_closed": {
+    "message": "Closed."
+  },
+  "inspect_codex_command": {
+    "message": "Codex command"
+  },
+  "inspect_config_ignored": {
+    "message": "Project config ignored: $path$: $reason$",
+    "placeholders": {
+      "path": {
+        "content": "$1"
+      },
+      "reason": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_connecting": {
+    "message": "Connecting…"
+  },
+  "inspect_copied_markdown": {
+    "message": "Copied as Markdown."
+  },
+  "inspect_copy": {
+    "message": "Copy"
+  },
+  "inspect_copy_command": {
+    "message": "Copy command"
+  },
+  "inspect_delivery_failed": {
+    "message": "Delivery failed. Nothing was stored."
+  },
+  "inspect_delivery_failed_error": {
+    "message": "Delivery failed: $error$. Nothing was stored.",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_delivery_no_binding": {
+    "message": "Pick a project for this site first."
+  },
+  "inspect_delivery_no_ocs": {
+    "message": "ocs is not installed. Install it with the command above, then send again."
+  },
+  "inspect_delivery_no_session": {
+    "message": "No running agent session for this project. Start one, then press Check again."
+  },
+  "inspect_delivery_page_changed": {
+    "message": "The page moved to another path since you reviewed it. Nothing was sent. Check the target and the selected elements, then send again."
+  },
+  "inspect_delivery_sent": {
+    "message": "Sent to the session. It is in the agent's queue; watch the agent for its answer."
+  },
+  "inspect_delivery_sent_wake": {
+    "message": "Sent to the session (wake: $wake$). It is in the agent's queue; watch the agent for its answer.",
+    "placeholders": {
+      "wake": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_delivery_session_changed": {
+    "message": "The bound session is gone or moved to another folder. Pick the session again."
+  },
+  "inspect_delivery_stored": {
+    "message": "Stored in ocs, but the session was not woken. Do not resend; the agent sees it when it next reads its inbox."
+  },
+  "inspect_delivery_stored_wake": {
+    "message": "Stored in ocs, but the session was not woken (wake: $wake$). Do not resend; the agent sees it when it next reads its inbox.",
+    "placeholders": {
+      "wake": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_delivery_target_changed": {
+    "message": "The target changed since the panel showed it (another session took over, it was unbound, or the dev server moved). Nothing was sent. Check the target, then send again."
+  },
+  "inspect_delivery_unconfirmed": {
+    "message": "No confirmation from the native host. Not resent. Check status once chrome-use is connected."
+  },
+  "inspect_delivery_unconfirmed_error": {
+    "message": "No confirmation from the native host ($error$). Not resent. Check status once chrome-use is connected.",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_delivery_unknown": {
+    "message": "Outcome unknown: ocs may have stored it. Not resent. Check status before starting a new batch."
+  },
+  "inspect_delivery_unknown_warning": {
+    "message": "Outcome unknown: ocs may have stored it ($warning$). Not resent. Check status before starting a new batch.",
+    "placeholders": {
+      "warning": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_delivery_unrecognized": {
+    "message": "Unrecognized delivery result. Not resent."
+  },
+  "inspect_delivery_upgrade_required": {
+    "message": "This site has path-specific targets or a pending claim that this chrome-use version cannot apply. Nothing was sent. Upgrade with `chrome-use upgrade`."
+  },
+  "inspect_delivery_with_note": {
+    "message": "$message$ Note: $warning$",
+    "placeholders": {
+      "message": {
+        "content": "$1"
+      },
+      "warning": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_deployed_revision": {
+    "message": "Deployed revision (page meta, unverified): $revision$",
+    "placeholders": {
+      "revision": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_draw_clear": {
+    "message": "Clear"
+  },
+  "inspect_draw_done": {
+    "message": "Done"
+  },
+  "inspect_draw_reset": {
+    "message": "Reset"
+  },
+  "inspect_enable_button": {
+    "message": "Enable Inspect & Ask"
+  },
+  "inspect_enable_intro": {
+    "message": "Inspect & Ask lets you click an element on a page and send a change request, with the element’s source location and a screenshot, to the AI coding session working on that project."
+  },
+  "inspect_enable_point_ocs": {
+    "message": "Delivery uses ocs to reach a session you choose; it never starts agents or changes their permissions."
+  },
+  "inspect_enable_point_shortcut": {
+    "message": "Runs only when you press the shortcut or the popup button."
+  },
+  "inspect_enable_point_untrusted": {
+    "message": "Page content is sent as untrusted data next to your own words; nothing is sent until you press Send."
+  },
+  "inspect_env_local": {
+    "message": "local dev"
+  },
+  "inspect_env_test": {
+    "message": "test env"
+  },
+  "inspect_error_already_sent": {
+    "message": "This batch was already sent or its outcome is unconfirmed. Check its status or start a new batch."
+  },
+  "inspect_error_cannot_inspect": {
+    "message": "This page cannot be inspected."
+  },
+  "inspect_error_cli_too_old": {
+    "message": "This chrome-use CLI is too old for this choice; upgrade it with `chrome-use upgrade`."
+  },
+  "inspect_error_enable_needs_click": {
+    "message": "Enabling needs a click in the panel."
+  },
+  "inspect_error_host_offline": {
+    "message": "The chrome-use native host is not connected. Run `chrome-use doctor` or reinstall chrome-use, then press the shortcut again."
+  },
+  "inspect_error_http_only": {
+    "message": "Inspect & Ask works on http(s) pages only."
+  },
+  "inspect_error_no_document": {
+    "message": "Could not identify the page document."
+  },
+  "inspect_error_nothing_selected": {
+    "message": "Nothing selected"
+  },
+  "inspect_error_select_first": {
+    "message": "Select at least one element first."
+  },
+  "inspect_error_selection_changed_sending": {
+    "message": "The selection changed while sending. Review it and send again."
+  },
+  "inspect_error_write_first": {
+    "message": "Write what should change first."
+  },
+  "inspect_evidence_config": {
+    "message": "project config"
+  },
+  "inspect_evidence_config_wildcard": {
+    "message": "project config (wildcard)"
+  },
+  "inspect_evidence_dev_server": {
+    "message": "dev server"
+  },
+  "inspect_evidence_matched_many": {
+    "message": "$count$ source files matched",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_evidence_matched_one": {
+    "message": "$count$ source file matched",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_evidence_previous": {
+    "message": "used before"
+  },
+  "inspect_evidence_session_folder": {
+    "message": "agent session folder"
+  },
+  "inspect_hand_over": {
+    "message": "Hand over"
+  },
+  "inspect_host_offline_copy": {
+    "message": "The chrome-use native host is not connected. Copy still works."
+  },
+  "inspect_install_ocs_body": {
+    "message": "ocs carries your request to a running Claude Code, Codex or Pi session. Run this in a terminal, then press Check again. Your draft is kept."
+  },
+  "inspect_install_ocs_title": {
+    "message": "Install ocs to deliver to your agent session"
+  },
+  "inspect_instruction_placeholder": {
+    "message": "What should change? Enter sends, Shift+Enter for a new line."
+  },
+  "inspect_mapping_requested_plugin": {
+    "message": "Source mapping setup was requested. After the agent adds code-inspector-plugin and the dev server restarts, elements show file:line here."
+  },
+  "inspect_mapping_requested_test": {
+    "message": "Test-build source mapping was requested. It takes effect after the next test deployment."
+  },
+  "inspect_mapping_site_default": {
+    "message": "Source-mapping setup goes to the site default target. Use the site default (not \"this tab only\") to request it."
+  },
+  "inspect_new_batch": {
+    "message": "New batch"
+  },
+  "inspect_no_batch_record": {
+    "message": "The native host has no record of this batch, so its outcome cannot be confirmed. Check the agent session before starting a new batch."
+  },
+  "inspect_no_candidates": {
+    "message": "No candidates found. Type the project folder."
+  },
+  "inspect_no_marks_body": {
+    "message": "Elements can still be sent, labelled \"no source location\". For file:line, your agent can set up source mapping in this project:"
+  },
+  "inspect_no_marks_title": {
+    "message": "No source marks on this page"
+  },
+  "inspect_no_match_body": {
+    "message": "Start Claude Code, Codex or Pi in the project, then press Check again. Or, in the session that should receive requests, run:"
+  },
+  "inspect_no_match_title": {
+    "message": "No running agent session matches this page"
+  },
+  "inspect_no_running_session_here": {
+    "message": "no running session here"
+  },
+  "inspect_no_screenshot": {
+    "message": "no screenshot"
+  },
+  "inspect_no_session": {
+    "message": "no session"
+  },
+  "inspect_no_sessions_in_root": {
+    "message": "No running Claude Code, Codex or Pi session in $root$. Start one there, then press Check again:",
+    "placeholders": {
+      "root": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_not_now": {
+    "message": "Not now"
+  },
+  "inspect_note_placeholder": {
+    "message": "Note for this element (optional)"
+  },
+  "inspect_only_this_tab": {
+    "message": "Only this tab"
+  },
+  "inspect_open_in_editor": {
+    "message": "Open in editor"
+  },
+  "inspect_other_matches": {
+    "message": "Other matches:"
+  },
+  "inspect_page_moved": {
+    "message": "The page moved to another path. Check the target and the selected elements before sending."
+  },
+  "inspect_pair_also_source": {
+    "message": "Also counts as this page’s source: $roots$",
+    "placeholders": {
+      "roots": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_pair_project": {
+    "message": "Project: $root$",
+    "placeholders": {
+      "root": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_pair_session_folder": {
+    "message": "$details$ · session folder $folder$",
+    "placeholders": {
+      "details": {
+        "content": "$1"
+      },
+      "folder": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_pair_title": {
+    "message": "Send requests from $scope$ to $session$",
+    "placeholders": {
+      "scope": {
+        "content": "$1"
+      },
+      "session": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_pause_title": {
+    "message": "Pause animations (P)"
+  },
+  "inspect_pick_hint": {
+    "message": "Click an element on the page to start. Shift+click or drag to select several."
+  },
+  "inspect_picker_hint": {
+    "message": "Click an element · Shift+click or drag to select several · ↑/↓ parent/child · P pause animations · Esc exit"
+  },
+  "inspect_plugin_change_dependency": {
+    "message": "Add code-inspector-plugin as a devDependency"
+  },
+  "inspect_plugin_change_dev_only": {
+    "message": "Register it in the dev build only (pathType: relative, hotKeys: false)"
+  },
+  "inspect_plugin_change_no_commit": {
+    "message": "No production change, no commit, no push; the agent reports the diff"
+  },
+  "inspect_project_path_placeholder": {
+    "message": "Or type a project folder path"
+  },
+  "inspect_reason_port_moved": {
+    "message": "The dev server on this port now runs from another folder. Choose where requests go now."
+  },
+  "inspect_reason_root_missing": {
+    "message": "The bound project folder is gone or moved. Choose where requests go now."
+  },
+  "inspect_reason_session_default": {
+    "message": "The session"
+  },
+  "inspect_reason_session_ended": {
+    "message": "$session$ is no longer running. Choose where requests go now.",
+    "placeholders": {
+      "session": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_reason_session_moved": {
+    "message": "$session$ now works in another folder. Choose where requests go now.",
+    "placeholders": {
+      "session": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_remove": {
+    "message": "remove"
+  },
+  "inspect_retake_screenshots": {
+    "message": "Retake screenshots"
+  },
+  "inspect_revision_ahead_many": {
+    "message": "local is $count$ commits ahead of the deployed build",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_revision_ahead_one": {
+    "message": "local is $count$ commit ahead of the deployed build",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_revision_behind_many": {
+    "message": "local is $count$ commits behind the deployed build",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_revision_behind_one": {
+    "message": "local is $count$ commit behind the deployed build",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_revision_diverged": {
+    "message": "local and deployed build diverged ($ahead$ ahead, $behind$ behind)",
+    "placeholders": {
+      "ahead": {
+        "content": "$1"
+      },
+      "behind": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_revision_same": {
+    "message": "deployed build is your local HEAD"
+  },
+  "inspect_revision_unknown": {
+    "message": "deployed build not found in this checkout"
+  },
+  "inspect_roster_error": {
+    "message": "Could not list running agent sessions ($error$). The target cannot be checked right now; nothing will be sent until it can.",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_screenshot_alt": {
+    "message": "Screenshot of element $number$",
+    "placeholders": {
+      "number": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_screenshot_draw_title": {
+    "message": "Click to draw on the screenshot"
+  },
+  "inspect_selection_changed_checking": {
+    "message": "The selection changed while checking. Review it and send again."
+  },
+  "inspect_send": {
+    "message": "Send"
+  },
+  "inspect_sending": {
+    "message": "Sending…"
+  },
+  "inspect_session_ended": {
+    "message": "This Inspect & Ask session ended. Press the shortcut again to start a new one."
+  },
+  "inspect_session_fallback": {
+    "message": "session"
+  },
+  "inspect_session_revoked": {
+    "message": "This Inspect & Ask session ended ($reason$). Press the shortcut again.",
+    "placeholders": {
+      "reason": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_setup_myself": {
+    "message": "Set it up myself"
+  },
+  "inspect_start_session_hint": {
+    "message": "To use a project without a running session, start Claude Code or Codex there, or run $command$ in the session that should receive requests.",
+    "placeholders": {
+      "command": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_target_changed_checking": {
+    "message": "The target changed while checking. Review it and send again."
+  },
+  "inspect_target_legacy": {
+    "message": "→ $session$ @ $root$ $action$",
+    "placeholders": {
+      "session": {
+        "content": "$1"
+      },
+      "root": {
+        "content": "$2"
+      },
+      "action": {
+        "content": "$3"
+      }
+    }
+  },
+  "inspect_target_not_chosen": {
+    "message": "Target: not chosen yet"
+  },
+  "inspect_target_not_confirmed": {
+    "message": "Target: not confirmed yet"
+  },
+  "inspect_target_site": {
+    "message": "→ $session$ @ $root$ · $scope$ $action$",
+    "placeholders": {
+      "session": {
+        "content": "$1"
+      },
+      "root": {
+        "content": "$2"
+      },
+      "scope": {
+        "content": "$3"
+      },
+      "action": {
+        "content": "$4"
+      }
+    }
+  },
+  "inspect_target_tab": {
+    "message": "→ $session$ @ $root$ (this tab only) $action$",
+    "placeholders": {
+      "session": {
+        "content": "$1"
+      },
+      "root": {
+        "content": "$2"
+      },
+      "action": {
+        "content": "$3"
+      }
+    }
+  },
+  "inspect_test_change_flag": {
+    "message": "Add an explicit flag so test builds (never production) enable code-inspector-plugin with relative paths"
+  },
+  "inspect_test_change_meta": {
+    "message": "Add <meta name=\"chrome-use-revision\"> with the git commit to test builds"
+  },
+  "inspect_test_change_verify": {
+    "message": "Verify a production build has no data-insp-path; no commit or push"
+  },
+  "inspect_test_exposure_warning": {
+    "message": "Anyone who can open the test environment will be able to see source file paths in the page. Production stays unchanged. It takes effect after the next test deployment."
+  },
+  "inspect_test_no_marks_title": {
+    "message": "This test build has no source marks"
+  },
+  "inspect_title": {
+    "message": "Inspect & Ask"
+  },
+  "inspect_use_project": {
+    "message": "Use this project"
+  },
+  "inspect_use_session": {
+    "message": "Use this session"
+  },
+  "inspect_use_site_default": {
+    "message": "use site default"
+  },
+  "inspect_visibility_covered": {
+    "message": "The panel is covered, faded or moved. Scroll, or press the shortcut again."
+  },
+  "inspect_visibility_page_hidden": {
+    "message": "The page is hidden. Bring it to the front and try again."
+  },
+  "inspect_visibility_unconfirmed": {
+    "message": "Could not confirm the panel is visible. Try again."
+  },
+  "inspect_visibility_unsupported": {
+    "message": "This browser cannot confirm the panel is visible, so sending is off. Use Copy instead."
+  },
+  "inspect_which_project": {
+    "message": "Which project is $origin$?",
+    "placeholders": {
+      "origin": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_which_session": {
+    "message": "Which agent session should receive requests?"
+  },
+  "notify_turn_done": {
+    "message": "Done"
+  },
+  "notify_turn_done_preview": {
+    "message": "Done: $PREVIEW$",
+    "placeholders": {
+      "preview": {
+        "content": "$1",
+        "example": "The order was placed."
+      }
+    }
+  },
+  "notify_turn_failed": {
+    "message": "Failed"
+  },
+  "notify_turn_failed_error": {
+    "message": "Failed: $ERROR$",
+    "placeholders": {
+      "error": {
+        "content": "$1",
+        "example": "Rate limit reached"
+      }
+    }
+  },
+  "notify_turn_outcome_unconfirmed": {
+    "message": "Needs your attention: the outcome is unconfirmed"
+  },
+  "notify_turn_stopped": {
+    "message": "Stopped"
+  },
+  "notify_turn_waiting_approval": {
+    "message": "Needs your attention: waiting for your approval"
+  },
+  "options_connection_heading": {
+    "message": "Connection"
+  },
+  "options_connection_lead": {
+    "message": "Status of the bridge to your local chrome-use CLI."
+  },
+  "options_connection_notify_hint": {
+    "message": "Notify me when chrome-use links to or unlinks from Chrome."
+  },
+  "options_connection_notify_name": {
+    "message": "Connection notifications"
+  },
+  "options_copied": {
+    "message": "Copied ✓"
+  },
+  "options_copy": {
+    "message": "Copy"
+  },
+  "options_cursor_heading": {
+    "message": "Agent cursor"
+  },
+  "options_cursor_hint": {
+    "message": "A soft cursor + click ripple while chrome-use drives a tab. Off by default — the cursor is a visible DOM overlay, so leaving it off keeps automation invisible to the page (stealth)."
+  },
+  "options_cursor_lead": {
+    "message": "Watch a friendly cursor glide where the agent clicks."
+  },
+  "options_cursor_name": {
+    "message": "Show the agent cursor"
+  },
+  "options_debugger_heading": {
+    "message": "The “started debugging this browser” bar"
+  },
+  "options_debugger_lead": {
+    "message": "chrome-use drives Chrome via the DevTools protocol, so Chrome shows that bar while an agent is driving a tab. Automatic debugger release is disabled by default (0 seconds). Set “Release idle tabs after” to a positive timeout to release idle tabs between tasks. A one-time restart with a startup flag removes it entirely (your tabs & logins are restored automatically)."
+  },
+  "options_docs": {
+    "message": "Docs ↗"
+  },
+  "options_idle_aria": {
+    "message": "Seconds before idle tabs are released"
+  },
+  "options_idle_hint": {
+    "message": "Seconds without agent activity before the debugger detaches from a tab (the bar goes away). The next command re-attaches automatically. 0 keeps tabs attached until the session ends."
+  },
+  "options_idle_name": {
+    "message": "Release idle tabs after"
+  },
+  "options_idle_unit": {
+    "message": "sec"
+  },
+  "options_inspect_binding_consented": {
+    "message": "consented: $KINDS$",
+    "placeholders": {
+      "kinds": {
+        "content": "$1",
+        "example": "dev source mapping"
+      }
+    }
+  },
+  "options_inspect_binding_linked": {
+    "message": "linked by the session"
+  },
+  "options_inspect_bindings_empty": {
+    "message": "No site is bound yet. The first pick on a site asks where its requests go."
+  },
+  "options_inspect_bindings_heading": {
+    "message": "Sites bound to projects"
+  },
+  "options_inspect_bindings_hint": {
+    "message": "A site (optionally limited to a path) sends to one agent session. Unbind to choose again; a session can also claim a site with `chrome-use inspect link <url>`."
+  },
+  "options_inspect_bindings_loading": {
+    "message": "Loading…"
+  },
+  "options_inspect_bindings_preview": {
+    "message": "Bindings appear here once a site is bound."
+  },
+  "options_inspect_bindings_unavailable": {
+    "message": "Bindings unavailable: $ERROR$",
+    "placeholders": {
+      "error": {
+        "content": "$1",
+        "example": "Native host is not connected"
+      }
+    }
+  },
+  "options_inspect_change_shortcut": {
+    "message": "Change the shortcut"
+  },
+  "options_inspect_claim_keep": {
+    "message": "Keep current"
+  },
+  "options_inspect_claim_pending": {
+    "message": "Pending: $SESSION$ asks for $SCOPE$",
+    "placeholders": {
+      "session": {
+        "content": "$1",
+        "example": "frontend-1"
+      },
+      "scope": {
+        "content": "$2",
+        "example": "https://example.com/app"
+      }
+    }
+  },
+  "options_inspect_claim_replace": {
+    "message": "Replace"
+  },
+  "options_inspect_claim_replaces": {
+    "message": "$ROOT$ · replaces $AFFECTED$",
+    "placeholders": {
+      "root": {
+        "content": "$1",
+        "example": "~/code/app"
+      },
+      "affected": {
+        "content": "$2",
+        "example": "frontend-1 (https://example.com)"
+      }
+    }
+  },
+  "options_inspect_consent_dev": {
+    "message": "dev source mapping"
+  },
+  "options_inspect_consent_test": {
+    "message": "test-build source mapping"
+  },
+  "options_inspect_editor_aria": {
+    "message": "Editor for source links"
+  },
+  "options_inspect_editor_hint": {
+    "message": "Source links open the file at the line in this editor."
+  },
+  "options_inspect_editor_name": {
+    "message": "\"Open in editor\" uses"
+  },
+  "options_inspect_editor_none": {
+    "message": "Do not show"
+  },
+  "options_inspect_enable_hint": {
+    "message": "Off by default. Nothing is injected into pages until you press the shortcut ($SHORTCUT$) or the popup button.",
+    "placeholders": {
+      "shortcut": {
+        "content": "$1",
+        "example": "Alt+Shift+C"
+      }
+    }
+  },
+  "options_inspect_enable_name": {
+    "message": "Enable Inspect & Ask"
+  },
+  "options_inspect_heading": {
+    "message": "Inspect & Ask"
+  },
+  "options_inspect_lead": {
+    "message": "Press the shortcut, click an element, and send a change request with its source location and a screenshot to the coding session working on that project (via ocs)."
+  },
+  "options_inspect_revoke_dev": {
+    "message": "Revoke dev consent"
+  },
+  "options_inspect_revoke_test": {
+    "message": "Revoke test consent"
+  },
+  "options_inspect_shortcut_not_set": {
+    "message": "not set"
+  },
+  "options_inspect_unbind": {
+    "message": "Unbind"
+  },
+  "options_notifications_heading": {
+    "message": "Notifications"
+  },
+  "options_notifications_lead": {
+    "message": "A gentle heads-up when the bridge connects or drops, or a panel task finishes."
+  },
+  "options_page_title": {
+    "message": "chrome-use settings"
+  },
+  "options_privacy": {
+    "message": "Runs locally · no tracking · no cloud"
+  },
+  "options_request_failed": {
+    "message": "Request failed"
+  },
+  "options_saved": {
+    "message": "Saved ✓"
+  },
+  "options_status_checking": {
+    "message": "Checking…"
+  },
+  "options_status_checking_detail": {
+    "message": "saying hi to your local CLI"
+  },
+  "options_status_connected": {
+    "message": "Connected"
+  },
+  "options_status_connected_detail": {
+    "message": "bridged to your local CLI · ready"
+  },
+  "options_status_not_paired": {
+    "message": "Not paired"
+  },
+  "options_status_not_paired_detail": {
+    "message": "run `chrome-use extension install`, then reopen"
+  },
+  "options_tabs_attached": {
+    "message": "$COUNT$ tabs attached",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "3"
+      }
+    }
+  },
+  "options_tabs_attached_one": {
+    "message": "1 tab attached"
+  },
+  "options_tagline": {
+    "message": "Local browser automation bridge"
+  },
+  "options_turn_notify_hint": {
+    "message": "When a side-panel task finishes, fails, stops or waits for your approval, show a notification and a count on the toolbar icon. Nothing is shown for the conversation the panel already has open in the focused window."
+  },
+  "options_turn_notify_name": {
+    "message": "Notify when a task finishes"
+  },
+  "panel_a_tool": {
+    "message": "A tool"
+  },
+  "panel_access_allow_tools": {
+    "message": "Allow tools automatically"
+  },
+  "panel_access_ask_first": {
+    "message": "Ask first"
+  },
+  "panel_access_cli_permissions": {
+    "message": "CLI permissions"
+  },
+  "panel_access_follow_switch": {
+    "message": "Follow permission switch"
+  },
+  "panel_access_full": {
+    "message": "Full access"
+  },
+  "panel_access_review_tools": {
+    "message": "Review tool approvals"
+  },
+  "panel_access_title_ask": {
+    "message": "Asks before each tool, command or file change. Click for full access."
+  },
+  "panel_access_title_full": {
+    "message": "Automatically allows permission requests in this conversation. Click to turn this off."
+  },
+  "panel_access_title_opencode": {
+    "message": "OpenCode uses its own permission rules and may allow tools without asking. Requests it does send appear here. Click to automatically allow those requests."
+  },
+  "panel_access_title_pi_browser": {
+    "message": "Pi never asks before a tool runs, so it gets only the browser tools: no shell or file changes. Click for full access."
+  },
+  "panel_access_title_pi_full": {
+    "message": "Pi runs browser tools, commands and file changes. Click for browser tools only."
+  },
+  "panel_account_login_unknown": {
+    "message": "Login unknown"
+  },
+  "panel_account_reported": {
+    "message": "Account reported"
+  },
+  "panel_account_signed_in": {
+    "message": "Signed in"
+  },
+  "panel_account_signed_out": {
+    "message": "Signed out"
+  },
+  "panel_acted_not_recorded": {
+    "message": "Pages acted on: not recorded"
+  },
+  "panel_acted_on": {
+    "message": "Acted on: $PAGES$",
+    "placeholders": {
+      "pages": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_action_reported_late": {
+    "message": "reported after the request ended"
+  },
+  "panel_action_unreported": {
+    "message": "admitted, never reported"
+  },
+  "panel_agent_chat_unsupported": {
+    "message": "Installed · chat not supported in the panel yet"
+  },
+  "panel_agent_checking": {
+    "message": "Installed · checking…"
+  },
+  "panel_agent_config_only": {
+    "message": "Configuration found; program not installed"
+  },
+  "panel_agent_configure": {
+    "message": "Configure"
+  },
+  "panel_agent_installed": {
+    "message": "Installed"
+  },
+  "panel_agent_not_installed": {
+    "message": "Not installed"
+  },
+  "panel_agent_status_failed": {
+    "message": "Installed · status unavailable"
+  },
+  "panel_agent_status_failed_reason": {
+    "message": "Installed · status unavailable: $ERROR$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_agent_status_title": {
+    "message": "Reported by the CLI. Model access is confirmed when a conversation runs."
+  },
+  "panel_allow_all": {
+    "message": "Allow all in this conversation"
+  },
+  "panel_allow_once": {
+    "message": "Allow once"
+  },
+  "panel_allow_turn": {
+    "message": "Allow for this turn"
+  },
+  "panel_answer_each": {
+    "message": "Answer each question before sending."
+  },
+  "panel_answer_label": {
+    "message": "Answer: $QUESTION$",
+    "placeholders": {
+      "question": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_artifact_captured": {
+    "message": "File captured: yes"
+  },
+  "panel_artifact_capturing": {
+    "message": "Capturing…"
+  },
+  "panel_artifact_changed": {
+    "message": "Not shown: the file changed while it was read."
+  },
+  "panel_artifact_delivered": {
+    "message": "Saved to your path: yes"
+  },
+  "panel_artifact_download": {
+    "message": "Download"
+  },
+  "panel_artifact_empty": {
+    "message": "Not empty: no, the file is empty"
+  },
+  "panel_artifact_file": {
+    "message": "File"
+  },
+  "panel_artifact_finalizing": {
+    "message": "Finishing the recording…"
+  },
+  "panel_artifact_gone": {
+    "message": "The file is no longer available."
+  },
+  "panel_artifact_not_delivered": {
+    "message": "Saved to your path: no"
+  },
+  "panel_artifact_not_delivered_detail": {
+    "message": "Saved to your path: no ($DETAIL$)",
+    "placeholders": {
+      "detail": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_artifact_not_empty": {
+    "message": "Not empty: yes"
+  },
+  "panel_artifact_not_kept": {
+    "message": "the file could not be kept"
+  },
+  "panel_artifact_read_failed": {
+    "message": "The file could not be read: $REASON$",
+    "placeholders": {
+      "reason": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_artifact_reading": {
+    "message": "Reading the file…"
+  },
+  "panel_artifact_recording": {
+    "message": "Recording"
+  },
+  "panel_artifact_recording_now": {
+    "message": "Recording…"
+  },
+  "panel_artifact_save": {
+    "message": "Save"
+  },
+  "panel_artifact_save_copy": {
+    "message": "Save a copy"
+  },
+  "panel_artifact_screenshot": {
+    "message": "Screenshot"
+  },
+  "panel_artifact_size": {
+    "message": "Size: $SIZE$",
+    "placeholders": {
+      "size": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_artifact_type_no": {
+    "message": "Type matches .$EXT$: no ($MIME$)",
+    "placeholders": {
+      "ext": {
+        "content": "$1"
+      },
+      "mime": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_artifact_type_unchecked": {
+    "message": "Type matches .$EXT$: not checked",
+    "placeholders": {
+      "ext": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_artifact_type_yes": {
+    "message": "Type matches .$EXT$: yes",
+    "placeholders": {
+      "ext": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_artifact_unavailable": {
+    "message": "Unavailable: $REASON$",
+    "placeholders": {
+      "reason": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_artifact_unknown_type": {
+    "message": "unknown type"
+  },
+  "panel_artifact_waiting": {
+    "message": "Waiting for the file…"
+  },
+  "panel_assessment_blocked": {
+    "message": "Blocked: $TEXT$",
+    "placeholders": {
+      "text": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_assessment_disclaimer": {
+    "message": "These are the checks the agent chose; they do not prove the whole request was done."
+  },
+  "panel_assessment_lowered": {
+    "message": "Lowered: $REASON$",
+    "placeholders": {
+      "reason": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_assessment_not_assessed": {
+    "message": "The agent did not assess this request."
+  },
+  "panel_browser_tool": {
+    "message": "browser tool"
+  },
+  "panel_cancel_request": {
+    "message": "Cancel request"
+  },
+  "panel_change_default_model": {
+    "message": "Change default model"
+  },
+  "panel_check_checked": {
+    "message": "Checked"
+  },
+  "panel_check_claimed": {
+    "message": "Agent claimed"
+  },
+  "panel_check_evidence": {
+    "message": "$VERB$ '$PREDICATE$'",
+    "placeholders": {
+      "verb": {
+        "content": "$1"
+      },
+      "predicate": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_check_evidence_when": {
+    "message": "$VERB$ '$PREDICATE$' at $TIME$",
+    "placeholders": {
+      "verb": {
+        "content": "$1"
+      },
+      "predicate": {
+        "content": "$2"
+      },
+      "time": {
+        "content": "$3"
+      }
+    }
+  },
+  "panel_check_evidence_where": {
+    "message": "$VERB$ '$PREDICATE$' on $PLACE$",
+    "placeholders": {
+      "verb": {
+        "content": "$1"
+      },
+      "predicate": {
+        "content": "$2"
+      },
+      "place": {
+        "content": "$3"
+      }
+    }
+  },
+  "panel_check_evidence_where_when": {
+    "message": "$VERB$ '$PREDICATE$' on $PLACE$ at $TIME$",
+    "placeholders": {
+      "verb": {
+        "content": "$1"
+      },
+      "predicate": {
+        "content": "$2"
+      },
+      "place": {
+        "content": "$3"
+      },
+      "time": {
+        "content": "$4"
+      }
+    }
+  },
+  "panel_check_failed": {
+    "message": "Check failed"
+  },
+  "panel_check_file": {
+    "message": "File $NAME$ is $PREDICATE$",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      },
+      "predicate": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_check_predicate": {
+    "message": "Check: $PREDICATE$",
+    "placeholders": {
+      "predicate": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_check_stale": {
+    "message": "Check is stale: the page was acted on afterwards"
+  },
+  "panel_check_unknown": {
+    "message": "Unknown"
+  },
+  "panel_check_unmet": {
+    "message": "Not met"
+  },
+  "panel_check_verb_expect": {
+    "message": "page showed"
+  },
+  "panel_check_verb_other": {
+    "message": "check:"
+  },
+  "panel_check_verb_read_back": {
+    "message": "field check:"
+  },
+  "panel_check_verb_url": {
+    "message": "browser landed on"
+  },
+  "panel_cli_account_metadata": {
+    "message": "CLI reports account metadata"
+  },
+  "panel_cli_account_unverified": {
+    "message": "Account state unverified"
+  },
+  "panel_cli_default": {
+    "message": "CLI default"
+  },
+  "panel_cli_no_answer": {
+    "message": "the CLI did not answer"
+  },
+  "panel_cli_signed_in": {
+    "message": "CLI reports signed in"
+  },
+  "panel_cli_signed_out": {
+    "message": "CLI reports signed out"
+  },
+  "panel_config_hidden_value": {
+    "message": "Hidden structured or sensitive value"
+  },
+  "panel_config_invalid_type": {
+    "message": "Stored value has an unsupported type; enter a replacement to repair it."
+  },
+  "panel_config_no_changes": {
+    "message": "Change a field before previewing."
+  },
+  "panel_config_restore_conflicts": {
+    "message": "Restored unchanged fields. Preserved later edits to: $FIELDS$",
+    "placeholders": {
+      "fields": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_config_restored": {
+    "message": "The original configuration was restored and read back."
+  },
+  "panel_config_saved": {
+    "message": "Configuration saved and read back. Existing conversations keep their current settings."
+  },
+  "panel_config_title": {
+    "message": "$NAME$ configuration",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_config_unavailable": {
+    "message": "Configuration changes are unavailable for this host."
+  },
+  "panel_connection_connected": {
+    "message": "Local bridge connected"
+  },
+  "panel_connection_read_only": {
+    "message": "Connected. This Windows panel is read-only; browser CLI automation remains available."
+  },
+  "panel_connection_unavailable": {
+    "message": "Local bridge unavailable. Run chrome-use extension install, then refresh."
+  },
+  "panel_connection_update_cli": {
+    "message": "Bridge connected. Update the chrome-use CLI, then refresh to enable the agent panel."
+  },
+  "panel_connection_waiting": {
+    "message": "Waiting for local bridge…"
+  },
+  "panel_control_agent": {
+    "message": "Agent working"
+  },
+  "panel_control_resuming": {
+    "message": "Resuming"
+  },
+  "panel_control_stop_requested": {
+    "message": "Stop requested, waiting for confirmation"
+  },
+  "panel_control_stopped": {
+    "message": "This conversation's agent has stopped"
+  },
+  "panel_control_unknown": {
+    "message": "Agent state unknown"
+  },
+  "panel_conversation_untitled": {
+    "message": "Conversation"
+  },
+  "panel_decline": {
+    "message": "Decline"
+  },
+  "panel_default_model": {
+    "message": "Default model"
+  },
+  "panel_delete_done_with_problems": {
+    "message": "Conversation deleted. $PROBLEMS$",
+    "placeholders": {
+      "problems": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_delete_not_removed": {
+    "message": "Could not remove: $ITEMS$",
+    "placeholders": {
+      "items": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_delete_session_files": {
+    "message": "Agent session files were not removed: $ERROR$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_delete_tabs_unconfirmed": {
+    "message": "chrome-use could not confirm that all of its browser tabs closed; a leftover tab may remain in the AI window."
+  },
+  "panel_details": {
+    "message": "Details"
+  },
+  "panel_disable": {
+    "message": "Disable"
+  },
+  "panel_edit": {
+    "message": "Edit"
+  },
+  "panel_empty_answer": {
+    "message": "The agent returned no answer text."
+  },
+  "panel_enable": {
+    "message": "Enable"
+  },
+  "panel_error_cli_required": {
+    "message": "Local agent conversations require a supported current CLI."
+  },
+  "panel_error_direct_waiting": {
+    "message": "A direct message is already waiting for stop confirmation."
+  },
+  "panel_error_host_unconfirmed": {
+    "message": "The local host did not confirm this operation."
+  },
+  "panel_error_open_from_extension": {
+    "message": "Open this page from the chrome-use extension."
+  },
+  "panel_error_pending_storage": {
+    "message": "Message identity storage is unavailable; the message was not sent."
+  },
+  "panel_field_effort": {
+    "message": "Reasoning effort"
+  },
+  "panel_field_haiku_model": {
+    "message": "Haiku model"
+  },
+  "panel_field_model": {
+    "message": "Model"
+  },
+  "panel_field_opus_model": {
+    "message": "Opus model"
+  },
+  "panel_field_provider": {
+    "message": "Provider"
+  },
+  "panel_field_service_tier": {
+    "message": "Service tier"
+  },
+  "panel_field_small_model": {
+    "message": "Small model"
+  },
+  "panel_field_sonnet_model": {
+    "message": "Sonnet model"
+  },
+  "panel_fork_context": {
+    "message": "This conversation continues one whose last request ended with an unknown outcome. Actions listed there may already have taken effect."
+  },
+  "panel_image_attached": {
+    "message": "Attached image"
+  },
+  "panel_image_limit": {
+    "message": "Attach up to five images per message."
+  },
+  "panel_image_remove": {
+    "message": "Remove image"
+  },
+  "panel_image_unavailable": {
+    "message": "Saved image unavailable"
+  },
+  "panel_keep_going": {
+    "message": "Keep going"
+  },
+  "panel_memory_summarized": {
+    "message": "memory summarized"
+  },
+  "panel_memory_summarized_note": {
+    "message": "The agent's memory was summarized during this request; the history shown is complete."
+  },
+  "panel_model_inspection_unavailable": {
+    "message": "CLI model inspection is unavailable for this host."
+  },
+  "panel_model_metadata_failed": {
+    "message": "Model metadata unavailable: $REASON$. No fallback list was substituted; you can still enter a custom model ID.",
+    "placeholders": {
+      "reason": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_model_not_checked": {
+    "message": "CLI model access has not been checked."
+  },
+  "panel_model_reading": {
+    "message": "Reading CLI model metadata…"
+  },
+  "panel_model_status": {
+    "message": "CLI version unverified. $COUNT$ models. $ACCOUNT$. Model execution access is unverified.",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      },
+      "account": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_model_status_partial": {
+    "message": "CLI version unverified. $COUNT$ models (partial catalog). $ACCOUNT$. Model execution access is unverified.",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      },
+      "account": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_model_status_version": {
+    "message": "CLI $VERSION$. $COUNT$ models. $ACCOUNT$. Model execution access is unverified.",
+    "placeholders": {
+      "version": {
+        "content": "$1"
+      },
+      "count": {
+        "content": "$2"
+      },
+      "account": {
+        "content": "$3"
+      }
+    }
+  },
+  "panel_model_status_version_partial": {
+    "message": "CLI $VERSION$. $COUNT$ models (partial catalog). $ACCOUNT$. Model execution access is unverified.",
+    "placeholders": {
+      "version": {
+        "content": "$1"
+      },
+      "count": {
+        "content": "$2"
+      },
+      "account": {
+        "content": "$3"
+      }
+    }
+  },
+  "panel_models_count": {
+    "message": "$COUNT$ models",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_new_conversation": {
+    "message": "New conversation"
+  },
+  "panel_new_conversation_item": {
+    "message": "＋ New conversation"
+  },
+  "panel_no_answer": {
+    "message": "no answer"
+  },
+  "panel_no_conversations": {
+    "message": "No conversations yet."
+  },
+  "panel_no_conversations_on": {
+    "message": "No conversations on $DOMAIN$ yet.",
+    "placeholders": {
+      "domain": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_open_earlier_conversation": {
+    "message": "Open the earlier conversation"
+  },
+  "panel_open_new_conversation": {
+    "message": "Open the new conversation"
+  },
+  "panel_page_chip_title": {
+    "message": "Sent with your message: $URL$",
+    "placeholders": {
+      "url": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_page_fallback": {
+    "message": "a page"
+  },
+  "panel_page_you_sent": {
+    "message": "the page you sent"
+  },
+  "panel_pending_text_missing": {
+    "message": "The original text is unavailable; clear the warning or inspect the conversation history."
+  },
+  "panel_phase_read_only": {
+    "message": "Read-only discovery"
+  },
+  "panel_phase_ready": {
+    "message": "Ready"
+  },
+  "panel_phase_unknown": {
+    "message": "Unknown response state"
+  },
+  "panel_pointed_at": {
+    "message": "Browser tools pointed at: $PAGES$",
+    "placeholders": {
+      "pages": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_question": {
+    "message": "Question"
+  },
+  "panel_queue_count": {
+    "message": "$COUNT$ queued",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_queue_count_paused": {
+    "message": "$COUNT$ queued, paused",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_queue_unconfirmed": {
+    "message": "Send unconfirmed; checking stored message"
+  },
+  "panel_queued": {
+    "message": "Queued: $TEXT$",
+    "placeholders": {
+      "text": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_queued_direct": {
+    "message": "Send after stop: $TEXT$",
+    "placeholders": {
+      "text": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_queued_edit_label": {
+    "message": "Edit queued message"
+  },
+  "panel_queued_empty": {
+    "message": "Enter a message, or remove it from the queue."
+  },
+  "panel_queued_load_first": {
+    "message": "Load the full queued message before changing it."
+  },
+  "panel_queued_load_full": {
+    "message": "Load full text"
+  },
+  "panel_queued_loaded": {
+    "message": "Full queued message loaded."
+  },
+  "panel_queued_remove": {
+    "message": "Remove"
+  },
+  "panel_queued_save": {
+    "message": "Save edit"
+  },
+  "panel_queued_saved": {
+    "message": "Change saved; reading the queue."
+  },
+  "panel_queued_unconfirmed": {
+    "message": "Change unconfirmed. Refresh the queue before editing again."
+  },
+  "panel_recovery_action": {
+    "message": "$TOOL$ · may have taken effect",
+    "placeholders": {
+      "tool": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_recovery_action_on": {
+    "message": "$TOOL$ on $HOST$ · may have taken effect",
+    "placeholders": {
+      "tool": {
+        "content": "$1"
+      },
+      "host": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_recovery_alive": {
+    "message": "The old agent process is still running."
+  },
+  "panel_recovery_continue": {
+    "message": "Continue in a new conversation"
+  },
+  "panel_recovery_end": {
+    "message": "End the old agent process"
+  },
+  "panel_recovery_end_unconfirmed": {
+    "message": "Ending the old agent process was not confirmed."
+  },
+  "panel_recovery_ended": {
+    "message": "The old agent process was ended."
+  },
+  "panel_recovery_exited": {
+    "message": "The old agent process has exited."
+  },
+  "panel_recovery_forked": {
+    "message": "This request was continued in a new conversation."
+  },
+  "panel_recovery_no_options": {
+    "message": "Ending it or continuing in a new conversation is not offered, because its state cannot be proven. A new conversation started normally does not stop the old agent."
+  },
+  "panel_recovery_review": {
+    "message": "Review what may have happened"
+  },
+  "panel_recovery_review_failed": {
+    "message": "Review failed: $REASON$",
+    "placeholders": {
+      "reason": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_recovery_state_unknown": {
+    "message": "chrome-use cannot tell whether the old agent process is still running."
+  },
+  "panel_recovery_unknown": {
+    "message": "The outcome of this request is unknown. Browser actions may already have taken effect."
+  },
+  "panel_redirect": {
+    "message": "Asked for $ASKED$, landed on $LANDED$",
+    "placeholders": {
+      "asked": {
+        "content": "$1"
+      },
+      "landed": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_request_changed": {
+    "message": "This request changed. Review it again before answering."
+  },
+  "panel_request_decision": {
+    "message": "This action requires a decision."
+  },
+  "panel_request_form_unsafe": {
+    "message": "This form cannot be safely completed here. Decline or cancel this request."
+  },
+  "panel_request_mcp": {
+    "message": "The MCP server needs a decision."
+  },
+  "panel_request_needs_input": {
+    "message": "The agent needs your input"
+  },
+  "panel_request_opencode": {
+    "message": "OpenCode tool request"
+  },
+  "panel_request_permissions": {
+    "message": "Review the requested access for this turn."
+  },
+  "panel_request_review": {
+    "message": "Review the agent request"
+  },
+  "panel_request_sent": {
+    "message": "Choice sent; waiting for the agent to continue."
+  },
+  "panel_request_stop_requested": {
+    "message": "Stop requested; allowing is disabled. You can still decline."
+  },
+  "panel_request_tool": {
+    "message": "Tool request"
+  },
+  "panel_request_truncated": {
+    "message": "The request preview is incomplete. Stop this response before approving anything."
+  },
+  "panel_request_unconfirmed": {
+    "message": "Response unconfirmed. Waiting for the current agent state."
+  },
+  "panel_request_unsupported": {
+    "message": "This request needs a response format this view cannot present. Stop the response and inspect the CLI request."
+  },
+  "panel_requirement": {
+    "message": "Requirement"
+  },
+  "panel_respond_unconfirmed": {
+    "message": "Response unconfirmed. Read the current state before retrying."
+  },
+  "panel_retry_default_model": {
+    "message": "Retry with default model"
+  },
+  "panel_role_answer": {
+    "message": "Answer"
+  },
+  "panel_role_progress": {
+    "message": "Progress note"
+  },
+  "panel_role_response": {
+    "message": "Response"
+  },
+  "panel_schedule_acknowledge": {
+    "message": "Acknowledge unknown outcome"
+  },
+  "panel_schedule_delete": {
+    "message": "Delete schedule"
+  },
+  "panel_schedule_disabled": {
+    "message": "Disabled"
+  },
+  "panel_schedule_enabled": {
+    "message": "Enabled"
+  },
+  "panel_schedule_next": {
+    "message": "Next: $TIME$",
+    "placeholders": {
+      "time": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_schedule_not_run": {
+    "message": "Not run yet"
+  },
+  "panel_schedule_open_run": {
+    "message": "Open run"
+  },
+  "panel_schedule_run_now": {
+    "message": "Run now"
+  },
+  "panel_scope_site": {
+    "message": "This site"
+  },
+  "panel_scope_site_domain": {
+    "message": "This site · $DOMAIN$",
+    "placeholders": {
+      "domain": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_send": {
+    "message": "Send"
+  },
+  "panel_send_answers": {
+    "message": "Send answers"
+  },
+  "panel_send_label": {
+    "message": "Send message"
+  },
+  "panel_send_now": {
+    "message": "Send now"
+  },
+  "panel_send_queue_label": {
+    "message": "Queue message"
+  },
+  "panel_send_queue_title": {
+    "message": "Queue — sends after the current response"
+  },
+  "panel_send_stop_and_send": {
+    "message": "Stop & send"
+  },
+  "panel_sent_with": {
+    "message": "Sent with: $PAGE$",
+    "placeholders": {
+      "page": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_skill_ambiguous": {
+    "message": "Choose which skill source to use from the picker."
+  },
+  "panel_skill_disabled": {
+    "message": "disabled"
+  },
+  "panel_skill_none": {
+    "message": "No skill"
+  },
+  "panel_skill_unknown": {
+    "message": "Unknown or disabled skill. Refresh skills or choose an entry from the picker."
+  },
+  "panel_skill_use": {
+    "message": "Use"
+  },
+  "panel_speaker_assistant": {
+    "message": "Assistant"
+  },
+  "panel_speaker_status": {
+    "message": "Response status"
+  },
+  "panel_speaker_you": {
+    "message": "You"
+  },
+  "panel_stall_banner": {
+    "message": "$TEXT$ Nothing was stopped automatically.",
+    "placeholders": {
+      "text": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_stall_no_activity": {
+    "message": "The agent has shown no activity for a while."
+  },
+  "panel_stall_no_progress": {
+    "message": "The page did not change after the last step."
+  },
+  "panel_stall_repeated_failure": {
+    "message": "The same step failed."
+  },
+  "panel_stall_repeated_failure_times": {
+    "message": "The same step failed $COUNT$ times.",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_stall_repeated_result": {
+    "message": "The agent repeated the same step with the same result."
+  },
+  "panel_stall_repeated_result_times": {
+    "message": "The agent repeated the same step with the same result $COUNT$ times.",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_step_no_record": {
+    "message": "No record that it ran"
+  },
+  "panel_step_reported_late": {
+    "message": "Reported after the request ended"
+  },
+  "panel_step_unfinished": {
+    "message": "Did not finish; may have run"
+  },
+  "panel_steps_failed": {
+    "message": "$COUNT$ failed",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_steps_failed_named": {
+    "message": "$COUNT$ failed: $NAMES$",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      },
+      "names": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_steps_many": {
+    "message": "$COUNT$ steps",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_steps_one": {
+    "message": "$COUNT$ step",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_stop": {
+    "message": "Stop"
+  },
+  "panel_stray_no_record": {
+    "message": "$TOOL$: no record that it ran",
+    "placeholders": {
+      "tool": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_stray_unfinished": {
+    "message": "$TOOL$: did not finish; may have run",
+    "placeholders": {
+      "tool": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_time_days_ago": {
+    "message": "$COUNT$d ago",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_time_hours_ago": {
+    "message": "$COUNT$h ago",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_time_just_now": {
+    "message": "just now"
+  },
+  "panel_time_minutes_ago": {
+    "message": "$COUNT$m ago",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_tool_failed": {
+    "message": "Failed"
+  },
+  "panel_tool_running": {
+    "message": "Running"
+  },
+  "panel_tools_browser_only": {
+    "message": "Browser only"
+  },
+  "panel_tools_read_files": {
+    "message": "Browser and file reads"
+  },
+  "panel_tools_read_files_codex": {
+    "message": "Browser and file reads (Codex shell remains)"
+  },
+  "panel_tools_run_commands": {
+    "message": "Browser, files and commands"
+  },
+  "panel_tools_write_files": {
+    "message": "Browser, file reads and writes"
+  },
+  "panel_unavailable_cancelled": {
+    "message": "The download was cancelled"
+  },
+  "panel_unavailable_changed": {
+    "message": "The file changed while it was copied"
+  },
+  "panel_unavailable_encoder_failed": {
+    "message": "ffmpeg could not encode the recording"
+  },
+  "panel_unavailable_encoder_missing": {
+    "message": "ffmpeg is not installed"
+  },
+  "panel_unavailable_failed": {
+    "message": "Capture failed"
+  },
+  "panel_unavailable_interrupted": {
+    "message": "Capture was interrupted"
+  },
+  "panel_unavailable_linked": {
+    "message": "The file was a link"
+  },
+  "panel_unavailable_missing": {
+    "message": "The file is missing"
+  },
+  "panel_unavailable_not_owned": {
+    "message": "The file belongs to another user"
+  },
+  "panel_unavailable_not_regular": {
+    "message": "Not a regular file"
+  },
+  "panel_unavailable_path_mismatch": {
+    "message": "The file was not where chrome-use put it"
+  },
+  "panel_unavailable_quota": {
+    "message": "This conversation is out of file space"
+  },
+  "panel_unavailable_timeout": {
+    "message": "Capture timed out"
+  },
+  "panel_unavailable_too_large": {
+    "message": "Too large to keep a copy"
+  },
+  "panel_unlinked_many": {
+    "message": "$COUNT$ browser records not matched to a step",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_unlinked_one": {
+    "message": "$COUNT$ browser record not matched to a step",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_working": {
+    "message": "Working"
+  },
+  "panel_working_folder": {
+    "message": "Working folder: $PATH$",
+    "placeholders": {
+      "path": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_your_answer": {
+    "message": "Your answer"
+  },
+  "popup_desc_after_name": {
+    "message": " CLI drives your own logged-in Chrome tabs, on this machine, only when you ask."
+  },
+  "popup_desc_before_name": {
+    "message": "Your local "
+  },
+  "popup_docs": {
+    "message": "Docs"
+  },
+  "popup_hint_check": {
+    "message": "Check the local CLI connection:"
+  },
+  "popup_hint_check_and_reopen": {
+    "message": "Check the local CLI, then reopen this popup to reconnect:"
+  },
+  "popup_hint_install_host": {
+    "message": "Install the local host, then reopen this popup:"
+  },
+  "popup_inspect": {
+    "message": "Inspect element"
+  },
+  "popup_inspect_failed": {
+    "message": "Could not start Inspect & Ask on this page."
+  },
+  "popup_inspect_title": {
+    "message": "Pick an element on this page and send a change request to your coding agent (Alt+Shift+C)"
+  },
+  "popup_privacy": {
+    "message": "Runs locally · no tracking"
+  },
+  "popup_settings": {
+    "message": "Settings"
+  },
+  "popup_standalone": {
+    "message": "Open this popup from the chrome-use extension"
+  },
+  "popup_status_checking": {
+    "message": "Checking…"
+  },
+  "popup_status_checking_detail": {
+    "message": "saying hi to your local CLI"
+  },
+  "popup_status_connected": {
+    "message": "Connected"
+  },
+  "popup_status_connected_detail": {
+    "message": "local CLI connection confirmed"
+  },
+  "popup_status_connecting": {
+    "message": "Connecting…"
+  },
+  "popup_status_connecting_detail": {
+    "message": "waiting for the local CLI to respond"
+  },
+  "popup_status_not_paired": {
+    "message": "Not paired"
+  },
+  "popup_status_not_paired_detail": {
+    "message": "no local chrome-use CLI linked"
+  },
+  "popup_tab_count": {
+    "message": "$COUNT$ tabs",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "3"
+      }
+    }
+  },
+  "popup_tab_count_one": {
+    "message": "1 tab"
+  },
+  "popup_tagline": {
+    "message": "Local browser automation bridge"
+  },
+  "sidepanel_access_browser_only_claude_pi": {
+    "message": "Browser only (Claude or Pi)"
+  },
+  "sidepanel_access_read_files": {
+    "message": "Browser and file reads"
+  },
+  "sidepanel_access_run_commands": {
+    "message": "Browser, files and commands"
+  },
+  "sidepanel_access_write_files": {
+    "message": "Browser, file reads and writes"
+  },
+  "sidepanel_agent": {
+    "message": "Agent"
+  },
+  "sidepanel_agent_configuration": {
+    "message": "Agent configuration"
+  },
+  "sidepanel_agent_requests": {
+    "message": "Agent requests"
+  },
+  "sidepanel_agent_settings": {
+    "message": "Agent settings"
+  },
+  "sidepanel_agent_working": {
+    "message": "The agent is working"
+  },
+  "sidepanel_agents_and_models_label": {
+    "message": "Agents and models"
+  },
+  "sidepanel_agents_and_models_title": {
+    "message": "Agents & models"
+  },
+  "sidepanel_allowed_tools": {
+    "message": "Allowed tools"
+  },
+  "sidepanel_apply_config_hint": {
+    "message": "Updates this agent's settings on the machine. Running conversations keep their current configuration."
+  },
+  "sidepanel_apply_configuration": {
+    "message": "Apply configuration"
+  },
+  "sidepanel_attach_images": {
+    "message": "Attach images"
+  },
+  "sidepanel_back": {
+    "message": "← Back"
+  },
+  "sidepanel_changes_to_apply": {
+    "message": "Changes to apply"
+  },
+  "sidepanel_checking_connection": {
+    "message": "Checking local connection…"
+  },
+  "sidepanel_clear_send_warning": {
+    "message": "Clear send warning"
+  },
+  "sidepanel_cli_default": {
+    "message": "CLI default"
+  },
+  "sidepanel_conversation_label": {
+    "message": "Conversation"
+  },
+  "sidepanel_conversation_options": {
+    "message": "Conversation options"
+  },
+  "sidepanel_conversation_scope": {
+    "message": "Which conversations"
+  },
+  "sidepanel_conversations": {
+    "message": "Conversations"
+  },
+  "sidepanel_custom_model": {
+    "message": "Custom model ID"
+  },
+  "sidepanel_custom_model_placeholder": {
+    "message": "Overrides the model menu"
+  },
+  "sidepanel_custom_program": {
+    "message": "Custom program"
+  },
+  "sidepanel_custom_program_placeholder": {
+    "message": "Use the discovered program"
+  },
+  "sidepanel_default_model": {
+    "message": "Default model"
+  },
+  "sidepanel_delete": {
+    "message": "Delete"
+  },
+  "sidepanel_delete_confirm_detail": {
+    "message": "Removes its panel history, the agent CLI's own session files and its browser tabs from this computer. This cannot be undone."
+  },
+  "sidepanel_delete_confirm_title": {
+    "message": "Delete this conversation?"
+  },
+  "sidepanel_delete_conversation": {
+    "message": "Delete conversation"
+  },
+  "sidepanel_discard_preview": {
+    "message": "Discard preview"
+  },
+  "sidepanel_empty_detail": {
+    "message": "Describe a page or a task. The agent works in its own browser session with your local CLI login."
+  },
+  "sidepanel_empty_title": {
+    "message": "What should the browser do?"
+  },
+  "sidepanel_enabled": {
+    "message": "Enabled"
+  },
+  "sidepanel_example_tasks": {
+    "message": "Example tasks"
+  },
+  "sidepanel_extension_settings": {
+    "message": "Extension settings"
+  },
+  "sidepanel_find_again": {
+    "message": "Find again"
+  },
+  "sidepanel_follow_permission_switch": {
+    "message": "Follow permission switch"
+  },
+  "sidepanel_full_access": {
+    "message": "Full access"
+  },
+  "sidepanel_import_archive": {
+    "message": "Local ZIP or .skill archive"
+  },
+  "sidepanel_import_folder": {
+    "message": "Local folder"
+  },
+  "sidepanel_import_git": {
+    "message": "Git HTTPS URL"
+  },
+  "sidepanel_import_skills": {
+    "message": "Import skills"
+  },
+  "sidepanel_import_source": {
+    "message": "Import source"
+  },
+  "sidepanel_import_source_placeholder": {
+    "message": "Absolute path or repository URL"
+  },
+  "sidepanel_jump_latest": {
+    "message": "↓ Latest"
+  },
+  "sidepanel_keep": {
+    "message": "Keep"
+  },
+  "sidepanel_library_skill_name": {
+    "message": "Library skill name"
+  },
+  "sidepanel_local_agents": {
+    "message": "Local agents"
+  },
+  "sidepanel_message_keys": {
+    "message": "Enter to send · Ctrl/⌘+Enter to stop and send · Shift+Enter for a new line"
+  },
+  "sidepanel_message_label": {
+    "message": "Message"
+  },
+  "sidepanel_message_placeholder": {
+    "message": "Describe a browser task…"
+  },
+  "sidepanel_model": {
+    "message": "Model"
+  },
+  "sidepanel_model_status_unchecked": {
+    "message": "CLI model access has not been checked."
+  },
+  "sidepanel_more_options": {
+    "message": "More options"
+  },
+  "sidepanel_new_conversation": {
+    "message": "New conversation"
+  },
+  "sidepanel_new_conversation_options": {
+    "message": "New conversation options"
+  },
+  "sidepanel_new_schedule": {
+    "message": "New schedule"
+  },
+  "sidepanel_no_skill": {
+    "message": "No skill"
+  },
+  "sidepanel_page_detach": {
+    "message": "Don't send this page"
+  },
+  "sidepanel_page_title": {
+    "message": "chrome-use assistant"
+  },
+  "sidepanel_phase_ready": {
+    "message": "Ready"
+  },
+  "sidepanel_preview_changes": {
+    "message": "Preview changes"
+  },
+  "sidepanel_privacy_hint": {
+    "message": "Your CLI may send tasks and page observations to its configured model service. Conversation history stays on this computer."
+  },
+  "sidepanel_prompt": {
+    "message": "Prompt"
+  },
+  "sidepanel_queued_messages": {
+    "message": "Queued messages"
+  },
+  "sidepanel_reasoning_effort": {
+    "message": "Reasoning effort"
+  },
+  "sidepanel_record_task": {
+    "message": "Record this task"
+  },
+  "sidepanel_record_task_hint": {
+    "message": "Record the agent's browser tab for this message only. The recording stays on this computer."
+  },
+  "sidepanel_recovery_hint": {
+    "message": "Delivery is unconfirmed. Retry uses the same message ID. Clearing this warning does not cancel a task that may have reached the agent."
+  },
+  "sidepanel_refresh": {
+    "message": "Refresh"
+  },
+  "sidepanel_refresh_schedules": {
+    "message": "Refresh schedules"
+  },
+  "sidepanel_refresh_skills": {
+    "message": "Refresh skills"
+  },
+  "sidepanel_reload_models": {
+    "message": "Reload models from CLI"
+  },
+  "sidepanel_restore_change": {
+    "message": "Restore this change"
+  },
+  "sidepanel_resume_queue": {
+    "message": "Resume queue"
+  },
+  "sidepanel_retry_same_message": {
+    "message": "Retry same message"
+  },
+  "sidepanel_save_conversation_options": {
+    "message": "Save conversation options"
+  },
+  "sidepanel_save_library_skill": {
+    "message": "Save library skill"
+  },
+  "sidepanel_save_schedule": {
+    "message": "Save schedule"
+  },
+  "sidepanel_schedule_automatic": {
+    "message": "Allow permitted tools automatically"
+  },
+  "sidepanel_schedule_cron": {
+    "message": "Five-field cron"
+  },
+  "sidepanel_schedule_daily": {
+    "message": "Daily at HH:MM"
+  },
+  "sidepanel_schedule_effort_placeholder": {
+    "message": "CLI default; Codex or Claude only"
+  },
+  "sidepanel_schedule_interval": {
+    "message": "Every N minutes"
+  },
+  "sidepanel_schedule_name": {
+    "message": "Name"
+  },
+  "sidepanel_schedule_timing_placeholder": {
+    "message": "60, 09:00 or 0 9 * * 1-5"
+  },
+  "sidepanel_schedule_weekdays": {
+    "message": "Weekdays at HH:MM"
+  },
+  "sidepanel_schedule_when": {
+    "message": "When"
+  },
+  "sidepanel_scheduled_prompts": {
+    "message": "Scheduled prompts"
+  },
+  "sidepanel_schedules_hint": {
+    "message": "Runs while the local agent service is running. Times use this host's local time zone. Missed periods run once. A run with an unknown outcome needs your review before another can start."
+  },
+  "sidepanel_scope_all": {
+    "message": "All"
+  },
+  "sidepanel_scope_this_site": {
+    "message": "This site"
+  },
+  "sidepanel_send": {
+    "message": "Send"
+  },
+  "sidepanel_send_message": {
+    "message": "Send message"
+  },
+  "sidepanel_service_tier": {
+    "message": "Service tier"
+  },
+  "sidepanel_skill": {
+    "message": "Skill"
+  },
+  "sidepanel_skill_library": {
+    "message": "Skill library"
+  },
+  "sidepanel_skill_library_hint": {
+    "message": "Library entries are shared by agents in this Chrome profile. Your existing skills are read-only here."
+  },
+  "sidepanel_skill_name_placeholder": {
+    "message": "lowercase-name"
+  },
+  "sidepanel_skills": {
+    "message": "Skills"
+  },
+  "sidepanel_stop": {
+    "message": "Stop"
+  },
+  "sidepanel_stop_and_send": {
+    "message": "Stop & send"
+  },
+  "sidepanel_suggest_links": {
+    "message": "Explain the links on this page"
+  },
+  "sidepanel_suggest_summarize": {
+    "message": "Summarize this page"
+  },
+  "sidepanel_suggest_table": {
+    "message": "Extract a table from this page"
+  },
+  "sidepanel_tab_agents": {
+    "message": "Agents"
+  },
+  "sidepanel_tab_schedules": {
+    "message": "Schedules"
+  },
+  "sidepanel_tier_priority": {
+    "message": "Priority"
+  },
+  "sidepanel_tier_priority_codex": {
+    "message": "Priority (Codex)"
+  },
+  "sidepanel_tier_standard": {
+    "message": "Standard"
+  },
+  "sidepanel_tier_standard_codex": {
+    "message": "Standard (Codex)"
+  },
+  "sidepanel_transcript": {
+    "message": "Conversation transcript"
+  },
+  "sidepanel_turn_options_hint": {
+    "message": "Applies to this conversation. Changes take effect on the next response without editing CLI settings."
+  },
+  "timeline_assessment_blocked": {
+    "message": "Blocked"
+  },
+  "timeline_assessment_checks_passed": {
+    "message": "Agent's browser checks passed"
+  },
+  "timeline_assessment_not_checked": {
+    "message": "Not checked"
+  },
+  "timeline_assessment_not_recorded": {
+    "message": "Checks not recorded"
+  },
+  "timeline_assessment_pending": {
+    "message": "Assessment pending"
+  },
+  "timeline_assessment_some_checks_passed": {
+    "message": "Some checks passed"
+  },
+  "timeline_error_chunks_out_of_order": {
+    "message": "Completed response chunks arrived out of order."
+  },
+  "timeline_error_cursor_mismatch": {
+    "message": "Conversation cursor did not match the received events."
+  },
+  "timeline_error_history_gap": {
+    "message": "Conversation history has a gap. Refresh before relying on this view."
+  },
+  "timeline_note_failed_queue_paused": {
+    "message": "Response failed. Queued messages are paused."
+  },
+  "timeline_note_interrupted_queue_paused": {
+    "message": "Response interrupted. Queued messages are paused."
+  },
+  "timeline_outcome_completed": {
+    "message": "Completed"
+  },
+  "timeline_outcome_failed": {
+    "message": "Failed"
+  },
+  "timeline_outcome_interrupted": {
+    "message": "Interrupted"
+  },
+  "timeline_outcome_unknown": {
+    "message": "Outcome unknown"
+  },
+  "timeline_phase_failed": {
+    "message": "Response failed"
+  },
+  "timeline_phase_idle": {
+    "message": "Ready"
+  },
+  "timeline_phase_interrupted": {
+    "message": "Response interrupted"
+  },
+  "timeline_phase_recovery_required": {
+    "message": "Previous outcome unconfirmed"
+  },
+  "timeline_phase_running": {
+    "message": "Responding"
+  },
+  "timeline_phase_starting": {
+    "message": "Starting agent"
+  },
+  "timeline_phase_stopping": {
+    "message": "Waiting for stop confirmation"
+  },
+  "timeline_phase_waiting_input": {
+    "message": "Waiting for your input"
+  },
+  "timeline_queue_edited": {
+    "message": "Edited before sending"
+  },
+  "timeline_queue_removed": {
+    "message": "Removed from queue"
+  },
+  "timeline_tool_browser": {
+    "message": "Browser · $TOOL$",
+    "placeholders": {
+      "tool": {
+        "content": "$1",
+        "example": "open"
+      }
+    }
+  },
+  "timeline_tool_changed_files": {
+    "message": "Changed files"
+  },
+  "timeline_tool_generic": {
+    "message": "Tool"
+  },
+  "timeline_tool_preview_shortened": {
+    "message": "[The tool preview was shortened]"
+  },
+  "timeline_tool_ran_command": {
+    "message": "Ran a command"
+  },
+  "timeline_tool_result": {
+    "message": "Tool result"
+  },
+  "timeline_tool_searched_web": {
+    "message": "Searched the web"
+  },
+  "timeline_verdict_confirmed": {
+    "message": "Confirmed"
+  },
+  "timeline_verdict_failed": {
+    "message": "Failed"
+  },
+  "timeline_verdict_no_browser_record": {
+    "message": "No browser record"
+  },
+  "timeline_verdict_not_checked": {
+    "message": "Not checked"
+  },
+  "timeline_verdict_page_not_recorded": {
+    "message": "Page not recorded"
+  }
+}

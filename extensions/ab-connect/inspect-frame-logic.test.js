@@ -1,3 +1,4 @@
+import './test-i18n.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { visibilityVerdict, editorUrl, deliveryMessage, LOCKED_STATES } from './inspect-frame-logic.js';

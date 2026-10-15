@@ -4,6 +4,8 @@
 // drops the screenshots with a stated reason; the extension never switches
 // the user's tabs to make a capture succeed.
 
+import { t } from './i18n.js';
+
 export const MAX_CROP_SIDE = 1600;
 
 export function layoutsMatch(a, b, tolerance = 1) {
@@ -18,10 +20,10 @@ export function layoutsMatch(a, b, tolerance = 1) {
 // Bitmap pixels per CSS pixel come from the bitmap itself, not devicePixelRatio
 // (zoom and display scaling make them differ).
 export function cropPlan({ bitmapWidth, bitmapHeight, layout, maxSide = MAX_CROP_SIDE }) {
-  if (!(bitmapWidth > 0 && bitmapHeight > 0 && layout?.innerWidth > 0 && layout?.innerHeight > 0)) return { ok: false, reason: 'Screenshot or viewport size is unknown.' };
+  if (!(bitmapWidth > 0 && bitmapHeight > 0 && layout?.innerWidth > 0 && layout?.innerHeight > 0)) return { ok: false, reason: t('inspect_capture_size_unknown') };
   const sx = bitmapWidth / layout.innerWidth;
   const sy = bitmapHeight / layout.innerHeight;
-  if (Math.abs(sx - sy) > 0.02) return { ok: false, reason: 'Screenshot proportions do not match the page viewport.' };
+  if (Math.abs(sx - sy) > 0.02) return { ok: false, reason: t('inspect_capture_proportions') };
   const crops = layout.rects.map(rect => {
     const x0 = Math.max(0, Math.floor(rect.x * sx));
     const y0 = Math.max(0, Math.floor(rect.y * sy));
@@ -39,11 +41,11 @@ export function cropPlan({ bitmapWidth, bitmapHeight, layout, maxSide = MAX_CROP
 // Pre/post checks around one capture. `before`/`after` are tab snapshots and
 // generations taken by the background; layouts come from the picker.
 export function captureVerdict({ before, after, generationBefore, generationAfter, layoutBefore, layoutAfter, topDocumentId, documentAfter }) {
-  if (!before?.active) return { ok: false, reason: 'Screenshots need the page to be the visible tab.' };
-  if (!after?.active || after.windowId !== before.windowId || after.id !== before.id) return { ok: false, reason: 'The visible tab changed during capture.' };
-  if (generationAfter !== generationBefore) return { ok: false, reason: 'The tab, window or zoom changed during capture.' };
-  if (documentAfter !== topDocumentId) return { ok: false, reason: 'The page navigated during capture.' };
-  if (!layoutsMatch(layoutBefore, layoutAfter)) return { ok: false, reason: 'The page moved or resized during capture.' };
+  if (!before?.active) return { ok: false, reason: t('inspect_capture_needs_visible_tab') };
+  if (!after?.active || after.windowId !== before.windowId || after.id !== before.id) return { ok: false, reason: t('inspect_capture_tab_changed') };
+  if (generationAfter !== generationBefore) return { ok: false, reason: t('inspect_capture_zoom_changed') };
+  if (documentAfter !== topDocumentId) return { ok: false, reason: t('inspect_capture_navigated') };
+  if (!layoutsMatch(layoutBefore, layoutAfter)) return { ok: false, reason: t('inspect_capture_moved') };
   return { ok: true };
 }
 

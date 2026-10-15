@@ -1,0 +1,2834 @@
+{
+  "bg_notify_connected_message": {
+    "message": "已连上本机 CLI，可以操作你的标签页了。"
+  },
+  "bg_notify_connected_title": {
+    "message": "chrome-use 已连接"
+  },
+  "bg_notify_disconnected_message": {
+    "message": "与本机 CLI 的连接已断开。"
+  },
+  "bg_notify_disconnected_title": {
+    "message": "chrome-use 已断开"
+  },
+  "entry_error_popup_unavailable": {
+    "message": "连接弹窗不可用：$ERROR$",
+    "placeholders": {
+      "error": {
+        "content": "$1",
+        "example": "Invalid popup path"
+      }
+    }
+  },
+  "entry_error_side_panel_unconfirmed": {
+    "message": "Chrome 没有确认侧栏入口。"
+  },
+  "entry_error_side_panel_unsupported": {
+    "message": "这个版本的 Chrome 无法打开 agent 侧栏。"
+  },
+  "ext_action_title": {
+    "message": "chrome-use"
+  },
+  "ext_command_inspect_element": {
+    "message": "点选改代码：选中一个元素，把修改请求发给你的编程 agent"
+  },
+  "ext_description": {
+    "message": "用本机的 chrome-use CLI 和你本机的 Codex、Claude Code、OpenCode 或 Pi agent 自动操作浏览器。"
+  },
+  "inspect_add_element": {
+    "message": "+ 添加元素"
+  },
+  "inspect_agree_setup": {
+    "message": "同意，让我的 agent 来配置"
+  },
+  "inspect_attach_screenshot": {
+    "message": "附上截图"
+  },
+  "inspect_bound_site": {
+    "message": "$scope$ 的请求现在发给 $target$。",
+    "placeholders": {
+      "scope": {
+        "content": "$1"
+      },
+      "target": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_bound_tab": {
+    "message": "刷新之前，这个标签页发给 $target$。",
+    "placeholders": {
+      "target": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_cancel": {
+    "message": "取消"
+  },
+  "inspect_cancelled_blur": {
+    "message": "面板失去焦点，已取消。请重试。"
+  },
+  "inspect_candidate_files_found": {
+    "message": "找到 $count$ 个源码文件",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_capture_moved": {
+    "message": "截图期间页面滚动或尺寸变了。"
+  },
+  "inspect_capture_navigated": {
+    "message": "截图期间页面跳转了。"
+  },
+  "inspect_capture_needs_visible_tab": {
+    "message": "截图需要页面是当前可见的标签页。"
+  },
+  "inspect_capture_outside_view": {
+    "message": "部分元素在可见区域之外。"
+  },
+  "inspect_capture_page_no_answer": {
+    "message": "页面没有响应。"
+  },
+  "inspect_capture_prepare_failed": {
+    "message": "页面无法准备截图。"
+  },
+  "inspect_capture_proportions": {
+    "message": "截图比例和页面视口不一致。"
+  },
+  "inspect_capture_size_unknown": {
+    "message": "截图或视口尺寸未知。"
+  },
+  "inspect_capture_tab_changed": {
+    "message": "截图期间可见标签页变了。"
+  },
+  "inspect_capture_unavailable": {
+    "message": "截图不可用：$error$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_capture_zoom_changed": {
+    "message": "截图期间标签页、窗口或缩放变了。"
+  },
+  "inspect_change": {
+    "message": "更改"
+  },
+  "inspect_change_project": {
+    "message": "更换项目"
+  },
+  "inspect_check_again": {
+    "message": "重新检查"
+  },
+  "inspect_check_status": {
+    "message": "查看状态"
+  },
+  "inspect_checking_binding": {
+    "message": "正在检查 ocs 和项目绑定…"
+  },
+  "inspect_checking_visible": {
+    "message": "正在确认面板可见…"
+  },
+  "inspect_checks_skipped": {
+    "message": "部分检查因超时被跳过：$checks$",
+    "placeholders": {
+      "checks": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_choice_remembered": {
+    "message": "每个站点只选一次，之后记住。页面数据不会改变这个选择。"
+  },
+  "inspect_choose_another": {
+    "message": "选其他"
+  },
+  "inspect_choose_destination": {
+    "message": "选择这个页面的请求发到哪里："
+  },
+  "inspect_claim_accepted": {
+    "message": "已接受认领。"
+  },
+  "inspect_claim_affects": {
+    "message": "替换只会把 $scope$ 从这些目标移走：$targets$。绑定到别处的更细路径保持原目标。",
+    "placeholders": {
+      "scope": {
+        "content": "$1"
+      },
+      "targets": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_claim_also_source": {
+    "message": "同时算作源码：$roots$",
+    "placeholders": {
+      "roots": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_claim_current": {
+    "message": "这个页面目前发给：$target$。",
+    "placeholders": {
+      "target": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_claim_keep": {
+    "message": "保留当前"
+  },
+  "inspect_claim_kept": {
+    "message": "已保留当前目标。"
+  },
+  "inspect_claim_no_target": {
+    "message": "无目标"
+  },
+  "inspect_claim_replace": {
+    "message": "替换"
+  },
+  "inspect_claim_target": {
+    "message": "认领的目标：$root$ · 会话目录 $folder$",
+    "placeholders": {
+      "root": {
+        "content": "$1"
+      },
+      "folder": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_claim_title": {
+    "message": "$session$ 请求接管 $scope$",
+    "placeholders": {
+      "session": {
+        "content": "$1"
+      },
+      "scope": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_claude_command": {
+    "message": "Claude Code 命令"
+  },
+  "inspect_close_title": {
+    "message": "关闭 (Esc)"
+  },
+  "inspect_closed": {
+    "message": "已关闭。"
+  },
+  "inspect_codex_command": {
+    "message": "Codex 命令"
+  },
+  "inspect_config_ignored": {
+    "message": "已忽略项目配置：$path$：$reason$",
+    "placeholders": {
+      "path": {
+        "content": "$1"
+      },
+      "reason": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_connecting": {
+    "message": "正在连接…"
+  },
+  "inspect_copied_markdown": {
+    "message": "已复制为 Markdown。"
+  },
+  "inspect_copy": {
+    "message": "复制"
+  },
+  "inspect_copy_command": {
+    "message": "复制命令"
+  },
+  "inspect_delivery_failed": {
+    "message": "投递失败，没有存下任何内容。"
+  },
+  "inspect_delivery_failed_error": {
+    "message": "投递失败：$error$。没有存下任何内容。",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_delivery_no_binding": {
+    "message": "请先为这个站点选择项目。"
+  },
+  "inspect_delivery_no_ocs": {
+    "message": "没有安装 ocs。用上面的命令安装后再发送。"
+  },
+  "inspect_delivery_no_session": {
+    "message": "这个项目没有运行中的 agent 会话。启动一个，然后点「重新检查」。"
+  },
+  "inspect_delivery_page_changed": {
+    "message": "你核对之后页面跳到了另一个路径。没有发送。请检查目标和已选元素，再重新发送。"
+  },
+  "inspect_delivery_sent": {
+    "message": "已发给会话，正在 agent 的队列里；回复请看 agent。"
+  },
+  "inspect_delivery_sent_wake": {
+    "message": "已发给会话（唤醒：$wake$），正在 agent 的队列里；回复请看 agent。",
+    "placeholders": {
+      "wake": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_delivery_session_changed": {
+    "message": "绑定的会话已退出或换了目录。请重新选择会话。"
+  },
+  "inspect_delivery_stored": {
+    "message": "已存入 ocs，但没有唤醒会话。不要重发；agent 下次读收件箱时会看到。"
+  },
+  "inspect_delivery_stored_wake": {
+    "message": "已存入 ocs，但没有唤醒会话（唤醒：$wake$）。不要重发；agent 下次读收件箱时会看到。",
+    "placeholders": {
+      "wake": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_delivery_target_changed": {
+    "message": "面板显示之后目标变了（别的会话接管、已解除绑定，或 dev server 换了位置）。没有发送。请检查目标后重新发送。"
+  },
+  "inspect_delivery_unconfirmed": {
+    "message": "本地宿主没有确认。没有重发。chrome-use 连上后请查看状态。"
+  },
+  "inspect_delivery_unconfirmed_error": {
+    "message": "本地宿主没有确认（$error$）。没有重发。chrome-use 连上后请查看状态。",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_delivery_unknown": {
+    "message": "结果未知：ocs 可能已经存下。没有重发。开始新的一批之前请先查看状态。"
+  },
+  "inspect_delivery_unknown_warning": {
+    "message": "结果未知：ocs 可能已经存下（$warning$）。没有重发。开始新的一批之前请先查看状态。",
+    "placeholders": {
+      "warning": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_delivery_unrecognized": {
+    "message": "无法识别的投递结果。没有重发。"
+  },
+  "inspect_delivery_upgrade_required": {
+    "message": "这个站点有按路径设置的目标或待确认的认领，当前 chrome-use 版本无法处理。没有发送。请运行 `chrome-use upgrade` 升级。"
+  },
+  "inspect_delivery_with_note": {
+    "message": "$message$注意：$warning$",
+    "placeholders": {
+      "message": {
+        "content": "$1"
+      },
+      "warning": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_deployed_revision": {
+    "message": "部署的版本（来自页面 meta，未核实）：$revision$",
+    "placeholders": {
+      "revision": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_draw_clear": {
+    "message": "清除"
+  },
+  "inspect_draw_done": {
+    "message": "完成"
+  },
+  "inspect_draw_reset": {
+    "message": "还原"
+  },
+  "inspect_enable_button": {
+    "message": "启用点选改代码"
+  },
+  "inspect_enable_intro": {
+    "message": "点选改代码：在页面上点选元素，把修改请求连同元素的源码位置和截图，发给正在做这个项目的 AI 编程会话。"
+  },
+  "inspect_enable_point_ocs": {
+    "message": "通过 ocs 投递到你选定的会话；不会启动 agent，也不会改动它的权限。"
+  },
+  "inspect_enable_point_shortcut": {
+    "message": "只在你按快捷键或点弹窗里的按钮时运行。"
+  },
+  "inspect_enable_point_untrusted": {
+    "message": "页面内容作为不可信数据，和你写的话一起发送；不点发送就什么都不会发出。"
+  },
+  "inspect_env_local": {
+    "message": "本地开发"
+  },
+  "inspect_env_test": {
+    "message": "测试环境"
+  },
+  "inspect_error_already_sent": {
+    "message": "这一批已经发送过，或结果还没确认。请查看状态，或开始新的一批。"
+  },
+  "inspect_error_cannot_inspect": {
+    "message": "这个页面不能点选。"
+  },
+  "inspect_error_cli_too_old": {
+    "message": "当前 chrome-use CLI 版本太旧，不支持这个选择；请运行 `chrome-use upgrade` 升级。"
+  },
+  "inspect_error_enable_needs_click": {
+    "message": "需要在面板里点击才能启用。"
+  },
+  "inspect_error_host_offline": {
+    "message": "chrome-use 本地宿主未连接。运行 `chrome-use doctor` 或重新安装 chrome-use，然后再按一次快捷键。"
+  },
+  "inspect_error_http_only": {
+    "message": "点选改代码只能用在 http(s) 页面上。"
+  },
+  "inspect_error_no_document": {
+    "message": "无法识别页面文档。"
+  },
+  "inspect_error_nothing_selected": {
+    "message": "没有选中任何元素"
+  },
+  "inspect_error_select_first": {
+    "message": "请先至少选一个元素。"
+  },
+  "inspect_error_selection_changed_sending": {
+    "message": "发送期间选区变了。请核对后重新发送。"
+  },
+  "inspect_error_write_first": {
+    "message": "请先写下要改什么。"
+  },
+  "inspect_evidence_config": {
+    "message": "项目配置"
+  },
+  "inspect_evidence_config_wildcard": {
+    "message": "项目配置（通配）"
+  },
+  "inspect_evidence_dev_server": {
+    "message": "dev server"
+  },
+  "inspect_evidence_matched_many": {
+    "message": "命中 $count$ 个源码文件",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_evidence_matched_one": {
+    "message": "命中 $count$ 个源码文件",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_evidence_previous": {
+    "message": "之前用过"
+  },
+  "inspect_evidence_session_folder": {
+    "message": "agent 会话目录"
+  },
+  "inspect_hand_over": {
+    "message": "交给它"
+  },
+  "inspect_host_offline_copy": {
+    "message": "chrome-use 本地宿主未连接。复制仍然可用。"
+  },
+  "inspect_install_ocs_body": {
+    "message": "ocs 负责把请求送到运行中的 Claude Code、Codex 或 Pi 会话。在终端里运行下面的命令，然后点「重新检查」。草稿会保留。"
+  },
+  "inspect_install_ocs_title": {
+    "message": "安装 ocs 才能投递到你的 agent 会话"
+  },
+  "inspect_instruction_placeholder": {
+    "message": "要改什么？Enter 发送，Shift+Enter 换行。"
+  },
+  "inspect_mapping_requested_plugin": {
+    "message": "已请求配置源码定位。agent 加上 code-inspector-plugin、dev server 重启后，这里的元素会显示 文件:行号。"
+  },
+  "inspect_mapping_requested_test": {
+    "message": "已请求为测试构建配置源码定位，下次部署测试环境后生效。"
+  },
+  "inspect_mapping_site_default": {
+    "message": "源码定位配置只发给站点默认目标。请切回站点默认（而不是“仅此标签页”）再请求。"
+  },
+  "inspect_new_batch": {
+    "message": "新的一批"
+  },
+  "inspect_no_batch_record": {
+    "message": "本地宿主没有这一批的记录，无法确认结果。开始新的一批之前，请先看看 agent 会话。"
+  },
+  "inspect_no_candidates": {
+    "message": "没有找到候选项目，请输入项目目录。"
+  },
+  "inspect_no_marks_body": {
+    "message": "元素仍然可以发送，会标为“没有源码位置”。要显示 文件:行号，可以让你的 agent 在这个项目里配置源码定位："
+  },
+  "inspect_no_marks_title": {
+    "message": "这个页面没有源码标记"
+  },
+  "inspect_no_match_body": {
+    "message": "在项目里启动 Claude Code、Codex 或 Pi，然后点「重新检查」。或者在要接收请求的会话里运行："
+  },
+  "inspect_no_match_title": {
+    "message": "没有运行中的 agent 会话对应这个页面"
+  },
+  "inspect_no_running_session_here": {
+    "message": "这里没有运行中的会话"
+  },
+  "inspect_no_screenshot": {
+    "message": "无截图"
+  },
+  "inspect_no_session": {
+    "message": "无会话"
+  },
+  "inspect_no_sessions_in_root": {
+    "message": "$root$ 里没有运行中的 Claude Code、Codex 或 Pi 会话。在那里启动一个，然后点「重新检查」：",
+    "placeholders": {
+      "root": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_not_now": {
+    "message": "暂不"
+  },
+  "inspect_note_placeholder": {
+    "message": "这个元素的备注（可选）"
+  },
+  "inspect_only_this_tab": {
+    "message": "仅此标签页"
+  },
+  "inspect_open_in_editor": {
+    "message": "在编辑器中打开"
+  },
+  "inspect_other_matches": {
+    "message": "其他匹配："
+  },
+  "inspect_page_moved": {
+    "message": "页面已跳到另一个路径。发送前请检查目标和已选元素。"
+  },
+  "inspect_pair_also_source": {
+    "message": "同时算作这个页面的源码：$roots$",
+    "placeholders": {
+      "roots": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_pair_project": {
+    "message": "项目：$root$",
+    "placeholders": {
+      "root": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_pair_session_folder": {
+    "message": "$details$ · 会话目录 $folder$",
+    "placeholders": {
+      "details": {
+        "content": "$1"
+      },
+      "folder": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_pair_title": {
+    "message": "把 $scope$ 的请求发给 $session$",
+    "placeholders": {
+      "scope": {
+        "content": "$1"
+      },
+      "session": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_pause_title": {
+    "message": "暂停动画 (P)"
+  },
+  "inspect_pick_hint": {
+    "message": "点页面上的元素开始。Shift+点击或拖选可以选多个。"
+  },
+  "inspect_picker_hint": {
+    "message": "点选元素 · Shift+点击或拖选多个 · ↑/↓ 父/子元素 · P 暂停动画 · Esc 退出"
+  },
+  "inspect_plugin_change_dependency": {
+    "message": "把 code-inspector-plugin 加为 devDependency"
+  },
+  "inspect_plugin_change_dev_only": {
+    "message": "只在开发构建里注册（pathType: relative, hotKeys: false）"
+  },
+  "inspect_plugin_change_no_commit": {
+    "message": "不改生产构建，不提交，不推送；agent 会汇报改动"
+  },
+  "inspect_project_path_placeholder": {
+    "message": "或者输入项目目录路径"
+  },
+  "inspect_reason_port_moved": {
+    "message": "这个端口上的 dev server 现在从另一个目录运行。请重新选择请求发到哪里。"
+  },
+  "inspect_reason_root_missing": {
+    "message": "绑定的项目目录已不存在或被移动。请重新选择请求发到哪里。"
+  },
+  "inspect_reason_session_default": {
+    "message": "该会话"
+  },
+  "inspect_reason_session_ended": {
+    "message": "$session$ 已不在运行。请重新选择请求发到哪里。",
+    "placeholders": {
+      "session": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_reason_session_moved": {
+    "message": "$session$ 换到了另一个目录。请重新选择请求发到哪里。",
+    "placeholders": {
+      "session": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_remove": {
+    "message": "移除"
+  },
+  "inspect_retake_screenshots": {
+    "message": "重新截图"
+  },
+  "inspect_revision_ahead_many": {
+    "message": "本地比部署的构建领先 $count$ 个提交",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_revision_ahead_one": {
+    "message": "本地比部署的构建领先 $count$ 个提交",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_revision_behind_many": {
+    "message": "本地比部署的构建落后 $count$ 个提交",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_revision_behind_one": {
+    "message": "本地比部署的构建落后 $count$ 个提交",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_revision_diverged": {
+    "message": "本地和部署的构建已分叉（领先 $ahead$，落后 $behind$）",
+    "placeholders": {
+      "ahead": {
+        "content": "$1"
+      },
+      "behind": {
+        "content": "$2"
+      }
+    }
+  },
+  "inspect_revision_same": {
+    "message": "部署的构建就是你本地的 HEAD"
+  },
+  "inspect_revision_unknown": {
+    "message": "在这个检出里找不到部署的构建"
+  },
+  "inspect_roster_error": {
+    "message": "无法列出运行中的 agent 会话（$error$）。目前无法核对目标，核对之前不会发送任何内容。",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_screenshot_alt": {
+    "message": "元素 $number$ 的截图",
+    "placeholders": {
+      "number": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_screenshot_draw_title": {
+    "message": "点击在截图上标注"
+  },
+  "inspect_selection_changed_checking": {
+    "message": "检查期间选区变了。请核对后重新发送。"
+  },
+  "inspect_send": {
+    "message": "发送"
+  },
+  "inspect_sending": {
+    "message": "正在发送…"
+  },
+  "inspect_session_ended": {
+    "message": "这次点选改代码已结束。再按一次快捷键开始新的一次。"
+  },
+  "inspect_session_fallback": {
+    "message": "会话"
+  },
+  "inspect_session_revoked": {
+    "message": "这次点选改代码已结束（$reason$）。请再按一次快捷键。",
+    "placeholders": {
+      "reason": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_setup_myself": {
+    "message": "我自己配置"
+  },
+  "inspect_start_session_hint": {
+    "message": "要用没有运行中会话的项目，请在那里启动 Claude Code 或 Codex，或者在要接收请求的会话里运行 $command$。",
+    "placeholders": {
+      "command": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_target_changed_checking": {
+    "message": "检查期间目标变了。请核对后重新发送。"
+  },
+  "inspect_target_legacy": {
+    "message": "→ $session$ @ $root$ $action$",
+    "placeholders": {
+      "session": {
+        "content": "$1"
+      },
+      "root": {
+        "content": "$2"
+      },
+      "action": {
+        "content": "$3"
+      }
+    }
+  },
+  "inspect_target_not_chosen": {
+    "message": "目标：尚未选择"
+  },
+  "inspect_target_not_confirmed": {
+    "message": "目标：尚未确认"
+  },
+  "inspect_target_site": {
+    "message": "→ $session$ @ $root$ · $scope$ $action$",
+    "placeholders": {
+      "session": {
+        "content": "$1"
+      },
+      "root": {
+        "content": "$2"
+      },
+      "scope": {
+        "content": "$3"
+      },
+      "action": {
+        "content": "$4"
+      }
+    }
+  },
+  "inspect_target_tab": {
+    "message": "→ $session$ @ $root$（仅此标签页）$action$",
+    "placeholders": {
+      "session": {
+        "content": "$1"
+      },
+      "root": {
+        "content": "$2"
+      },
+      "action": {
+        "content": "$3"
+      }
+    }
+  },
+  "inspect_test_change_flag": {
+    "message": "加一个显式开关，让测试构建（绝不包括生产）以相对路径启用 code-inspector-plugin"
+  },
+  "inspect_test_change_meta": {
+    "message": "在测试构建里加上带 git 提交号的 <meta name=\"chrome-use-revision\">"
+  },
+  "inspect_test_change_verify": {
+    "message": "确认生产构建里没有 data-insp-path；不提交，不推送"
+  },
+  "inspect_test_exposure_warning": {
+    "message": "能打开测试环境的人都能在页面里看到源码文件路径。生产环境不变。下次部署测试环境后生效。"
+  },
+  "inspect_test_no_marks_title": {
+    "message": "这个测试构建没有源码标记"
+  },
+  "inspect_title": {
+    "message": "点选改代码"
+  },
+  "inspect_use_project": {
+    "message": "使用这个项目"
+  },
+  "inspect_use_session": {
+    "message": "使用这个会话"
+  },
+  "inspect_use_site_default": {
+    "message": "改用站点默认"
+  },
+  "inspect_visibility_covered": {
+    "message": "面板被遮挡、变淡或移位了。请滚动页面，或再按一次快捷键。"
+  },
+  "inspect_visibility_page_hidden": {
+    "message": "页面在后台。请切到前台后重试。"
+  },
+  "inspect_visibility_unconfirmed": {
+    "message": "无法确认面板可见。请重试。"
+  },
+  "inspect_visibility_unsupported": {
+    "message": "这个浏览器无法确认面板可见，所以不能发送。请改用「复制」。"
+  },
+  "inspect_which_project": {
+    "message": "$origin$ 对应哪个项目？",
+    "placeholders": {
+      "origin": {
+        "content": "$1"
+      }
+    }
+  },
+  "inspect_which_session": {
+    "message": "由哪个 agent 会话接收请求？"
+  },
+  "notify_turn_done": {
+    "message": "已完成"
+  },
+  "notify_turn_done_preview": {
+    "message": "已完成：$PREVIEW$",
+    "placeholders": {
+      "preview": {
+        "content": "$1",
+        "example": "The order was placed."
+      }
+    }
+  },
+  "notify_turn_failed": {
+    "message": "失败"
+  },
+  "notify_turn_failed_error": {
+    "message": "失败：$ERROR$",
+    "placeholders": {
+      "error": {
+        "content": "$1",
+        "example": "Rate limit reached"
+      }
+    }
+  },
+  "notify_turn_outcome_unconfirmed": {
+    "message": "需要你处理：结果未确认"
+  },
+  "notify_turn_stopped": {
+    "message": "已停止"
+  },
+  "notify_turn_waiting_approval": {
+    "message": "需要你处理：等待你审批"
+  },
+  "options_connection_heading": {
+    "message": "连接"
+  },
+  "options_connection_lead": {
+    "message": "与本机 chrome-use CLI 之间桥接的状态。"
+  },
+  "options_connection_notify_hint": {
+    "message": "chrome-use 与 Chrome 连上或断开时通知我。"
+  },
+  "options_connection_notify_name": {
+    "message": "连接通知"
+  },
+  "options_copied": {
+    "message": "已复制 ✓"
+  },
+  "options_copy": {
+    "message": "复制"
+  },
+  "options_cursor_heading": {
+    "message": "Agent 光标"
+  },
+  "options_cursor_hint": {
+    "message": "chrome-use 操作标签页时显示柔和的光标和点击波纹。默认关闭：光标是页面上可见的 DOM 浮层，关掉它，页面就察觉不到自动化（隐身）。"
+  },
+  "options_cursor_lead": {
+    "message": "看着一个光标滑到 agent 点击的位置。"
+  },
+  "options_cursor_name": {
+    "message": "显示 agent 光标"
+  },
+  "options_debugger_heading": {
+    "message": "“正在调试此浏览器”提示栏"
+  },
+  "options_debugger_lead": {
+    "message": "chrome-use 通过 DevTools 协议操作 Chrome，所以 agent 操作标签页时 Chrome 会显示这个提示栏。默认不自动释放调试器（0 秒）。把“空闲多久后释放标签页”设成正数，就会在任务间隙释放空闲标签页。用启动参数重启一次 Chrome 可以彻底去掉它（标签页和登录状态会自动恢复）。"
+  },
+  "options_docs": {
+    "message": "文档 ↗"
+  },
+  "options_idle_aria": {
+    "message": "释放空闲标签页前等待的秒数"
+  },
+  "options_idle_hint": {
+    "message": "agent 无活动多少秒后，调试器从标签页上断开（提示栏随之消失）。下一条命令会自动重新连接。设为 0 则一直保持连接，直到会话结束。"
+  },
+  "options_idle_name": {
+    "message": "空闲多久后释放标签页"
+  },
+  "options_idle_unit": {
+    "message": "秒"
+  },
+  "options_inspect_binding_consented": {
+    "message": "已同意：$KINDS$",
+    "placeholders": {
+      "kinds": {
+        "content": "$1",
+        "example": "dev source mapping"
+      }
+    }
+  },
+  "options_inspect_binding_linked": {
+    "message": "由会话关联"
+  },
+  "options_inspect_bindings_empty": {
+    "message": "还没有绑定任何网站。在某个网站上第一次点选时，会询问请求发到哪里。"
+  },
+  "options_inspect_bindings_heading": {
+    "message": "已绑定到项目的网站"
+  },
+  "options_inspect_bindings_hint": {
+    "message": "一个网站（可限定到某个路径）只发给一个 agent 会话。解除绑定后可以重新选择；会话也可以用 `chrome-use inspect link <url>` 认领网站。"
+  },
+  "options_inspect_bindings_loading": {
+    "message": "正在加载…"
+  },
+  "options_inspect_bindings_preview": {
+    "message": "网站绑定后会显示在这里。"
+  },
+  "options_inspect_bindings_unavailable": {
+    "message": "无法读取绑定：$ERROR$",
+    "placeholders": {
+      "error": {
+        "content": "$1",
+        "example": "Native host is not connected"
+      }
+    }
+  },
+  "options_inspect_change_shortcut": {
+    "message": "修改快捷键"
+  },
+  "options_inspect_claim_keep": {
+    "message": "保留当前"
+  },
+  "options_inspect_claim_pending": {
+    "message": "待确认：$SESSION$ 请求绑定 $SCOPE$",
+    "placeholders": {
+      "session": {
+        "content": "$1",
+        "example": "frontend-1"
+      },
+      "scope": {
+        "content": "$2",
+        "example": "https://example.com/app"
+      }
+    }
+  },
+  "options_inspect_claim_replace": {
+    "message": "替换"
+  },
+  "options_inspect_claim_replaces": {
+    "message": "$ROOT$ · 将替换 $AFFECTED$",
+    "placeholders": {
+      "root": {
+        "content": "$1",
+        "example": "~/code/app"
+      },
+      "affected": {
+        "content": "$2",
+        "example": "frontend-1 (https://example.com)"
+      }
+    }
+  },
+  "options_inspect_consent_dev": {
+    "message": "开发版源码映射"
+  },
+  "options_inspect_consent_test": {
+    "message": "测试版源码映射"
+  },
+  "options_inspect_editor_aria": {
+    "message": "源码链接使用的编辑器"
+  },
+  "options_inspect_editor_hint": {
+    "message": "源码链接会在这个编辑器里打开文件并跳到对应行。"
+  },
+  "options_inspect_editor_name": {
+    "message": "“在编辑器中打开”使用"
+  },
+  "options_inspect_editor_none": {
+    "message": "不显示"
+  },
+  "options_inspect_enable_hint": {
+    "message": "默认关闭。在你按下快捷键（$SHORTCUT$）或弹窗里的按钮之前，不会向页面注入任何东西。",
+    "placeholders": {
+      "shortcut": {
+        "content": "$1",
+        "example": "Alt+Shift+C"
+      }
+    }
+  },
+  "options_inspect_enable_name": {
+    "message": "启用点选改代码"
+  },
+  "options_inspect_heading": {
+    "message": "点选改代码"
+  },
+  "options_inspect_lead": {
+    "message": "按下快捷键，点一下元素，就能把带源码位置和截图的修改请求，发给正在做这个项目的编程会话（通过 ocs）。"
+  },
+  "options_inspect_revoke_dev": {
+    "message": "撤销开发版授权"
+  },
+  "options_inspect_revoke_test": {
+    "message": "撤销测试版授权"
+  },
+  "options_inspect_shortcut_not_set": {
+    "message": "未设置"
+  },
+  "options_inspect_unbind": {
+    "message": "解除绑定"
+  },
+  "options_notifications_heading": {
+    "message": "通知"
+  },
+  "options_notifications_lead": {
+    "message": "桥接连上或断开、侧栏任务结束时，轻轻提醒你一下。"
+  },
+  "options_page_title": {
+    "message": "chrome-use 设置"
+  },
+  "options_privacy": {
+    "message": "本地运行 · 不做跟踪 · 不上云"
+  },
+  "options_request_failed": {
+    "message": "请求失败"
+  },
+  "options_saved": {
+    "message": "已保存 ✓"
+  },
+  "options_status_checking": {
+    "message": "正在检查…"
+  },
+  "options_status_checking_detail": {
+    "message": "正在联系本机 CLI"
+  },
+  "options_status_connected": {
+    "message": "已连接"
+  },
+  "options_status_connected_detail": {
+    "message": "已连上本机 CLI · 就绪"
+  },
+  "options_status_not_paired": {
+    "message": "未配对"
+  },
+  "options_status_not_paired_detail": {
+    "message": "运行 `chrome-use extension install`，然后重新打开"
+  },
+  "options_tabs_attached": {
+    "message": "已接管 $COUNT$ 个标签页",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "3"
+      }
+    }
+  },
+  "options_tabs_attached_one": {
+    "message": "已接管 1 个标签页"
+  },
+  "options_tagline": {
+    "message": "本地浏览器自动化桥接"
+  },
+  "options_turn_notify_hint": {
+    "message": "侧栏任务完成、失败、停止或等待你审批时，弹出通知，并在工具栏图标上显示计数。当前窗口侧栏里正打开的会话不会提醒。"
+  },
+  "options_turn_notify_name": {
+    "message": "任务结束时通知"
+  },
+  "panel_a_tool": {
+    "message": "某个工具"
+  },
+  "panel_access_allow_tools": {
+    "message": "自动允许工具"
+  },
+  "panel_access_ask_first": {
+    "message": "先询问"
+  },
+  "panel_access_cli_permissions": {
+    "message": "CLI 权限"
+  },
+  "panel_access_follow_switch": {
+    "message": "跟随权限开关"
+  },
+  "panel_access_full": {
+    "message": "完全访问"
+  },
+  "panel_access_review_tools": {
+    "message": "审批工具请求"
+  },
+  "panel_access_title_ask": {
+    "message": "每次运行工具、命令或修改文件前都会询问。点击开启完全访问。"
+  },
+  "panel_access_title_full": {
+    "message": "在这个会话中自动允许权限请求。点击关闭。"
+  },
+  "panel_access_title_opencode": {
+    "message": "OpenCode 使用自己的权限规则，可能不经询问就允许工具运行。它发来的请求会显示在这里。点击自动允许这些请求。"
+  },
+  "panel_access_title_pi_browser": {
+    "message": "Pi 运行工具前从不询问，所以只给它浏览器工具：不能用 shell，也不能修改文件。点击开启完全访问。"
+  },
+  "panel_access_title_pi_full": {
+    "message": "Pi 会运行浏览器工具和命令，也会修改文件。点击改为仅浏览器工具。"
+  },
+  "panel_account_login_unknown": {
+    "message": "登录状态未知"
+  },
+  "panel_account_reported": {
+    "message": "已报告账户"
+  },
+  "panel_account_signed_in": {
+    "message": "已登录"
+  },
+  "panel_account_signed_out": {
+    "message": "未登录"
+  },
+  "panel_acted_not_recorded": {
+    "message": "操作过的页面：未记录"
+  },
+  "panel_acted_on": {
+    "message": "操作过：$PAGES$",
+    "placeholders": {
+      "pages": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_action_reported_late": {
+    "message": "请求结束后才上报"
+  },
+  "panel_action_unreported": {
+    "message": "已受理，但从未上报"
+  },
+  "panel_agent_chat_unsupported": {
+    "message": "已安装 · 侧栏暂不支持与它对话"
+  },
+  "panel_agent_checking": {
+    "message": "已安装 · 正在检查…"
+  },
+  "panel_agent_config_only": {
+    "message": "找到配置，但程序未安装"
+  },
+  "panel_agent_configure": {
+    "message": "配置"
+  },
+  "panel_agent_installed": {
+    "message": "已安装"
+  },
+  "panel_agent_not_installed": {
+    "message": "未安装"
+  },
+  "panel_agent_status_failed": {
+    "message": "已安装 · 无法获取状态"
+  },
+  "panel_agent_status_failed_reason": {
+    "message": "已安装 · 无法获取状态：$ERROR$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_agent_status_title": {
+    "message": "由 CLI 报告。模型能否使用要在会话运行时才能确认。"
+  },
+  "panel_allow_all": {
+    "message": "在这个会话中全部允许"
+  },
+  "panel_allow_once": {
+    "message": "允许一次"
+  },
+  "panel_allow_turn": {
+    "message": "本轮允许"
+  },
+  "panel_answer_each": {
+    "message": "请先回答每个问题再发送。"
+  },
+  "panel_answer_label": {
+    "message": "回答：$QUESTION$",
+    "placeholders": {
+      "question": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_artifact_captured": {
+    "message": "已捕获文件：是"
+  },
+  "panel_artifact_capturing": {
+    "message": "正在捕获…"
+  },
+  "panel_artifact_changed": {
+    "message": "未显示：读取过程中文件发生了变化。"
+  },
+  "panel_artifact_delivered": {
+    "message": "已保存到你指定的路径：是"
+  },
+  "panel_artifact_download": {
+    "message": "下载"
+  },
+  "panel_artifact_empty": {
+    "message": "非空：否，文件是空的"
+  },
+  "panel_artifact_file": {
+    "message": "文件"
+  },
+  "panel_artifact_finalizing": {
+    "message": "正在完成录屏…"
+  },
+  "panel_artifact_gone": {
+    "message": "文件已经不可用。"
+  },
+  "panel_artifact_not_delivered": {
+    "message": "已保存到你指定的路径：否"
+  },
+  "panel_artifact_not_delivered_detail": {
+    "message": "已保存到你指定的路径：否（$DETAIL$）",
+    "placeholders": {
+      "detail": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_artifact_not_empty": {
+    "message": "非空：是"
+  },
+  "panel_artifact_not_kept": {
+    "message": "文件无法保留"
+  },
+  "panel_artifact_read_failed": {
+    "message": "无法读取文件：$REASON$",
+    "placeholders": {
+      "reason": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_artifact_reading": {
+    "message": "正在读取文件…"
+  },
+  "panel_artifact_recording": {
+    "message": "录屏"
+  },
+  "panel_artifact_recording_now": {
+    "message": "正在录屏…"
+  },
+  "panel_artifact_save": {
+    "message": "保存"
+  },
+  "panel_artifact_save_copy": {
+    "message": "保存副本"
+  },
+  "panel_artifact_screenshot": {
+    "message": "截图"
+  },
+  "panel_artifact_size": {
+    "message": "大小：$SIZE$",
+    "placeholders": {
+      "size": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_artifact_type_no": {
+    "message": "类型与 .$EXT$ 相符：否（$MIME$）",
+    "placeholders": {
+      "ext": {
+        "content": "$1"
+      },
+      "mime": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_artifact_type_unchecked": {
+    "message": "类型与 .$EXT$ 相符：未检查",
+    "placeholders": {
+      "ext": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_artifact_type_yes": {
+    "message": "类型与 .$EXT$ 相符：是",
+    "placeholders": {
+      "ext": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_artifact_unavailable": {
+    "message": "不可用：$REASON$",
+    "placeholders": {
+      "reason": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_artifact_unknown_type": {
+    "message": "未知类型"
+  },
+  "panel_artifact_waiting": {
+    "message": "正在等待文件…"
+  },
+  "panel_assessment_blocked": {
+    "message": "受阻：$TEXT$",
+    "placeholders": {
+      "text": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_assessment_disclaimer": {
+    "message": "这些是 agent 自己选的检查项，不能证明整个请求都已完成。"
+  },
+  "panel_assessment_lowered": {
+    "message": "已降级：$REASON$",
+    "placeholders": {
+      "reason": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_assessment_not_assessed": {
+    "message": "agent 没有评估这个请求。"
+  },
+  "panel_browser_tool": {
+    "message": "浏览器工具"
+  },
+  "panel_cancel_request": {
+    "message": "取消请求"
+  },
+  "panel_change_default_model": {
+    "message": "更改默认模型"
+  },
+  "panel_check_checked": {
+    "message": "已检查"
+  },
+  "panel_check_claimed": {
+    "message": "agent 自述"
+  },
+  "panel_check_evidence": {
+    "message": "$VERB$ '$PREDICATE$'",
+    "placeholders": {
+      "verb": {
+        "content": "$1"
+      },
+      "predicate": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_check_evidence_when": {
+    "message": "$VERB$ '$PREDICATE$'，时间 $TIME$",
+    "placeholders": {
+      "verb": {
+        "content": "$1"
+      },
+      "predicate": {
+        "content": "$2"
+      },
+      "time": {
+        "content": "$3"
+      }
+    }
+  },
+  "panel_check_evidence_where": {
+    "message": "$VERB$ '$PREDICATE$'，位置 $PLACE$",
+    "placeholders": {
+      "verb": {
+        "content": "$1"
+      },
+      "predicate": {
+        "content": "$2"
+      },
+      "place": {
+        "content": "$3"
+      }
+    }
+  },
+  "panel_check_evidence_where_when": {
+    "message": "$VERB$ '$PREDICATE$'，位置 $PLACE$，时间 $TIME$",
+    "placeholders": {
+      "verb": {
+        "content": "$1"
+      },
+      "predicate": {
+        "content": "$2"
+      },
+      "place": {
+        "content": "$3"
+      },
+      "time": {
+        "content": "$4"
+      }
+    }
+  },
+  "panel_check_failed": {
+    "message": "检查未通过"
+  },
+  "panel_check_file": {
+    "message": "文件 $NAME$ $PREDICATE$",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      },
+      "predicate": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_check_predicate": {
+    "message": "检查：$PREDICATE$",
+    "placeholders": {
+      "predicate": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_check_stale": {
+    "message": "检查已过时：之后页面又被操作过"
+  },
+  "panel_check_unknown": {
+    "message": "未知"
+  },
+  "panel_check_unmet": {
+    "message": "未满足"
+  },
+  "panel_check_verb_expect": {
+    "message": "页面显示"
+  },
+  "panel_check_verb_other": {
+    "message": "检查："
+  },
+  "panel_check_verb_read_back": {
+    "message": "字段检查："
+  },
+  "panel_check_verb_url": {
+    "message": "浏览器到达"
+  },
+  "panel_cli_account_metadata": {
+    "message": "CLI 报告了账户信息"
+  },
+  "panel_cli_account_unverified": {
+    "message": "账户状态未验证"
+  },
+  "panel_cli_default": {
+    "message": "CLI 默认"
+  },
+  "panel_cli_no_answer": {
+    "message": "CLI 没有响应"
+  },
+  "panel_cli_signed_in": {
+    "message": "CLI 报告已登录"
+  },
+  "panel_cli_signed_out": {
+    "message": "CLI 报告未登录"
+  },
+  "panel_config_hidden_value": {
+    "message": "已隐藏的结构化或敏感值"
+  },
+  "panel_config_invalid_type": {
+    "message": "已保存的值类型不受支持；输入新值即可修复。"
+  },
+  "panel_config_no_changes": {
+    "message": "请先修改字段再预览。"
+  },
+  "panel_config_restore_conflicts": {
+    "message": "已恢复没有被改动的字段。保留了之后对这些字段的修改：$FIELDS$",
+    "placeholders": {
+      "fields": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_config_restored": {
+    "message": "原配置已恢复并回读确认。"
+  },
+  "panel_config_saved": {
+    "message": "配置已保存并回读确认。已有会话保留原来的设置。"
+  },
+  "panel_config_title": {
+    "message": "$NAME$ 配置",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_config_unavailable": {
+    "message": "当前主机不支持修改配置。"
+  },
+  "panel_connection_connected": {
+    "message": "本地桥接已连接"
+  },
+  "panel_connection_read_only": {
+    "message": "已连接。Windows 上的侧栏是只读的；浏览器 CLI 自动化仍然可用。"
+  },
+  "panel_connection_unavailable": {
+    "message": "本地桥接不可用。请运行 chrome-use extension install，然后刷新。"
+  },
+  "panel_connection_update_cli": {
+    "message": "桥接已连接。请更新 chrome-use CLI，然后刷新以启用 agent 侧栏。"
+  },
+  "panel_connection_waiting": {
+    "message": "正在等待本地桥接…"
+  },
+  "panel_control_agent": {
+    "message": "agent 正在工作"
+  },
+  "panel_control_resuming": {
+    "message": "正在恢复"
+  },
+  "panel_control_stop_requested": {
+    "message": "已请求停止，等待确认"
+  },
+  "panel_control_stopped": {
+    "message": "这个会话的 agent 已停止"
+  },
+  "panel_control_unknown": {
+    "message": "agent 状态未知"
+  },
+  "panel_conversation_untitled": {
+    "message": "会话"
+  },
+  "panel_decline": {
+    "message": "拒绝"
+  },
+  "panel_default_model": {
+    "message": "默认模型"
+  },
+  "panel_delete_done_with_problems": {
+    "message": "会话已删除。$PROBLEMS$",
+    "placeholders": {
+      "problems": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_delete_not_removed": {
+    "message": "无法删除：$ITEMS$",
+    "placeholders": {
+      "items": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_delete_session_files": {
+    "message": "agent 会话文件未删除：$ERROR$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_delete_tabs_unconfirmed": {
+    "message": "chrome-use 无法确认它的浏览器标签页已全部关闭；AI 窗口里可能还留有标签页。"
+  },
+  "panel_details": {
+    "message": "详情"
+  },
+  "panel_disable": {
+    "message": "停用"
+  },
+  "panel_edit": {
+    "message": "编辑"
+  },
+  "panel_empty_answer": {
+    "message": "agent 没有返回回答文本。"
+  },
+  "panel_enable": {
+    "message": "启用"
+  },
+  "panel_error_cli_required": {
+    "message": "本地 agent 会话需要受支持的新版 CLI。"
+  },
+  "panel_error_direct_waiting": {
+    "message": "已有一条直接发送的消息在等待停止确认。"
+  },
+  "panel_error_host_unconfirmed": {
+    "message": "本地主机没有确认这个操作。"
+  },
+  "panel_error_open_from_extension": {
+    "message": "请从 chrome-use 扩展中打开这个页面。"
+  },
+  "panel_error_pending_storage": {
+    "message": "无法保存消息标识，消息没有发送。"
+  },
+  "panel_field_effort": {
+    "message": "推理强度"
+  },
+  "panel_field_haiku_model": {
+    "message": "Haiku 模型"
+  },
+  "panel_field_model": {
+    "message": "模型"
+  },
+  "panel_field_opus_model": {
+    "message": "Opus 模型"
+  },
+  "panel_field_provider": {
+    "message": "提供方"
+  },
+  "panel_field_service_tier": {
+    "message": "服务档位"
+  },
+  "panel_field_small_model": {
+    "message": "小模型"
+  },
+  "panel_field_sonnet_model": {
+    "message": "Sonnet 模型"
+  },
+  "panel_fork_context": {
+    "message": "这个会话接续自另一个会话，那个会话的最后一个请求结果未知。其中列出的操作可能已经生效。"
+  },
+  "panel_image_attached": {
+    "message": "附加的图片"
+  },
+  "panel_image_limit": {
+    "message": "每条消息最多附加五张图片。"
+  },
+  "panel_image_remove": {
+    "message": "移除图片"
+  },
+  "panel_image_unavailable": {
+    "message": "已保存的图片不可用"
+  },
+  "panel_keep_going": {
+    "message": "继续"
+  },
+  "panel_memory_summarized": {
+    "message": "记忆已压缩"
+  },
+  "panel_memory_summarized_note": {
+    "message": "这次请求中 agent 的记忆被压缩过；这里显示的历史是完整的。"
+  },
+  "panel_model_inspection_unavailable": {
+    "message": "当前主机不支持检查 CLI 模型。"
+  },
+  "panel_model_metadata_failed": {
+    "message": "无法获取模型信息：$REASON$。没有用备用列表代替；你仍然可以输入自定义模型 ID。",
+    "placeholders": {
+      "reason": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_model_not_checked": {
+    "message": "还没有检查 CLI 的模型访问权限。"
+  },
+  "panel_model_reading": {
+    "message": "正在读取 CLI 模型信息…"
+  },
+  "panel_model_status": {
+    "message": "CLI 版本未验证。$COUNT$ 个模型。$ACCOUNT$。模型能否实际使用尚未验证。",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      },
+      "account": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_model_status_partial": {
+    "message": "CLI 版本未验证。$COUNT$ 个模型（目录不完整）。$ACCOUNT$。模型能否实际使用尚未验证。",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      },
+      "account": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_model_status_version": {
+    "message": "CLI $VERSION$。$COUNT$ 个模型。$ACCOUNT$。模型能否实际使用尚未验证。",
+    "placeholders": {
+      "version": {
+        "content": "$1"
+      },
+      "count": {
+        "content": "$2"
+      },
+      "account": {
+        "content": "$3"
+      }
+    }
+  },
+  "panel_model_status_version_partial": {
+    "message": "CLI $VERSION$。$COUNT$ 个模型（目录不完整）。$ACCOUNT$。模型能否实际使用尚未验证。",
+    "placeholders": {
+      "version": {
+        "content": "$1"
+      },
+      "count": {
+        "content": "$2"
+      },
+      "account": {
+        "content": "$3"
+      }
+    }
+  },
+  "panel_models_count": {
+    "message": "$COUNT$ 个模型",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_new_conversation": {
+    "message": "新会话"
+  },
+  "panel_new_conversation_item": {
+    "message": "＋ 新会话"
+  },
+  "panel_no_answer": {
+    "message": "没有响应"
+  },
+  "panel_no_conversations": {
+    "message": "还没有会话。"
+  },
+  "panel_no_conversations_on": {
+    "message": "$DOMAIN$ 上还没有会话。",
+    "placeholders": {
+      "domain": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_open_earlier_conversation": {
+    "message": "打开之前的会话"
+  },
+  "panel_open_new_conversation": {
+    "message": "打开新会话"
+  },
+  "panel_page_chip_title": {
+    "message": "随你的消息一起发送：$URL$",
+    "placeholders": {
+      "url": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_page_fallback": {
+    "message": "某个页面"
+  },
+  "panel_page_you_sent": {
+    "message": "你发送的页面"
+  },
+  "panel_pending_text_missing": {
+    "message": "原始文本已不可用；请清除警告，或查看会话历史。"
+  },
+  "panel_phase_read_only": {
+    "message": "只读发现"
+  },
+  "panel_phase_ready": {
+    "message": "就绪"
+  },
+  "panel_phase_unknown": {
+    "message": "响应状态未知"
+  },
+  "panel_pointed_at": {
+    "message": "浏览器工具指向：$PAGES$",
+    "placeholders": {
+      "pages": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_question": {
+    "message": "问题"
+  },
+  "panel_queue_count": {
+    "message": "$COUNT$ 条排队中",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_queue_count_paused": {
+    "message": "$COUNT$ 条排队中，已暂停",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_queue_unconfirmed": {
+    "message": "发送未确认；正在检查已保存的消息"
+  },
+  "panel_queued": {
+    "message": "排队中：$TEXT$",
+    "placeholders": {
+      "text": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_queued_direct": {
+    "message": "停止后发送：$TEXT$",
+    "placeholders": {
+      "text": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_queued_edit_label": {
+    "message": "编辑排队中的消息"
+  },
+  "panel_queued_empty": {
+    "message": "请输入消息，或把它移出队列。"
+  },
+  "panel_queued_load_first": {
+    "message": "请先加载完整的排队消息再修改。"
+  },
+  "panel_queued_load_full": {
+    "message": "加载全文"
+  },
+  "panel_queued_loaded": {
+    "message": "已加载完整的排队消息。"
+  },
+  "panel_queued_remove": {
+    "message": "移除"
+  },
+  "panel_queued_save": {
+    "message": "保存修改"
+  },
+  "panel_queued_saved": {
+    "message": "修改已保存，正在读取队列。"
+  },
+  "panel_queued_unconfirmed": {
+    "message": "修改未确认。请刷新队列后再编辑。"
+  },
+  "panel_recovery_action": {
+    "message": "$TOOL$ · 可能已生效",
+    "placeholders": {
+      "tool": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_recovery_action_on": {
+    "message": "$TOOL$（$HOST$）· 可能已生效",
+    "placeholders": {
+      "tool": {
+        "content": "$1"
+      },
+      "host": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_recovery_alive": {
+    "message": "旧的 agent 进程仍在运行。"
+  },
+  "panel_recovery_continue": {
+    "message": "在新会话中继续"
+  },
+  "panel_recovery_end": {
+    "message": "结束旧的 agent 进程"
+  },
+  "panel_recovery_end_unconfirmed": {
+    "message": "未能确认旧的 agent 进程已结束。"
+  },
+  "panel_recovery_ended": {
+    "message": "旧的 agent 进程已结束。"
+  },
+  "panel_recovery_exited": {
+    "message": "旧的 agent 进程已退出。"
+  },
+  "panel_recovery_forked": {
+    "message": "这个请求已在新会话中继续。"
+  },
+  "panel_recovery_no_options": {
+    "message": "它的状态无法确认，所以不提供结束进程或在新会话中继续的选项。正常新建的会话不会停止旧的 agent。"
+  },
+  "panel_recovery_review": {
+    "message": "查看可能发生了什么"
+  },
+  "panel_recovery_review_failed": {
+    "message": "查看失败：$REASON$",
+    "placeholders": {
+      "reason": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_recovery_state_unknown": {
+    "message": "chrome-use 无法判断旧的 agent 进程是否仍在运行。"
+  },
+  "panel_recovery_unknown": {
+    "message": "这个请求的结果未知。浏览器操作可能已经生效。"
+  },
+  "panel_redirect": {
+    "message": "请求打开 $ASKED$，实际到达 $LANDED$",
+    "placeholders": {
+      "asked": {
+        "content": "$1"
+      },
+      "landed": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_request_changed": {
+    "message": "这个请求已经变了。请重新查看后再回答。"
+  },
+  "panel_request_decision": {
+    "message": "这个操作需要你做决定。"
+  },
+  "panel_request_form_unsafe": {
+    "message": "这个表单无法在这里安全填写。请拒绝或取消这个请求。"
+  },
+  "panel_request_mcp": {
+    "message": "MCP 服务器需要你做决定。"
+  },
+  "panel_request_needs_input": {
+    "message": "agent 需要你的输入"
+  },
+  "panel_request_opencode": {
+    "message": "OpenCode 工具请求"
+  },
+  "panel_request_permissions": {
+    "message": "请审批这一轮请求的访问权限。"
+  },
+  "panel_request_review": {
+    "message": "审批 agent 的请求"
+  },
+  "panel_request_sent": {
+    "message": "选择已发送，等待 agent 继续。"
+  },
+  "panel_request_stop_requested": {
+    "message": "已请求停止，不能再允许。你仍然可以拒绝。"
+  },
+  "panel_request_tool": {
+    "message": "工具请求"
+  },
+  "panel_request_truncated": {
+    "message": "请求预览不完整。批准任何操作之前，请先停止这次回复。"
+  },
+  "panel_request_unconfirmed": {
+    "message": "回应未确认。正在等待 agent 的当前状态。"
+  },
+  "panel_request_unsupported": {
+    "message": "这个请求需要的回应格式无法在这里显示。请停止这次回复，到 CLI 中查看请求。"
+  },
+  "panel_requirement": {
+    "message": "要求"
+  },
+  "panel_respond_unconfirmed": {
+    "message": "回应未确认。请先读取当前状态再重试。"
+  },
+  "panel_retry_default_model": {
+    "message": "用默认模型重试"
+  },
+  "panel_role_answer": {
+    "message": "回答"
+  },
+  "panel_role_progress": {
+    "message": "进度说明"
+  },
+  "panel_role_response": {
+    "message": "回复"
+  },
+  "panel_schedule_acknowledge": {
+    "message": "知道了，结果未知"
+  },
+  "panel_schedule_delete": {
+    "message": "删除定时任务"
+  },
+  "panel_schedule_disabled": {
+    "message": "已停用"
+  },
+  "panel_schedule_enabled": {
+    "message": "已启用"
+  },
+  "panel_schedule_next": {
+    "message": "下次：$TIME$",
+    "placeholders": {
+      "time": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_schedule_not_run": {
+    "message": "尚未运行"
+  },
+  "panel_schedule_open_run": {
+    "message": "打开这次运行"
+  },
+  "panel_schedule_run_now": {
+    "message": "立即运行"
+  },
+  "panel_scope_site": {
+    "message": "本站"
+  },
+  "panel_scope_site_domain": {
+    "message": "本站 · $DOMAIN$",
+    "placeholders": {
+      "domain": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_send": {
+    "message": "发送"
+  },
+  "panel_send_answers": {
+    "message": "发送回答"
+  },
+  "panel_send_label": {
+    "message": "发送消息"
+  },
+  "panel_send_now": {
+    "message": "立即发送"
+  },
+  "panel_send_queue_label": {
+    "message": "排队发送消息"
+  },
+  "panel_send_queue_title": {
+    "message": "排队：当前回复结束后发送"
+  },
+  "panel_send_stop_and_send": {
+    "message": "停止并发送"
+  },
+  "panel_sent_with": {
+    "message": "随消息发送：$PAGE$",
+    "placeholders": {
+      "page": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_skill_ambiguous": {
+    "message": "请在选择列表里选定要用哪个来源的技能。"
+  },
+  "panel_skill_disabled": {
+    "message": "已停用"
+  },
+  "panel_skill_none": {
+    "message": "不使用技能"
+  },
+  "panel_skill_unknown": {
+    "message": "技能不存在或已停用。请刷新技能，或在选择列表里选一项。"
+  },
+  "panel_skill_use": {
+    "message": "使用"
+  },
+  "panel_speaker_assistant": {
+    "message": "助手"
+  },
+  "panel_speaker_status": {
+    "message": "回复状态"
+  },
+  "panel_speaker_you": {
+    "message": "你"
+  },
+  "panel_stall_banner": {
+    "message": "$TEXT$没有自动停止任何操作。",
+    "placeholders": {
+      "text": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_stall_no_activity": {
+    "message": "agent 已经有一段时间没有动作了。"
+  },
+  "panel_stall_no_progress": {
+    "message": "上一步之后页面没有变化。"
+  },
+  "panel_stall_repeated_failure": {
+    "message": "同一步骤反复失败。"
+  },
+  "panel_stall_repeated_failure_times": {
+    "message": "同一步骤失败了 $COUNT$ 次。",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_stall_repeated_result": {
+    "message": "agent 重复了同一步骤，结果都一样。"
+  },
+  "panel_stall_repeated_result_times": {
+    "message": "agent 重复了同一步骤 $COUNT$ 次，结果都一样。",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_step_no_record": {
+    "message": "没有运行记录"
+  },
+  "panel_step_reported_late": {
+    "message": "请求结束后才上报"
+  },
+  "panel_step_unfinished": {
+    "message": "未完成；可能已经运行"
+  },
+  "panel_steps_failed": {
+    "message": "$COUNT$ 步失败",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_steps_failed_named": {
+    "message": "$COUNT$ 步失败：$NAMES$",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      },
+      "names": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_steps_many": {
+    "message": "$COUNT$ 步",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_steps_one": {
+    "message": "$COUNT$ 步",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_stop": {
+    "message": "停止"
+  },
+  "panel_stray_no_record": {
+    "message": "$TOOL$：没有运行记录",
+    "placeholders": {
+      "tool": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_stray_unfinished": {
+    "message": "$TOOL$：未完成；可能已经运行",
+    "placeholders": {
+      "tool": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_time_days_ago": {
+    "message": "$COUNT$ 天前",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_time_hours_ago": {
+    "message": "$COUNT$ 小时前",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_time_just_now": {
+    "message": "刚刚"
+  },
+  "panel_time_minutes_ago": {
+    "message": "$COUNT$ 分钟前",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_tool_failed": {
+    "message": "失败"
+  },
+  "panel_tool_running": {
+    "message": "运行中"
+  },
+  "panel_tools_browser_only": {
+    "message": "仅浏览器"
+  },
+  "panel_tools_read_files": {
+    "message": "浏览器和读取文件"
+  },
+  "panel_tools_read_files_codex": {
+    "message": "浏览器和读取文件（Codex shell 仍可用）"
+  },
+  "panel_tools_run_commands": {
+    "message": "浏览器、文件和命令"
+  },
+  "panel_tools_write_files": {
+    "message": "浏览器、读写文件"
+  },
+  "panel_unavailable_cancelled": {
+    "message": "下载已取消"
+  },
+  "panel_unavailable_changed": {
+    "message": "复制过程中文件发生了变化"
+  },
+  "panel_unavailable_encoder_failed": {
+    "message": "ffmpeg 无法编码这段录屏"
+  },
+  "panel_unavailable_encoder_missing": {
+    "message": "未安装 ffmpeg"
+  },
+  "panel_unavailable_failed": {
+    "message": "捕获失败"
+  },
+  "panel_unavailable_interrupted": {
+    "message": "捕获被中断"
+  },
+  "panel_unavailable_linked": {
+    "message": "文件是一个链接"
+  },
+  "panel_unavailable_missing": {
+    "message": "文件不存在"
+  },
+  "panel_unavailable_not_owned": {
+    "message": "文件属于其他用户"
+  },
+  "panel_unavailable_not_regular": {
+    "message": "不是普通文件"
+  },
+  "panel_unavailable_path_mismatch": {
+    "message": "文件不在 chrome-use 存放的位置"
+  },
+  "panel_unavailable_quota": {
+    "message": "这个会话的文件空间已用完"
+  },
+  "panel_unavailable_timeout": {
+    "message": "捕获超时"
+  },
+  "panel_unavailable_too_large": {
+    "message": "文件太大，无法保留副本"
+  },
+  "panel_unlinked_many": {
+    "message": "$COUNT$ 条浏览器记录未对应到步骤",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_unlinked_one": {
+    "message": "$COUNT$ 条浏览器记录未对应到步骤",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_working": {
+    "message": "工作中"
+  },
+  "panel_working_folder": {
+    "message": "工作目录：$PATH$",
+    "placeholders": {
+      "path": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_your_answer": {
+    "message": "你的回答"
+  },
+  "popup_desc_after_name": {
+    "message": " CLI 只在你要求时，在这台电脑上操作你自己已登录的 Chrome 标签页。"
+  },
+  "popup_desc_before_name": {
+    "message": "本机的 "
+  },
+  "popup_docs": {
+    "message": "文档"
+  },
+  "popup_hint_check": {
+    "message": "检查本机 CLI 连接："
+  },
+  "popup_hint_check_and_reopen": {
+    "message": "检查本机 CLI，然后重新打开这个弹窗来重连："
+  },
+  "popup_hint_install_host": {
+    "message": "先安装本地 host，再重新打开这个弹窗："
+  },
+  "popup_inspect": {
+    "message": "点选元素"
+  },
+  "popup_inspect_failed": {
+    "message": "无法在此页面上启动点选改代码。"
+  },
+  "popup_inspect_title": {
+    "message": "在此页面上选中一个元素，把修改请求发给你的编程 agent（Alt+Shift+C）"
+  },
+  "popup_privacy": {
+    "message": "本地运行 · 不做跟踪"
+  },
+  "popup_settings": {
+    "message": "设置"
+  },
+  "popup_standalone": {
+    "message": "请从 chrome-use 扩展里打开这个弹窗"
+  },
+  "popup_status_checking": {
+    "message": "正在检查…"
+  },
+  "popup_status_checking_detail": {
+    "message": "正在联系本机 CLI"
+  },
+  "popup_status_connected": {
+    "message": "已连接"
+  },
+  "popup_status_connected_detail": {
+    "message": "已确认与本机 CLI 的连接"
+  },
+  "popup_status_connecting": {
+    "message": "正在连接…"
+  },
+  "popup_status_connecting_detail": {
+    "message": "正在等待本机 CLI 响应"
+  },
+  "popup_status_not_paired": {
+    "message": "未配对"
+  },
+  "popup_status_not_paired_detail": {
+    "message": "没有连上本机的 chrome-use CLI"
+  },
+  "popup_tab_count": {
+    "message": "$COUNT$ 个标签页",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "3"
+      }
+    }
+  },
+  "popup_tab_count_one": {
+    "message": "1 个标签页"
+  },
+  "popup_tagline": {
+    "message": "本地浏览器自动化桥接"
+  },
+  "sidepanel_access_browser_only_claude_pi": {
+    "message": "仅浏览器（Claude 或 Pi）"
+  },
+  "sidepanel_access_read_files": {
+    "message": "浏览器和读文件"
+  },
+  "sidepanel_access_run_commands": {
+    "message": "浏览器、文件和命令"
+  },
+  "sidepanel_access_write_files": {
+    "message": "浏览器、读写文件"
+  },
+  "sidepanel_agent": {
+    "message": "agent"
+  },
+  "sidepanel_agent_configuration": {
+    "message": "agent 配置"
+  },
+  "sidepanel_agent_requests": {
+    "message": "agent 请求"
+  },
+  "sidepanel_agent_settings": {
+    "message": "agent 设置"
+  },
+  "sidepanel_agent_working": {
+    "message": "agent 正在工作"
+  },
+  "sidepanel_agents_and_models_label": {
+    "message": "agent 与模型"
+  },
+  "sidepanel_agents_and_models_title": {
+    "message": "agent 与模型"
+  },
+  "sidepanel_allowed_tools": {
+    "message": "允许的工具"
+  },
+  "sidepanel_apply_config_hint": {
+    "message": "会修改这台机器上该 agent 的设置。正在运行的会话保持当前配置。"
+  },
+  "sidepanel_apply_configuration": {
+    "message": "应用配置"
+  },
+  "sidepanel_attach_images": {
+    "message": "添加图片"
+  },
+  "sidepanel_back": {
+    "message": "← 返回"
+  },
+  "sidepanel_changes_to_apply": {
+    "message": "将要应用的改动"
+  },
+  "sidepanel_checking_connection": {
+    "message": "正在检查本地连接…"
+  },
+  "sidepanel_clear_send_warning": {
+    "message": "清除发送警告"
+  },
+  "sidepanel_cli_default": {
+    "message": "CLI 默认"
+  },
+  "sidepanel_conversation_label": {
+    "message": "会话"
+  },
+  "sidepanel_conversation_options": {
+    "message": "会话选项"
+  },
+  "sidepanel_conversation_scope": {
+    "message": "显示哪些会话"
+  },
+  "sidepanel_conversations": {
+    "message": "会话列表"
+  },
+  "sidepanel_custom_model": {
+    "message": "自定义模型 ID"
+  },
+  "sidepanel_custom_model_placeholder": {
+    "message": "覆盖模型菜单的选择"
+  },
+  "sidepanel_custom_program": {
+    "message": "自定义程序"
+  },
+  "sidepanel_custom_program_placeholder": {
+    "message": "使用自动发现的程序"
+  },
+  "sidepanel_default_model": {
+    "message": "默认模型"
+  },
+  "sidepanel_delete": {
+    "message": "删除"
+  },
+  "sidepanel_delete_confirm_detail": {
+    "message": "会从这台电脑上删除它的侧栏记录、agent CLI 自己的会话文件和它的浏览器标签页。此操作无法撤销。"
+  },
+  "sidepanel_delete_confirm_title": {
+    "message": "删除这个会话？"
+  },
+  "sidepanel_delete_conversation": {
+    "message": "删除会话"
+  },
+  "sidepanel_discard_preview": {
+    "message": "放弃预览"
+  },
+  "sidepanel_empty_detail": {
+    "message": "描述一个页面或任务。agent 会在自己的浏览器会话里工作，使用你本地 CLI 的登录。"
+  },
+  "sidepanel_empty_title": {
+    "message": "想让浏览器做什么？"
+  },
+  "sidepanel_enabled": {
+    "message": "启用"
+  },
+  "sidepanel_example_tasks": {
+    "message": "示例任务"
+  },
+  "sidepanel_extension_settings": {
+    "message": "扩展设置"
+  },
+  "sidepanel_find_again": {
+    "message": "重新查找"
+  },
+  "sidepanel_follow_permission_switch": {
+    "message": "跟随权限开关"
+  },
+  "sidepanel_full_access": {
+    "message": "完整权限"
+  },
+  "sidepanel_import_archive": {
+    "message": "本地 ZIP 或 .skill 压缩包"
+  },
+  "sidepanel_import_folder": {
+    "message": "本地文件夹"
+  },
+  "sidepanel_import_git": {
+    "message": "Git HTTPS 地址"
+  },
+  "sidepanel_import_skills": {
+    "message": "导入技能"
+  },
+  "sidepanel_import_source": {
+    "message": "导入来源"
+  },
+  "sidepanel_import_source_placeholder": {
+    "message": "绝对路径或仓库地址"
+  },
+  "sidepanel_jump_latest": {
+    "message": "↓ 最新"
+  },
+  "sidepanel_keep": {
+    "message": "保留"
+  },
+  "sidepanel_library_skill_name": {
+    "message": "技能库中的名称"
+  },
+  "sidepanel_local_agents": {
+    "message": "本地 agent"
+  },
+  "sidepanel_message_keys": {
+    "message": "Enter 发送 · Ctrl/⌘+Enter 停止并发送 · Shift+Enter 换行"
+  },
+  "sidepanel_message_label": {
+    "message": "消息"
+  },
+  "sidepanel_message_placeholder": {
+    "message": "描述一个浏览器任务…"
+  },
+  "sidepanel_model": {
+    "message": "模型"
+  },
+  "sidepanel_model_status_unchecked": {
+    "message": "尚未检查 CLI 的模型访问。"
+  },
+  "sidepanel_more_options": {
+    "message": "更多选项"
+  },
+  "sidepanel_new_conversation": {
+    "message": "新会话"
+  },
+  "sidepanel_new_conversation_options": {
+    "message": "新会话选项"
+  },
+  "sidepanel_new_schedule": {
+    "message": "新建定时任务"
+  },
+  "sidepanel_no_skill": {
+    "message": "不用技能"
+  },
+  "sidepanel_page_detach": {
+    "message": "不发送这个页面"
+  },
+  "sidepanel_page_title": {
+    "message": "chrome-use 助手"
+  },
+  "sidepanel_phase_ready": {
+    "message": "就绪"
+  },
+  "sidepanel_preview_changes": {
+    "message": "预览改动"
+  },
+  "sidepanel_privacy_hint": {
+    "message": "你的 CLI 可能会把任务和页面观察结果发给它配置的模型服务。会话记录保留在这台电脑上。"
+  },
+  "sidepanel_prompt": {
+    "message": "提示词"
+  },
+  "sidepanel_queued_messages": {
+    "message": "排队中的消息"
+  },
+  "sidepanel_reasoning_effort": {
+    "message": "推理强度"
+  },
+  "sidepanel_record_task": {
+    "message": "录制这个任务"
+  },
+  "sidepanel_record_task_hint": {
+    "message": "只为这条消息录制 agent 的浏览器标签页。录像保留在这台电脑上。"
+  },
+  "sidepanel_recovery_hint": {
+    "message": "未确认是否送达。重试会使用同一个消息 ID。清除这条警告不会取消可能已送达 agent 的任务。"
+  },
+  "sidepanel_refresh": {
+    "message": "刷新"
+  },
+  "sidepanel_refresh_schedules": {
+    "message": "刷新定时任务"
+  },
+  "sidepanel_refresh_skills": {
+    "message": "刷新技能"
+  },
+  "sidepanel_reload_models": {
+    "message": "从 CLI 重新读取模型"
+  },
+  "sidepanel_restore_change": {
+    "message": "还原这次改动"
+  },
+  "sidepanel_resume_queue": {
+    "message": "恢复队列"
+  },
+  "sidepanel_retry_same_message": {
+    "message": "重试同一条消息"
+  },
+  "sidepanel_save_conversation_options": {
+    "message": "保存会话选项"
+  },
+  "sidepanel_save_library_skill": {
+    "message": "保存到技能库"
+  },
+  "sidepanel_save_schedule": {
+    "message": "保存定时任务"
+  },
+  "sidepanel_schedule_automatic": {
+    "message": "自动允许范围内的工具"
+  },
+  "sidepanel_schedule_cron": {
+    "message": "五段式 cron"
+  },
+  "sidepanel_schedule_daily": {
+    "message": "每天 HH:MM"
+  },
+  "sidepanel_schedule_effort_placeholder": {
+    "message": "CLI 默认；仅限 Codex 或 Claude"
+  },
+  "sidepanel_schedule_interval": {
+    "message": "每 N 分钟"
+  },
+  "sidepanel_schedule_name": {
+    "message": "名称"
+  },
+  "sidepanel_schedule_timing_placeholder": {
+    "message": "60、09:00 或 0 9 * * 1-5"
+  },
+  "sidepanel_schedule_weekdays": {
+    "message": "工作日 HH:MM"
+  },
+  "sidepanel_schedule_when": {
+    "message": "时间"
+  },
+  "sidepanel_scheduled_prompts": {
+    "message": "定时提示"
+  },
+  "sidepanel_schedules_hint": {
+    "message": "本地 agent 服务运行时才会执行。时间使用这台主机的本地时区。错过的周期只补跑一次。结果未知的运行需要你先确认，下一次才能开始。"
+  },
+  "sidepanel_scope_all": {
+    "message": "全部"
+  },
+  "sidepanel_scope_this_site": {
+    "message": "本站"
+  },
+  "sidepanel_send": {
+    "message": "发送"
+  },
+  "sidepanel_send_message": {
+    "message": "发送消息"
+  },
+  "sidepanel_service_tier": {
+    "message": "服务等级"
+  },
+  "sidepanel_skill": {
+    "message": "技能"
+  },
+  "sidepanel_skill_library": {
+    "message": "技能库"
+  },
+  "sidepanel_skill_library_hint": {
+    "message": "技能库里的条目由这个 Chrome 用户资料中的 agent 共用。你已有的技能在这里只读。"
+  },
+  "sidepanel_skill_name_placeholder": {
+    "message": "小写名称，用连字符分隔"
+  },
+  "sidepanel_skills": {
+    "message": "技能"
+  },
+  "sidepanel_stop": {
+    "message": "停止"
+  },
+  "sidepanel_stop_and_send": {
+    "message": "停止并发送"
+  },
+  "sidepanel_suggest_links": {
+    "message": "解释页面上的链接"
+  },
+  "sidepanel_suggest_summarize": {
+    "message": "总结这个页面"
+  },
+  "sidepanel_suggest_table": {
+    "message": "提取页面上的表格"
+  },
+  "sidepanel_tab_agents": {
+    "message": "agent"
+  },
+  "sidepanel_tab_schedules": {
+    "message": "定时任务"
+  },
+  "sidepanel_tier_priority": {
+    "message": "优先"
+  },
+  "sidepanel_tier_priority_codex": {
+    "message": "优先（Codex）"
+  },
+  "sidepanel_tier_standard": {
+    "message": "标准"
+  },
+  "sidepanel_tier_standard_codex": {
+    "message": "标准（Codex）"
+  },
+  "sidepanel_transcript": {
+    "message": "会话记录"
+  },
+  "sidepanel_turn_options_hint": {
+    "message": "只作用于这个会话。改动从下一次回复开始生效，不会修改 CLI 设置。"
+  },
+  "timeline_assessment_blocked": {
+    "message": "受阻"
+  },
+  "timeline_assessment_checks_passed": {
+    "message": "agent 的浏览器检查已通过"
+  },
+  "timeline_assessment_not_checked": {
+    "message": "未检查"
+  },
+  "timeline_assessment_not_recorded": {
+    "message": "未记录检查"
+  },
+  "timeline_assessment_pending": {
+    "message": "等待评估"
+  },
+  "timeline_assessment_some_checks_passed": {
+    "message": "部分检查已通过"
+  },
+  "timeline_error_chunks_out_of_order": {
+    "message": "已完成的回复分段到达顺序错乱。"
+  },
+  "timeline_error_cursor_mismatch": {
+    "message": "会话游标与收到的事件不一致。"
+  },
+  "timeline_error_history_gap": {
+    "message": "会话记录有缺口。请先刷新，再以此视图为准。"
+  },
+  "timeline_note_failed_queue_paused": {
+    "message": "回复失败。排队的消息已暂停。"
+  },
+  "timeline_note_interrupted_queue_paused": {
+    "message": "回复已中断。排队的消息已暂停。"
+  },
+  "timeline_outcome_completed": {
+    "message": "已完成"
+  },
+  "timeline_outcome_failed": {
+    "message": "失败"
+  },
+  "timeline_outcome_interrupted": {
+    "message": "已中断"
+  },
+  "timeline_outcome_unknown": {
+    "message": "结果未知"
+  },
+  "timeline_phase_failed": {
+    "message": "回复失败"
+  },
+  "timeline_phase_idle": {
+    "message": "就绪"
+  },
+  "timeline_phase_interrupted": {
+    "message": "回复已中断"
+  },
+  "timeline_phase_recovery_required": {
+    "message": "上一次结果未确认"
+  },
+  "timeline_phase_running": {
+    "message": "正在回复"
+  },
+  "timeline_phase_starting": {
+    "message": "正在启动 agent"
+  },
+  "timeline_phase_stopping": {
+    "message": "等待停止确认"
+  },
+  "timeline_phase_waiting_input": {
+    "message": "等待你的输入"
+  },
+  "timeline_queue_edited": {
+    "message": "发送前已编辑"
+  },
+  "timeline_queue_removed": {
+    "message": "已移出队列"
+  },
+  "timeline_tool_browser": {
+    "message": "浏览器 · $TOOL$",
+    "placeholders": {
+      "tool": {
+        "content": "$1",
+        "example": "open"
+      }
+    }
+  },
+  "timeline_tool_changed_files": {
+    "message": "修改了文件"
+  },
+  "timeline_tool_generic": {
+    "message": "工具"
+  },
+  "timeline_tool_preview_shortened": {
+    "message": "[工具预览已截短]"
+  },
+  "timeline_tool_ran_command": {
+    "message": "运行了命令"
+  },
+  "timeline_tool_result": {
+    "message": "工具结果"
+  },
+  "timeline_tool_searched_web": {
+    "message": "搜索了网页"
+  },
+  "timeline_verdict_confirmed": {
+    "message": "已确认"
+  },
+  "timeline_verdict_failed": {
+    "message": "失败"
+  },
+  "timeline_verdict_no_browser_record": {
+    "message": "无浏览器记录"
+  },
+  "timeline_verdict_not_checked": {
+    "message": "未检查"
+  },
+  "timeline_verdict_page_not_recorded": {
+    "message": "未记录页面"
+  }
+}
