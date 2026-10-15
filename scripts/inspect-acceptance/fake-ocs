@@ -1,6 +1,7 @@
 #!/Users/leo/.local/bin/node
-// Fake ocs for Inspect & Ask acceptance: emulates `--version`, `who --json`
-// and `dm <id> <text> --as <name> --json`. Mode comes from ./fake-ocs-mode.
+// Fake ocs for Inspect & Ask acceptance: emulates `--version`, `who --json`,
+// `dm <id> <text> --as <name> --json`, and empty `inbox`/`read` answers for
+// the reply poll. Mode comes from ./fake-ocs-mode.
 const fs = require('fs');
 const path = require('path');
 const dir = __dirname;
@@ -27,6 +28,10 @@ if (args[0] === 'whoami') {
   const me = roster().find(e => (e.id || e.target) === id);
   console.log(JSON.stringify({ host: me?.kind === 'codex-task' ? 'codex' : 'claude', id, name: me?.name || null, session: me?.name || null, addresses: id ? [id] : [] }));
   process.exit(id ? 0 : 1);
+}
+if (args[0] === 'inbox' || args[0] === 'read') {
+  console.log('[]');
+  process.exit(0);
 }
 if (args[0] === 'dm') {
   let mode = 'sent';

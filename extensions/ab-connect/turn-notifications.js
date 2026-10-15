@@ -161,6 +161,7 @@ export function openFromNotification(id, { windowId, chrome, panels, pending = (
     void Promise.resolve(chrome.storage.local.set({ ab_panel_show_replies: Date.now() })).catch(() => {});
     const show = windowId => {
       void Promise.resolve(chrome.sidePanel.open({ windowId })).catch(error => console.warn('Open the side panel to read the reply:', String(error?.message || error)));
+      void Promise.resolve(chrome.windows.update(windowId, { focused: true })).catch(() => {});
       for (const [port, presence] of panels) {
         if (presence.windowId === windowId) try { port.postMessage({ type: 'showReplies' }); } catch {}
       }

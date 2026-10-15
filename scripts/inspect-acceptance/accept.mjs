@@ -169,7 +169,10 @@ await scenario('react-local-enable-bind-send', async () => {
   await waitFor(() => dms().length === before + 1, { timeout: 15000, label: 'one dm' });
   const dm = dms().at(-1);
   assert.equal(dm.target, 'claude-aaaa1111');
-  assert.deepEqual(dm.rest.slice(0, 3), ['--as', 'chrome-use', '--json']);
+  // A per-profile identity no session answers to (never the `chrome-use` workspace alias).
+  assert.equal(dm.rest[0], '--as');
+  assert.match(dm.rest[1], /^chrome-use\.inspect\.[0-9a-f]{12}$/);
+  assert.equal(dm.rest[2], '--json');
   assert.match(dm.text, /^\[chrome-use Inspect & Ask\]/);
   assert.match(dm.text, /Instruction \(typed by the user\): Make the save button rounded and blue/);
   assert.match(dm.text, /OrderForm\.jsx/);

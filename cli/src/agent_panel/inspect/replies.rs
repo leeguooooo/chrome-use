@@ -36,6 +36,9 @@ const MAX_REPLY_STORE: u64 = 8 * 1024 * 1024;
 const POLL_WINDOW: u64 = 24 * 60 * 60 * 1000;
 const MAX_CHANNELS: usize = 8;
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
+/// `ocs inbox` scans every channel log, so other channels are looked for
+/// less often than the delivery channels are read.
+const INBOX_INTERVAL: Duration = Duration::from_secs(60);
 pub(super) const READ_TIMEOUT: Duration = Duration::from_secs(8);
 const STORE_VERSION: u32 = 1;
 
@@ -240,6 +243,17 @@ pub(super) struct RepliesParams {
 /// When each data root was last polled in this process.
 static POLLED: Mutex<BTreeMap<PathBuf, Instant>> = Mutex::new(BTreeMap::new());
 
+/// Whether `key` was last polled at least `interval` ago; if so, it counts
+/// as polled now.
+fn due(key: &Path, interval: Duration) -> bool {
+    let mut polled = POLLED.lock().unwrap_or_else(|e| e.into_inner());
+    if polled.get(key).is_some_and(|t| t.elapsed() < interval) {
+        return false;
+    }
+    polled.insert(key.to_path_buf(), Instant::now());
+    true
+}
+
 impl Inspect<'_> {
     fn replies_path(&self) -> PathBuf {
         self.root.join("replies.json")
@@ -306,6 +320,9 @@ impl Inspect<'_> {
     /// [`POLL_INTERVAL`], and only when this profile delivered something in
     /// the last day; otherwise no process is started.
     fn poll(&self, mine: &[String]) -> Result<(), String> {
+        if !due(&self.root, POLL_INTERVAL) {
+            return Ok(());
+        }
         let now = super::super::conversation::now();
         let sent = self.sent(mine);
         let recent: Vec<&Sent> = sent
@@ -315,16 +332,7 @@ impl Inspect<'_> {
         if recent.is_empty() {
             return Ok(());
         }
-        {
-            let mut polled = POLLED.lock().unwrap_or_else(|e| e.into_inner());
-            if polled
-                .get(&self.root)
-                .is_some_and(|t| t.elapsed() < POLL_INTERVAL)
-            {
-                return Ok(());
-            }
-            polled.insert(self.root.clone(), Instant::now());
-        }
+        let inbox = due(&self.root.join("inbox"), INBOX_INTERVAL);
         let Some(ocs) = self.sys.ocs() else {
             return Ok(());
         };
@@ -343,10 +351,11 @@ impl Inspect<'_> {
                     channels.push(s.channel.clone());
                 }
             }
-            if let Ok(run) = self
-                .sys
-                .ocs_json(&ocs.path, &["inbox", "--as", me, "--json"])
-            {
+            let listed = inbox.then(|| {
+                self.sys
+                    .ocs_json(&ocs.path, &["inbox", "--as", me, "--json"])
+            });
+            if let Some(Ok(run)) = listed {
                 if run.code == Some(0) && !run.timed_out {
                     for c in parse_inbox(&run.stdout) {
                         if !channels.contains(&c) {
@@ -470,7 +479,9 @@ fn read_store(root: &Path) -> Value {
 
 #[cfg(test)]
 fn reset_poll_clock(root: &Path) {
-    POLLED.lock().unwrap().remove(root);
+    let mut polled = POLLED.lock().unwrap();
+    polled.remove(root);
+    polled.remove(&root.join("inbox"));
 }
 
 #[cfg(test)]
@@ -670,6 +681,8 @@ mod tests {
         .unwrap();
         assert_eq!(record["as"], me);
 
+        // The empty poll above started the poll clock.
+        reset_poll_clock(&w.data);
         let read = format!("read dm-x --as {me} --since 0 --json");
         sys.ocs_answers.borrow_mut().extend([
             (format!("inbox --as {me} --json"), r#"[{"channel":"dm-x","unread":1},{"channel":"dm-other","unread":1}]"#.to_string()),

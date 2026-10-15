@@ -203,10 +203,11 @@ test('a reply notification opens the side panel at its replies', () => {
   const chrome = {
     storage: { local: { set: async value => { calls.push(['store', Object.keys(value)]); } } },
     sidePanel: { open: options => { calls.push(['open', options]); return Promise.resolve(); } },
+    windows: { update: async (id, options) => { calls.push(['focus', id, options]); } },
     notifications: { clear: async id => { calls.push(['clear', id]); } },
   };
   const here = { posted: [], postMessage(message) { this.posted.push(message); } };
   assert.equal(openFromNotification('inspect-reply:dm-a#4', { windowId: 4, chrome, panels: new Map([[here, { windowId: 4 }]]) }), true);
-  assert.deepEqual(calls, [['store', ['ab_panel_show_replies']], ['open', { windowId: 4 }], ['clear', 'inspect-reply:dm-a#4']]);
+  assert.deepEqual(calls, [['store', ['ab_panel_show_replies']], ['open', { windowId: 4 }], ['focus', 4, { focused: true }], ['clear', 'inspect-reply:dm-a#4']]);
   assert.deepEqual(here.posted, [{ type: 'showReplies' }]);
 });
