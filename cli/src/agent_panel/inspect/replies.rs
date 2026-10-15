@@ -16,7 +16,6 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::Read,
     path::{Path, PathBuf},
     sync::Mutex,
     time::{Duration, Instant},
@@ -461,6 +460,7 @@ impl Inspect<'_> {
 
 #[cfg(test)]
 fn read_store(root: &Path) -> Value {
+    use std::io::Read;
     let mut data = Vec::new();
     fs::File::open(root.join("replies.json"))
         .and_then(|mut f| f.read_to_end(&mut data))
@@ -656,7 +656,7 @@ mod tests {
         .unwrap();
         assert_eq!(result["state"], "sent");
         let me = identity(None, 0);
-        assert_eq!(*sys.senders.borrow(), [me.clone()]);
+        assert_eq!(*sys.senders.borrow(), std::slice::from_ref(&me));
         assert!(sys.senders.borrow().iter().all(|s| s != "chrome-use"));
         let message = sys.sent.borrow()[0].1.clone();
         assert!(
