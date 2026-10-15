@@ -703,3 +703,24 @@ test('the panel reports the conversation it shows and switches when a notificati
   assert.equal(f.presence.posted.at(-1).visible, false);
   f.panel.close();
 });
+
+test('agent replies to Inspect & Ask batches are listed and reported as seen once shown', async () => {
+  const replies = [{ deliveryId: 'd', channel: 'dm-a', seq: 4, from: 'chrome-use-91', text: 'Fixed **it**', receivedAt: 1 }];
+  const f = await fixture({ presence: true, status: () => ({ connected: true, agentPanel: { ...fullSupport, inspectReplies: 1 } }), inspectReplies: async () => ({ success: true, result: { replies } }) }, { ab_panel_conversation: 'a' });
+  await settle();
+  const box = f.nodes.get('inspectReplies');
+  assert.equal(box.hidden, false);
+  assert.match(f.nodes.get('inspectReplyList').children[0].children[0].children[0].textContent, /Reply from chrome-use-91/);
+  assert.equal(f.presence.posted.at(-1).repliesShown, undefined, 'collapsed replies are not seen');
+  f.presence.listeners.message({ type: 'showReplies' }); await settle();
+  assert.equal(box.open, true);
+  assert.equal(f.presence.posted.at(-1).repliesShown, true);
+  f.panel.close();
+});
+
+test('a host without inspectReplies is never asked for replies', async () => {
+  const f = await fixture({ presence: true });
+  assert.equal(f.calls.some(call => call.operation === 'inspectReplies'), false);
+  assert.equal(f.nodes.get('inspectReplies').hidden, true);
+  f.panel.close();
+});

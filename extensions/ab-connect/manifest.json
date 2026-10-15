@@ -58,7 +58,9 @@
         "inspect-frame.js",
         "inspect-frame.css",
         "inspect-frame-logic.js",
-        "inspect-format.js"
+        "inspect-format.js",
+        "inspect-replies.js",
+        "markdown.js"
       ],
       "matches": [
         "<all_urls>"

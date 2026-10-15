@@ -159,7 +159,7 @@ test('every flag the real host capabilities() reports reaches the panel', async 
   assert.equal(state.receive(port, { method: 'pong', params: { agentPanel } }), true);
   const seen = state.snapshot().agentPanel;
   for (const [key, value] of Object.entries(agentPanel)) if (key !== 'chatAgents') assert.equal(seen[key], value, key);
-  for (const key of ['turnEvidence', 'artifacts', 'recovery', 'recording', 'requestRevision']) assert.ok(seen[key] >= 1, key);
+  for (const key of ['turnEvidence', 'artifacts', 'recovery', 'recording', 'requestRevision', 'inspectReplies']) assert.ok(seen[key] >= 1, key);
   // A later version change is a change the panel must re-read.
   assert.equal(state.receive(port, { method: 'pong', params: { agentPanel: { ...agentPanel, turnEvidence: 2 } } }), true);
   assert.equal(state.snapshot().agentPanel.turnEvidence, 2);

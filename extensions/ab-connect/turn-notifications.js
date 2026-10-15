@@ -1,6 +1,9 @@
 // Notify when a side-panel turn ends or waits for the user, unless the user is
-// already looking at that conversation. The cursor stores conversation ids and
-// turn tokens only, never titles, prompts or answers.
+// already looking at that conversation, and when an agent replies to an
+// Inspect & Ask batch. The cursor stores conversation ids, turn tokens and a
+// reply time only, never titles, prompts or answers.
+import { replyKey, replyNotice, validReplies } from './inspect-replies.js';
+
 const KEY = 'ab_turn_notifications';
 const ENDED = new Set(['idle', 'failed', 'interrupted']);
 const BUSY = new Set(['starting', 'running', 'stopping']);
@@ -46,7 +49,7 @@ export class TurnNotifications {
   async load() {
     if (!this.state) {
       const saved = (await this.storage.get(KEY))[KEY] || {};
-      this.state = { seen: saved.seen || {}, unseen: saved.unseen || {} };
+      this.state = { seen: saved.seen || {}, unseen: saved.unseen || {}, ...(Number.isSafeInteger(saved.replyAfter) ? { replyAfter: saved.replyAfter } : {}) };
     }
     return this.state;
   }
@@ -91,10 +94,49 @@ export class TurnNotifications {
         const title = firstLine(c.title || c.site || agentNames[c.agentId] || 'chrome-use', 80);
         await this.notifications.create(`panel-turn:${c.id}`, { type: 'basic', iconUrl: 'icons/icon128.png', title, message: turnMessage(c, event.kind) });
       }
-      for (const id of Object.keys(unseen)) if (!live.has(id)) delete unseen[id];
+      for (const id of Object.keys(unseen)) if (!live.has(id) && !id.startsWith('reply:')) delete unseen[id];
       if (!enabled) this.state.unseen = {};
       await this.save();
     } finally { this.running = false; }
+  }
+  /**
+   * Agent replies to Inspect & Ask batches.
+   * @param read resolves to the host's `inspectReplies` result
+   * Replies stored before the first poll are not announced; later ones
+   * notify once each and count on the badge until `repliesSeen`.
+   */
+  async pollReplies(read, { enabled = true } = {}) {
+    if (this.replying) return;
+    this.replying = true;
+    try {
+      const state = await this.load();
+      const replies = validReplies(await read());
+      const newest = replies.reduce((max, r) => Math.max(max, r.receivedAt), 0);
+      if (state.replyAfter === undefined) {
+        state.replyAfter = newest;
+        await this.save();
+        return;
+      }
+      const fresh = replies.filter(r => r.receivedAt > state.replyAfter);
+      if (!fresh.length) return;
+      state.replyAfter = newest;
+      for (const reply of fresh) {
+        if (!enabled) continue;
+        const id = `inspect-reply:${replyKey(reply)}`;
+        state.unseen[`reply:${replyKey(reply)}`] = reply.receivedAt;
+        await this.notifications.create(id, { type: 'basic', iconUrl: 'icons/icon128.png', ...replyNotice(reply) });
+      }
+      await this.save();
+    } finally { this.replying = false; }
+  }
+  /** The side panel showed the replies: their badge entries are done. */
+  async repliesSeen() {
+    const { unseen } = await this.load();
+    const keys = Object.keys(unseen).filter(id => id.startsWith('reply:'));
+    if (!keys.length) return;
+    for (const id of keys) delete unseen[id];
+    await this.save();
+    for (const id of keys) await this.notifications.clear?.(`inspect-${id}`);
   }
   /** The panel shows `id`: its badge entry and notification are done. */
   async seen(id) {
@@ -114,6 +156,20 @@ export class TurnNotifications {
  * `pending` receives the selection for a panel that has yet to report.
  */
 export function openFromNotification(id, { windowId, chrome, panels, pending = () => {} }) {
+  if (id.startsWith('inspect-reply:')) {
+    // The side panel lists Inspect & Ask replies; open it where the user is.
+    void Promise.resolve(chrome.storage.local.set({ ab_panel_show_replies: Date.now() })).catch(() => {});
+    const show = windowId => {
+      void Promise.resolve(chrome.sidePanel.open({ windowId })).catch(error => console.warn('Open the side panel to read the reply:', String(error?.message || error)));
+      for (const [port, presence] of panels) {
+        if (presence.windowId === windowId) try { port.postMessage({ type: 'showReplies' }); } catch {}
+      }
+    };
+    if (windowId !== null && windowId !== undefined) show(windowId);
+    else void Promise.resolve(chrome.windows.getLastFocused()).then(window => { if (window?.id !== undefined) show(window.id); }).catch(() => {});
+    void Promise.resolve(chrome.notifications.clear(id)).catch(() => {});
+    return true;
+  }
   const match = /^(schedule-run|panel-turn):([a-f0-9-]{36})$/.exec(id);
   if (!match) return false;
   const conversationId = match[2];

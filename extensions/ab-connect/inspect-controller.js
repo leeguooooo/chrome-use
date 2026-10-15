@@ -98,13 +98,15 @@ export function deliveryLocked(state) {
 }
 
 export class InspectController {
-  constructor({ chrome, request, hostReady, resolveReady = () => false }) {
+  constructor({ chrome, request, hostReady, resolveReady = () => false, repliesReady = () => false }) {
     this.chrome = chrome;
     this.request = request;
     this.hostReady = hostReady;
     // Hosts from v1.5.214 resolve path-scoped bindings, claims and tab
     // targets; older hosts only know one binding per origin.
     this.resolveReady = resolveReady;
+    // Hosts that send as a reply-safe identity and keep agent replies.
+    this.repliesReady = repliesReady;
     this.registry = new InspectRegistry({ runtimeId: chrome.runtime.id });
   }
 
@@ -440,6 +442,13 @@ export class InspectController {
         return answer({ revision: instance.selectionRevision || 0, annotations: instance.annotations.map((a, i) => formatAnnotation(a, i + 1)) });
       case 'deliver':
         return answer({ result: await this.deliver(instance, message) });
+      case 'replies': {
+        // `replies: null` tells the frame this host keeps none.
+        if (!this.repliesReady()) return answer({ replies: null });
+        const deliveryId = String(message.deliveryId || '');
+        if (!/^[0-9a-f-]{36}$/.test(deliveryId)) throw new Error('Missing delivery id');
+        return answer({ replies: (await this.host('inspectReplies', { deliveryId })).replies });
+      }
       case 'deliveryStatus':
         return answer({ result: await this.host('inspectDeliveryStatus', { deliveryId: String(message.deliveryId || '') }) });
       case 'setup': {

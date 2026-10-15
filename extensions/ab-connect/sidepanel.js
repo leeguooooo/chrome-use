@@ -1,6 +1,7 @@
 import { PanelTimeline, phaseLabels, assessmentLabel, outcomeLabel, stepVerdict, stepActions, actingPages } from './panel-state.js';
 import { heifConverter, isHeif, prepareImage } from './image-attachment.js';
 import { renderMarkdown } from './markdown.js';
+import { REPLY_TEXT, renderReplies, validReplies } from './inspect-replies.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
 // Main domain of a host: the last two labels, or three under common
@@ -239,12 +240,35 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   function reportPresence() {
     if (!presencePort || windowId === null) return;
     const visible = document.visibilityState !== 'hidden' && !nodes.chatView.hidden;
-    try { presencePort.postMessage({ type: 'presence', windowId, conversationId: selected, visible }); } catch {}
+    const repliesShown = visible && replyCount > 0 && replyBox.open === true;
+    try { presencePort.postMessage({ type: 'presence', windowId, conversationId: selected, visible, ...(repliesShown ? { repliesShown } : {}) }); } catch {}
   }
+  // Inspect & Ask replies: agents answer batches sent from the page picker,
+  // and hosts that report `inspectReplies` keep them for this list.
+  const replyBox = document.getElementById('inspectReplies'), replyList = document.getElementById('inspectReplyList');
+  let replyCount = 0, replyTimer = null;
+  async function loadReplies() {
+    if (!panelSupport?.inspectReplies) { replyBox.hidden = true; replyCount = 0; return; }
+    replyCount = renderReplies(document, replyList, validReplies(await api('inspectReplies')), renderMarkdown, { showBatch: true });
+    replyBox.hidden = !replyCount;
+    reportPresence();
+  }
+  function replyLoop() {
+    cancel(replyTimer);
+    replyTimer = schedule(() => { if (!closed) void loadReplies().catch(() => {}).finally(replyLoop); }, 20000);
+  }
+  function showReplies() {
+    replyBox.open = true;
+    void loadReplies().then(() => replyBox.scrollIntoView?.({ block: 'nearest' })).catch(error);
+  }
+  replyBox.addEventListener('toggle', reportPresence);
   function connectPresence() {
     if (closed || !runtime?.connect) return;
     try { presencePort = runtime.connect({ name: 'ab-panel-presence' }); } catch { return; }
-    presencePort.onMessage.addListener(message => { if (message?.type === 'select' && typeof message.conversationId === 'string') select(message.conversationId); });
+    presencePort.onMessage.addListener(message => {
+      if (message?.type === 'select' && typeof message.conversationId === 'string') select(message.conversationId);
+      if (message?.type === 'showReplies') showReplies();
+    });
     // The service worker restarting closes the port; reconnect to the new one.
     presencePort.onDisconnect.addListener(() => { presencePort = null; schedule(connectPresence, 1000); });
     reportPresence();
@@ -1127,6 +1151,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
       else if (!conversation || conversation.id !== selected) select(selected);
     }
     await poll(); loop(); loadModels(); void loadSkills().catch(error); void loadSchedules().catch(error); void refreshPage().catch(() => {});
+    void loadReplies().catch(() => {}); replyLoop();
   }
   nodes.composer.addEventListener('submit', event => { event.preventDefault(); void send().catch(error); });
   nodes.message.addEventListener('keydown', event => { if (skillPickerKey(event)) return; if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void send(event.ctrlKey || event.metaKey).catch(error); } });
@@ -1335,7 +1360,10 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   controls(); closeConversationMenu();
   return { async start() {
     try {
-      const saved = await storage?.local?.get(['ab_panel_conversation', 'ab_panel_pending', 'ab_panel_full_access', 'ab_panel_conversation_scope', 'ab_panel_agent']);
+      const saved = await storage?.local?.get(['ab_panel_conversation', 'ab_panel_pending', 'ab_panel_full_access', 'ab_panel_conversation_scope', 'ab_panel_agent', 'ab_panel_show_replies']);
+      replyBox.querySelector?.('summary')?.replaceChildren(REPLY_TEXT.heading);
+      // Opened from a reply notification.
+      if (Date.now() - Number(saved?.ab_panel_show_replies || 0) < 30000) replyBox.open = true;
       if (chatAgents.has(saved?.ab_panel_agent)) preferredAgent = saved.ab_panel_agent;
       if (saved?.ab_panel_conversation_scope === 'all') scope = 'all';
       selected = saved?.ab_panel_conversation || '';
@@ -1347,7 +1375,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
       void Promise.resolve(windows?.getCurrent?.()).then(current => { if (Number.isInteger(current?.id)) { windowId = current.id; connectPresence(); } }).catch(() => {});
       await refresh();
     } catch (failure) { error(failure); }
-  }, refresh, select, send, timeline: () => timeline, close() { closed = true; try { presencePort?.disconnect(); } catch {} clearTurnView(); modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
+  }, refresh, select, send, timeline: () => timeline, close() { closed = true; try { presencePort?.disconnect(); } catch {} cancel(replyTimer); clearTurnView(); modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
 }
 
 if (typeof document !== 'undefined') {

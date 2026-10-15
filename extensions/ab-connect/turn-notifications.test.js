@@ -167,3 +167,46 @@ test('a turn seen running notifies even if it ends while the worker is stopped',
   f.tick(1000); await new TurnNotifications(f.options).poll(read);
   assert.equal(f.notices.length, 1);
 });
+
+test('agent replies to Inspect & Ask batches notify once, count on the badge and clear when shown', async () => {
+  const f = fixture();
+  const replies = [{ channel: 'dm-a', seq: 3, from: 'old-agent', text: 'before', receivedAt: 50 }];
+  const read = async () => ({ replies });
+  let notifier = new TurnNotifications(f.options);
+  // The first poll only marks what the host already held.
+  await notifier.pollReplies(read);
+  assert.equal(f.notices.length, 0);
+  replies.push({ deliveryId: ID, channel: 'dm-a', seq: 4, from: 'chrome-use-91', text: 'Fixed the button\nsecond line', receivedAt: 200 });
+  await notifier.pollReplies(read); await notifier.pollReplies(read);
+  assert.deepEqual(f.notices, [{ id: 'inspect-reply:dm-a#4', value: { type: 'basic', iconUrl: 'icons/icon128.png', title: 'Reply from chrome-use-91', message: 'Fixed the button' } }]);
+  assert.equal(f.badges.at(-1), '1');
+  // A conversation poll keeps the reply's badge entry.
+  await notifier.poll(async () => ({ conversations: [] }));
+  assert.equal(f.badges.at(-1), '1');
+  // A restarted worker does not announce it again.
+  notifier = new TurnNotifications(f.options);
+  await notifier.pollReplies(read);
+  assert.equal(f.notices.length, 1);
+  await notifier.repliesSeen();
+  assert.equal(f.badges.at(-1), '');
+  assert.deepEqual(f.cleared, ['inspect-reply:dm-a#4']);
+  assert.equal(JSON.stringify(f.saved()).includes('Fixed the button'), false, 'reply text is never stored');
+  // Disabled: nothing is shown, and the cursor still moves past it.
+  replies.push({ channel: 'dm-a', seq: 5, from: 'x', text: 'quiet', receivedAt: 300 });
+  await notifier.pollReplies(read, { enabled: false });
+  await notifier.pollReplies(read);
+  assert.equal(f.notices.length, 1);
+});
+
+test('a reply notification opens the side panel at its replies', () => {
+  const calls = [];
+  const chrome = {
+    storage: { local: { set: async value => { calls.push(['store', Object.keys(value)]); } } },
+    sidePanel: { open: options => { calls.push(['open', options]); return Promise.resolve(); } },
+    notifications: { clear: async id => { calls.push(['clear', id]); } },
+  };
+  const here = { posted: [], postMessage(message) { this.posted.push(message); } };
+  assert.equal(openFromNotification('inspect-reply:dm-a#4', { windowId: 4, chrome, panels: new Map([[here, { windowId: 4 }]]) }), true);
+  assert.deepEqual(calls, [['store', ['ab_panel_show_replies']], ['open', { windowId: 4 }], ['clear', 'inspect-reply:dm-a#4']]);
+  assert.deepEqual(here.posted, [{ type: 'showReplies' }]);
+});

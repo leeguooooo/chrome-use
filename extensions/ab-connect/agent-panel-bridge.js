@@ -9,7 +9,7 @@ const readOperations = ['conversationRead', 'conversationList', 'conversationArt
 
 // Inspect & Ask host operations. inspectDeliver is never replayed: a timeout
 // leaves the batch unconfirmed and the caller asks inspectDeliveryStatus.
-export const INSPECT_OPERATIONS = ['inspectStatus', 'inspectResolve', 'inspectClaimDecide', 'inspectBind', 'inspectUnbind', 'inspectBindings', 'inspectConsent', 'inspectDeliver', 'inspectDeliveryStatus', 'inspectLaunchCommand'];
+export const INSPECT_OPERATIONS = ['inspectStatus', 'inspectResolve', 'inspectClaimDecide', 'inspectBind', 'inspectUnbind', 'inspectBindings', 'inspectConsent', 'inspectDeliver', 'inspectDeliveryStatus', 'inspectLaunchCommand', 'inspectReplies'];
 
 export class AgentPanelBridge {
   constructor({ send, schedule = (callback, delay) => globalThis.setTimeout(callback, delay), cancel = timer => globalThis.clearTimeout(timer), timeoutMs = 15000, maxPending = 16 }) {
@@ -102,6 +102,7 @@ function validResult({ operation, agentId, planId, conversationId, messageId, re
   if (operation === 'inspectBindings') return Array.isArray(result.bindings);
   if (operation === 'inspectDeliver') return ['sent', 'stored', 'unknown', 'failed', 'noBinding', 'noSession', 'sessionChanged', 'noOcs', 'upgradeRequired', 'targetChanged'].includes(result.state);
   if (operation === 'inspectDeliveryStatus') return result.delivery === null || typeof result.delivery?.state === 'string';
+  if (operation === 'inspectReplies') return Array.isArray(result.replies);
   if (operation === 'inspectLaunchCommand') return typeof result.command === 'string' && typeof result.shell === 'string';
   if (operation === 'serviceHealth') return typeof result.profile === 'string' && typeof result.binaryHash === 'string' && Number.isInteger(result.pid);
   if (operation === 'serviceStop') return result.service?.stopRequested === true;

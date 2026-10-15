@@ -308,3 +308,22 @@ test('matching: a refused precheck never records the batch as sending', async ()
   assert.equal(real.sent.find(m => m.requestId === 62).result.state, 'sent');
   assert.equal(calls.filter(c => c[0] === 'inspectDeliver').length, 1);
 });
+
+test('the frame reads its batch replies only from a host that keeps them', async () => {
+  const ctx = await authorized();
+  const { real, controller, calls } = ctx;
+  const deliveryId = '11111111-2222-4333-8444-555555555555';
+  real.msg[0]({ type: 'replies', requestId: 41, deliveryId });
+  await flush();
+  assert.deepEqual(real.sent.find(m => m.requestId === 41).replies, null);
+  assert.equal(calls.filter(c => c[0] === 'inspectReplies').length, 0);
+  controller.repliesReady = () => true;
+  controller.request = async (op, params) => { calls.push([op, params]); return { schemaVersion: 1, replies: [{ channel: 'dm-a', seq: 2 }] }; };
+  real.msg[0]({ type: 'replies', requestId: 42, deliveryId });
+  await flush();
+  assert.deepEqual(calls.at(-1), ['inspectReplies', { deliveryId }]);
+  assert.deepEqual(real.sent.find(m => m.requestId === 42).replies, [{ channel: 'dm-a', seq: 2 }]);
+  real.msg[0]({ type: 'replies', requestId: 43, deliveryId: '../x' });
+  await flush();
+  assert.equal(real.sent.find(m => m.requestId === 43).type, 'error');
+});

@@ -4,7 +4,7 @@
 // Host feature flags the panel may rely on. Boolean ones are `true`; versioned
 // ones are positive integers so a later host can raise the version.
 const BOOLEAN_FEATURES = ['conversationOptions','imageAttachments','heicConvert','skillLibrary','schedules','inspect','inspectResolve'];
-const VERSIONED_FEATURES = ['requestRevision','turnEvidence','artifacts','recovery','recording'];
+const VERSIONED_FEATURES = ['requestRevision','turnEvidence','artifacts','recovery','recording','inspectReplies'];
 
 export class HostConnectionState {
   constructor() {

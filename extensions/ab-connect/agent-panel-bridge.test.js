@@ -291,3 +291,13 @@ test('HEIC conversion waits past the host converter budget and must return a JPE
     if (ok) assert.equal((await pending).data, '/9j/'); else await assert.rejects(pending, /Malformed/);
   }
 });
+
+test('an Inspect & Ask reply list must be a list', async () => {
+  const { bridge, messages } = setup();
+  const good = bridge.request('inspectReplies', { deliveryId: '11111111-2222-4333-8444-555555555555' });
+  bridge.receive({ method: 'agentPanelReply', requestId: messages[0].requestId, result: { schemaVersion: 1, replies: [] } });
+  assert.deepEqual((await good).replies, []);
+  const bad = bridge.request('inspectReplies');
+  bridge.receive({ method: 'agentPanelReply', requestId: messages[1].requestId, result: { schemaVersion: 1, replies: {} } });
+  await assert.rejects(bad, /Malformed/);
+});

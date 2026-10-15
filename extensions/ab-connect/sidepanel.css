@@ -301,3 +301,10 @@ button.stop { background:var(--ink); border-color:var(--ink); color:var(--bg); f
 .composer-controls #turnOptions { width:auto; height:auto; }
 .composer-controls #turnOptions > summary { width:auto; height:24px; padding:0 8px; white-space:nowrap; }
 .composer-controls .model { min-width:110px; max-width:160px; flex:1 1 110px; }
+
+.inspect-replies { margin: 4px 12px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; max-height: 40vh; overflow: auto; }
+.inspect-replies > summary { cursor: pointer; font-weight: 600; }
+.inspect-replies .muted, .inspect-reply-head time { color: var(--muted); }
+.inspect-reply { border-left: 3px solid var(--accent); padding: 4px 8px; margin: 6px 0; }
+.inspect-reply-head { font-size: 12px; }
+.inspect-reply-body { overflow-wrap: anywhere; }
