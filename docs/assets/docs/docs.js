@@ -87,6 +87,7 @@
     { id: "start", label: { zh: "开始", en: "Getting Started" }, items: [
       { slug: "overview",  ico: "🧭", zh: "概览",        en: "Overview",            kw: "intro start home 首页 介绍" },
       { slug: "install",   ico: "📦", zh: "安装",        en: "Installation",        kw: "install setup 安装 npm curl extension 扩展" },
+      { slug: "agent-panel", ico: "Chat", zh: "插件对话", en: "Agent Chat", kw: "chat side panel local agent codex claude opencode pi 对话 侧栏 本机 agent 模型 技能 定时" },
       { slug: "core-loop", ico: "🔁", zh: "核心循环",    en: "The Core Loop",       kw: "loop snapshot act observe 循环 workflow" },
       { slug: "how-it-works", ico: "⚙️", zh: "它怎么工作", en: "How It Works",       kw: "architecture daemon relay native messaging extension cdp pipeline 架构 原理 守护进程 中继 工作原理" },
     ]},

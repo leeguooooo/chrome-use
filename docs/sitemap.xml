@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
   <url>
+    <loc>https://chrome-use.leeguoo.com/agent-panel.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/agent-panel.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/agent-panel.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/agent-panel.html" />
+    <lastmod>2026-10-15</lastmod>
+  </url>
+  <url>
     <loc>https://chrome-use.leeguoo.com/canvas.html</loc>
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/canvas.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/canvas.html" />
@@ -12,7 +19,7 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/changelog.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/changelog.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/changelog.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/choosebrowser.html</loc>
@@ -47,7 +54,7 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/core-loop.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/core-loop.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/core-loop.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/debugger-banner-silence.html</loc>
@@ -61,6 +68,13 @@
     <lastmod>2026-10-07</lastmod>
   </url>
   <url>
+    <loc>https://chrome-use.leeguoo.com/en/agent-panel.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/agent-panel.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/agent-panel.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/agent-panel.html" />
+    <lastmod>2026-10-15</lastmod>
+  </url>
+  <url>
     <loc>https://chrome-use.leeguoo.com/en/canvas.html</loc>
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/canvas.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/canvas.html" />
@@ -72,7 +86,7 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/changelog.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/changelog.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/changelog.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/en/choosebrowser.html</loc>
@@ -107,7 +121,7 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/core-loop.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/core-loop.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/core-loop.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/en/electron.html</loc>
@@ -121,7 +135,7 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/extension-changelog.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/extension-changelog.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/extension-changelog.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/en/extract.html</loc>
@@ -170,14 +184,14 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/inspect.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/inspect.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/inspect.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/en/install.html</loc>
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/install.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/install.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/install.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/en/interacting.html</loc>
@@ -212,7 +226,7 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/mcp.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/mcp.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/mcp.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/en/media.html</loc>
@@ -252,7 +266,7 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/real-chrome.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/real-chrome.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/real-chrome.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/en/script.html</loc>
@@ -301,7 +315,7 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/troubleshooting.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/troubleshooting.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/troubleshooting.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/en/waiting.html</loc>
@@ -315,7 +329,7 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/extension-changelog.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/extension-changelog.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/extension-changelog.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/extract.html</loc>
@@ -364,14 +378,14 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/inspect.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/inspect.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/inspect.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/install.html</loc>
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/install.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/install.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/install.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/interacting.html</loc>
@@ -406,7 +420,7 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/mcp.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/mcp.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/mcp.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/media.html</loc>
@@ -441,7 +455,7 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/real-chrome.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/real-chrome.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/real-chrome.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/script.html</loc>
@@ -490,7 +504,7 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/troubleshooting.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/troubleshooting.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/troubleshooting.html" />
-    <lastmod>2026-10-14</lastmod>
+    <lastmod>2026-10-15</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/waiting.html</loc>

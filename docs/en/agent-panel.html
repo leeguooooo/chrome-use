@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Agent chat · chrome-use Docs</title>
+  <meta name="description" content="Chat with installed Codex, Claude Code, OpenCode or Pi from the Chrome extension side panel. Pages, models, approvals, queues, skills, images and scheduled prompts." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+
+  <link rel="canonical" href="https://chrome-use.leeguoo.com/en/agent-panel.html" />
+  <link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/agent-panel.html" />
+  <link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/agent-panel.html" />
+  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/agent-panel.html" />
+</head>
+
+<body data-page="agent-panel" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main"><nav aria-label="Documentation"><a href="/en/">chrome-use</a> · <a href="/en/install.html">Install</a> · <a href="/en/logged-in-browser.html">Logged-in browser guide</a> · <a href="/en/mcp.html">MCP</a> · <a href="/en/compare.html">Compare</a></nav>
+
+      <p class="du-eyebrow">Agent chat / Chrome extension</p>
+
+      <div class="du-title-row">
+        <h1>Agent chat</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">Give a task in Chrome’s side panel and let a local coding agent work with your logged-in browser. The extension uses your installed CLI and its configured model service.</p>
+      <p><img src="/assets/side-panel.webp" alt="The agent compares plans on the page and replies with a table" style="max-width:100%;height:auto;border-radius:12px" /></p>
+      <p>Install <a href="/en/install.html">chrome-use</a>, register the native host with <code>chrome-use extension install</code>, and install the <a href="/en/real-chrome.html">Chrome extension</a>. Install and sign in to at least one supported agent CLI, then open the side panel.</p>
+      <h2 id="start">Start a conversation</h2>
+      <p>Click the extension icon to open the side panel; <strong>Settings</strong> opens connection options. On macOS, Linux or Windows, choose Codex, Claude Code, OpenCode or Pi with your installed CLI's login. The host reports which agents it supports; older hosts may need an upgrade. Windows also supports skills, images, conversation options, schedules and configuration apply/restore. Stop, delete and option changes confirm the whole agent process tree exits. Private state uses a protected user/SYSTEM ACL; no administrator access is required. Codex uses app-server, Claude Code uses stream-json, OpenCode uses ACP, and Pi uses JSONL RPC.</p>
+      <h2 id="pages-models">Pages and models</h2>
+      <p>Each conversation has its own browser session. The page tag above the composer attaches the current webpage to your next message; click <strong>×</strong> to omit it. Model choices come from the selected CLI's catalog. <strong>Default model</strong> uses its configured model; <strong>Custom model ID</strong> in the <strong>＋</strong> menu overrides the choice. <strong>Reload models from CLI</strong> refreshes the catalog. A listed model or reported login does not prove execution access.</p>
+      <h2 id="permissions">Tool access and approvals</h2>
+      <p>The permission switch applies to one conversation. New chats start with <strong>Full access</strong> unless you saved another choice.</p>
+      <ul>
+        <li><strong>Codex / Claude Code:</strong> turn full access off for <strong>Ask first</strong> and review approval requests. Full access runs without those prompts and automatically answers supported approvals. Agent questions still need your response.</li>
+        <li><strong>OpenCode:</strong> <strong>CLI permissions</strong> keeps its own rules, which may allow tools without asking. Incoming requests appear in the panel; full access answers with <strong>Allow once</strong> without changing stored rules.</li>
+        <li><strong>Pi:</strong> tools have no per-call approval mechanism. <strong>Browser only</strong> exposes only <code>chrome_use</code> MCP tools, without shell or file tools. Full access enables the CLI's full tool set.</li>
+      </ul>
+      <h2 id="queue">Queue, stop and resume</h2>
+      <p>Replies stream into history, with tool rows that expand for details. Tool output does not prove the browser task succeeded. Messages sent during a response queue up; failure or interruption pauses the queue until <strong>Resume queue</strong>. <strong>Stop &amp; send</strong> or Ctrl/Cmd+Enter waits for confirmed interruption or process exit before sending ahead of the ordinary queue. Reconnect reads history without resending.</p>
+      <h2 id="history">History and deletion</h2>
+      <p>Stop the response before confirming deletion from the header. Deletion removes panel history and the conversation's browser session, plus Codex rollout files, Claude session files/directories, OpenCode history through <code>session/delete</code>, or Pi session files inside the conversation folder. Codex's SQLite cache is untouched. Cleanup failures or unconfirmed tab closure are reported.</p>
+      <h2 id="privacy">Privacy and configuration</h2>
+      <p>History stays on this computer. The chosen CLI may send tasks and page content to its configured model service, whose privacy policy applies. The panel adds no webpage content script; opening it can change the viewport. <strong>Agents &amp; models</strong> discovers programs and previews configuration changes, with verified writes and restore that preserves later edits.</p>
+      <h2 id="skills-images">Skills and images</h2>
+      <p>Type <code>/</code> to choose a skill. <strong>Agents &amp; models → Skill library</strong> edits or enables library entries and imports local folders, ZIP/.skill archives or HTTPS Git repositories. Existing user/CLI skill folders are read-only here. Skills and assets are snapshotted before sending, so queue edits and explicit retries retain their revision. Panel-bound agents can list/read skills and save library instructions with <code>chrome_use_skills</code>.</p>
+      <p>Paste, drop or choose up to five PNG/JPEG/WebP files with <strong>Attach images</strong>. Images are reduced to a 2000-pixel long edge and at most 512 KiB each. They remain with the conversation, including queued edits and retries, and are removed with it. ACP agents must advertise image input. Attachments are sent to the configured model service.</p>
+      <h2 id="options-schedules">Conversation options and recurring work</h2>
+      <p><strong>Conversation options</strong> overrides allowed tools and Codex/Claude reasoning effort; Codex also supports service tier. Save while idle; the next response uses the override without editing CLI defaults. Codex cannot remove its file-reading shell. OpenCode ACP cannot enforce built-in tool restrictions. The approval switch controls automatic answers within the chosen tool scope; Pi has no per-call approvals.</p>
+      <p><strong>Agents &amp; models → Scheduled prompts</strong> supports intervals, daily/weekday local times and five-field cron, with agent, model, options, skill and explicit tool scope. Runs use independent background browser sessions, appear in history and notify on completion. <strong>Run now</strong> does not move the next scheduled time. Closing the panel does not stop the local service; stopping that service stops scheduling. Missed periods coalesce into one run after restart or wake. An active or unconfirmed run is never overlapped or replayed; inspect its history before acknowledging an unknown outcome.</p>
+      <p>Chats cannot schedule more tools or automatic approval than they have. Scheduled conversations can list schedules but cannot change or trigger them, or rewrite library skills for future runs. Agent completion does not establish that the requested page effect succeeded.</p>
+
+      <div class="du-callout note"><div class="du-callout-title">Planned for CLI 1.5.215 and extension 0.5.58</div>The sections below describe the next release. They are not available in the current CLI 1.5.214 release. Chrome Web Store availability is separate.</div>
+      <h2 id="turns">A turn for each request (upcoming)</h2>
+      <p>Requires CLI 1.5.215 and extension 0.5.58. Older extensions retain the previous view. Chrome Web Store submission, review and public availability are separate from the CLI release.</p>
+      <p>Each message has a card containing its attached page, browser steps, response, result files and turn outcome. Running steps expand; finished groups can collapse, with failed steps retained in the summary. Missing evidence in older history is labelled <strong>not recorded</strong>, never guessed.</p>
+      <h3 id="acting-page">Attached page and acting page</h3>
+      <p><strong>Sent with</strong> is the page attached when you sent the message. <strong>Acted on</strong> lists pages named by browser-action replies. An agent can open another tab, so these may differ. A cached target without an action reply is labelled <strong>Browser tools pointed at</strong>. A tab you merely activate is not recorded as a page the agent acted on.</p>
+      <h3 id="checks">What a passed check means</h3>
+      <table><thead><tr><th>Label</th><th>Meaning</th></tr></thead><tbody>
+      <tr><td>Agent's browser checks passed</td><td>The browser checks the agent chose for this request passed. Expand them to see what was checked; this does not guarantee the checks fully express or satisfy your request.</td></tr>
+      <tr><td>Some checks passed</td><td>Some checks passed; others were not checked, failed or lack usable evidence.</td></tr>
+      <tr><td>Not checked / Blocked</td><td>No supporting check, or a blocker such as login, human verification or missing input.</td></tr>
+      </tbody></table>
+      <p>Read-back, page assertions, landing URLs and download types establish only their specific checks. An existing file does not prove correct content, and a screenshot does not automatically prove completion. A finished turn, passed browser checks and fulfillment of your request are separate facts.</p>
+      <h2 id="results">Screenshots, downloads and recordings (upcoming)</h2>
+      <p>Result cards show file type, size and availability. Reads verify content; missing or changed files become unavailable. Existence, type matching and fulfillment of the request are shown separately. Delivery to the agent's requested destination is also reported separately from the conversation's retained copy.</p>
+      <p>Check <strong>Record this task</strong> before sending to permit recording for that message. Recordings move through capture, processing and availability states. A finished answer does not mean the recording is ready; missing encoders and processing errors are reported. Recording never starts automatically for progress display.</p>
+      <h2 id="recovery">When an outcome is unknown (upcoming)</h2>
+      <p><strong>Stop requested, waiting for confirmation</strong> means interruption has been requested, not confirmed. <strong>This conversation's agent has stopped</strong> refers only to this conversation, not to other agents.</p>
+      <ol><li>Choose <strong>Review what may have happened</strong> to inspect possibly executed actions, last pages and result files. Do not immediately repeat a send, payment or submission.</li><li><strong>End the old agent process</strong> is offered only when a live process can be proven to belong to this conversation.</li><li>After its exit is confirmed, <strong>Continue in a new conversation</strong> carries a reference to the old history. Creating the conversation does not resend the previous request.</li></ol>
+      <p>No continue action is offered while process state remains unknown. After a service restart, some platforms cannot re-establish the old process tree's state and retain the unknown result.</p>
+      <h2 id="progress">Long tasks and continuous history (upcoming)</h2>
+      <p>Repeated results, repeated failures or a long period without activity raise an advisory. It does not stop or retry the task. You can stop, wait or inspect the steps. Context compaction leaves a marker while history remains available; it never turns an unchecked action into a successful one.</p>
+
+      <h2 id="planned-privacy">Privacy, notifications and HEIC (upcoming)</h2><p>The next release will mask recognized sensitive fields before writing new tool and approval records, add task notifications and support local HEIC/HEIF conversion. Masking does not cover your own message text, image pixels, file bytes or the CLI’s own history, and cannot retract secrets discovered later. Result files stay with their conversation until deletion.</p>
+      <h2 id="related">Related workflows</h2>
+      <p>To select an element and send a code-change request to an existing local session, see <a href="/en/inspect.html">Inspect &amp; Ask</a>.</p>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+  </div>
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

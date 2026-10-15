@@ -159,6 +159,8 @@ For hosts that speak **MCP but can't run arbitrary shell commands** (Claude Desk
 
 ### Local agent side panel
 
+Full guide: [Agent chat](https://chrome-use.leeguoo.com/en/agent-panel.html).
+
 <p align="center">
   <img src="assets/side-panel.webp" alt="chrome-use side panel: the agent compares the plans on a pricing page and answers with a table" width="820">
 </p>

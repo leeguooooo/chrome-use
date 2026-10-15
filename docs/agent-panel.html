@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>插件对话 · chrome-use 文档</title>
+  <meta name="description" content="在 Chrome 扩展侧栏里使用本机 Codex、Claude Code、OpenCode 或 Pi 对话，了解页面上下文、模型、审批、队列、技能、图片和定时提示。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+
+  <link rel="canonical" href="https://chrome-use.leeguoo.com/agent-panel.html" />
+  <link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/agent-panel.html" />
+  <link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/agent-panel.html" />
+  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/agent-panel.html" />
+</head>
+
+<body data-page="agent-panel" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main"><nav aria-label="文档"><a href="/">chrome-use</a> · <a href="/install.html">安装</a> · <a href="/logged-in-browser.html">已登录浏览器指南</a> · <a href="/mcp.html">MCP</a> · <a href="/compare.html">选型</a></nav>
+
+      <p class="du-eyebrow">插件对话 / Chrome 扩展</p>
+
+      <div class="du-title-row">
+        <h1>插件对话</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">在 Chrome 侧栏里写下任务，让本机 agent 使用已登录的浏览器完成操作。扩展沿用你安装的 CLI 和它配置的模型服务。</p>
+      <p><img src="/assets/side-panel.webp" alt="agent 对比页面上的套餐，并用表格给出结果" style="max-width:100%;height:auto;border-radius:12px" /></p>
+      <p>先<a href="/install.html">安装 chrome-use</a>，运行 <code>chrome-use extension install</code> 注册原生宿主，再<a href="/real-chrome.html">安装 Chrome 扩展</a>。本机至少安装并登录一个受支持的 agent CLI，然后打开侧栏。</p>
+      <h2 id="start">开始对话</h2>
+      <p>点击扩展图标打开侧栏，<strong>Settings</strong> 打开连接设置。macOS、Linux 和 Windows 可选择 Codex、Claude Code、OpenCode 或 Pi，沿用已安装 CLI 的登录。主机会报告支持哪些 agent，旧主机可能需要升级。Windows 同样支持技能、图片、会话参数、定时任务及配置应用和恢复。停止、删除或更改参数会确认整个 agent 进程树退出；私有数据通过 Windows ACL 限制为当前用户和 SYSTEM 访问，不需要管理员权限。Codex 走 app-server，Claude Code 走 stream-json，OpenCode 走 ACP，Pi 走 JSONL RPC。</p>
+      <h2 id="pages-models">页面与模型</h2>
+      <p>每个会话使用独立浏览器 session。输入框上方的页面标签会随下一条消息附带当前网页，点 <strong>×</strong> 可去掉。模型下拉来自所选 CLI 的目录，<strong>Default model</strong> 沿用配置的模型，<strong>＋</strong> 菜单中的 <strong>Custom model ID</strong> 可覆盖选择，<strong>Reload models from CLI</strong> 重新读取目录。列出模型或报告已登录不代表实际调用可用。</p>
+      <h2 id="permissions">工具权限与审批</h2>
+      <p>权限开关只作用于当前会话。新会话默认开启 <strong>Full access</strong>，除非你保存过其他选择。</p>
+      <ul>
+        <li><strong>Codex / Claude Code：</strong>关闭后显示 <strong>Ask first</strong>，由你处理审批请求。完整权限模式不再逐次询问，并自动回复支持的审批；agent 提问仍需你回答。</li>
+        <li><strong>OpenCode：</strong><strong>CLI permissions</strong> 遵循它自己的规则，部分工具可能无需询问。收到的审批会显示在侧栏，完整权限模式按 <strong>Allow once</strong> 自动回复，不改保存的权限规则。</li>
+        <li><strong>Pi：</strong>没有逐次审批机制。<strong>Browser only</strong> 只开放 <code>chrome_use</code> MCP 工具，不开放 shell 或文件工具；完整权限模式使用 CLI 的完整工具集。</li>
+      </ul>
+      <h2 id="queue">排队、停止与继续</h2>
+      <p>历史显示流式回复，工具行可展开查看。工具返回不代表浏览器任务成功。回复中发送的消息进入队列，失败或中断后需点 <strong>Resume queue</strong> 恢复。<strong>Stop &amp; send</strong> 或 Ctrl/Cmd+Enter 等确认终止或进程退出后才优先发送，普通队列仍暂停。重连只读回历史，不重发。</p>
+      <h2 id="history">历史与删除</h2>
+      <p>删除前先停止回复，再点顶部删除按钮并确认。删除内容包括面板历史和该会话的浏览器 session，以及 Codex rollout 文件、Claude 会话文件及目录、通过 <code>session/delete</code> 删除的 OpenCode 历史，或会话文件夹内的 Pi 会话文件。Codex 的 SQLite 缓存不改动。清理失败或标签页关闭未确认时会提示。</p>
+      <h2 id="privacy">隐私与配置</h2>
+      <p>历史保存在本机。所选 CLI 可能把任务和网页内容发送给它配置的模型服务，该服务的隐私政策适用。侧栏没有新增网页 content script，打开时仍可能改变页面视口。<strong>Agents &amp; models</strong> 可发现程序和预览配置改动，写入后读回，恢复时保留后来的修改。</p>
+      <h2 id="skills-images">技能和图片</h2>
+      <p>输入 <code>/</code> 选择技能。在 <strong>Agents &amp; models → Skill library</strong> 编辑、启停库内条目，或从本机目录、ZIP/.skill 压缩包、HTTPS Git 仓库导入。用户和 CLI 原有技能目录在这里只读。发送前保存所选技能及文件的副本，队列编辑和明确重试保留同一份内容。面板 agent 可通过 <code>chrome_use_skills</code> 列出、读取技能或保存库内说明。</p>
+      <p>通过 <strong>Attach images</strong> 选择图片，也可粘贴或拖入，每条消息最多五张 PNG/JPEG/WebP。最长边缩到 2000 像素，每张不超过 512 KiB。图片随会话保存，队列编辑和重试会保留，删除会话时一起清理。ACP agent 必须声明支持图片输入。附件会交给配置的模型服务。</p>
+      <h2 id="options-schedules">会话参数和定时提示</h2>
+      <p><strong>Conversation options</strong> 设置允许的工具、Codex/Claude 推理强度和 Codex 服务等级。空闲时保存，下一次回复生效，不改 CLI 全局配置。Codex 无法移除可以读文件的 shell，OpenCode ACP 无法保证限制内置工具。审批开关只决定是否自动处理当前工具范围内的请求，Pi 没有逐次审批。</p>
+      <p><strong>Agents &amp; models → Scheduled prompts</strong> 支持间隔、每天或工作日的本地时间、五字段 cron，并保存 agent、模型、会话参数、技能和明确的工具范围。每次运行使用独立后台浏览器 session，保留历史并在完成时通知。<strong>Run now</strong> 不改变下次到期时间。关闭侧栏不会停掉本地服务，停止服务则不再调度。重启或唤醒后，错过的周期只补跑一次；上次仍在执行或结果未确认时不会重叠执行或重放，确认未知结果前先看历史。</p>
+      <p>聊天不能创建比自己工具范围更大或审批权限更高的任务。定时聊天可以列出任务，但不能修改或触发任务，也不能重写供未来任务使用的技能库。agent 已结束不代表网页目标已达成。</p>
+
+      <div class="du-callout note"><div class="du-callout-title">计划随 CLI 1.5.215 和扩展 0.5.58 发布</div>下面几节介绍下一版能力，当前已发布的 CLI 1.5.214 尚不提供。Chrome Web Store 的公开可用时间另行确认。</div>
+      <h2 id="turns">每条请求的过程与结果（待发布）</h2>
+      <p>需要 CLI 1.5.215 和扩展 0.5.58。旧扩展保留原来的显示方式；Chrome Web Store 的提交、审核和公开发布与 CLI 发版分开进行。</p>
+      <p>每条消息显示为一张卡片，包含随消息附加的页面、浏览器步骤、回复、结果文件和本轮结束状态。运行中的步骤展开，结束后可折叠；失败步骤仍会显示在摘要里。旧历史没有记录的信息会标为 <strong>not recorded</strong>，不会补猜。</p>
+      <h3 id="acting-page">附加页面与实际操作页面</h3>
+      <p><strong>Sent with</strong> 是你发送消息时附加的页面；<strong>Acted on</strong> 是浏览器操作回执确认过的页面。AI 可以打开新标签页，所以两者可能不同。只有缓存目标、缺少操作回执时，显示 <strong>Browser tools pointed at</strong>。你自己切换标签页不会因此被记为 AI 操作过的页面。</p>
+      <h3 id="checks">检查通过表示什么</h3>
+      <table><thead><tr><th>标签</th><th>含义</th></tr></thead><tbody>
+      <tr><td>Agent's browser checks passed</td><td>agent 为这条请求选择的浏览器检查已通过。展开查看具体检查；这不保证它完整理解或满足了你的要求。</td></tr>
+      <tr><td>Some checks passed</td><td>部分检查通过，其余未检查、未通过或缺少有效证据。</td></tr>
+      <tr><td>Not checked / Blocked</td><td>没有可支持结论的检查，或任务被登录、人工验证、缺少输入等条件阻塞。</td></tr>
+      </tbody></table>
+      <p>输入值读回、页面断言、落地地址和下载类型分别只证明对应的检查。文件存在不等于内容正确，截图也不自动证明任务完成。本轮结束、浏览器检查通过和用户目标达成都应分别判断。</p>
+      <h2 id="results">截图、下载与录像（待发布）</h2>
+      <p>结果文件显示为卡片，列出类型、大小和可用状态。文件读取会校验内容；文件丢失或改变时会显示不可用。文件存在、类型匹配，以及是否满足要求分开呈现。保存到 agent 指定位置的结果，也与会话中保留的副本分开报告。</p>
+      <p>发送前勾选 <strong>Record this task</strong> 才允许录制这一条请求。录像会经历录制、处理、可读取等状态，回答结束不代表录像已完成；缺少编码器或处理失败会明确提示。未勾选时不会为了显示进度自动录屏。</p>
+      <h2 id="recovery">任务状态未知时怎么办（待发布）</h2>
+      <p><strong>Stop requested, waiting for confirmation</strong> 表示已请求停止，尚未确认。<strong>This conversation's agent has stopped</strong> 仅说明这个会话的 agent 已停止，不代表其他会话也已停止。</p>
+      <ol><li>出现未知结果时，先点 <strong>Review what may have happened</strong> 查看可能已执行的动作、最后页面和结果文件。不要直接重做发送、付款或提交。</li><li>只有能确认归属的旧进程仍在运行时，才会提供 <strong>End the old agent process</strong>。</li><li>确认旧进程已退出后，可点 <strong>Continue in a new conversation</strong>，带着原历史的关联信息继续。创建新会话不会自动重发旧请求。</li></ol>
+      <p>进程状态仍未知时不会开放继续按钮。服务重启后，某些平台无法再核实旧进程树，界面会保留未知状态。</p>
+      <h2 id="progress">长任务与历史连续性（待发布）</h2>
+      <p>重复结果、连续失败或长时间没有活动会显示提示；提示本身不会停止任务或自动重试。可以停止、继续等待，或查看步骤判断原因。上下文压缩会留下标记，历史记录仍保留；压缩不会把未经检查的动作变成成功。</p>
+
+      <h2 id="planned-privacy">隐私、通知和 HEIC（待发布）</h2><p>下一版将对工具和审批记录中的已识别敏感字段在落盘前遮盖，并加入任务通知和本机 HEIC/HEIF 转换。遮盖不覆盖消息原文、图片像素、文件内容或 CLI 自己的历史，也不能抹掉后来才发现的敏感值。结果文件随会话保存，删除会话时一并清理。</p>
+      <h2 id="related">相关流程</h2>
+      <p>要点选页面元素、把修改要求交给已经运行的本地会话，见<a href="/inspect.html">点选改代码</a>。</p>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+  </div>
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

@@ -147,6 +147,8 @@ npx skills add leeguooooo/chrome-use -g
 
 ### 本机 agent 侧栏
 
+完整使用说明：[插件对话](https://chrome-use.leeguoo.com/agent-panel.html)。
+
 <p align="center">
   <img src="assets/side-panel.webp" alt="chrome-use 侧栏：agent 对比价格页上的套餐，用表格给出结果" width="820">
 </p>
