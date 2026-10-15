@@ -225,6 +225,54 @@ button.stop { background:var(--ink); border-color:var(--ink); color:var(--bg); f
 #configResult { font-size:12px; margin:8px 0; white-space:pre-wrap; }
 
 .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+/* Turn cards: one per user message, evidence grouped under it. */
+.turn-card { margin:10px 0 4px; padding-bottom:10px; border-bottom:1px solid var(--line); }
+.turn-card:last-of-type { border-bottom:0; }
+.turn-card > .message-row.user { margin-bottom:4px; }
+.turn-sent,.turn-acting { font-size:12px; color:var(--muted); text-align:right; overflow-wrap:anywhere; }
+.turn-acting { text-align:left; margin:6px 0 2px; }
+.turn-acting div + div { margin-top:2px; }
+.verdict-chip { flex:none; font-size:11px; line-height:16px; padding:0 6px; border-radius:8px; background:var(--surface); color:var(--muted); }
+.verdict-chip.confirmed { color:var(--ok); }
+.verdict-chip.failed { color:var(--error); background:var(--error-bg); font-weight:600; }
+.verdict-chip.missing { font-style:italic; }
+.tool-row .verdict-chip { margin-left:auto; }
+.tool-row .verdict-chip ~ .tool-state { margin-left:0; }
+.step-note { flex:none; font-size:11px; color:var(--warning); }
+.turn-unlinked { font-size:12px; color:var(--muted); }
+.unlinked-actions div { padding:1px 0 1px 14px; }
+.turn-answer .message-row.commentary { margin:6px 0; font-size:12px; color:var(--muted); }
+.turn-answer .message-row.commentary .content { font-size:12px; }
+.turn-resultList { display:grid; gap:6px; margin:8px 0; }
+.result-card { border:1px solid var(--line); border-radius:10px; padding:8px 10px; font-size:12px; display:grid; gap:2px; }
+.result-card.unavailable { border-color:var(--error); }
+.result-title { font-weight:600; color:var(--ink); overflow-wrap:anywhere; }
+.result-media img { display:block; max-width:100%; max-height:220px; margin:6px 0 2px; border-radius:6px; border:1px solid var(--line); }
+.result-media a { font-size:12px; color:var(--accent); text-decoration:none; }
+.result-card .changed { color:var(--error); }
+.assessment { margin:6px 0; }
+.assessment > summary { list-style:none; display:inline-flex; }
+.assessment > summary::-webkit-details-marker { display:none; }
+.badge { font-size:12px; padding:2px 8px; border-radius:10px; background:var(--surface); color:var(--muted); }
+.badge.checksPassed { color:var(--ok); }
+.badge.someChecksPassed,.badge.blocked { color:var(--warning); }
+.badge.pending { font-style:italic; }
+.requirement { display:flex; flex-wrap:wrap; gap:2px 8px; justify-content:space-between; font-size:12px; padding:4px 0; border-bottom:1px solid var(--line); }
+.requirement > .hint { flex-basis:100%; overflow-wrap:anywhere; }
+.requirement-state { color:var(--muted); }
+.requirement.checked .requirement-state { color:var(--ok); }
+.requirement.checkFailed .requirement-state,.requirement.stale .requirement-state { color:var(--error); }
+.assessment > p,.assessment > div.hint { margin-top:4px; }
+.turn-outcome .outcome { font-size:12px; color:var(--muted); margin-top:4px; }
+.turn-outcome .outcome.failed,.turn-outcome .outcome.unknown { color:var(--error); }
+.stall-banner,.recovery-block,.turn-banner { margin:8px 0; padding:8px 10px; border-radius:10px; font-size:12px; background:var(--surface); display:grid; gap:6px; }
+.recovery-block { border:1px solid var(--warning); }
+.recovery-block ul { margin:0; padding-left:18px; }
+.stall-banner .actions,.recovery-block .actions { display:flex; flex-wrap:wrap; gap:6px; }
+.conversation-status .control { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chip.record { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--muted); }
+.chip.record input { width:auto; margin:0; }
+
 @media(prefers-color-scheme:dark) { :root { --bg:#1f1f1f; --surface:#2b2c2f; --bubble:#2a3a55; --ink:#e8eaed; --muted:#a8acb3; --line:#3c3f44; --accent:#8ab4f8; --accent-ink:#1f1f1f; --warning:#fdd663; --error:#f2b8b5; --error-bg:#3a2523; --full:#ff8a50; --ok:#81c995; --accent-soft:#25324a; } }
 @media(prefers-reduced-motion:reduce) { * { animation:none !important; transition:none !important; } }
 

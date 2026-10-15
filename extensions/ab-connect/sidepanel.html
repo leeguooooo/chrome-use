@@ -32,7 +32,7 @@
       <p class="hint">Removes its panel history, the agent CLI's own session files and its browser tabs from this computer. This cannot be undone.</p>
       <div class="actions"><button id="confirmDelete" class="danger" type="button">Delete</button><button id="cancelDelete" class="quiet" type="button">Keep</button></div>
     </section>
-    <div id="status" class="conversation-status"><span id="phase">Ready</span><span id="effectiveModel"></span></div>
+    <div id="status" class="conversation-status"><span id="phase">Ready</span><span id="control" class="control" hidden></span><span id="effectiveModel"></span></div>
     <div id="transcript" class="transcript" tabindex="0" aria-label="Conversation transcript">
       <div id="empty" class="empty">
         <img src="icons/icon48.png" width="40" height="40" alt="">
@@ -88,6 +88,7 @@
               <button id="saveTurnOptions" class="quiet" type="button">Save conversation options</button>
             </div>
           </details>
+          <label id="recordTaskLabel" class="chip record" title="Record the agent's browser tab for this message only. The recording stays on this computer." hidden><input id="recordTask" type="checkbox">Record this task</label>
           <span id="queue" class="hint"></span>
           <label id="modelChip" class="chip model"><span class="sr-only">Model</span><select id="model"><option value="">Default model</option></select></label>
           <span class="composer-send">

@@ -77,7 +77,7 @@ export class PanelTimeline {
       action.target = { requested: data.requested ?? null, observed: data.observed ?? null, outcome: data.outcome ?? null, errorCode: data.errorCode ?? null, durationMs: data.durationMs ?? null, sequence: event.sequence };
       action.late = data.afterTurnEnd === true; action.afterStop = data.afterStop === true;
     } else if (kind === 'actionObserved') {
-      this.action(data).observed = { verdict: data.verdict, basis: data.basis ?? null, detail: data.detail ?? null, possiblyExecuted: data.possiblyExecuted === true, check: data.check ?? null, sequence: event.sequence };
+      this.action(data).observed = { verdict: data.verdict, basis: data.basis ?? null, detail: data.detail ?? null, possiblyExecuted: data.possiblyExecuted === true, check: data.check ?? null, sequence: event.sequence, at: event.at };
     } else if (kind === 'unboundActionReport') this.unbound.push({ sequence: event.sequence, ...data });
     else if (kind === 'artifactCreated') Object.assign(this.artifact(data.artifactId, data), { state: data.state || 'pending' });
     else if (kind === 'artifactState') this.artifact(data.artifactId).state = data.state;

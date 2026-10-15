@@ -1,4 +1,4 @@
-import { PanelTimeline, phaseLabels } from './panel-state.js';
+import { PanelTimeline, phaseLabels, assessmentLabel, outcomeLabel, stepVerdict, stepActions, actingPages } from './panel-state.js';
 import { prepareImage } from './image-attachment.js';
 import { renderMarkdown } from './markdown.js';
 
@@ -24,8 +24,21 @@ const agentNames = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode'
 const chatAgents = new Set(Object.keys(agentNames));
 const fieldLabels = { model: 'Model', provider: 'Provider', effort: 'Reasoning effort', serviceTier: 'Service tier', smallModel: 'Small model', opusModel: 'Opus model', sonnetModel: 'Sonnet model', haikuModel: 'Haiku model' };
 
-export function createPanel({ document, runtime, storage, tabs, schedule = setTimeout, cancel = clearTimeout, encodeImage = prepareImage }) {
-  const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
+// What `control` means is this conversation's agent process only; nothing
+// here says the user has the browser to themselves.
+export const controlLabels = { agent: 'Agent working', stopRequested: 'Stop requested, waiting for confirmation', stopped: "This conversation's agent has stopped", resuming: 'Resuming', unknown: 'Agent state unknown' };
+const verdictClass = { Confirmed: 'confirmed', Failed: 'failed', 'Not checked': 'unchecked', 'No browser record': 'missing', 'Page not recorded': 'missing' };
+const computedLabels = { checked: 'Checked', checkFailed: 'Check failed', stale: 'Check is stale: the page was acted on afterwards', claimed: 'Agent claimed', unmet: 'Not met', unknown: 'Unknown' };
+const stallText = { repeatedIdenticalResult: n => `The agent repeated the same step with the same result${n ? ` ${n} times` : ''}.`, repeatedFailure: n => `The same step failed${n ? ` ${n} times` : ''}.`, noActivity: () => 'The agent has shown no activity for a while.', nativeNoProgress: () => 'The page did not change after the last step.' };
+const unavailableText = { cancelled: 'The download was cancelled', interrupted: 'Capture was interrupted', timeout: 'Capture timed out', failed: 'Capture failed', tooLargeToRetain: 'Too large to keep a copy', quotaExceeded: 'This conversation is out of file space', pathMismatch: 'The file was not where chrome-use put it', notRegularFile: 'Not a regular file', notOwned: 'The file belongs to another user', linked: 'The file was a link', missing: 'The file is missing', changed: 'The file changed while it was copied', encoderMissing: 'ffmpeg is not installed', encoderFailed: 'ffmpeg could not encode the recording' };
+const ARTIFACT_CHUNK = 384 * 1024;
+function hostOf(url) { try { return new URL(url).host; } catch { return ''; } }
+function pageName(target) { const host = hostOf(target?.url); let path = ''; try { path = new URL(target.url).pathname; } catch {} return target?.title ? `${target.title}${host ? ` · ${host}` : ''}` : `${host}${path === '/' ? '' : path}` || 'a page'; }
+function sizeText(bytes) { return !Number.isFinite(bytes) ? '' : bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`; }
+function base64Bytes(data) { const text = atob(data); const bytes = new Uint8Array(text.length); for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i); return bytes; }
+
+export function createPanel({ document, runtime, storage, tabs, schedule = setTimeout, cancel = clearTimeout, encodeImage = prepareImage, objectUrls = { create: blob => URL.createObjectURL(blob), revoke: url => URL.revokeObjectURL(url) }, subtle = globalThis.crypto?.subtle }) {
+  const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'control', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'recordTask', 'recordTaskLabel', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
   let timeline = new PanelTimeline(), conversations = [], conversation = null, timer = null, polling = false;
@@ -44,6 +57,11 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   // Consecutive tool calls share one collapsible group; `toolTail` is the
   // group the next tool joins while nothing else has been rendered after it.
   let toolTail = null; const toolGroups = new Set();
+  // Turn view: one card per user message, used only when the host reports
+  // turn evidence. Cards are keyed by the projected turn object.
+  const turnCards = new Map(), liveUrls = new Set(), dismissedStalls = new Set();
+  let viewMode = null, forkView = null;
+  const turnView = () => Boolean(panelSupport?.turnEvidence);
 
   // Keep only correlation IDs in extension storage. Chat text lives in the
   // native journal; closing the view must not turn an uncertain send into a retry.
@@ -142,6 +160,10 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     nodes.confirmDelete.disabled = nodes.deleteChat.disabled;
     nodes.phase.textContent = panelSupport?.mode === 'readOnly' ? 'Read-only discovery' : conversation ? phaseLabels[conversation.phase] || 'Unknown response state' : 'Ready';
     nodes.effectiveModel.textContent = conversation?.model || '';
+    const control = turnView() && conversation?.phase !== 'idle' ? controlLabels[conversation?.control] : null;
+    nodes.control.hidden = !control; nodes.control.textContent = control || '';
+    nodes.recordTaskLabel.hidden = !panelSupport?.recording || panelSupport?.mode !== 'full';
+    nodes.recordTask.disabled = !connected || sending;
     const busy = busyPhases.has(conversation?.phase);
     renderWorking();
     nodes.status.classList.toggle('idle', !conversation || (conversation.phase === 'idle' && !conversation.model));
@@ -204,7 +226,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     selected = id; skillChoice = null; renderImageDrafts(); selectionEpoch++; conversation = conversations.find(c => c.id === id) || null;
     void loadSkills().catch(error);
     timeline = new PanelTimeline(); queuedNodes.clear(); nodes.queuedMessages.replaceChildren(); nodes.queuedMessages.hidden = true; rendered.clear(); requestNodes.clear(); nodes.requests.replaceChildren();
-    toolTail = null; toolGroups.clear();
+    toolTail = null; toolGroups.clear(); clearTurnView();
     nodes.transcript.replaceChildren(nodes.empty); nodes.empty.hidden = false; controls(); renderConversationMenu();
     storage?.local?.set({ ab_panel_conversation: id }).catch(() => {});
     void poll().catch(error);
@@ -218,6 +240,12 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   }
   function rememberAgent(agentId) { preferredAgent = agentId; storage?.local?.set({ ab_panel_agent: agentId }).catch(() => {}); }
   function renderTimeline() {
+    const mode = turnView() ? 'turns' : 'rows';
+    if (viewMode !== mode) {
+      if (viewMode) { rendered.clear(); toolTail = null; toolGroups.clear(); clearTurnView(); nodes.transcript.replaceChildren(nodes.empty); }
+      viewMode = mode;
+    }
+    if (mode === 'turns') { renderTurns(); return; }
     const follow = nodes.transcript.scrollHeight - nodes.transcript.scrollTop - nodes.transcript.clientHeight < 80;
     nodes.empty.hidden = timeline.rows.length > 0;
     // A tool still open when the response ended is not running any more.
@@ -226,57 +254,65 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
       let view = rendered.get(row.key);
       if (!view) {
         if (row.type === 'tool') {
-          const container = element('details', undefined, 'tool-row'); const title = element('summary');
-          const name = element('span', undefined, 'tool-name'); const hint = element('span', undefined, 'tool-hint'); const state = element('span', undefined, 'tool-state'); title.append(name, hint, state);
-          const content = element('pre'); container.append(title, content); view = { container, name, hint, state, content, row };
+          view = toolView(row); const { container } = view;
           if (!toolTail) toolTail = toolGroup();
           toolTail.tools.push(view); toolTail.list.append(container); toolGroups.add(toolTail);
           rendered.set(row.key, view);
-        } else {
-          const container = element('article', undefined, `message-row ${row.type}`);
-          const speaker = element('div', row.type === 'user' ? 'You' : row.type === 'assistant' ? 'Assistant' : 'Response status', 'speaker');
-          const content = element('div', undefined, 'content'); container.append(content, speaker); view = { container, content, speaker };
-          if (row.attachments?.length) {
-            const images = element('div', undefined, 'attachment-images'); container.append(images);
-            const chatId = selected;
-            for (const attachment of row.attachments) {
-              const image = element('img'); image.alt = 'Attached image'; images.append(image);
-              void api('conversationAttachmentRead', { conversationId: chatId, attachment }).then(result => {
-                image.src = `data:${result.attachment.mediaType};base64,${result.data}`;
-              }).catch(() => { image.alt = 'Saved image unavailable'; });
-            }
-          }
-          if (row.page?.title) container.append(element('div', row.page.title, 'page-ref'));
-          if (row.detail) { const raw = element('details'); raw.append(element('summary', 'Details'), element('pre', row.detail)); container.append(raw); }
-          if (row.type === 'note' && row.failed && conversation?.agentId) {
-            const agentId = conversation.agentId;
-            const prompt = [...timeline.rows].reverse().find(r => r.type === 'user' && !r.queueStatus)?.text;
-            // Only an explicitly chosen model can be dropped; a model from the
-            // CLI's own configuration has to be changed there.
-            if (conversation.requestedModel && prompt) container.append(button('Retry with default model', () => retryWithDefaultModel(agentId, prompt), 'retry'));
-            else if (conversation.model) container.append(button('Change default model', async () => { showAgents(); await loadConfig(agentId, agentNames[agentId] || agentId); }, 'retry'));
-          }
-        }
+        } else view = messageView(row, row.type !== 'user' || !turnView());
         if (row.type !== 'tool') { toolTail = null; rendered.set(row.key, view); nodes.transcript.append(view.container); }
       }
-      if (view.text !== row.text) {
-        view.text = row.text;
-        // Agent replies are Markdown; user text and tool output stay literal.
-        if (row.type === 'assistant') { renderMarkdown(document, view.content, row.text.trim()); view.container.hidden = !row.text.trim(); }
-        else view.content.textContent = row.text;
-      }
-      if (row.type === 'user') view.speaker.textContent = row.queueStatus || '';
-      if (row.type === 'tool') {
-        view.name.textContent = row.name; view.hint.textContent = row.hint || ''; view.row = row;
-        view.state.textContent = row.failed ? 'Failed' : ''; view.running = live && !row.failed && !row.completed;
-        view.state.title = row.failed ? 'Failed' : view.running ? 'Running' : '';
-        view.container.classList.toggle('failed', row.failed); view.container.classList.toggle('running', view.running);
-      }
+      updateRowView(view, row, live);
     }
     for (const group of toolGroups) renderToolGroup(group);
     renderWorking();
     if (follow) nodes.transcript.scrollTop = nodes.transcript.scrollHeight;
     nodes.latest.hidden = follow || timeline.rows.length === 0;
+  }
+  function messageView(row, showPage = true) {
+    const container = element('article', undefined, `message-row ${row.type}`);
+    const speaker = element('div', row.type === 'user' ? 'You' : row.type === 'assistant' ? 'Assistant' : 'Response status', 'speaker');
+    const content = element('div', undefined, 'content'); container.append(content, speaker); const view = { container, content, speaker };
+    if (row.attachments?.length) {
+      const images = element('div', undefined, 'attachment-images'); container.append(images);
+      const chatId = selected;
+      for (const attachment of row.attachments) {
+        const image = element('img'); image.alt = 'Attached image'; images.append(image);
+        void api('conversationAttachmentRead', { conversationId: chatId, attachment }).then(result => {
+          image.src = `data:${result.attachment.mediaType};base64,${result.data}`;
+        }).catch(() => { image.alt = 'Saved image unavailable'; });
+      }
+    }
+    if (showPage && row.page?.title) container.append(element('div', row.page.title, 'page-ref'));
+    if (row.detail) { const raw = element('details'); raw.append(element('summary', 'Details'), element('pre', row.detail)); container.append(raw); }
+    if (row.type === 'note' && row.failed && conversation?.agentId) {
+      const agentId = conversation.agentId;
+      const prompt = [...timeline.rows].reverse().find(r => r.type === 'user' && !r.queueStatus)?.text;
+      // Only an explicitly chosen model can be dropped; a model from the
+      // CLI's own configuration has to be changed there.
+      if (conversation.requestedModel && prompt) container.append(button('Retry with default model', () => retryWithDefaultModel(agentId, prompt), 'retry'));
+      else if (conversation.model) container.append(button('Change default model', async () => { showAgents(); await loadConfig(agentId, agentNames[agentId] || agentId); }, 'retry'));
+    }
+    return view;
+  }
+  function toolView(row) {
+    const container = element('details', undefined, 'tool-row'); const title = element('summary');
+    const name = element('span', undefined, 'tool-name'); const hint = element('span', undefined, 'tool-hint'); const state = element('span', undefined, 'tool-state'); title.append(name, hint, state);
+    const content = element('pre'); container.append(title, content); return { container, title, name, hint, state, content, row };
+  }
+  function updateRowView(view, row, live) {
+    if (view.text !== row.text) {
+      view.text = row.text;
+      // Agent replies are Markdown; user text and tool output stay literal.
+      if (row.type === 'assistant') { renderMarkdown(document, view.content, row.text.trim()); view.container.hidden = !row.text.trim(); }
+      else view.content.textContent = row.text;
+    }
+    if (row.type === 'user') view.speaker.textContent = row.queueStatus || '';
+    if (row.type === 'tool') {
+      view.name.textContent = row.name; view.hint.textContent = row.hint || ''; view.row = row;
+      view.state.textContent = row.failed ? 'Failed' : ''; view.running = live && !row.failed && !row.completed;
+      view.state.title = row.failed ? 'Failed' : view.running ? 'Running' : '';
+      view.container.classList.toggle('failed', row.failed); view.container.classList.toggle('running', view.running);
+    }
   }
   function toolGroup() {
     const container = element('details', undefined, 'tool-group'), summary = element('summary'), list = element('div', undefined, 'tool-list');
@@ -295,6 +331,322 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     if (count === 1) group.container.open = true;
     else if (!group.touched && running !== group.wasRunning) group.container.open = running;
     group.wasRunning = running;
+  }
+  // ---- Turn view -----------------------------------------------------------
+  // Every section is rebuilt only when its own data changed (`section`); steps,
+  // texts and result cards are keyed so open details and loaded files survive.
+  function clearTurnView() {
+    for (const url of liveUrls) objectUrls.revoke(url);
+    liveUrls.clear(); turnCards.clear(); forkView = null;
+  }
+  function section(card, name, data, build) {
+    const signature = JSON.stringify(data);
+    if (card.signatures[name] === signature) return;
+    card.signatures[name] = signature; card[name].replaceChildren(...build());
+    card[name].hidden = card[name].children.length === 0;
+  }
+  function turnCard(turn) {
+    const container = element('article', undefined, 'turn-card');
+    const card = { container, turn, signatures: {}, texts: new Map(), steps: new Map(), results: new Map(), touched: false, wasRunning: null, review: null };
+    card.user = turn.user ? messageView(turn.user, false) : null;
+    if (card.user) container.append(card.user.container);
+    for (const name of ['sentWith', 'acting']) { card[name] = element('div', undefined, `turn-${name === 'sentWith' ? 'sent' : 'acting'} hint`); container.append(card[name]); }
+    card.group = element('details', undefined, 'tool-group'); card.groupSummary = element('summary'); card.groupList = element('div', undefined, 'tool-list');
+    card.group.append(card.groupSummary, card.groupList); card.group.addEventListener('click', () => { card.touched = true; });
+    container.append(card.group);
+    for (const name of ['unlinked', 'answer', 'resultList', 'assessment', 'outcome', 'stall', 'recovery']) { card[name] = element('div', undefined, `turn-${name}`); container.append(card[name]); }
+    card.answerTexts = element('div'); card.answerNote = element('p', '', 'hint'); card.answer.append(card.answerTexts, card.answerNote);
+    return card;
+  }
+  function renderTurns() {
+    const follow = nodes.transcript.scrollHeight - nodes.transcript.scrollTop - nodes.transcript.clientHeight < 80;
+    nodes.empty.hidden = timeline.rows.length > 0 || Boolean(timeline.recovery.context);
+    const live = busyPhases.has(conversation?.phase);
+    renderForkContext();
+    for (const id of timeline.turnOrder) {
+      const turn = timeline.turns.get(id);
+      let card = turnCards.get(turn);
+      if (!card) { card = turnCard(turn); turnCards.set(turn, card); nodes.transcript.append(card.container); }
+      renderTurn(card, turn, live && turn.messageId === conversation?.activeMessageId);
+    }
+    renderWorking();
+    if (follow) nodes.transcript.scrollTop = nodes.transcript.scrollHeight;
+    nodes.latest.hidden = follow || timeline.rows.length === 0;
+  }
+  function renderForkContext() {
+    const context = timeline.recovery.context;
+    if (!context || forkView) return;
+    forkView = element('section', undefined, 'turn-banner');
+    forkView.append(element('p', 'This conversation continues one whose last request ended with an unknown outcome. Actions listed there may already have taken effect.'));
+    if (typeof context.fromConversationId === 'string') forkView.append(button('Open the earlier conversation', async () => { await list(); select(context.fromConversationId); }));
+    nodes.transcript.insertBefore(forkView, nodes.transcript.children[0] || null);
+  }
+  function renderTurn(card, turn, live) {
+    if (card.user) updateRowView(card.user, turn.user, live);
+    const pageSent = turn.attachedPage;
+    section(card, 'sentWith', pageSent, () => pageSent ? [element('span', `Sent with: ${pageName(pageSent)}`)] : []);
+    renderActing(card, turn);
+    renderSteps(card, turn, live);
+    renderUnlinked(card, turn);
+    renderAnswer(card, turn, live);
+    renderResults(card, turn);
+    renderAssessment(card, turn);
+    renderOutcome(card, turn);
+    renderStall(card, turn);
+    renderRecovery(card, turn);
+  }
+  function renderActing(card, turn) {
+    const pages = actingPages(turn);
+    const browserSteps = turn.steps.some(key => timeline.items.get(key)?.browser);
+    section(card, 'acting', { pages, recorded: turn.recorded, browserSteps }, () => {
+      const lines = [];
+      const list = targets => `${targets.slice(0, 3).map(target => target.attached ? 'the page you sent' : pageName(target)).join(', ')}${targets.length > 3 ? ` +${targets.length - 3}` : ''}`;
+      if (!turn.recorded) { if (browserSteps) lines.push(element('div', 'Pages acted on: not recorded')); return lines; }
+      if (pages.actedOn.length) lines.push(element('div', `Acted on: ${list(pages.actedOn)}`));
+      if (pages.pointedAt.length) lines.push(element('div', `Browser tools pointed at: ${list(pages.pointedAt)}`));
+      for (const redirect of pages.redirects.slice(0, 3)) lines.push(element('div', `Asked for ${redirect.asked}, landed on ${redirect.landed}`));
+      return lines;
+    });
+  }
+  function stepNote(turn, row) {
+    const unresolved = turn.batchInterrupted?.unresolved?.find(entry => entry.toolCallId && entry.toolCallId === row.toolCallId);
+    if (unresolved) return unresolved.executed === 'unknown' ? 'No record that it ran' : 'Did not finish; may have run';
+    if (stepActions(timeline, row).some(action => action.late)) return 'Reported after the request ended';
+    return '';
+  }
+  function renderSteps(card, turn, live) {
+    for (const key of turn.steps) {
+      const row = timeline.items.get(key); if (!row) continue;
+      let view = card.steps.get(key);
+      if (!view) { view = toolView(row); view.chip = element('span', undefined, 'verdict-chip'); view.note = element('span', undefined, 'step-note'); view.title.append(view.chip, view.note); card.steps.set(key, view); card.groupList.append(view.container); }
+      updateRowView(view, row, live);
+      const verdict = stepVerdict(timeline, turn, row);
+      view.verdict = verdict;
+      view.chip.textContent = verdict || ''; view.chip.hidden = !verdict; view.chip.className = `verdict-chip ${verdictClass[verdict] || ''}`;
+      if (verdict === 'Failed') view.state.textContent = '';
+      view.note.textContent = stepNote(turn, row); view.note.hidden = !view.note.textContent;
+    }
+    const views = [...card.steps.values()], count = views.length;
+    card.group.hidden = count === 0;
+    // A folded group names its failed steps, so folding never hides a failure.
+    const failed = views.filter(view => view.row.failed || view.verdict === 'Failed').map(view => view.row.name);
+    const running = views.some(view => view.running);
+    const compacted = turn.compactions.length ? ' · memory summarized' : '';
+    card.groupSummary.textContent = `${running ? 'Working · ' : ''}${count} step${count === 1 ? '' : 's'}${failed.length ? ` · ${failed.length} failed: ${[...new Set(failed)].join(', ')}` : ''}${compacted}`;
+    card.group.classList.toggle('single', count === 1); card.group.classList.toggle('running', running);
+    if (count === 1) card.group.open = true;
+    else if (!card.touched && running !== card.wasRunning) card.group.open = running;
+    card.wasRunning = running;
+  }
+  function renderUnlinked(card, turn) {
+    const unlinked = [...turn.actions.values()].filter(action => !action.linkedStep).map(action => ({ tool: action.tool, verdict: action.observed?.verdict || null, late: action.late, unreported: action.unreported && !action.target }));
+    const stray = (turn.batchInterrupted?.unresolved || []).filter(entry => !entry.toolCallId || !turn.stepByCall.has(entry.toolCallId)).map(entry => ({ name: entry.name, executed: entry.executed }));
+    const compactions = turn.compactions.length;
+    section(card, 'unlinked', { unlinked, stray, compactions }, () => {
+      const lines = [];
+      if (compactions) lines.push(element('p', "The agent's memory was summarized during this request; the history shown is complete.", 'hint'));
+      if (unlinked.length) {
+        const box = element('details', undefined, 'unlinked-actions'); box.append(element('summary', `${unlinked.length} browser record${unlinked.length === 1 ? '' : 's'} not matched to a step`));
+        for (const action of unlinked) box.append(element('div', `${(action.tool || 'browser tool').replace(/^chrome_use_/, '')} · ${action.unreported ? 'admitted, never reported' : action.verdict === 'confirmed' ? 'Confirmed' : action.verdict === 'failed' ? 'Failed' : 'Not checked'}${action.late ? ' · reported after the request ended' : ''}`));
+        lines.push(box);
+      }
+      for (const entry of stray) lines.push(element('div', `${entry.name || 'A tool'}: ${entry.executed === 'unknown' ? 'no record that it ran' : 'did not finish; may have run'}`, 'hint'));
+      return lines;
+    });
+  }
+  function renderAnswer(card, turn, live) {
+    const keys = [...turn.texts].sort((a, b) => (turn.roles.get(a) === 'commentary' ? 0 : 1) - (turn.roles.get(b) === 'commentary' ? 0 : 1));
+    keys.forEach((key, index) => {
+      const row = timeline.items.get(key); if (!row) return;
+      let view = card.texts.get(key);
+      if (!view) { view = messageView(row); card.texts.set(key, view); }
+      const role = turn.roles.get(key);
+      view.speaker.textContent = role === 'commentary' ? 'Progress note' : role === 'final' ? 'Answer' : 'Response';
+      view.container.className = `message-row assistant${role === 'commentary' ? ' commentary' : ''}`;
+      if (card.answerTexts.children[index] !== view.container) card.answerTexts.insertBefore(view.container, card.answerTexts.children[index] || null);
+      updateRowView(view, row, live);
+    });
+    card.answerNote.textContent = turn.emptyAnswer ? 'The agent returned no answer text.' : '';
+    card.answerNote.hidden = !turn.emptyAnswer;
+    card.answer.hidden = !keys.length && !turn.emptyAnswer;
+  }
+  function renderResults(card, turn) {
+    card.resultList.hidden = turn.artifacts.size === 0;
+    for (const artifact of turn.artifacts.values()) {
+      let view = card.results.get(artifact.artifactId);
+      if (!view) { view = { container: element('section', undefined, 'result-card'), lines: element('div'), media: element('div', undefined, 'result-media'), status: element('p', '', 'hint'), loading: false, signature: null };
+        view.container.append(view.lines, view.media, view.status); card.results.set(artifact.artifactId, view); card.resultList.append(view.container); }
+      const signature = JSON.stringify(artifact);
+      if (view.signature === signature) continue;
+      view.signature = signature;
+      view.lines.replaceChildren(...artifactLines(artifact));
+      view.container.className = `result-card ${artifact.state}`;
+      if (artifact.state === 'ready' && panelSupport?.artifacts) {
+        if (artifact.kind === 'screenshot' && !view.url && !view.loading) void showArtifact(view, artifact, true);
+        else if (artifact.kind !== 'screenshot' && !view.save) { view.save = button('Save a copy', () => showArtifact(view, artifact, false)); view.media.append(view.save); }
+      }
+    }
+  }
+  // A result card reports what happened to the file, never that it meets the request.
+  function artifactLines(artifact) {
+    const kind = { screenshot: 'Screenshot', download: 'Download', recording: 'Recording' }[artifact.kind] || 'File';
+    const lines = [element('div', `${kind}${artifact.name ? ` · ${artifact.name}` : ''}`, 'result-title')];
+    if (artifact.state === 'unavailable') {
+      lines.push(element('div', `Unavailable: ${unavailableText[artifact.reason] || 'the file could not be kept'}`));
+      if (artifact.detail) lines.push(element('div', artifact.detail, 'hint'));
+      if (artifact.reason === 'tooLargeToRetain' && Number.isFinite(artifact.bytes)) lines.push(element('div', `Size: ${sizeText(artifact.bytes)}`, 'hint'));
+    } else if (artifact.state !== 'ready') lines.push(element('div', { capturing: artifact.kind === 'recording' ? 'Recording…' : 'Capturing…', finalizing: 'Finishing the recording…' }[artifact.state] || 'Waiting for the file…'));
+    else {
+      lines.push(element('div', 'File captured: yes'));
+      if (artifact.declaredExtension) lines.push(element('div', `Type matches .${artifact.declaredExtension}: ${artifact.typeMatches === true ? 'yes' : artifact.typeMatches === false ? `no (${artifact.mime || 'unknown type'})` : 'not checked'}`));
+      lines.push(element('div', `Not empty: ${artifact.bytes > 0 ? 'yes' : 'no, the file is empty'}`));
+      lines.push(element('div', [artifact.mime, sizeText(artifact.bytes)].filter(Boolean).join(' · '), 'hint'));
+    }
+    if (artifact.delivery) lines.push(element('div', artifact.delivery.state === 'delivered' ? 'Saved to your path: yes' : `Saved to your path: no${artifact.delivery.detail ? ` (${artifact.delivery.detail})` : ''}`));
+    return lines;
+  }
+  // Files are read in chunks, sequentially, at most two at a time (the bridge
+  // caps pending requests). Bytes are shown only when their SHA-256 matches.
+  let artifactsRunning = 0; const artifactWaiters = [];
+  async function artifactSlot(task) {
+    if (artifactsRunning >= 2) await new Promise(resolve => artifactWaiters.push(resolve));
+    artifactsRunning++;
+    try { return await task(); } finally { artifactsRunning--; artifactWaiters.shift()?.(); }
+  }
+  async function readArtifact(conversationId, artifact) {
+    const chunks = []; let offset = 0, total = null, digest = null;
+    do {
+      const result = await api('conversationArtifactRead', { conversationId, artifactId: artifact.artifactId, offset, length: ARTIFACT_CHUNK });
+      if ((digest !== null && result.digest !== digest) || (total !== null && result.total !== total)) throw new Error('changed');
+      digest = result.digest; total = result.total;
+      const bytes = base64Bytes(result.data);
+      if (!bytes.length && offset < total) throw new Error('changed');
+      chunks.push(bytes); offset += bytes.length;
+    } while (offset < total);
+    if (offset !== total || (artifact.digest && digest !== artifact.digest)) throw new Error('changed');
+    const blob = new Blob(chunks, { type: artifact.mime || 'application/octet-stream' });
+    const hash = [...new Uint8Array(await subtle.digest('SHA-256', await blob.arrayBuffer()))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    if (`sha256:${hash}` !== digest) throw new Error('changed');
+    return blob;
+  }
+  async function showArtifact(view, artifact, inline) {
+    if (view.loading) return;
+    const id = selected, epoch = selectionEpoch;
+    view.loading = true; view.status.textContent = 'Reading the file…';
+    try {
+      const blob = await artifactSlot(() => readArtifact(id, artifact));
+      if (id !== selected || epoch !== selectionEpoch) return;
+      if (view.url) { objectUrls.revoke(view.url); liveUrls.delete(view.url); }
+      view.url = objectUrls.create(blob); liveUrls.add(view.url);
+      if (inline) { const image = element('img'); image.alt = artifact.name || 'Screenshot'; image.src = view.url; view.media.replaceChildren(image); }
+      const save = element('a', 'Save', 'quiet'); save.href = view.url; save.download = artifact.name || 'artifact';
+      if (inline) view.media.append(save); else save.click?.();
+      view.status.textContent = '';
+    } catch (failure) {
+      if (id !== selected || epoch !== selectionEpoch) return;
+      view.status.textContent = failure?.message === 'changed' ? 'Not shown: the file changed while it was read.' : /artifact_unavailable/.test(failure?.message || '') ? 'The file is no longer available.' : `The file could not be read: ${failure?.message || 'no answer'}`;
+      view.status.className = 'hint changed';
+    } finally { view.loading = false; }
+  }
+  function renderAssessment(card, turn) {
+    const { final, provisional } = turn.assessment;
+    const label = assessmentLabel(turn);
+    section(card, 'assessment', { label, final, provisional: Boolean(provisional) }, () => {
+      const box = element('details', undefined, 'assessment');
+      const summary = element('summary'); summary.append(element('span', label, `badge ${final?.status || (label === 'Assessment pending' ? 'pending' : 'none')}`)); box.append(summary);
+      if (!final) return [box];
+      if (final.blocker?.text) box.append(element('p', `Blocked: ${final.blocker.text}`));
+      if (final.reason === 'notAssessed') box.append(element('p', 'The agent did not assess this request.', 'hint'));
+      for (const requirement of final.requirements || []) {
+        const line = element('div', undefined, `requirement ${requirement.computed}`);
+        line.append(element('span', requirement.text || 'Requirement'), element('span', computedLabels[requirement.computed] || 'Unknown', 'requirement-state'));
+        const detail = checkDetail(requirement);
+        if (detail) line.append(element('div', detail, 'hint'));
+        else if (requirement.because) line.append(element('div', requirement.because, 'hint'));
+        box.append(line);
+      }
+      for (const reason of final.downgradedBecause || []) box.append(element('div', `Lowered: ${reason}`, 'hint'));
+      box.append(element('p', 'These are the checks the agent chose; they do not prove the whole request was done.', 'hint'));
+      return [box];
+    });
+  }
+  // "page showed 'Order placed' on shop.example/orders" — only for checked
+  // requirements, and only from the cited evidence's own recorded target.
+  function checkDetail(requirement) {
+    const check = requirement.check;
+    if (requirement.computed !== 'checked' || !check) return check?.predicate ? `Check: ${check.predicate}` : '';
+    const action = timeline.actions.get(check.evidence), artifact = timeline.artifacts.get(check.evidence);
+    if (artifact) return `File ${artifact.name || ''} is ${check.predicate}`.replace('  ', ' ');
+    const target = action?.observed?.check?.target;
+    const where = target?.url ? ` on ${hostOf(target.url)}${(() => { try { return new URL(target.url).pathname; } catch { return ''; } })()}` : '';
+    const when = action?.observed?.at ? ` at ${new Date(action.observed.at).toLocaleTimeString()}` : '';
+    const verb = { expect: 'page showed', readBack: 'field check:', urlMatch: 'browser landed on' }[check.kind] || 'check:';
+    return `${verb} '${check.predicate}'${where}${when}`;
+  }
+  function renderOutcome(card, turn) {
+    const label = outcomeLabel(turn);
+    section(card, 'outcome', { label, error: turn.error, notes: turn.notes }, () => {
+      const lines = [];
+      if (label) lines.push(element('div', label, `outcome ${turn.outcome || turn.legacyTerminal || ''}`));
+      for (const key of turn.notes) { const row = timeline.rows.find(candidate => candidate.key === key); if (row) { const view = messageView(row); updateRowView(view, row, false); lines.push(view.container); } }
+      return lines;
+    });
+  }
+  function renderStall(card, turn) {
+    const stall = turn.state !== 'ended' ? turn.stalls.findLast(entry => entry.open && !dismissedStalls.has(`${turn.messageId}:${entry.sequence}`)) : null;
+    section(card, 'stall', stall, () => {
+      if (!stall) return [];
+      const banner = element('div', undefined, 'stall-banner');
+      banner.append(element('p', `${(stallText[stall.kind] || stallText.noActivity)(stall.count)} Nothing was stopped automatically.`));
+      const actions = element('div', undefined, 'actions');
+      actions.append(button('Stop', () => controlConversation('conversationStop'), 'quiet'), button('Keep going', async () => { dismissedStalls.add(`${turn.messageId}:${stall.sequence}`); renderTurns(); }));
+      banner.append(actions); return [banner];
+    });
+  }
+  function renderRecovery(card, turn) {
+    const unknown = turn.outcome === 'unknown' || (conversation?.phase === 'recoveryRequired' && conversation?.activeMessageId === turn.messageId);
+    const show = panelSupport?.recovery && (unknown || turn.forkedTo);
+    const review = card.review;
+    section(card, 'recovery', { show: Boolean(show), forkedTo: turn.forkedTo, review, phase: conversation?.phase }, () => {
+      if (!show) return [];
+      const block = element('section', undefined, 'recovery-block');
+      if (turn.forkedTo) { block.append(element('p', 'This request was continued in a new conversation.'), button('Open the new conversation', async () => { await list(); select(turn.forkedTo); })); return [block]; }
+      block.append(element('p', 'The outcome of this request is unknown. Browser actions may already have taken effect.'));
+      const actions = element('div', undefined, 'actions');
+      actions.append(button('Review what may have happened', () => recoveryReview(card)));
+      if (review?.error) block.append(element('p', review.error, 'hint'));
+      if (review?.process) {
+        const state = review.process.state;
+        block.append(element('p', state === 'alive' ? 'The old agent process is still running.' : state === 'exited' ? 'The old agent process has exited.' : 'chrome-use cannot tell whether the old agent process is still running.'));
+        if (review.process.reason) block.append(element('p', review.process.reason, 'hint'));
+        const executed = (review.actions || []).filter(action => action.possiblyExecuted);
+        if (executed.length) { const list = element('ul'); for (const action of executed.slice(0, 20)) list.append(element('li', `${String(action.tool || 'browser tool').replace(/^chrome_use_/, '')}${action.target?.url ? ` on ${hostOf(action.target.url)}` : ''} · may have taken effect`)); block.append(list); }
+        if (review.terminated) block.append(element('p', review.terminated.confirmed ? 'The old agent process was ended.' : 'Ending the old agent process was not confirmed.', 'hint'));
+        if (state === 'alive') actions.append(button('End the old agent process', () => recoveryTerminate(card), 'danger'));
+        else if (state === 'exited' && conversation?.phase === 'recoveryRequired') actions.append(button('Continue in a new conversation', () => recoveryFork(), 'primary'));
+        else if (state === 'unknown') block.append(element('p', 'Ending it or continuing in a new conversation is not offered, because its state cannot be proven. A new conversation started normally does not stop the old agent.', 'hint'));
+      }
+      block.append(actions); return [block];
+    });
+  }
+  async function recoveryReview(card) {
+    const id = selected, epoch = selectionEpoch;
+    try {
+      const review = await api('conversationRecoveryReview', { conversationId: id });
+      if (id === selected && epoch === selectionEpoch) { card.review = { ...review, terminated: card.review?.terminated || null }; renderTurns(); }
+    } catch (failure) { if (id === selected && epoch === selectionEpoch) { card.review = { error: `Review failed: ${failure?.message || 'no answer'}` }; renderTurns(); } }
+  }
+  async function recoveryTerminate(card) {
+    const id = selected, epoch = selectionEpoch;
+    const result = await api('conversationRecoveryTerminate', { conversationId: id });
+    if (id !== selected || epoch !== selectionEpoch) return;
+    card.review = { ...card.review, terminated: { confirmed: result.confirmed } };
+    await recoveryReview(card); await poll();
+  }
+  async function recoveryFork() {
+    const id = selected;
+    const result = await api('conversationRecoveryFork', { conversationId: id });
+    await list(); if (selected === id) select(result.conversation.id);
   }
   // Three dots under the transcript while the agent works and nothing else
   // (a running tool) already shows that it is busy.
@@ -347,6 +699,9 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
       if (selected === id && epoch === selectionEpoch) { request.sent = true; renderRequests(); }
     } catch (failure) { if (selected === id && epoch === selectionEpoch) { request.unconfirmed = true; view.status.textContent = 'Response unconfirmed. Read the current state before retrying.'; } throw failure; }
   }
+  // Buttons that let a requested action run. They stay disabled once Stop was
+  // requested; the service refuses them then as well (decline still works).
+  function allow(node) { node.dataset.decision = 'allow'; return node; }
   function requestView(key, request) {
     const container = element('section', undefined, 'request'); const status = element('p', '', 'hint');
     const params = request.params || {}; const method = request.method; const actions = element('div', undefined, 'actions');
@@ -358,7 +713,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
       // Codex marks where free text is allowed; Claude always offers "Other".
       const allowCustom = question => !bound || !codex || question.isOther === true || !(question.options || []).length;
       const fields = questionFields(codex ? params.questions || [] : params.input?.questions || [], container, allowCustom);
-      actions.append(button('Send answers', async () => {
+      actions.append(allow(button('Send answers', async () => {
         const answers = fields.map(f => ({ question: f.question, values: f.read(), answer: f.answer() }));
         if (answers.some(a => a.values.length === 0)) throw new Error('Answer each question before sending.');
         const result = codex
@@ -366,12 +721,12 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
           : { behavior: 'allow', updatedInput: { ...params.input, answers: Object.fromEntries(answers.map(a => [a.question.question, a.values.join(', ')])) } };
         const decision = { answers: Object.fromEntries(answers.map(a => [codex ? a.question.id : a.question.question, a.answer])) };
         await respond(key, result, decision);
-      }, 'primary'));
+      }, 'primary')));
     } else if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)) {
       container.append(element('p', params.reason || 'This action requires a decision.'));
       if (params.command) container.append(element('pre', params.command));
       if (params.cwd) container.append(element('p', `Working folder: ${params.cwd}`, 'hint'));
-      actions.append(button('Allow once', () => respond(key, { decision: 'accept' }, 'accept'), 'primary'), button('Decline', () => respond(key, { decision: 'decline' }, 'decline')));
+      actions.append(allow(button('Allow once', () => respond(key, { decision: 'accept' }, 'accept'), 'primary')), button('Decline', () => respond(key, { decision: 'decline' }, 'decline')));
     } else if (method === 'mcpServer/elicitation/request') {
       container.append(element('p', params.message || 'The MCP server needs a decision.'));
       const properties = params.requestedSchema?.properties;
@@ -380,23 +735,23 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
         container.dataset.approvalKind = 'mcpTool'; container.dataset.serverName = params.serverName;
         if (params._meta.tool_description) container.append(element('p', params._meta.tool_description, 'hint'));
         container.append(element('pre', JSON.stringify(params._meta.tool_params, null, 2), 'tool-arguments'));
-        actions.append(button('Allow once', () => respond(key, {action:'accept',content:{}}, 'accept'), 'primary'));
+        actions.append(allow(button('Allow once', () => respond(key, {action:'accept',content:{}}, 'accept'), 'primary')));
       } else container.append(element('p', 'This form cannot be safely completed here. Decline or cancel this request.'));
       actions.append(button('Decline', () => respond(key, {action:'decline',content:null}, 'decline')), button('Cancel request', () => respond(key, {action:'cancel',content:null}, 'cancel')));
     } else if (method === 'session/request_permission') {
       container.append(element('p', params.toolCall?.title || 'OpenCode tool request'));
       container.append(element('pre', JSON.stringify(params.toolCall?.rawInput || {}, null, 2)));
-      for (const option of params.options || []) actions.append(button(option.name || option.optionId, () => respond(key, { outcome: { outcome: 'selected', optionId: option.optionId } }, { optionId: option.optionId }), option.kind === 'allow_once' ? 'primary' : 'quiet'));
+      for (const option of params.options || []) { const choice = button(option.name || option.optionId, () => respond(key, { outcome: { outcome: 'selected', optionId: option.optionId } }, { optionId: option.optionId }), option.kind === 'allow_once' ? 'primary' : 'quiet'); actions.append(String(option.kind || '').startsWith('allow') ? allow(choice) : choice); }
       actions.append(button('Cancel request', () => respond(key, { outcome: { outcome: 'cancelled' } }, 'cancel')));
     } else if (method === 'can_use_tool') {
       container.append(element('p', params.tool_name || 'Tool request')); container.append(element('pre', JSON.stringify(params.input || {}, null, 2)));
-      actions.append(button('Allow once', () => respond(key, { behavior: 'allow', updatedInput: params.input || {} }, 'allow'), 'primary'), button('Decline', () => respond(key, { behavior: 'deny', message: 'User declined' }, 'deny')));
+      actions.append(allow(button('Allow once', () => respond(key, { behavior: 'allow', updatedInput: params.input || {} }, 'allow'), 'primary')), button('Decline', () => respond(key, { behavior: 'deny', message: 'User declined' }, 'deny')));
     } else if (method === 'item/permissions/requestApproval') {
       container.append(element('p', params.reason || 'Review the requested access for this turn.')); container.append(element('pre', JSON.stringify(params.permissions || {}, null, 2)));
-      actions.append(button('Allow for this turn', () => respond(key, { permissions: params.permissions || {}, scope: 'turn' }, 'accept'), 'primary'));
+      actions.append(allow(button('Allow for this turn', () => respond(key, { permissions: params.permissions || {}, scope: 'turn' }, 'accept'), 'primary')));
     } else { container.append(element('p', 'This request needs a response format this view cannot present. Stop the response and inspect the CLI request.')); }
     const question = method === 'item/tool/requestUserInput' || params.tool_name === 'AskUserQuestion';
-    if (!question && !params.truncated && panelSupport?.fullAccess && actions.querySelectorAll('button').length) actions.append(button('Allow all in this conversation', () => setAccess(true)));
+    if (!question && !params.truncated && panelSupport?.fullAccess && actions.querySelectorAll('button').length) actions.append(allow(button('Allow all in this conversation', () => setAccess(true))));
     container.append(actions, status); return { container, status, bound, revision: request.requestRevision, generation: request.generation };
   }
   function renderRequests() {
@@ -406,6 +761,10 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
       if (!requestNodes.has(key)) { const view = requestView(key, request); requestNodes.set(key, view); nodes.requests.append(view.container); }
       const view = requestNodes.get(key); view.status.textContent = request.sent ? 'Choice sent; waiting for the agent to continue.' : request.unconfirmed ? 'Response unconfirmed. Waiting for the current agent state.' : '';
       if (request.sent || request.unconfirmed) for (const node of view.container.querySelectorAll('button')) node.disabled = true;
+      else if (conversation?.control === 'stopRequested') {
+        for (const node of view.container.querySelectorAll('button')) if (node.dataset.decision === 'allow') node.disabled = true;
+        view.status.textContent = 'Stop requested; allowing is disabled. You can still decline.';
+      }
     }
   }
   function renderQueue(messages) {
@@ -517,6 +876,8 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
       imageDrafts.set(id, images); if (images.length) imageDrafts.delete(''); renderImageDrafts();
       const params = { conversationId: id, messageId: pending.id, text };
       const attached = attachedPage(); if (attached) params.page = attached;
+      // Recording consent is per message; the host refuses to record without it.
+      if (panelSupport?.recording && nodes.recordTask.checked) params.record = true;
       if (images.length) {
         params.attachments = [];
         for (const image of images) {
@@ -532,7 +893,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
       pendingMessages.set(id, pending); controls();
       try { await savePending(); } catch (failure) { pendingMessages.delete(id); throw failure; }
       const result = await api(direct ? 'conversationSendDirect' : 'conversationSend', params);
-      pageDetached = false; renderPage();
+      pageDetached = false; renderPage(); nodes.recordTask.checked = false;
       if (selected === id) { conversation = result.conversation; if (nodes.message.value === text) nodes.message.value = ''; }
       imageDrafts.delete(id); if (images.length) imageDrafts.delete(''); renderImageDrafts();
       pendingMessages.delete(id); drafts.delete(id); await savePending(); await list(); await poll();
@@ -963,7 +1324,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
       }
       await refresh();
     } catch (failure) { error(failure); }
-  }, refresh, select, send, timeline: () => timeline, close() { closed = true; modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
+  }, refresh, select, send, timeline: () => timeline, close() { closed = true; clearTurnView(); modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
 }
 
 if (typeof document !== 'undefined') {
