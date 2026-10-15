@@ -2057,10 +2057,12 @@ async fn dispatch(
             };
             e.persist(&p.conversation_id)?;
             if added {
-                let page = p.page.clone().map(|mut page| {
-                    page.url = redact::url(&page.url);
-                    page
-                });
+                // The raw page goes to the event masker: it masks the URL's
+                // token parameters and learns them, so the same token in the
+                // title or elsewhere in this event is masked too. The stored
+                // message already holds the projection; identity used the
+                // raw input.
+                let page = p.page.clone();
                 e.record(
                     &p.conversation_id,
                     "user",

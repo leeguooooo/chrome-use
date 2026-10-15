@@ -166,17 +166,13 @@ pub(super) fn event(kind: &str, mut data: Value, secrets: &mut Secrets) -> Optio
         };
         let mut echo = Echoes {
             secrets: &found,
-            numbers: found
-                .iter()
-                .filter(|k| k.parse::<f64>().is_ok())
-                .map(String::as_str)
-                .collect(),
+            numbers: found.iter().filter_map(|k| canonical_number(k)).collect(),
             blanket,
             redactions: &mut walker.redactions,
         };
         if let Some(object) = data.as_object_mut() {
             for (key, value) in object.iter_mut() {
-                if !exempt.contains(&key.as_str()) && !ID_KEYS.contains(&key.as_str()) {
+                if !exempt.contains(&key.as_str()) && !kept_field(key) {
                     echo.walk(value, format!("/{}", pointer(key)));
                 }
             }
@@ -254,7 +250,7 @@ fn fit(kind: &str, data: &mut Value) {
 /// revealed more secrets than are scanned for one by one.
 struct Echoes<'a> {
     secrets: &'a [String],
-    numbers: std::collections::HashSet<&'a str>,
+    numbers: std::collections::HashSet<String>,
     blanket: bool,
     redactions: &'a mut Vec<Redaction>,
 }
@@ -287,10 +283,15 @@ impl Echoes<'_> {
                 }
                 *text = out;
             }
-            Value::Number(n) if self.numbers.contains(n.to_string().as_str()) => {
+            Value::Number(n)
+                if self.blanket
+                    || canonical_number(&n.to_string())
+                        .is_some_and(|c| self.numbers.contains(&c)) =>
+            {
                 let length = n.to_string().len();
-                *value = marker("secret", length).into();
-                self.record(path, "secret", length);
+                let kind = if self.blanket { "withheld" } else { "secret" };
+                *value = marker(kind, length).into();
+                self.record(path, kind, length);
             }
             Value::Array(items) => {
                 for (i, item) in items.iter_mut().enumerate() {
@@ -299,7 +300,7 @@ impl Echoes<'_> {
             }
             Value::Object(object) => {
                 for (key, child) in object.iter_mut() {
-                    if !ID_KEYS.contains(&key.as_str()) {
+                    if !kept_field(key) {
                         self.walk(child, child_path(&path, key));
                     }
                 }
@@ -314,6 +315,48 @@ impl Echoes<'_> {
             length,
         });
     }
+}
+
+/// Fields the panel and the service dispatch on. The echo pass leaves them
+/// as they are, also when it withholds everything else.
+const PROTOCOL_KEYS: &[&str] = &[
+    "method",
+    "type",
+    "kind",
+    "name",
+    "tool",
+    "tool_name",
+    "toolName",
+    "server",
+    "serverName",
+    "subtype",
+    "role",
+    "status",
+    "phase",
+    "outcome",
+    "optionId",
+    "mode",
+    "codex_approval_kind",
+    "multiSelect",
+    "isOther",
+    "completed",
+];
+
+fn kept_field(key: &str) -> bool {
+    ID_KEYS.contains(&key) || PROTOCOL_KEYS.contains(&key)
+}
+
+/// One spelling per number, so 483927, 483927.0 and "483927" compare equal.
+fn canonical_number(text: &str) -> Option<String> {
+    let value: f64 = text.trim().parse().ok()?;
+    if !value.is_finite() {
+        return None;
+    }
+    Some(if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
+    })
 }
 
 /// A child's JSON pointer, kept short: past MAX_PATH the parent's path is
@@ -630,6 +673,9 @@ fn mask_records(path: &str, masks: &[Mask]) -> Vec<Redaction> {
 pub(super) struct TextScrubber {
     pending: String,
     run: bool,
+    /// Values this item's own text revealed to a rule (`"password":"…"`),
+    /// masked wherever the item repeats them, short ones included.
+    local: Vec<String>,
     message_id: Value,
     item_id: String,
     next_part: u64,
@@ -640,7 +686,38 @@ impl TextScrubber {
     fn held(&self) -> usize {
         self.pending.len()
     }
+    /// Known secrets plus the ones this item revealed itself.
+    fn merged(&self, known: &[String]) -> Vec<String> {
+        let mut merged = known.to_vec();
+        merged.extend(self.local.iter().cloned());
+        merged
+    }
+    /// Values the rules masked in this text that are not known yet: kept
+    /// for the rest of the item and returned for a rescan.
+    fn adopt(&mut self, masks: &[Mask], merged: &[String], complete: usize) -> Vec<String> {
+        let mut new = Vec::new();
+        // A match running to the end of the buffer may still grow: its value
+        // is adopted once the text after it arrives.
+        for secret in masks
+            .iter()
+            .filter(|m| m.end < complete)
+            .filter_map(|m| m.secret.as_ref())
+        {
+            if secret.len() >= IN_EVENT_MIN
+                && !is_marker(secret)
+                && !merged.contains(secret)
+                && !new.contains(secret)
+                && self.local.len() < MAX_EVENT_SECRETS
+            {
+                new.push(secret.clone());
+                self.local.push(secret.clone());
+            }
+        }
+        new
+    }
     fn push(&mut self, chunk: &str, known: &[String]) -> (String, Vec<Mask>) {
+        let merged = self.merged(known);
+        let known = merged.as_slice();
         let mut out = String::new();
         let mut out_masks = Vec::new();
         let mut chunk = chunk;
@@ -666,9 +743,15 @@ impl TextScrubber {
         }
         let mut buffer = std::mem::take(&mut self.pending);
         buffer.push_str(chunk);
-        let masks = find_masks(&buffer, known, false);
+        let mut masks = find_masks(&buffer, known, false);
+        let new = self.adopt(&masks, known, buffer.len());
+        if !new.is_empty() {
+            // Find the echoes too, so no cut falls inside one.
+            let all = self.merged(known);
+            masks = find_masks(&buffer, &all, false);
+        }
         let len = buffer.len();
-        let longest = known.iter().map(String::len).max().unwrap_or(0);
+        let longest = known.iter().chain(&new).map(String::len).max().unwrap_or(0);
         let hold = longest.saturating_sub(1).clamp(SHAPE_HOLD, MAX_HOLD);
         let mut cut = len.saturating_sub(hold);
         let token = buffer
@@ -718,14 +801,41 @@ impl TextScrubber {
             m
         }));
         self.pending = buffer[cut..].to_string();
+        rescan(&mut out, &new, &mut out_masks);
         (out, out_masks)
     }
     fn flush(&mut self, known: &[String]) -> (String, Vec<Mask>) {
+        let merged = self.merged(known);
         let buffer = std::mem::take(&mut self.pending);
         self.run = false;
-        let masks = find_masks(&buffer, known, false);
-        apply(&buffer, &masks)
+        let masks = find_masks(&buffer, &merged, false);
+        let new = self.adopt(&masks, &merged, usize::MAX);
+        let (mut out, mut applied) = apply(&buffer, &masks);
+        rescan(&mut out, &new, &mut applied);
+        (out, applied)
     }
+}
+
+/// Mask the echoes of secrets a text revealed itself, in text already
+/// masked by the rules.
+fn rescan(text: &mut String, new: &[String], masks: &mut Vec<Mask>) {
+    if new.is_empty() {
+        return;
+    }
+    let mut echoes = known_masks(text, new);
+    echoes.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+    let mut kept: Vec<Mask> = Vec::new();
+    for mask in echoes {
+        if kept.last().is_none_or(|last| mask.start >= last.end) {
+            kept.push(mask);
+        }
+    }
+    if kept.is_empty() {
+        return;
+    }
+    let (out, applied) = apply(text, &kept);
+    *text = out;
+    masks.extend(applied);
 }
 
 /// Start of an unfinished construct at the end of streamed text whose secret
@@ -1186,11 +1296,7 @@ impl<'a> Walker<'a> {
             cap: None,
             tool_text: kind == "tool",
             cookie: false,
-            known_numbers: known
-                .iter()
-                .filter(|k| k.parse::<f64>().is_ok())
-                .cloned()
-                .collect(),
+            known_numbers: known.iter().filter_map(|k| canonical_number(k)).collect(),
         }
     }
     fn top(&mut self, data: &mut Value, kind: &str) {
@@ -1244,7 +1350,10 @@ impl<'a> Walker<'a> {
         match value {
             Value::String(text) => self.text(text, &path),
             // A number that is one of the secrets (a numeric OTP repeated).
-            Value::Number(n) if self.known_numbers.contains(&n.to_string()) => {
+            Value::Number(n)
+                if canonical_number(&n.to_string())
+                    .is_some_and(|c| self.known_numbers.contains(&c)) =>
+            {
                 let length = n.to_string().len();
                 *value = marker("secret", length).into();
                 self.redactions.push(Redaction {
@@ -1278,6 +1387,18 @@ impl<'a> Walker<'a> {
     }
     fn text(&mut self, text: &mut String, path: &str) {
         let mut masks = find_masks(text, self.known, self.tool_text);
+        // The attached page's URL, whatever its scheme (file://, chrome://).
+        if path == "/page/url" && text.contains("://") && !text.starts_with("http") {
+            masks.extend(url_masks(text, 0));
+            masks.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+            let mut kept: Vec<Mask> = Vec::new();
+            for mask in masks {
+                if kept.last().is_none_or(|last| mask.start >= last.end) {
+                    kept.push(mask);
+                }
+            }
+            masks = kept;
+        }
         if self.cookie {
             masks.extend(cookie_masks(text));
             // A rule's own label wins over the known-secret one.
@@ -2274,6 +2395,184 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Every real entry point, with secrets placed where a rule masks them
+    /// and repeated elsewhere: tool items, approval requests, streamed and
+    /// final text (split anywhere), user events with a page, numeric echoes
+    /// in every spelling, and events revealing more than 256 secrets.
+    #[test]
+    fn every_entry_point_keeps_placed_secrets_out() {
+        struct Rng(u64);
+        impl Rng {
+            fn next(&mut self) -> u64 {
+                self.0 ^= self.0 << 13;
+                self.0 ^= self.0 >> 7;
+                self.0 ^= self.0 << 17;
+                self.0
+            }
+            fn below(&mut self, n: u64) -> u64 {
+                self.next() % n.max(1)
+            }
+            fn secret(&mut self) -> String {
+                const CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+                let len = 8 + self.below(9) as usize;
+                (0..len)
+                    .map(|_| CHARS[self.below(CHARS.len() as u64) as usize] as char)
+                    .collect()
+            }
+        }
+        let check = |out: &Value, secrets: &[String], what: &str| {
+            let text = out.to_string();
+            assert!(text.len() <= EVENT_BUDGET, "{what}: {} bytes", text.len());
+            for s in secrets {
+                assert!(!text.contains(s.as_str()), "{what}: {s} leaked in {text}");
+            }
+        };
+        let mut rng = Rng(0xD1B5_4A32_D192_ED03);
+        for round in 0..1500 {
+            let what = format!("round {round}");
+            let s = rng.secret();
+            let n = 100_000 + rng.below(899_999_999);
+            // Numeric secret echoed as a number, a float and a string.
+            let out = event(
+                "tool",
+                json!({"completed":true,"item":{"name":"x","input":{"otp":n},"a":n,"b":n as f64,"c":format!("{n}"),"d":format!("code {n} sent")}}),
+                &mut Secrets::default(),
+            )
+            .unwrap()
+            .into_value();
+            check(&out, &[n.to_string()], &what);
+            // A request; its dispatch fields survive.
+            let out = event(
+                "request",
+                json!({"requestId":"r","method":"can_use_tool","params":{"subtype":"can_use_tool","tool_name":"mcp__chrome_use__chrome_use_fill",
+                    "input":{"selector":"#password","value":s},"description":format!("type {s}")}}),
+                &mut Secrets::default(),
+            )
+            .unwrap()
+            .into_value();
+            check(&out, std::slice::from_ref(&s), &what);
+            assert_eq!(out["method"], "can_use_tool");
+            assert_eq!(
+                out["params"]["tool_name"],
+                "mcp__chrome_use__chrome_use_fill"
+            );
+            // A final text revealing and repeating a secret.
+            let rule = match rng.below(3) {
+                0 => format!("{{\"password\":\"{s}\"}}"),
+                1 => format!("Authorization: Bearer {s}9"),
+                _ => format!("https://x.example/cb?access_token={s}"),
+            };
+            let echoed = if rule.contains("Bearer") {
+                format!("{s}9")
+            } else {
+                s.clone()
+            };
+            let text = format!("Done. {rule}\nYou typed {echoed} earlier and {echoed} again.");
+            let out = event(
+                "textFinal",
+                json!({"itemId":"i","text":text,"part":0,"last":true}),
+                &mut Secrets::default(),
+            )
+            .unwrap()
+            .into_value();
+            check(&out, std::slice::from_ref(&echoed), &what);
+            // The same text streamed in random pieces.
+            let mut secrets = Secrets::default();
+            let mut streamed = String::new();
+            let mut rest = text.as_str();
+            while !rest.is_empty() {
+                let mut cut = (1 + rng.below(12) as usize).min(rest.len());
+                while !rest.is_char_boundary(cut) {
+                    cut += 1;
+                }
+                let (piece, after) = rest.split_at(cut);
+                rest = after;
+                if let Some(r) = event(
+                    "textDelta",
+                    json!({"itemId":"i","text":piece}),
+                    &mut secrets,
+                ) {
+                    streamed.push_str(r.value()["text"].as_str().unwrap());
+                }
+            }
+            for (_, r) in secrets.flush() {
+                streamed.push_str(r.value()["text"].as_str().unwrap());
+            }
+            assert!(
+                !streamed.contains(&echoed),
+                "{what}: {echoed} leaked in {streamed}"
+            );
+            // A user event: the page URL's token repeated in the title.
+            let out = event(
+                "user",
+                json!({"messageId":"m","text":"hi","page":{"tabId":1,"url":format!("https://x.example/?access_token={s}&p=1"),"title":format!("echo {s}")}}),
+                &mut Secrets::default(),
+            )
+            .unwrap()
+            .into_value();
+            check(&out, std::slice::from_ref(&s), &what);
+            // More than 256 secrets: free text and numbers withheld, the
+            // dispatch fields kept.
+            if round % 50 == 0 {
+                let many: Vec<String> = (0..300).map(|_| rng.secret()).collect();
+                let nums: Vec<u64> = (0..300).map(|i| 1_000_000 + i).collect();
+                let out = event(
+                    "request",
+                    json!({"requestId":"r","method":"can_use_tool","params":{"tool_name":"AskUserQuestion","otp":nums,
+                        "rows":many.iter().map(|m| json!({"password":m})).collect::<Vec<_>>(),
+                        "echo":format!("last {}", many[299]),"num":nums[299]}}),
+                    &mut Secrets::default(),
+                )
+                .unwrap()
+                .into_value();
+                let mut all = many.clone();
+                all.push(nums[299].to_string());
+                check(&out, &all, &what);
+                assert_eq!(out["method"], "can_use_tool");
+                assert_eq!(out["params"]["tool_name"], "AskUserQuestion");
+            }
+        }
+    }
+
+    #[test]
+    fn codex_round_five_cases() {
+        // A final text revealing and repeating a password.
+        let out = event(
+            "textFinal",
+            json!({"itemId":"i","text":"{\"password\":\"ABCD5678\"} echoed ABCD5678","part":0,"last":true}),
+            &mut Secrets::default(),
+        )
+        .unwrap()
+        .into_value();
+        assert!(!out.to_string().contains("ABCD5678"), "{out}");
+        // The page URL's token repeated in the page title.
+        let out = event(
+            "user",
+            json!({"messageId":"m","text":"hi","page":{"tabId":1,"url":"https://x.example/?access_token=ABCD5678","title":"echo ABCD5678"}}),
+            &mut Secrets::default(),
+        )
+        .unwrap()
+        .into_value();
+        assert!(!out.to_string().contains("ABCD5678"), "{out}");
+        assert_eq!(
+            out["page"]["url"],
+            "https://x.example/?access_token=[redacted]"
+        );
+        // Over 256 numeric secrets: the 257th's echo is withheld too, and
+        // the request still dispatches.
+        let otp: Vec<u64> = (100_000..=100_256).collect();
+        let out = event(
+            "request",
+            json!({"requestId":"r","method":"can_use_tool","params":{"tool_name":"x","otp":otp,"echo":100_256,"again":100_256.0}}),
+            &mut Secrets::default(),
+        )
+        .unwrap()
+        .into_value();
+        assert!(!out.to_string().contains("100256"), "{out}");
+        assert_eq!(out["method"], "can_use_tool");
+        assert_eq!(out["params"]["tool_name"], "x");
     }
 
     #[test]

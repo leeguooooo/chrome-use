@@ -17,6 +17,17 @@ use std::sync::Mutex;
 const MAX_STATE: u64 = 8 * 1024 * 1024;
 const MAX_HISTORY: u64 = 128 * 1024 * 1024;
 const MAX_EVENT: usize = 64 * 1024;
+/// A message's text as JSON in its `user` event, leaving room for the page,
+/// attachments and envelope within MAX_EVENT.
+const MAX_ENCODED_TEXT: usize = 40 * 1024;
+const TOO_LONG_ENCODED: &str =
+    "This message is too long to keep in the history once encoded; shorten it or remove control characters";
+
+/// Whether a message text, JSON-encoded, fits its history event. Control
+/// characters take six bytes each when encoded.
+fn fits_history(text: &str) -> bool {
+    serde_json::to_string(text).is_ok_and(|encoded| encoded.len() <= MAX_ENCODED_TEXT)
+}
 
 pub(super) fn now() -> u64 {
     std::time::SystemTime::now()
@@ -338,6 +349,9 @@ impl Conversation {
     }
     pub(super) fn accept(&mut self, message: Message) -> Result<bool, String> {
         uuid::Uuid::parse_str(&message.id).map_err(|_| "A message needs a stable UUID")?;
+        if !fits_history(&message.text) {
+            return Err(TOO_LONG_ENCODED.into());
+        }
         if message.text.trim().is_empty() || message.text.len() > 32 * 1024 {
             return Err("A message must contain between one and 32768 bytes of text".into());
         }
@@ -458,6 +472,9 @@ impl Conversation {
         // put the superseded text back in the queue.
         uuid::Uuid::parse_str(&replacement.id)
             .map_err(|_| "Replacement message needs a stable UUID")?;
+        if !fits_history(&replacement.text) {
+            return Err(TOO_LONG_ENCODED.into());
+        }
         if replacement.text.trim().is_empty() || replacement.text.len() > 32768 {
             return Err("Replacement text must contain between one and 32768 bytes".into());
         }
@@ -1052,6 +1069,26 @@ mod tests {
     const PROJECTED: &str = "https://shop.example/orders?access_token=[redacted]&x=1";
 
     #[test]
+    fn text_that_would_not_fit_its_history_line_is_refused() {
+        let mut c = Conversation::new("claude", None, None).unwrap();
+        // 12,000 control characters pass the 32 KiB byte check but encode
+        // to over 70 KiB.
+        let control = "\u{1}".repeat(12_000);
+        assert_eq!(
+            c.accept(message(&format!("x{control}"))).unwrap_err(),
+            TOO_LONG_ENCODED
+        );
+        let queued = message("queued");
+        c.accept(queued.clone()).unwrap();
+        assert_eq!(
+            c.edit_queued(&queued.id, "queued", message(&format!("x{control}")))
+                .unwrap_err(),
+            TOO_LONG_ENCODED
+        );
+        assert!(c.accept(message(&"a".repeat(32 * 1024))).unwrap());
+    }
+
+    #[test]
     fn fingerprints_without_new_fields_match_v1_5_214() {
         // Hashes of the v1.5.214 rule: text only, and text with an
         // attachment and a page (serde_json of the tuple).
@@ -1235,13 +1272,15 @@ mod tests {
     #[test]
     fn large_queues_have_bounded_previews_without_truncating_stored_messages() {
         let mut c = Conversation::new("codex", None, None).unwrap();
+        // Multibyte text near the 32 KiB limit (control characters that
+        // large are refused: they would not fit a history line).
         for _ in 0..64 {
-            c.accept(message(&"\u{0001}".repeat(32768))).unwrap();
+            c.accept(message(&"€".repeat(10_922))).unwrap();
         }
         let snapshot = c.queue_snapshot();
         assert!(serde_json::to_vec(&snapshot).unwrap().len() < 450000);
         assert_eq!(snapshot[0]["truncated"], true);
-        assert_eq!(c.queue[0].text.len(), 32768);
+        assert_eq!(c.queue[0].text.len(), 10_922 * 3);
     }
     #[test]
     fn direct_message_waits_for_confirmation_and_leaves_ordinary_queue_paused() {
