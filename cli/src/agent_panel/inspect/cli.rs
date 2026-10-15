@@ -24,6 +24,7 @@ pub(in crate::agent_panel) fn run(args: &[String], json_mode: bool) -> i32 {
         Some(home) => Inspect {
             root: home.join(".chrome-use").join("inspect"),
             sys: &Host,
+            profile: None,
         }
         .cli(args),
         None => Err("Cannot locate the user's home directory".into()),

@@ -28,6 +28,12 @@ pub(super) struct Fake {
     pub calls: RefCell<Vec<String>>,
     pub dm_result: RefCell<Option<Run>>,
     pub sent: RefCell<Vec<(String, String)>>,
+    /// The `--as` of each dm, in order.
+    pub senders: RefCell<Vec<String>>,
+    /// Answers to other ocs commands by their argv joined with spaces; a
+    /// command with no answer fails. Every call is logged in `ocs_calls`.
+    pub ocs_answers: RefCell<Vec<(String, String)>>,
+    pub ocs_calls: RefCell<Vec<String>>,
 }
 
 impl System for Fake {
@@ -83,7 +89,24 @@ impl System for Fake {
                 .map_or(Relation::Unknown, |(_, r)| *r),
         )
     }
-    fn dm(&self, _: &Path, id: &str, text: &str) -> Result<Run, String> {
+    fn ocs_json(&self, _: &Path, args: &[&str]) -> Result<Run, String> {
+        let argv = args.join(" ");
+        self.ocs_calls.borrow_mut().push(argv.clone());
+        let answer = self
+            .ocs_answers
+            .borrow()
+            .iter()
+            .find(|(a, _)| *a == argv)
+            .map(|(_, out)| out.clone())
+            .ok_or_else(|| format!("no fake answer for ocs {argv}"))?;
+        Ok(Run {
+            code: Some(0),
+            stdout: answer,
+            ..Run::default()
+        })
+    }
+    fn dm(&self, _: &Path, id: &str, text: &str, sender: &str) -> Result<Run, String> {
+        self.senders.borrow_mut().push(sender.into());
         self.sent.borrow_mut().push((id.into(), text.into()));
         Ok(self.dm_result.borrow_mut().take().unwrap_or(Run {
             code: Some(0),
@@ -100,6 +123,7 @@ pub(super) fn session(id: &str, cwd: &Path) -> Session {
         name: Some("fixture".into()),
         cwd: cwd.into(),
         status: Some("idle".into()),
+        addresses: Vec::new(),
     }
 }
 
@@ -126,6 +150,7 @@ pub(super) fn call(w: &World, sys: &Fake, op: &str, params: Value) -> Result<Val
     Inspect {
         root: w.data.clone(),
         sys,
+        profile: None,
     }
     .handle(op, &params)
 }

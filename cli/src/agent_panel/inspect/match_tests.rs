@@ -49,6 +49,7 @@ fn cli(w: &World, sys: &Fake, me: &str, args: &[&str]) -> Result<cli::Done, Stri
     Inspect {
         root: w.data.clone(),
         sys,
+        profile: None,
     }
     .cli(&args)
 }
@@ -1037,7 +1038,8 @@ fn link_identity_root_and_config_choice_are_checked() {
     sys.me.replace(None);
     assert!(Inspect {
         root: w.data.clone(),
-        sys: &sys
+        sys: &sys,
+        profile: None,
     }
     .cli(&["link".into(), "https://x.test/".into()])
     .is_err());
@@ -1177,6 +1179,7 @@ fn legacy_callers_get_upgrade_required_once_an_origin_is_scoped() {
     let linked = Inspect {
         root: w.data.clone(),
         sys: &sys,
+        profile: None,
     }
     .cli(&[
         "link".into(),
@@ -1308,6 +1311,7 @@ fn version_1_bindings_migrate_unchanged_in_effect() {
     Inspect {
         root: w.data.clone(),
         sys: &sys,
+        profile: None,
     }
     .cli(&[
         "link".into(),
@@ -1363,6 +1367,7 @@ fn tab_targets_are_revalidated_and_never_widened() {
     Inspect {
         root: w.data.clone(),
         sys: &sys,
+        profile: None,
     }
     .cli(&["link".into(), "https://test-admin.x.com/".into()])
     .unwrap();
