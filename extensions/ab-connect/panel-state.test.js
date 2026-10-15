@@ -220,3 +220,10 @@ test('queue edits move the turn to the replacement id', () => {
   assert.deepEqual(timeline.turnOrder, ['new']); assert.equal(timeline.turns.get('new').user.text, 'b'); assert.equal(timeline.turns.get('new').state, 'running');
   assert.equal(assessmentLabel(timeline.turns.get('new')), 'Assessment pending');
 });
+
+test('an exit note without a messageId does not mark a recorded turn as legacy grouping', () => {
+  const timeline = new PanelTimeline();
+  timeline.apply([event(1, 'user', { messageId: 'm', text: 'go' }), event(2, 'turnStarted', { v: 1, messageId: 'm', generation: 1 }), event(3, 'terminal', { messageId: 'm', status: 'completed' }), event(4, 'exited', { error: 'backend crashed' })], 4);
+  const turn = timeline.turns.get('m');
+  assert.equal(turn.legacy.grouping, false); assert.equal(turn.notes.length, 1);
+});

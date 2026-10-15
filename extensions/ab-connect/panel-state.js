@@ -168,7 +168,13 @@ export class PanelTimeline {
     if (cursor !== this.cursor) throw new Error('Conversation cursor did not match the received events.');
   }
   requestKey(requestId) { const id = JSON.stringify(requestId); return this.requestKeys.get(id) ?? id; }
-  note(row, data) { this.rows.push(row); this.turn(data.messageId, row.at).notes.push(row.key); }
+  // An exit note after the turn's terminal has no messageId; it belongs to
+  // that turn but says nothing about how its steps were grouped.
+  note(row, data) {
+    this.rows.push(row);
+    const turn = this.turns.get(data.messageId ?? this.lastUser ?? '');
+    if (turn && data.messageId == null) turn.notes.push(row.key); else this.turn(data.messageId, row.at).notes.push(row.key);
+  }
 }
 
 // Wording is fixed here so every view says the same thing. The badge never
