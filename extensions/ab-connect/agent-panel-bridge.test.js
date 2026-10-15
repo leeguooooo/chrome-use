@@ -224,3 +224,57 @@ test('slow operations wait longer than the native host does before giving up', (
   bridge.request('conversationList').catch(() => {});
   assert.deepEqual(Object.values(delays), [35000, 50000, 15000]);
 });
+
+test('turn evidence operations are allowed with their own budgets; agent-only operations are not', async () => {
+  const delays = [];
+  const bridge = new AgentPanelBridge({ send() {}, schedule: (fn, delay) => { delays.push(delay); return delays.length; }, cancel() {}, maxPending: 64 });
+  for (const operation of ['conversationArtifactRead', 'conversationRecoveryReview', 'conversationRecoveryTerminate', 'conversationRecoveryFork']) void bridge.request(operation, { conversationId: 'chat' }).catch(() => {});
+  assert.deepEqual(delays, [12000, 17000, 17000, 12000]);
+  for (const operation of ['agentActionBegin', 'agentActionReport', 'agentDeliveryReport', 'agentTaskAssess', 'agentRecordingAuthorize']) await assert.rejects(bridge.request(operation, {}), /Unsupported/);
+  bridge.disconnect('test end');
+});
+
+test('artifact chunks must name the requested artifact, offset and a sha256 digest', async () => {
+  const digest = `sha256:${'a'.repeat(64)}`;
+  for (const [result, valid] of [
+    [{ artifactId: 'art', offset: 0, data: 'AA==', total: 1, digest }, true],
+    [{ artifactId: 'other', offset: 0, data: 'AA==', total: 1, digest }, false],
+    [{ artifactId: 'art', offset: 4, data: 'AA==', total: 1, digest }, false],
+    [{ artifactId: 'art', offset: 0, data: 7, total: 1, digest }, false],
+    [{ artifactId: 'art', offset: 0, data: 'AA==', total: 1, digest: 'md5:00' }, false],
+    [{ artifactId: 'art', offset: 0, data: 'AA==', digest }, false],
+  ]) {
+    const { bridge, messages } = setup();
+    const reply = bridge.request('conversationArtifactRead', { conversationId: 'chat', artifactId: 'art', offset: 0, length: 393216 });
+    bridge.receive({ method: 'agentPanelReply', requestId: messages[0].requestId, result: { schemaVersion: 1, ...result } });
+    if (valid) assert.equal((await reply).artifactId, 'art'); else await assert.rejects(reply, /Malformed/);
+  }
+});
+
+test('recovery replies are validated: review process state, terminate confirmation, fork identity', async () => {
+  const cases = [
+    ['conversationRecoveryReview', { process: { state: 'alive' } }, true],
+    ['conversationRecoveryReview', { process: { state: 'gone' } }, false],
+    ['conversationRecoveryReview', { conversation: { id: 'chat', phase: 'recoveryRequired' } }, false],
+    ['conversationRecoveryTerminate', { confirmed: false }, true],
+    ['conversationRecoveryTerminate', { confirmed: 'yes' }, false],
+    ['conversationRecoveryFork', { conversation: { id: 'fork', phase: 'idle' }, forkedFrom: 'chat' }, true],
+    ['conversationRecoveryFork', { conversation: { id: 'chat', phase: 'idle' }, forkedFrom: 'chat' }, false],
+    ['conversationRecoveryFork', { conversation: { id: 'fork', phase: 'idle' }, forkedFrom: 'other' }, false],
+  ];
+  for (const [operation, result, valid] of cases) {
+    const { bridge, messages } = setup();
+    const reply = bridge.request(operation, { conversationId: 'chat' });
+    bridge.receive({ method: 'agentPanelReply', requestId: messages[0].requestId, result: { schemaVersion: 1, ...result } });
+    if (valid) await reply; else await assert.rejects(reply, /Malformed/);
+  }
+});
+
+test('a timed-out read is not described as an unconfirmed conversation change', async () => {
+  for (const [operation, expected] of [['conversationArtifactRead', /not replayed/], ['conversationRecoveryReview', /not replayed/], ['conversationRecoveryTerminate', /unconfirmed/]]) {
+    const { bridge, timers } = setup();
+    const reply = bridge.request(operation, { conversationId: 'chat' });
+    [...timers.values()][0]();
+    await assert.rejects(reply, expected);
+  }
+});
