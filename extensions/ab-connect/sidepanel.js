@@ -566,7 +566,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
         box.append(line);
       }
       for (const reason of final.downgradedBecause || []) box.append(element('div', `Lowered: ${reason}`, 'hint'));
-      box.append(element('p', 'These are the checks the agent chose; they do not prove the whole request was done.', 'hint'));
+      if (final.requirements?.length) box.append(element('p', 'These are the checks the agent chose; they do not prove the whole request was done.', 'hint'));
       return [box];
     });
   }
