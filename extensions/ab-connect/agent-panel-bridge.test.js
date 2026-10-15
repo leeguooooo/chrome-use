@@ -136,11 +136,15 @@ test('only packaged extension pages may invoke native agent services', () => {
   const runtime = { id: 'own', getURL: path => `chrome-extension://own/${path}` };
   assert.equal(isAgentPanelSender({ id: 'own', url: runtime.getURL('sidepanel.html') }, runtime), true);
   assert.equal(isAgentPanelSender({ id: 'own', url: runtime.getURL('options.html') }, runtime), true);
+  // options_ui.open_in_tab: the options page runs as the top frame of a tab.
+  assert.equal(isAgentPanelSender({ id: 'own', url: runtime.getURL('options.html'), tab: { id: 7 }, frameId: 0 }, runtime), true);
   for (const sender of [
     { id: 'other', url: runtime.getURL('sidepanel.html') },
     { id: 'own', url: 'https://example.com/' },
     { id: 'own', url: runtime.getURL('sidepanel.html'), tab: { id: 1 } },
     { id: 'own', url: runtime.getURL('sidepanel.html') + '?spoof' },
+    { id: 'own', url: runtime.getURL('options.html'), tab: { id: 7 }, frameId: 3 },
+    { id: 'own', url: runtime.getURL('options.html') + '#x', tab: { id: 7 }, frameId: 0 },
   ]) assert.equal(isAgentPanelSender(sender, runtime), false);
 });
 

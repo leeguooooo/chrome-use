@@ -139,6 +139,11 @@ function validResult({ operation, agentId, planId, conversationId, messageId, re
 // services. Check sender origin and the actual extension page URL, not a
 // caller-supplied operation or claimed identity.
 export function isAgentPanelSender(sender, runtime) {
-  if (sender?.id !== runtime.id || sender.tab) return false;
-  return [runtime.getURL('sidepanel.html'), runtime.getURL('options.html')].includes(sender.url);
+  if (sender?.id !== runtime.id) return false;
+  if (sender.url === runtime.getURL('sidepanel.html')) return !sender.tab;
+  // The options page opens in its own tab (options_ui.open_in_tab), so it
+  // carries sender.tab. It is not web-accessible, so a web page cannot frame
+  // it; require the top frame of that tab.
+  if (sender.url === runtime.getURL('options.html')) return !sender.tab || sender.frameId === 0;
+  return false;
 }
