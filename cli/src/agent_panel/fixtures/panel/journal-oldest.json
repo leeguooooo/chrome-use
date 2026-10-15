@@ -1,0 +1,73 @@
+{
+ "source": "Hand-built: journals from before notices were stamped with messageId.",
+ "events": [
+  {
+   "sequence": 1,
+   "at": 1792021409000,
+   "kind": "user",
+   "data": {
+    "messageId": "0d4c1b9e-6a51-4d0b-9e44-7a1c2f3e4b51",
+    "text": "Read the page",
+    "page": null
+   }
+  },
+  {
+   "sequence": 2,
+   "at": 1792021410000,
+   "kind": "ready",
+   "data": {
+    "sessionId": "01a13ccc-ac13-7a10-b04d-5f9c698a734e",
+    "model": "gpt-6",
+    "pid": 1
+   }
+  },
+  {
+   "sequence": 3,
+   "at": 1792021411000,
+   "kind": "tool",
+   "data": {
+    "completed": true,
+    "item": {
+     "id": "call_read",
+     "type": "mcpToolCall",
+     "server": "chrome_use",
+     "tool": "chrome_use_read",
+     "status": "completed",
+     "arguments": {
+      "tabId": "chrome-tab:4"
+     },
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "page text"
+       }
+      ]
+     },
+     "error": null,
+     "durationMs": null
+    }
+   }
+  },
+  {
+   "sequence": 4,
+   "at": 1792021412000,
+   "kind": "textFinal",
+   "data": {
+    "itemId": "msg_1",
+    "text": "It says hello.",
+    "part": 0,
+    "last": true
+   }
+  },
+  {
+   "sequence": 5,
+   "at": 1792021413000,
+   "kind": "terminal",
+   "data": {
+    "status": "completed",
+    "error": null
+   }
+  }
+ ]
+}

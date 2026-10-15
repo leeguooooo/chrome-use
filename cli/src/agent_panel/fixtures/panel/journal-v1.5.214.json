@@ -1,0 +1,297 @@
+{
+ "source": "Hand-built from Store::event shapes in v1.5.214 (cli/src/agent_panel/conversation.rs, service.rs Engine::notice stamping messageId from chat.active, backend.rs emit_text/notice). Not captured from a live build; replace with the build-host capture from plan step 1 when it lands.",
+ "capabilities": {
+  "schemaVersion": 1,
+  "mode": "full",
+  "modelInspection": true,
+  "conversationDelete": true,
+  "fullAccess": true,
+  "pageContext": true,
+  "conversationOptions": true,
+  "imageAttachments": true,
+  "skillLibrary": true,
+  "schedules": true,
+  "inspect": true,
+  "inspectResolve": true,
+  "chatAgents": [
+   "codex",
+   "claude",
+   "opencode",
+   "pi"
+  ]
+ },
+ "conversation": {
+  "id": "9f1e2d3c-4b5a-4697-8877-665544332211",
+  "agentId": "codex",
+  "title": "Checkout",
+  "phase": "interrupted",
+  "generation": 1,
+  "model": "gpt-6.1-sol",
+  "requestedModel": null,
+  "options": {},
+  "queued": 0,
+  "queuePaused": true,
+  "directMessageId": null,
+  "activeMessageId": null,
+  "lastError": null,
+  "lastSequence": 18,
+  "fullAccess": false,
+  "site": "shop.example",
+  "scheduleId": null
+ },
+ "events": [
+  {
+   "sequence": 1,
+   "at": 1792021409000,
+   "kind": "user",
+   "data": {
+    "messageId": "0d4c1b9e-6a51-4d0b-9e44-7a1c2f3e4b51",
+    "text": "Check out the cart and save the receipt",
+    "direct": false,
+    "page": {
+     "tabId": 1342,
+     "url": "https://shop.example/cart?access_token=legacyRawToken0001",
+     "title": "Cart \u00b7 Shop"
+    },
+    "attachments": [],
+    "skillId": null
+   }
+  },
+  {
+   "sequence": 2,
+   "at": 1792021410000,
+   "kind": "ready",
+   "data": {
+    "sessionId": "01a13ccc-ac13-7a10-b04d-5f9c698a734e",
+    "model": "gpt-6.1-sol",
+    "pid": 48211,
+    "messageId": "0d4c1b9e-6a51-4d0b-9e44-7a1c2f3e4b51"
+   }
+  },
+  {
+   "sequence": 3,
+   "at": 1792021411000,
+   "kind": "running",
+   "data": {
+    "turnId": "turn-1",
+    "messageId": "0d4c1b9e-6a51-4d0b-9e44-7a1c2f3e4b51"
+   }
+  },
+  {
+   "sequence": 4,
+   "at": 1792021412000,
+   "kind": "tool",
+   "data": {
+    "completed": false,
+    "item": {
+     "id": "call_open",
+     "type": "mcpToolCall",
+     "server": "chrome_use",
+     "tool": "chrome_use_open",
+     "status": "inProgress",
+     "arguments": {
+      "url": "https://shop.example/checkout"
+     },
+     "result": null,
+     "error": null,
+     "durationMs": null
+    },
+    "messageId": "0d4c1b9e-6a51-4d0b-9e44-7a1c2f3e4b51"
+   }
+  },
+  {
+   "sequence": 5,
+   "at": 1792021413000,
+   "kind": "tool",
+   "data": {
+    "completed": true,
+    "item": {
+     "id": "call_open",
+     "type": "mcpToolCall",
+     "server": "chrome_use",
+     "tool": "chrome_use_open",
+     "status": "completed",
+     "arguments": {
+      "url": "https://shop.example/checkout"
+     },
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "Opened https://shop.example/checkout"
+       }
+      ],
+      "structuredContent": {
+       "exitCode": 0,
+       "stdout": "Opened https://shop.example/checkout",
+       "stderr": "",
+       "response": null
+      }
+     },
+     "error": null,
+     "durationMs": null
+    },
+    "messageId": "0d4c1b9e-6a51-4d0b-9e44-7a1c2f3e4b51"
+   }
+  },
+  {
+   "sequence": 6,
+   "at": 1792021414000,
+   "kind": "tool",
+   "data": {
+    "completed": true,
+    "item": {
+     "id": "call_click",
+     "type": "mcpToolCall",
+     "server": "chrome_use",
+     "tool": "chrome_use_click",
+     "status": "failed",
+     "arguments": {
+      "selector": "#pay"
+     },
+     "result": null,
+     "error": {
+      "message": "element not found: #pay"
+     },
+     "durationMs": null
+    },
+    "messageId": "0d4c1b9e-6a51-4d0b-9e44-7a1c2f3e4b51"
+   }
+  },
+  {
+   "sequence": 7,
+   "at": 1792021415000,
+   "kind": "tool",
+   "data": {
+    "completed": true,
+    "item": {
+     "id": "call_cmd",
+     "type": "commandExecution",
+     "command": "/bin/zsh -lc ls",
+     "aggregatedOutput": "receipt.pdf",
+     "status": "completed",
+     "exitCode": 0
+    },
+    "messageId": "0d4c1b9e-6a51-4d0b-9e44-7a1c2f3e4b51"
+   }
+  },
+  {
+   "sequence": 8,
+   "at": 1792021416000,
+   "kind": "textDelta",
+   "data": {
+    "itemId": "msg_1",
+    "text": "The order ",
+    "part": 0,
+    "last": false,
+    "messageId": "0d4c1b9e-6a51-4d0b-9e44-7a1c2f3e4b51"
+   }
+  },
+  {
+   "sequence": 9,
+   "at": 1792021417000,
+   "kind": "textFinal",
+   "data": {
+    "itemId": "msg_1",
+    "text": "The order was placed and the receipt saved to receipt.pdf.",
+    "part": 0,
+    "last": true,
+    "messageId": "0d4c1b9e-6a51-4d0b-9e44-7a1c2f3e4b51"
+   }
+  },
+  {
+   "sequence": 10,
+   "at": 1792021418000,
+   "kind": "title",
+   "data": {
+    "title": "Checkout",
+    "messageId": "0d4c1b9e-6a51-4d0b-9e44-7a1c2f3e4b51"
+   }
+  },
+  {
+   "sequence": 11,
+   "at": 1792021419000,
+   "kind": "terminal",
+   "data": {
+    "status": "completed",
+    "error": null,
+    "messageId": "0d4c1b9e-6a51-4d0b-9e44-7a1c2f3e4b51"
+   }
+  },
+  {
+   "sequence": 12,
+   "at": 1792021420000,
+   "kind": "user",
+   "data": {
+    "messageId": "5b2f8c1d-3e47-4a19-8b6d-2c9e0f1a7d33",
+    "text": "Now cancel it",
+    "direct": false,
+    "page": null,
+    "attachments": [],
+    "skillId": null
+   }
+  },
+  {
+   "sequence": 13,
+   "at": 1792021421000,
+   "kind": "running",
+   "data": {
+    "turnId": "turn-2",
+    "messageId": "5b2f8c1d-3e47-4a19-8b6d-2c9e0f1a7d33"
+   }
+  },
+  {
+   "sequence": 14,
+   "at": 1792021422000,
+   "kind": "request",
+   "data": {
+    "requestId": 7,
+    "method": "item/commandExecution/requestApproval",
+    "params": {
+     "command": "rm receipt.pdf",
+     "reason": "Remove the file",
+     "cwd": "/WORK"
+    },
+    "messageId": "5b2f8c1d-3e47-4a19-8b6d-2c9e0f1a7d33"
+   }
+  },
+  {
+   "sequence": 15,
+   "at": 1792021423000,
+   "kind": "replySent",
+   "data": {
+    "requestId": 7,
+    "messageId": "5b2f8c1d-3e47-4a19-8b6d-2c9e0f1a7d33"
+   }
+  },
+  {
+   "sequence": 16,
+   "at": 1792021424000,
+   "kind": "requestResolved",
+   "data": {
+    "requestId": 7,
+    "messageId": "5b2f8c1d-3e47-4a19-8b6d-2c9e0f1a7d33"
+   }
+  },
+  {
+   "sequence": 17,
+   "at": 1792021425000,
+   "kind": "terminal",
+   "data": {
+    "status": "interrupted",
+    "error": null,
+    "messageId": "5b2f8c1d-3e47-4a19-8b6d-2c9e0f1a7d33"
+   }
+  },
+  {
+   "sequence": 18,
+   "at": 1792021426000,
+   "kind": "exited",
+   "data": {
+    "error": null,
+    "processExitConfirmed": true,
+    "processStarted": true
+   }
+  }
+ ]
+}

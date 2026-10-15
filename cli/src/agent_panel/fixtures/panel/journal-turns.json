@@ -1,0 +1,1444 @@
+{
+ "source": "Hand-built from the journal contract in docs/superpowers/plans/2026-10-15-verifiable-panel-turns.md section 2; pngBase64 is the screenshot artifact's bytes.",
+ "pngBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+ "capabilities": {
+  "schemaVersion": 1,
+  "mode": "full",
+  "modelInspection": true,
+  "conversationDelete": true,
+  "fullAccess": true,
+  "pageContext": true,
+  "conversationOptions": true,
+  "imageAttachments": true,
+  "skillLibrary": true,
+  "schedules": true,
+  "inspect": true,
+  "inspectResolve": true,
+  "chatAgents": [
+   "codex",
+   "claude",
+   "opencode",
+   "pi"
+  ],
+  "turnEvidence": 1,
+  "artifacts": 1,
+  "recovery": 1,
+  "recording": 1,
+  "requestRevision": 1
+ },
+ "conversation": {
+  "id": "3c2b1a09-8f7e-4d6c-9b5a-0123456789ab",
+  "agentId": "opencode",
+  "title": "Pay for cart",
+  "phase": "recoveryRequired",
+  "control": "unknown",
+  "generation": 3,
+  "model": "gpt-6.1-sol",
+  "requestedModel": null,
+  "options": {},
+  "queued": 0,
+  "queuePaused": true,
+  "directMessageId": null,
+  "activeMessageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+  "lastError": "Backend did not confirm exit",
+  "lastSequence": 62,
+  "fullAccess": false,
+  "site": "shop.example",
+  "scheduleId": null
+ },
+ "events": [
+  {
+   "sequence": 1,
+   "at": 1792030001000,
+   "kind": "user",
+   "data": {
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "text": "Pay for the cart and save the receipt PDF",
+    "direct": false,
+    "page": {
+     "tabId": 1342,
+     "url": "https://shop.example/cart?access_token=[redacted]",
+     "title": "Cart \u00b7 Shop"
+    },
+    "attachments": [],
+    "skillId": null
+   }
+  },
+  {
+   "sequence": 2,
+   "at": 1792030002000,
+   "kind": "turnStarted",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "direct": false,
+    "continuation": null,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 3,
+   "at": 1792030003000,
+   "kind": "ready",
+   "data": {
+    "sessionId": "sess-1",
+    "model": "gpt-6.1-sol",
+    "pid": 48211,
+    "pgid": 48211,
+    "processStartTime": 1792030000,
+    "serviceSid": 4100,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81"
+   }
+  },
+  {
+   "sequence": 4,
+   "at": 1792030004000,
+   "kind": "running",
+   "data": {
+    "turnId": "turn-1",
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81"
+   }
+  },
+  {
+   "sequence": 5,
+   "at": 1792030005000,
+   "kind": "actionAdmitted",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "actionId": "a1111111-1111-4111-8111-111111111111",
+    "tool": "chrome_use_open",
+    "toolClass": "act",
+    "outputs": [],
+    "quotaReserved": 0,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 6,
+   "at": 1792030006000,
+   "kind": "tool",
+   "data": {
+    "completed": false,
+    "toolCallId": "call_open",
+    "actionIds": [],
+    "item": {
+     "id": "call_open",
+     "type": "mcpToolCall",
+     "server": "chrome_use",
+     "tool": "chrome_use_open",
+     "status": "inProgress",
+     "arguments": {
+      "url": "https://shop.example/checkout"
+     },
+     "result": null,
+     "error": null
+    },
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81"
+   }
+  },
+  {
+   "sequence": 7,
+   "at": 1792030007000,
+   "kind": "browserActionTarget",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "actionId": "a1111111-1111-4111-8111-111111111111",
+    "tool": "chrome_use_open",
+    "toolClass": "act",
+    "requested": {
+     "tabHandle": null,
+     "url": "https://shop.example/checkout"
+    },
+    "observed": {
+     "before": {
+      "chromeTabId": 1342,
+      "tabRef": "chrome-tab:1342",
+      "targetId": "T-A",
+      "url": "https://shop.example/cart",
+      "title": "Cart \u00b7 Shop",
+      "provenance": "actionReply"
+     },
+     "after": {
+      "chromeTabId": 1400,
+      "tabRef": "chrome-tab:1400",
+      "targetId": "T-B",
+      "url": "https://shop.example/checkout/step-2",
+      "title": "Checkout",
+      "provenance": "actionReply"
+     }
+    },
+    "outcome": "ok",
+    "errorCode": null,
+    "durationMs": 420,
+    "resultDigest": null,
+    "afterStop": false,
+    "afterTurnEnd": false,
+    "afterRecoveryRequired": false,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 8,
+   "at": 1792030008000,
+   "kind": "actionObserved",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "actionId": "a1111111-1111-4111-8111-111111111111",
+    "verdict": "uncertain",
+    "evaluator": "browser",
+    "basis": "navigation",
+    "detail": "landed on https://shop.example",
+    "possiblyExecuted": false,
+    "check": {
+     "kind": "urlMatch",
+     "predicate": "https://shop.example/checkout/step-2",
+     "target": {
+      "chromeTabId": 1400,
+      "tabRef": "chrome-tab:1400",
+      "targetId": "T-B",
+      "url": "https://shop.example/checkout/step-2",
+      "title": "Checkout",
+      "provenance": "actionReply"
+     },
+     "observedSequence": 7
+    },
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 9,
+   "at": 1792030009000,
+   "kind": "tool",
+   "data": {
+    "completed": true,
+    "toolCallId": "call_open",
+    "actionIds": [
+     "a1111111-1111-4111-8111-111111111111"
+    ],
+    "item": {
+     "id": "call_open",
+     "type": "mcpToolCall",
+     "server": "chrome_use",
+     "tool": "chrome_use_open",
+     "status": "completed",
+     "arguments": {
+      "url": "https://shop.example/checkout"
+     },
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "chrome-use action a1111111-1111-4111-8111-111111111111"
+       }
+      ]
+     },
+     "error": null
+    },
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81"
+   }
+  },
+  {
+   "sequence": 10,
+   "at": 1792030010000,
+   "kind": "tool",
+   "data": {
+    "completed": true,
+    "toolCallId": "call_fill",
+    "actionIds": [
+     "a2222222-2222-4222-8222-222222222222"
+    ],
+    "item": {
+     "id": "call_fill",
+     "type": "mcpToolCall",
+     "server": "chrome_use",
+     "tool": "chrome_use_fill",
+     "status": "completed",
+     "arguments": {
+      "selector": "#card",
+      "value": "[redacted secret, 16 chars]"
+     },
+     "result": null,
+     "error": null
+    },
+    "redactions": [
+     {
+      "path": "item.arguments.value",
+      "kind": "secret",
+      "length": 16
+     }
+    ],
+    "privacyClass": "masked",
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81"
+   }
+  },
+  {
+   "sequence": 11,
+   "at": 1792030011000,
+   "kind": "actionAdmitted",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "actionId": "a2222222-2222-4222-8222-222222222222",
+    "tool": "chrome_use_fill",
+    "toolClass": "act",
+    "outputs": [],
+    "quotaReserved": 0,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 12,
+   "at": 1792030012000,
+   "kind": "browserActionTarget",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "actionId": "a2222222-2222-4222-8222-222222222222",
+    "tool": "chrome_use_fill",
+    "toolClass": "act",
+    "requested": null,
+    "observed": {
+     "before": {
+      "chromeTabId": 1400,
+      "tabRef": "chrome-tab:1400",
+      "targetId": "T-B",
+      "url": "https://shop.example/checkout/step-2",
+      "title": "Checkout",
+      "provenance": "daemonState"
+     },
+     "after": {
+      "chromeTabId": 1400,
+      "tabRef": "chrome-tab:1400",
+      "targetId": "T-B",
+      "url": "https://shop.example/checkout/step-2",
+      "title": "Checkout",
+      "provenance": "daemonState"
+     }
+    },
+    "outcome": "ok",
+    "errorCode": null,
+    "durationMs": 420,
+    "resultDigest": null,
+    "afterStop": false,
+    "afterTurnEnd": false,
+    "afterRecoveryRequired": false,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 13,
+   "at": 1792030013000,
+   "kind": "actionObserved",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "actionId": "a2222222-2222-4222-8222-222222222222",
+    "verdict": "confirmed",
+    "evaluator": "browser",
+    "basis": "readBack",
+    "detail": null,
+    "possiblyExecuted": false,
+    "check": {
+     "kind": "readBack",
+     "predicate": "#card has the typed value",
+     "target": {
+      "chromeTabId": 1400,
+      "tabRef": "chrome-tab:1400",
+      "targetId": "T-B",
+      "url": "https://shop.example/checkout/step-2",
+      "title": "Checkout",
+      "provenance": "daemonState"
+     },
+     "observedSequence": 12
+    },
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 14,
+   "at": 1792030014000,
+   "kind": "actionAdmitted",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "actionId": "a3333333-3333-4333-8333-333333333333",
+    "tool": "chrome_use_click",
+    "toolClass": "act",
+    "outputs": [],
+    "quotaReserved": 0,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 15,
+   "at": 1792030015000,
+   "kind": "browserActionTarget",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "actionId": "a3333333-3333-4333-8333-333333333333",
+    "tool": "chrome_use_click",
+    "toolClass": "act",
+    "requested": null,
+    "observed": {
+     "before": {
+      "chromeTabId": 1400,
+      "tabRef": "chrome-tab:1400",
+      "targetId": "T-B",
+      "url": "https://shop.example/checkout/step-2",
+      "title": "Checkout",
+      "provenance": "daemonState"
+     },
+     "after": {
+      "chromeTabId": 1400,
+      "tabRef": "chrome-tab:1400",
+      "targetId": "T-B",
+      "url": "https://shop.example/checkout/step-2",
+      "title": "Checkout",
+      "provenance": "daemonState"
+     }
+    },
+    "outcome": "error",
+    "errorCode": "element_not_found",
+    "durationMs": 420,
+    "resultDigest": null,
+    "afterStop": false,
+    "afterTurnEnd": false,
+    "afterRecoveryRequired": false,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 16,
+   "at": 1792030016000,
+   "kind": "actionObserved",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "actionId": "a3333333-3333-4333-8333-333333333333",
+    "verdict": "failed",
+    "evaluator": "browser",
+    "basis": "toolError",
+    "detail": "element not found: #pay",
+    "possiblyExecuted": false,
+    "check": null,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 17,
+   "at": 1792030017000,
+   "kind": "tool",
+   "data": {
+    "completed": true,
+    "toolCallId": "call_click",
+    "actionIds": [
+     "a3333333-3333-4333-8333-333333333333"
+    ],
+    "item": {
+     "id": "call_click",
+     "type": "mcpToolCall",
+     "server": "chrome_use",
+     "tool": "chrome_use_click",
+     "status": "failed",
+     "arguments": {
+      "selector": "#pay"
+     },
+     "result": null,
+     "error": {
+      "message": "element not found: #pay"
+     }
+    },
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81"
+   }
+  },
+  {
+   "sequence": 18,
+   "at": 1792030018000,
+   "kind": "actionAdmitted",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "actionId": "a4444444-4444-4444-8444-444444444444",
+    "tool": "chrome_use_screenshot",
+    "toolClass": "capture",
+    "outputs": [
+     {
+      "artifactId": "b1111111-1111-4111-8111-111111111111",
+      "kind": "screenshot",
+      "name": "checkout.png"
+     }
+    ],
+    "quotaReserved": 0,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 19,
+   "at": 1792030019000,
+   "kind": "artifactCreated",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "actionId": "a4444444-4444-4444-8444-444444444444",
+    "artifactId": "b1111111-1111-4111-8111-111111111111",
+    "kind": "screenshot",
+    "name": "checkout.png",
+    "state": "pending",
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 20,
+   "at": 1792030020000,
+   "kind": "browserActionTarget",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "actionId": "a4444444-4444-4444-8444-444444444444",
+    "tool": "chrome_use_screenshot",
+    "toolClass": "capture",
+    "requested": null,
+    "observed": {
+     "before": {
+      "chromeTabId": 1400,
+      "tabRef": "chrome-tab:1400",
+      "targetId": "T-B",
+      "url": "https://shop.example/checkout/step-2",
+      "title": "Checkout",
+      "provenance": "daemonState"
+     },
+     "after": {
+      "chromeTabId": 1400,
+      "tabRef": "chrome-tab:1400",
+      "targetId": "T-B",
+      "url": "https://shop.example/checkout/step-2",
+      "title": "Checkout",
+      "provenance": "daemonState"
+     }
+    },
+    "outcome": "ok",
+    "errorCode": null,
+    "durationMs": 420,
+    "resultDigest": null,
+    "afterStop": false,
+    "afterTurnEnd": false,
+    "afterRecoveryRequired": false,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 21,
+   "at": 1792030021000,
+   "kind": "artifactReady",
+   "data": {
+    "v": 1,
+    "artifactId": "b1111111-1111-4111-8111-111111111111",
+    "mime": "image/png",
+    "declaredExtension": "png",
+    "typeMatches": true,
+    "bytes": 70,
+    "digest": "sha256:6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 22,
+   "at": 1792030022000,
+   "kind": "actionObserved",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "actionId": "a4444444-4444-4444-8444-444444444444",
+    "verdict": "confirmed",
+    "evaluator": "browser",
+    "basis": "capture",
+    "detail": null,
+    "possiblyExecuted": false,
+    "check": null,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 23,
+   "at": 1792030023000,
+   "kind": "tool",
+   "data": {
+    "completed": true,
+    "toolCallId": "call_shot",
+    "actionIds": [
+     "a4444444-4444-4444-8444-444444444444"
+    ],
+    "item": {
+     "id": "call_shot",
+     "type": "mcpToolCall",
+     "server": "chrome_use",
+     "tool": "chrome_use_screenshot",
+     "status": "completed",
+     "arguments": {},
+     "result": null,
+     "error": null
+    },
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81"
+   }
+  },
+  {
+   "sequence": 24,
+   "at": 1792030024000,
+   "kind": "actionAdmitted",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "actionId": "a5555555-5555-4555-8555-555555555555",
+    "tool": "chrome_use_download_url",
+    "toolClass": "capture",
+    "outputs": [
+     {
+      "artifactId": "b2222222-2222-4222-8222-222222222222",
+      "kind": "download",
+      "name": "receipt.pdf"
+     }
+    ],
+    "quotaReserved": 0,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 25,
+   "at": 1792030025000,
+   "kind": "browserActionTarget",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "actionId": "a5555555-5555-4555-8555-555555555555",
+    "tool": "chrome_use_download_url",
+    "toolClass": "capture",
+    "requested": null,
+    "observed": {
+     "before": {
+      "chromeTabId": 1400,
+      "tabRef": "chrome-tab:1400",
+      "targetId": "T-B",
+      "url": "https://shop.example/checkout/step-2",
+      "title": "Checkout",
+      "provenance": "daemonState"
+     },
+     "after": {
+      "chromeTabId": 1400,
+      "tabRef": "chrome-tab:1400",
+      "targetId": "T-B",
+      "url": "https://shop.example/checkout/step-2",
+      "title": "Checkout",
+      "provenance": "daemonState"
+     }
+    },
+    "outcome": "ok",
+    "errorCode": null,
+    "durationMs": 420,
+    "resultDigest": null,
+    "afterStop": false,
+    "afterTurnEnd": false,
+    "afterRecoveryRequired": false,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 26,
+   "at": 1792030026000,
+   "kind": "artifactReady",
+   "data": {
+    "v": 1,
+    "artifactId": "b2222222-2222-4222-8222-222222222222",
+    "mime": "text/html",
+    "declaredExtension": "pdf",
+    "typeMatches": false,
+    "bytes": 2048,
+    "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 27,
+   "at": 1792030027000,
+   "kind": "actionObserved",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "actionId": "a5555555-5555-4555-8555-555555555555",
+    "verdict": "confirmed",
+    "evaluator": "browser",
+    "basis": "download",
+    "detail": null,
+    "possiblyExecuted": false,
+    "check": null,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 28,
+   "at": 1792030028000,
+   "kind": "fileDelivered",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "actionId": "a5555555-5555-4555-8555-555555555555",
+    "artifactId": "b2222222-2222-4222-8222-222222222222",
+    "requestedDestination": "/WORK/receipt.pdf",
+    "state": "failed",
+    "digest": null,
+    "detail": "destination folder is not writable",
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 29,
+   "at": 1792030029000,
+   "kind": "tool",
+   "data": {
+    "completed": true,
+    "toolCallId": "call_dl",
+    "actionIds": [
+     "a5555555-5555-4555-8555-555555555555"
+    ],
+    "item": {
+     "id": "call_dl",
+     "type": "mcpToolCall",
+     "server": "chrome_use",
+     "tool": "chrome_use_download_url",
+     "status": "completed",
+     "arguments": {
+      "url": "https://shop.example/receipt",
+      "path": "/WORK/receipt.pdf"
+     },
+     "result": null,
+     "error": null
+    },
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81"
+   }
+  },
+  {
+   "sequence": 30,
+   "at": 1792030030000,
+   "kind": "actionAdmitted",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "actionId": "a6666666-6666-4666-8666-666666666666",
+    "tool": "chrome_use_press",
+    "toolClass": "act",
+    "outputs": [],
+    "quotaReserved": 0,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 31,
+   "at": 1792030031000,
+   "kind": "browserActionTarget",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "actionId": "a6666666-6666-4666-8666-666666666666",
+    "tool": "chrome_use_press",
+    "toolClass": "act",
+    "requested": null,
+    "observed": {
+     "before": {
+      "chromeTabId": 1400,
+      "tabRef": "chrome-tab:1400",
+      "targetId": "T-B",
+      "url": "https://shop.example/checkout/step-2",
+      "title": "Checkout",
+      "provenance": "daemonState"
+     },
+     "after": {
+      "chromeTabId": 1400,
+      "tabRef": "chrome-tab:1400",
+      "targetId": "T-B",
+      "url": "https://shop.example/checkout/step-2",
+      "title": "Checkout",
+      "provenance": "daemonState"
+     }
+    },
+    "outcome": "ok",
+    "errorCode": null,
+    "durationMs": 420,
+    "resultDigest": null,
+    "afterStop": false,
+    "afterTurnEnd": false,
+    "afterRecoveryRequired": false,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 32,
+   "at": 1792030032000,
+   "kind": "actionObserved",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "actionId": "a6666666-6666-4666-8666-666666666666",
+    "verdict": "uncertain",
+    "evaluator": "none",
+    "basis": "none",
+    "detail": null,
+    "possiblyExecuted": true,
+    "check": null,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 33,
+   "at": 1792030033000,
+   "kind": "tool",
+   "data": {
+    "completed": true,
+    "toolCallId": "call_read",
+    "actionIds": [],
+    "item": {
+     "id": "call_read",
+     "type": "mcpToolCall",
+     "server": "chrome_use",
+     "tool": "chrome_use_read",
+     "status": "completed",
+     "arguments": {
+      "tabId": "chrome-tab:1400"
+     },
+     "result": null,
+     "error": null
+    },
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81"
+   }
+  },
+  {
+   "sequence": 34,
+   "at": 1792030034000,
+   "kind": "textFinal",
+   "data": {
+    "itemId": "msg_c",
+    "text": "Opening checkout first.",
+    "part": 0,
+    "last": true,
+    "role": "commentary",
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81"
+   }
+  },
+  {
+   "sequence": 35,
+   "at": 1792030035000,
+   "kind": "textFinal",
+   "data": {
+    "itemId": "msg_f",
+    "text": "I could not press **Pay**; the receipt download saved an HTML page.",
+    "part": 0,
+    "last": true,
+    "role": "final",
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81"
+   }
+  },
+  {
+   "sequence": 36,
+   "at": 1792030036000,
+   "kind": "taskAssessment",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "phase": "provisional",
+    "source": "agent",
+    "status": "someChecksPassed",
+    "declaredStatus": "done",
+    "reason": null,
+    "requirements": [],
+    "downgradedBecause": [],
+    "blocker": null,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 37,
+   "at": 1792030037000,
+   "kind": "actionAdmitted",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "actionId": "a9999999-9999-4999-8999-999999999999",
+    "tool": "chrome_use_click",
+    "toolClass": "act",
+    "outputs": [],
+    "quotaReserved": 0,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 38,
+   "at": 1792030038000,
+   "kind": "terminal",
+   "data": {
+    "status": "completed",
+    "error": null,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81"
+   }
+  },
+  {
+   "sequence": 39,
+   "at": 1792030039000,
+   "kind": "turnEnded",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "outcome": "completed",
+    "error": null,
+    "emptyAnswer": false,
+    "finalItemIds": [
+     "msg_f"
+    ],
+    "sourceSequences": [
+     2,
+     37
+    ],
+    "openLeases": [
+     "a9999999-9999-4999-8999-999999999999"
+    ],
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 40,
+   "at": 1792030040000,
+   "kind": "taskAssessment",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "phase": "final",
+    "source": "host",
+    "status": "someChecksPassed",
+    "declaredStatus": "done",
+    "reason": null,
+    "requirements": [
+     {
+      "id": "r1",
+      "text": "Card number entered",
+      "declared": "met",
+      "check": {
+       "kind": "readBack",
+       "predicate": "#card has the typed value",
+       "evidence": "a2222222-2222-4222-8222-222222222222"
+      },
+      "computed": "checked",
+      "because": null
+     },
+     {
+      "id": "r2",
+      "text": "Order paid",
+      "declared": "met",
+      "check": null,
+      "computed": "claimed",
+      "because": "no check named"
+     },
+     {
+      "id": "r3",
+      "text": "Receipt saved as PDF",
+      "declared": "met",
+      "check": {
+       "kind": "downloadType",
+       "predicate": "application/pdf",
+       "evidence": "b2222222-2222-4222-8222-222222222222"
+      },
+      "computed": "checkFailed",
+      "because": "sniffed text/html"
+     }
+    ],
+    "downgradedBecause": [
+     "Order paid has no check",
+     "Receipt saved as PDF failed its check"
+    ],
+    "blocker": null,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 41,
+   "at": 1792030041000,
+   "kind": "turnSummary",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "sourceSequences": [
+     2,
+     38
+    ],
+    "steps": 6,
+    "failedSteps": 1,
+    "actions": {
+     "confirmed": 3,
+     "failed": 1,
+     "uncertain": 2,
+     "unlinked": 1,
+     "admittedNotReported": 0
+    },
+    "artifacts": {
+     "ready": 2,
+     "unavailable": 0
+    },
+    "assessment": "someChecksPassed",
+    "stalls": 0,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 42,
+   "at": 1792030042000,
+   "kind": "unboundActionReport",
+   "data": {
+    "v": 1,
+    "generation": null,
+    "actionId": null,
+    "tool": "chrome_use_click",
+    "reason": "noLease",
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 43,
+   "at": 1792030043000,
+   "kind": "user",
+   "data": {
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+    "text": "Try again from the cart",
+    "direct": true,
+    "page": null,
+    "attachments": [],
+    "skillId": null
+   }
+  },
+  {
+   "sequence": 44,
+   "at": 1792030044000,
+   "kind": "turnStarted",
+   "data": {
+    "v": 1,
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+    "generation": 3,
+    "direct": true,
+    "continuation": "afterStop",
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 45,
+   "at": 1792030045000,
+   "kind": "controlChanged",
+   "data": {
+    "v": 1,
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+    "from": "stopped",
+    "to": "agent",
+    "reason": "turnStarted",
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 46,
+   "at": 1792030046000,
+   "kind": "actionAdmitted",
+   "data": {
+    "v": 1,
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+    "generation": 3,
+    "actionId": "a7777777-7777-4777-8777-777777777777",
+    "tool": "chrome_use_read",
+    "toolClass": "observe",
+    "outputs": [],
+    "quotaReserved": 0,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 47,
+   "at": 1792030047000,
+   "kind": "browserActionTarget",
+   "data": {
+    "v": 1,
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+    "generation": 3,
+    "actionId": "a7777777-7777-4777-8777-777777777777",
+    "tool": "chrome_use_read",
+    "toolClass": "observe",
+    "requested": null,
+    "observed": {
+     "before": {
+      "chromeTabId": 1342,
+      "tabRef": "chrome-tab:1342",
+      "targetId": "T-A",
+      "url": "https://shop.example/cart",
+      "title": "Cart \u00b7 Shop",
+      "provenance": "actionReply"
+     },
+     "after": {
+      "chromeTabId": 1342,
+      "tabRef": "chrome-tab:1342",
+      "targetId": "T-A",
+      "url": "https://shop.example/cart",
+      "title": "Cart \u00b7 Shop",
+      "provenance": "actionReply"
+     }
+    },
+    "outcome": "ok",
+    "errorCode": null,
+    "durationMs": 420,
+    "resultDigest": null,
+    "afterStop": false,
+    "afterTurnEnd": false,
+    "afterRecoveryRequired": false,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 48,
+   "at": 1792030048000,
+   "kind": "actionAdmitted",
+   "data": {
+    "v": 1,
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+    "generation": 3,
+    "actionId": "a8888888-8888-4888-8888-888888888888",
+    "tool": "chrome_use_click",
+    "toolClass": "act",
+    "outputs": [],
+    "quotaReserved": 0,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 49,
+   "at": 1792030049000,
+   "kind": "browserActionTarget",
+   "data": {
+    "v": 1,
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+    "generation": 3,
+    "actionId": "a8888888-8888-4888-8888-888888888888",
+    "tool": "chrome_use_click",
+    "toolClass": "act",
+    "requested": null,
+    "observed": {
+     "before": {
+      "chromeTabId": 1342,
+      "tabRef": "chrome-tab:1342",
+      "targetId": "T-A",
+      "url": "https://shop.example/cart",
+      "title": "Cart \u00b7 Shop",
+      "provenance": "actionReply"
+     },
+     "after": {
+      "chromeTabId": 1342,
+      "tabRef": "chrome-tab:1342",
+      "targetId": "T-A",
+      "url": "https://shop.example/cart",
+      "title": "Cart \u00b7 Shop",
+      "provenance": "actionReply"
+     }
+    },
+    "outcome": "ok",
+    "errorCode": null,
+    "durationMs": 420,
+    "resultDigest": null,
+    "afterStop": false,
+    "afterTurnEnd": false,
+    "afterRecoveryRequired": false,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 50,
+   "at": 1792030050000,
+   "kind": "actionObserved",
+   "data": {
+    "v": 1,
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+    "actionId": "a8888888-8888-4888-8888-888888888888",
+    "verdict": "uncertain",
+    "evaluator": "none",
+    "basis": "none",
+    "detail": null,
+    "possiblyExecuted": true,
+    "check": null,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 51,
+   "at": 1792030051000,
+   "kind": "tool",
+   "data": {
+    "completed": true,
+    "toolCallId": "exec_1",
+    "actionIds": [
+     "a7777777-7777-4777-8777-777777777777",
+     "a8888888-8888-4888-8888-888888888888"
+    ],
+    "item": {
+     "toolCallId": "exec_1",
+     "title": "execute",
+     "kind": "other",
+     "status": "completed",
+     "rawInput": {
+      "code": "await tools.chrome_use.chrome_use_read({})"
+     },
+     "rawOutput": {
+      "metadata": {
+       "toolCalls": [
+        {
+         "tool": "chrome_use.chrome_use_read",
+         "status": "completed"
+        },
+        {
+         "tool": "chrome_use.chrome_use_click",
+         "status": "completed"
+        }
+       ],
+       "error": true
+      }
+     },
+     "name": "execute"
+    },
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19"
+   }
+  },
+  {
+   "sequence": 52,
+   "at": 1792030052000,
+   "kind": "progressStalled",
+   "data": {
+    "v": 1,
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+    "kind": "repeatedIdenticalResult",
+    "count": 4,
+    "quietMs": null,
+    "actionIds": [
+     "a7777777-7777-4777-8777-777777777777"
+    ],
+    "sourceSequences": [
+     44,
+     49
+    ],
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 53,
+   "at": 1792030053000,
+   "kind": "contextCompacted",
+   "data": {
+    "v": 1,
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+    "backend": "opencode",
+    "trigger": null,
+    "sourceSequences": [
+     42,
+     50
+    ],
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 54,
+   "at": 1792030054000,
+   "kind": "tool",
+   "data": {
+    "completed": false,
+    "toolCallId": "exec_2",
+    "actionIds": [],
+    "item": {
+     "toolCallId": "exec_2",
+     "title": "execute",
+     "status": "in_progress",
+     "rawOutput": {
+      "metadata": {
+       "toolCalls": [
+        {
+         "tool": "chrome_use.chrome_use_click",
+         "status": "running"
+        }
+       ]
+      }
+     },
+     "name": "execute"
+    },
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19"
+   }
+  },
+  {
+   "sequence": 55,
+   "at": 1792030055000,
+   "kind": "controlChanged",
+   "data": {
+    "v": 1,
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+    "from": "agent",
+    "to": "stopRequested",
+    "reason": "stop",
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 56,
+   "at": 1792030056000,
+   "kind": "processUnconfirmed",
+   "data": {
+    "error": "Backend did not confirm exit",
+    "processExitConfirmed": false,
+    "processStarted": true,
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19"
+   }
+  },
+  {
+   "sequence": 57,
+   "at": 1792030057000,
+   "kind": "controlChanged",
+   "data": {
+    "v": 1,
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+    "from": "stopRequested",
+    "to": "unknown",
+    "reason": "processUnconfirmed",
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 58,
+   "at": 1792030058000,
+   "kind": "turnEnded",
+   "data": {
+    "v": 1,
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+    "generation": 3,
+    "outcome": "unknown",
+    "error": "Backend did not confirm exit",
+    "emptyAnswer": true,
+    "finalItemIds": [],
+    "sourceSequences": [
+     42,
+     55
+    ],
+    "openLeases": [],
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 59,
+   "at": 1792030059000,
+   "kind": "batchInterrupted",
+   "data": {
+    "v": 1,
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+    "outcome": "unknown",
+    "completed": [
+     "exec_1"
+    ],
+    "unresolved": [
+     {
+      "toolCallId": "exec_2",
+      "name": "execute",
+      "actionId": null,
+      "executed": "unknown"
+     }
+    ],
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 60,
+   "at": 1792030060000,
+   "kind": "taskAssessment",
+   "data": {
+    "v": 1,
+    "messageId": "2a6d9e14-8b57-4c3a-9f10-6e5d4c3b2a19",
+    "phase": "final",
+    "source": "host",
+    "status": "notChecked",
+    "declaredStatus": null,
+    "reason": "notAssessed",
+    "requirements": [],
+    "downgradedBecause": [],
+    "blocker": null,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 61,
+   "at": 1792030061000,
+   "kind": "browserActionTarget",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "generation": 3,
+    "actionId": "a9999999-9999-4999-8999-999999999999",
+    "tool": "chrome_use_click",
+    "toolClass": "act",
+    "requested": null,
+    "observed": {
+     "before": {
+      "chromeTabId": 1400,
+      "tabRef": "chrome-tab:1400",
+      "targetId": "T-B",
+      "url": "https://shop.example/checkout/step-2",
+      "title": "Checkout",
+      "provenance": "daemonState"
+     },
+     "after": {
+      "chromeTabId": 1400,
+      "tabRef": "chrome-tab:1400",
+      "targetId": "T-B",
+      "url": "https://shop.example/checkout/step-2",
+      "title": "Checkout",
+      "provenance": "daemonState"
+     }
+    },
+    "outcome": "ok",
+    "errorCode": null,
+    "durationMs": 420,
+    "resultDigest": null,
+    "afterStop": true,
+    "afterTurnEnd": true,
+    "afterRecoveryRequired": false,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 62,
+   "at": 1792030062000,
+   "kind": "actionObserved",
+   "data": {
+    "v": 1,
+    "messageId": "7c0e5a92-1d34-4f6b-9a8e-3b2c1d0e9f81",
+    "actionId": "a9999999-9999-4999-8999-999999999999",
+    "verdict": "uncertain",
+    "evaluator": "none",
+    "basis": "none",
+    "detail": null,
+    "possiblyExecuted": true,
+    "check": null,
+    "privacyClass": "public"
+   }
+  }
+ ]
+}
