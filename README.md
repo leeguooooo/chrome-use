@@ -35,6 +35,30 @@
 > 📖 **Deep dive:** [Letting an agent click into cross-origin iframes: how chrome-use solves the hardest part of browser control](https://blog.leeguoo.com/en/posts/chrome-use-cross-origin-iframe/)
 > · [Driving your already-logged-in real Chrome (CreepJS scores it 0% bot), 中文](https://blog.leeguoo.com/zh/posts/chrome-use-drive-your-real-chrome/)
 
+<table>
+<tr><td align="center" width="960">
+
+**Advertisement · Available**
+
+### Advertise here
+
+Showcase your product here and support ongoing maintenance.
+
+[**Ask about advertising**](mailto:leeguoooo@gmail.com?subject=chrome-use%20advertising%20inquiry&body=Product%20%2F%20company%20name%3A%0AProduct%20URL%3A%0APlacement%20%28README%20%2F%20website%20%2F%20both%29%3A%0ACampaign%20dates%3A%0ABudget%20%2F%20currency%20%28optional%29%3A%0A) · leeguoooo@gmail.com
+
+</td></tr>
+</table>
+
+## Paid setup and project sponsorship
+
+Need help connecting your agent to your signed-in Chrome or setting up a browser workflow? Email us with your environment, the workflow and expected result, and where you are stuck. We review feasibility and agree on scope, acceptance criteria and a quote before work starts.
+
+[**Ask about paid setup**](mailto:leeguoooo@gmail.com?subject=chrome-use%20paid%20setup%20inquiry&body=Target%20website%20or%20app%20%28public%20information%20only%29%3A%0AWorkflow%20and%20expected%20result%3A%0AEnvironment%20%28OS%20%2F%20browser%20%2F%20agent%20client%29%3A%0ACurrent%20blocker%3A%0ABudget%20%2F%20currency%20%28optional%29%3A%0APreferred%20timeline%3A%0A) · [Discuss sponsorship](mailto:leeguoooo@gmail.com?subject=chrome-use%20sponsorship&body=I%20would%20like%20to%20support%20ongoing%20maintenance.%0APreferred%20contribution%20%28one-time%20or%20monthly%29%3A%0AAmount%20%2F%20currency%3A%0A) · leeguoooo@gmail.com
+
+Want to support ongoing maintenance? Email us to discuss a one-time or recurring contribution.
+
+Community bug reports and feature requests remain welcome on GitHub. Please keep credentials and private account data out of inquiries.
+
 ## Give your AI agent the browser you already live in
 
 **No fresh Chrome. No re-login. No "are you a robot?" walls.**

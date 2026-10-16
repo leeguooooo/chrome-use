@@ -35,6 +35,30 @@
 > 📖 **深入原理：** [让 agent 点进跨域 iframe：chrome-use 如何解决浏览器控制里最难的一环（English）](https://blog.leeguoo.com/en/posts/chrome-use-cross-origin-iframe/)
 > · [让任何 AI Agent 直接驱动你已登录的真实 Chrome，CreepJS 给它打 0% bot](https://blog.leeguoo.com/zh/posts/chrome-use-drive-your-real-chrome/)
 
+<table>
+<tr><td align="center" width="960">
+
+**广告位 · 招租中**
+
+### 广告位招租
+
+在这里展示你的产品，支持项目持续维护。
+
+[**咨询广告合作**](mailto:leeguoooo@gmail.com?subject=chrome-use%20%E5%B9%BF%E5%91%8A%E5%90%88%E4%BD%9C&body=%E4%BA%A7%E5%93%81%20%2F%20%E5%85%AC%E5%8F%B8%E5%90%8D%E7%A7%B0%EF%BC%9A%0A%E4%BA%A7%E5%93%81%E9%93%BE%E6%8E%A5%EF%BC%9A%0A%E5%B8%8C%E6%9C%9B%E6%8A%95%E6%94%BE%E7%9A%84%E4%BD%8D%E7%BD%AE%EF%BC%88README%20%2F%20%E5%AE%98%E7%BD%91%20%2F%20%E4%B8%A4%E8%80%85%EF%BC%89%EF%BC%9A%0A%E6%8A%95%E6%94%BE%E6%97%B6%E9%97%B4%EF%BC%9A%0A%E9%A2%84%E7%AE%97%20%2F%20%E5%B8%81%E7%A7%8D%EF%BC%88%E5%8F%AF%E9%80%89%EF%BC%89%EF%BC%9A%0A) · leeguoooo@gmail.com
+
+</td></tr>
+</table>
+
+## 付费接入与项目赞助
+
+需要帮你把 agent 接到已登录的 Chrome，或跑通浏览器流程？ 发邮件说明设备环境、要跑通的流程和预期结果，以及目前卡在哪里。我们先评估可行性，再确认服务范围、验收方式和报价。
+
+[**咨询付费接入**](mailto:leeguoooo@gmail.com?subject=chrome-use%20%E4%BB%98%E8%B4%B9%E6%8E%A5%E5%85%A5%E5%92%A8%E8%AF%A2&body=%E7%9B%AE%E6%A0%87%E7%BD%91%E7%AB%99%E6%88%96%20App%EF%BC%88%E4%BB%85%E5%85%AC%E5%BC%80%E4%BF%A1%E6%81%AF%EF%BC%89%EF%BC%9A%0A%E8%A6%81%E8%B7%91%E9%80%9A%E7%9A%84%E6%B5%81%E7%A8%8B%E5%92%8C%E9%A2%84%E6%9C%9F%E7%BB%93%E6%9E%9C%EF%BC%9A%0A%E7%8E%AF%E5%A2%83%EF%BC%88OS%20%2F%20browser%20%2F%20agent%20client%EF%BC%89%EF%BC%9A%0A%E7%9B%AE%E5%89%8D%E5%8D%A1%E5%9C%A8%E5%93%AA%E9%87%8C%EF%BC%9A%0A%E9%A2%84%E7%AE%97%20%2F%20%E5%B8%81%E7%A7%8D%EF%BC%88%E5%8F%AF%E9%80%89%EF%BC%89%EF%BC%9A%0A%E6%9C%9F%E6%9C%9B%E6%97%B6%E9%97%B4%EF%BC%9A%0A) · [联系赞助维护](mailto:leeguoooo@gmail.com?subject=chrome-use%20%E8%B5%9E%E5%8A%A9%E7%BB%B4%E6%8A%A4&body=%E6%88%91%E6%83%B3%E6%94%AF%E6%8C%81%E9%A1%B9%E7%9B%AE%E6%8C%81%E7%BB%AD%E7%BB%B4%E6%8A%A4%E3%80%82%0A%E8%B5%9E%E5%8A%A9%E6%96%B9%E5%BC%8F%EF%BC%88%E4%B8%80%E6%AC%A1%E6%80%A7%E6%88%96%E6%8C%89%E6%9C%88%EF%BC%89%EF%BC%9A%0A%E9%87%91%E9%A2%9D%20%2F%20%E5%B8%81%E7%A7%8D%EF%BC%9A%0A) · leeguoooo@gmail.com
+
+想支持项目持续维护，也可以邮件联系，商量一次性或按月赞助。
+
+普通问题和功能建议仍可在 GitHub 提交。咨询时请勿附上密码、验证码或私人账号数据。
+
 ## 把你**已经登录好**的浏览器，交给你的 AI agent
 
 **不用开新 Chrome。不用重新登录。不用跟"你是不是机器人"较劲。**
