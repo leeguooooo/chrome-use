@@ -17,11 +17,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { startRig, cleanup, openTab, activate, EXT_ID } from './rig.mjs';
+import { startRig, cleanup, openTab, activate } from './rig.mjs';
 import { waitFor } from './lib.mjs';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
-const work = process.env.WORK || fs.mkdtempSync('/tmp/rp-');
+// Bindings store canonical folders (/tmp is /private/tmp on macOS).
+const work = fs.realpathSync(process.env.WORK || fs.mkdtempSync('/tmp/rp-'));
 const out = process.env.OUT || path.join(work, 'out');
 fs.mkdirSync(out, { recursive: true });
 const evidence = { work, hostBin: process.env.HOST_BIN, steps: [] };
@@ -81,14 +82,18 @@ evidence.chrome = rig.chromeVersion; evidence.extension = rig.extensionVersion;
 const A = rig.cdp, b = rig.browser;
 try {
   const site = await openTab(rig, rig.site + '/');
-  const win = await rig.ev('chrome.windows.getLastFocused()');
-  const opener = await A.openPage(`chrome-extension://${EXT_ID}/sidepanel.html?opener=1`);
-  await A.evaluate(opener.sid, `(() => { const b = document.createElement('button'); b.style = 'position:fixed;left:0;top:0;width:200px;height:80px;z-index:2147483647'; b.onclick = () => chrome.sidePanel.open({ windowId: ${win.id} }); document.body.append(b); return true; })()`);
-  await A.click(opener.sid, 50, 40);
-  const panelTarget = await waitFor(async () => (await b.send('Target.getTargets')).targetInfos.find(t => t.url.endsWith('/sidepanel.html')), { label: 'side panel' });
-  const ps = await A.attach(panelTarget.targetId);
-  await b.send('Target.closeTarget', { targetId: opener.targetId });
+  // The site tab's own panel, opened the way the toolbar button does (from
+  // a trusted click in a window of its own, so the tab stays active).
   await activate(rig, site);
+  const win = await rig.ev(`chrome.windows.create({ url: chrome.runtime.getURL('popup.html'), focused: true })`);
+  const opener = await waitFor(async () => (await b.send('Target.getTargets')).targetInfos.find(t => t.url.endsWith('/popup.html') && t.type === 'page'), { label: 'opener page' });
+  const osid = await A.attach(opener.targetId);
+  await waitFor(() => A.evaluate(osid, 'document.readyState === "complete"'), { label: 'opener load' });
+  await A.evaluate(osid, `(() => { const b = document.createElement('button'); b.style = 'position:fixed;left:0;top:0;width:200px;height:80px;z-index:2147483647'; b.onclick = () => { chrome.sidePanel.setOptions({ tabId: ${site.tabId}, path: 'sidepanel.html?tab=${site.tabId}', enabled: true }); chrome.sidePanel.open({ tabId: ${site.tabId} }); }; document.body.append(b); return true; })()`);
+  await A.click(osid, 50, 40);
+  const panelTarget = await waitFor(async () => (await b.send('Target.getTargets')).targetInfos.find(t => t.url.endsWith(`/sidepanel.html?tab=${site.tabId}`)), { timeout: 15000, label: 'side panel' });
+  await rig.ev(`chrome.windows.remove(${win.id})`);
+  const ps = await A.attach(panelTarget.targetId);
   const panel = expression => A.evaluate(ps, expression);
   const msg = (key, ...subs) => panel(`chrome.i18n.getMessage(${JSON.stringify(key)}, ${JSON.stringify(subs)})`);
   const shot = async name => { const s = await b.send('Page.captureScreenshot', { format: 'png' }, ps); fs.writeFileSync(path.join(out, `${name}.png`), Buffer.from(s.data, 'base64')); };
