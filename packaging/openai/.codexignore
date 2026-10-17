@@ -1,0 +1,7 @@
+# Keep local credentials and generated artifacts out of the directory package.
+.git/
+dist/
+.env
+.env.*
+*.p8
+*.p12

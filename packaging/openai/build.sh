@@ -16,8 +16,9 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/.codex-plugin" "$STAGE/assets" "$STAGE/skills/chrome-use" "$OUT"
 cp "$HERE/.codex-plugin/plugin.json" "$STAGE/.codex-plugin/"
 cp "$HERE/assets/logo.png" "$STAGE/assets/"
-cp "$HERE/SKILL.md" "$STAGE/skills/chrome-use/SKILL.md"
+cp "$HERE/skills/chrome-use/SKILL.md" "$STAGE/skills/chrome-use/SKILL.md"
 cp "$ROOT/LICENSE" "$STAGE/"
+cp "$HERE/README.md" "$HERE/SECURITY.md" "$HERE/.codexignore" "$STAGE/"
 
 ZIP="$OUT/chrome-use-$VERSION.zip"
 rm -f "$ZIP"
