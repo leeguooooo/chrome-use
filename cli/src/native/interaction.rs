@@ -3610,7 +3610,7 @@ pub async fn scroll(
     if let Some(sel) = selector_or_ref {
         let (object_id, effective_session_id) =
             resolve_element_object_id(client, session_id, ref_map, sel, iframe_sessions).await?;
-        let js = "function(dx, dy) { const x = this.scrollLeft, y = this.scrollTop; this.scrollBy({left: dx, top: dy, behavior: 'instant'}); return dx === 0 && dy === 0 || this.scrollLeft !== x || this.scrollTop !== y; }".to_string();
+        let js = "function(dx, dy) { const x = this.scrollLeft, y = this.scrollTop; this.scrollBy({left: dx, top: dy, behavior: 'instant'}); return this.scrollLeft !== x || this.scrollTop !== y; }".to_string();
         let reply = client
             .send_command_typed::<_, Value>(
                 "Runtime.callFunctionOn",
@@ -3637,7 +3637,7 @@ pub async fn scroll(
             .as_bool()
             .ok_or_else(|| "scroll position could not be verified".to_string())
     } else {
-        let js = format!("(() => {{ const x = scrollX, y = scrollY; window.scrollBy({{left: {}, top: {}, behavior: 'instant'}}); return ({} === 0 && {} === 0) || scrollX !== x || scrollY !== y; }})()", delta_x, delta_y, delta_x, delta_y);
+        let js = format!("(() => {{ const x = scrollX, y = scrollY; window.scrollBy({{left: {}, top: {}, behavior: 'instant'}}); return scrollX !== x || scrollY !== y; }})()", delta_x, delta_y);
         let reply = client
             .send_command_typed::<_, Value>(
                 "Runtime.evaluate",
