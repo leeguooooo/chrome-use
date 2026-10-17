@@ -14750,7 +14750,7 @@ async fn e2e_background_form_instant_scroll_and_trusted_pick() {
     <input id="combo" role="combobox" aria-controls="list" aria-autocomplete="list">
     <input type="hidden" name="country" value=""><input type="hidden" name="nonce" value="old">
     <div id="list" role="listbox" hidden><div role="option" id="option">Japan</div></div>
-    </form><div style="height:1200px"></div><script>
+    </form><div style="height:1200px"></div><div id="view-target">Target</div><script>
     combo.addEventListener('mousedown', e => { if(e.isTrusted) list.hidden=false; });
     option.addEventListener('mousedown', e => e.preventDefault());
     option.addEventListener('click', e => { if(!e.isTrusted) return;
@@ -14819,12 +14819,21 @@ async fn e2e_background_form_instant_scroll_and_trusted_pick() {
         json!(""),
     )
     .await;
+    assert_evaluate(
+        &mut state,
+        "before-view",
+        "document.querySelector('#view-target').getBoundingClientRect().top >= innerHeight",
+        json!(true),
+    )
+    .await;
     let view = Box::pin(execute_command(
-        &json!({"id":"v", "action":"scrollintoview", "selector":"#space"}),
+        &json!({"id":"v", "action":"scrollintoview", "selector":"#view-target"}),
         &mut state,
     ))
     .await;
     assert_success(&view);
+    assert_evaluate(&mut state, "after-view", "(() => { const r = document.querySelector('#view-target').getBoundingClientRect(); return r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth; })()", json!(true)).await;
+
     let _ = Box::pin(execute_command(
         &json!({"id":"c", "action":"close"}),
         &mut state,
