@@ -46,7 +46,7 @@
 
       <div class="du-title-row">
         <h1>交互操作</h1>
-      <p>自定义下拉框会先即时滚入视口，再用真实指针事件打开和选择。pick 未确认选中时返回 verified: false 和警告；选中后清空搜索框的控件会同时检查隐藏表单值。页面及容器使用即时滚动，位置未变化时返回 scrolled: false 和警告。</p>
+      <p>自定义下拉框会先即时滚入视口，再用真实指针事件打开和选择。pick 未确认选中时返回 verified: false 和警告；选中后清空搜索框时会报告隐藏表单字段的变化，但不会据此断言选中成功。页面及容器使用即时滚动，位置未变化时返回 scrolled: false 和警告。</p>
         <button class="du-copy-page" type="button" aria-label="复制页面">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
           <span class="du-copy-page-label">复制页面</span>

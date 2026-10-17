@@ -9283,7 +9283,8 @@ const PICK_DOM_CLICK_JS: &str = r#"function(opts, idx) {
 /// After the click: did the field take the option? Polls briefly for the
 /// field's value to match the option and for the list to close (or the option
 /// to be marked selected, or a hidden companion field to change), then
-/// reports what it saw.
+/// reports what it saw. Hidden fields are evidence only: unrelated nonce
+/// changes must never verify a choice after a widget clears its search text.
 fn pick_verify_function() -> String {
     format!(
         r#"async function(opts, idx, chosen, hiddenBefore) {{
@@ -9303,7 +9304,7 @@ fn pick_verify_function() -> String {
                     .filter(k => after[k] !== (hiddenBefore || {{}})[k])
                     .map(k => k + '=' + after[k]);
                 const valueOk = !!lv && (lv === lc || lv.includes(lc) || lc.includes(lv));
-                r = {{ value, closed, hiddenChanged, verified: (valueOk && closed) || (closed && hiddenChanged.length > 0) }};
+                r = {{ value, closed, hiddenChanged, verified: valueOk && closed }};
                 if (r.verified || Date.now() > deadline) break;
                 await new Promise(res => setTimeout(res, 100));
             }}

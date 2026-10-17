@@ -3427,7 +3427,8 @@ Use Cases:
 chrome-use scroll - Scroll the page
 
 Page/container scrolling is instant even with CSS smooth scrolling.
-An unchanged position returns scrolled: false with a warning.
+Page and --selector scrolling return scrolled: false with a warning when the position is unchanged.
+The --at / --frame wheel modes dispatch input without measuring movement.
 
 Usage: chrome-use scroll [direction] [amount] [options]
 

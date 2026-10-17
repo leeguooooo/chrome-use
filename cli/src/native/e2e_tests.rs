@@ -14748,13 +14748,15 @@ async fn e2e_background_form_instant_scroll_and_trusted_pick() {
     #space {height:2400px} #list[hidden] {display:none}</style>
     <div id="space"></div><form>
     <input id="combo" role="combobox" aria-controls="list" aria-autocomplete="list">
-    <input type="hidden" name="country" value="">
+    <input type="hidden" name="country" value=""><input type="hidden" name="nonce" value="old">
     <div id="list" role="listbox" hidden><div role="option" id="option">Japan</div></div>
     </form><div style="height:1200px"></div><script>
     combo.addEventListener('mousedown', e => { if(e.isTrusted) list.hidden=false; });
     option.addEventListener('mousedown', e => e.preventDefault());
     option.addEventListener('click', e => { if(!e.isTrusted) return;
-      document.querySelector('[name=country]').value='JP'; combo.value=''; list.hidden=true;
+      if (window.rejectChoice) document.querySelector('[name=nonce]').value='new';
+      else document.querySelector('[name=country]').value='JP';
+      combo.value=''; list.hidden=true;
     });</script>"##
         .to_string();
     let (port, server) = spawn_html_server(page).await;
@@ -14783,12 +14785,38 @@ async fn e2e_background_form_instant_scroll_and_trusted_pick() {
     .await;
     assert_success(&picked);
     assert_eq!(get_data(&picked)["dispatch"], "pointer", "{picked}");
-    assert_eq!(get_data(&picked)["verified"], true, "{picked}");
+    assert_eq!(get_data(&picked)["verified"], false, "{picked}");
+    assert!(get_data(&picked)["warning"].as_str().is_some());
+    assert_eq!(get_data(&picked)["hiddenChanged"], json!(["country=JP"]));
     assert_evaluate(
         &mut state,
         "value",
         "document.querySelector('[name=country]').value",
         json!("JP"),
+    )
+    .await;
+    // A changed nonce on the same form is not proof that the choice took.
+    assert_evaluate(
+        &mut state,
+        "reject",
+        "window.rejectChoice=true; document.querySelector('[name=country]').value=''; true",
+        json!(true),
+    )
+    .await;
+    let rejected = Box::pin(execute_command(
+        &json!({"id":"reject-pick", "action":"pick", "selector":"#combo", "option":"Japan"}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&rejected);
+    assert_eq!(get_data(&rejected)["verified"], false, "{rejected}");
+    assert!(get_data(&rejected)["warning"].as_str().is_some());
+    assert_eq!(get_data(&rejected)["hiddenChanged"], json!(["nonce=new"]));
+    assert_evaluate(
+        &mut state,
+        "rejected-value",
+        "document.querySelector('[name=country]').value",
+        json!(""),
     )
     .await;
     let view = Box::pin(execute_command(

@@ -6,7 +6,7 @@
 ### Bug Fixes
 
 - **Background form controls scroll instantly before pointer input.** CSS smooth scrolling no longer leaves off-screen click targets in place. Page/container scrolling reports an unchanged position, and `scrollintoview` checks that its target reached the viewport (#656).
-- **Custom comboboxes open and select with trusted pointer input.** `pick` handles widgets that ignore synthetic mouse events, verifies hidden form values when the search input clears, and warns about unconfirmed choices. An empty observation no longer claims the action legitimately did nothing (#656).
+- **Custom comboboxes open and select with trusted pointer input.** `pick` handles widgets that ignore synthetic mouse events, reports hidden form changes when the search input clears, and warns about unconfirmed choices. An empty observation no longer claims the action legitimately did nothing (#656).
 
 ### Contributors
 
