@@ -521,8 +521,8 @@ async fn point_misses_element(
 }
 
 /// Best-effort scroll-into-view before a coordinate click. Uses Chrome's
-/// `scrollIntoViewIfNeeded` (only scrolls when not already fully visible),
-/// falling back to centered `scrollIntoView`. Resolution failures are ignored —
+/// instant nearest-edge scrolling, including in background tabs with CSS smooth
+/// scrolling. Resolution failures are ignored —
 /// the subsequent resolve will surface a real "not found" error.
 async fn scroll_into_view_if_needed(
     client: &CdpClient,
@@ -570,8 +570,7 @@ async fn scroll_into_view_if_needed(
 /// which also covers a `<fieldset disabled>` ancestor), `"aria-disabled"`
 /// when it or an ancestor declares `aria-disabled="true"`, `""` otherwise.
 const SCROLL_AND_PROBE_DISABLED_JS: &str = "function() { try { \
-        if (typeof this.scrollIntoViewIfNeeded === 'function') { this.scrollIntoViewIfNeeded(true); } \
-        else { this.scrollIntoView({ block: 'center', inline: 'center' }); } \
+        this.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' }); \
     } catch (e) {} \
     try { \
         if (this.matches && this.matches(':disabled')) return 'disabled'; \
@@ -940,8 +939,7 @@ const HOVER_HIT_POINT_JS: &str = r#"function() {
   if (!win) return { error: 'detached' };
   if (!el.isConnected) return { error: 'detached' };
   try {
-    if (typeof el.scrollIntoViewIfNeeded === 'function') el.scrollIntoViewIfNeeded(true);
-    else el.scrollIntoView({ block: 'center', inline: 'center' });
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
   } catch (e) {}
   const describe = (n) => {
     if (!n || !n.tagName) return 'nothing';
@@ -3599,6 +3597,7 @@ pub async fn dispatch_single_key_with_modifiers(
     Ok(())
 }
 
+/// Scroll instantly and report whether the position changed (false at a boundary).
 pub async fn scroll(
     client: &CdpClient,
     session_id: &str,
@@ -3607,12 +3606,12 @@ pub async fn scroll(
     delta_x: f64,
     delta_y: f64,
     iframe_sessions: &HashMap<String, String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if let Some(sel) = selector_or_ref {
         let (object_id, effective_session_id) =
             resolve_element_object_id(client, session_id, ref_map, sel, iframe_sessions).await?;
-        let js = "function(dx, dy) { this.scrollBy(dx, dy); }".to_string();
-        client
+        let js = "function(dx, dy) { const x = this.scrollLeft, y = this.scrollTop; this.scrollBy({left: dx, top: dy, behavior: 'instant'}); return dx === 0 && dy === 0 || this.scrollLeft !== x || this.scrollTop !== y; }".to_string();
+        let reply = client
             .send_command_typed::<_, Value>(
                 "Runtime.callFunctionOn",
                 &CallFunctionOnParams {
@@ -3634,9 +3633,12 @@ pub async fn scroll(
                 Some(&effective_session_id),
             )
             .await?;
+        reply["result"]["value"]
+            .as_bool()
+            .ok_or_else(|| "scroll position could not be verified".to_string())
     } else {
-        let js = format!("window.scrollBy({}, {})", delta_x, delta_y);
-        client
+        let js = format!("(() => {{ const x = scrollX, y = scrollY; window.scrollBy({{left: {}, top: {}, behavior: 'instant'}}); return ({} === 0 && {} === 0) || scrollX !== x || scrollY !== y; }})()", delta_x, delta_y, delta_x, delta_y);
+        let reply = client
             .send_command_typed::<_, Value>(
                 "Runtime.evaluate",
                 &EvaluateParams {
@@ -3647,8 +3649,10 @@ pub async fn scroll(
                 Some(session_id),
             )
             .await?;
+        reply["result"]["value"]
+            .as_bool()
+            .ok_or_else(|| "scroll position could not be verified".to_string())
     }
-    Ok(())
 }
 
 pub async fn select_option(
@@ -4551,12 +4555,12 @@ pub async fn scroll_into_view(
     )
     .await?;
 
-    client
+    let reply = client
         .send_command_typed::<_, Value>(
             "Runtime.callFunctionOn",
             &CallFunctionOnParams {
                 function_declaration:
-                    "function() { this.scrollIntoView({ block: 'center', inline: 'center' }); }"
+                    "function() { this.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); const r = this.getBoundingClientRect(); const w = this.ownerDocument.defaultView; return r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < w.innerHeight && r.left < w.innerWidth; }"
                         .to_string(),
                 object_id: Some(object_id),
                 arguments: None,
@@ -4567,6 +4571,9 @@ pub async fn scroll_into_view(
         )
         .await?;
 
+    if reply["result"]["value"].as_bool() != Some(true) {
+        return Err("scrollintoview could not bring the target into the viewport".to_string());
+    }
     Ok(())
 }
 

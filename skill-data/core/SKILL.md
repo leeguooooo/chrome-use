@@ -6,6 +6,8 @@ allowed-tools: Bash(chrome-use:*), Bash(npx chrome-use:*)
 
 # chrome-use core
 
+Custom comboboxes are scrolled into view instantly and opened with trusted pointer input. `pick` reports `verified: false` with a warning when the choice is unconfirmed. Page/container scrolling uses instant movement even with CSS smooth scrolling; an unchanged position returns `scrolled: false` with a warning.
+
 Read and act on Chrome's live accessibility state through short `@eN` refs.
 This page holds the rules and the routing; load one reference from the table
 at the end only when the task or a symptom needs it.

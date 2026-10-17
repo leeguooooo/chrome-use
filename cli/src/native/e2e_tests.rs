@@ -14738,3 +14738,61 @@ ed.addEventListener('input',()=>setTimeout(()=>{
     );
     assert_success(&run(&mut state, json!({"id":"13","action":"close"})).await);
 }
+
+/// #656: smooth pages must scroll before trusted input; a react-select-style
+/// input may clear its search text while committing a hidden form value.
+#[tokio::test]
+#[ignore]
+async fn e2e_background_form_instant_scroll_and_trusted_pick() {
+    let page = r##"<!doctype html><style>html {scroll-behavior:smooth} body {margin:0}
+    #space {height:2400px} #list[hidden] {display:none}</style>
+    <div id="space"></div><form>
+    <input id="combo" role="combobox" aria-controls="list" aria-autocomplete="list">
+    <input type="hidden" name="country" value="">
+    <div id="list" role="listbox" hidden><div role="option" id="option">Japan</div></div>
+    </form><div style="height:1200px"></div><script>
+    combo.addEventListener('mousedown', e => { if(e.isTrusted) list.hidden=false; });
+    option.addEventListener('mousedown', e => e.preventDefault());
+    option.addEventListener('click', e => { if(!e.isTrusted) return;
+      document.querySelector('[name=country]').value='JP'; combo.value=''; list.hidden=true;
+    });</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let scroll = Box::pin(execute_command(
+        &json!({"id":"s", "action":"scroll", "direction":"down", "amount":500}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&scroll);
+    assert_eq!(get_data(&scroll)["scrolled"], true);
+    assert_evaluate(&mut state, "pos", "scrollY === 500", json!(true)).await;
+    let picked = Box::pin(execute_command(
+        &json!({"id":"p", "action":"pick", "selector":"#combo", "option":"Japan"}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&picked);
+    assert_eq!(get_data(&picked)["dispatch"], "pointer", "{picked}");
+    assert_eq!(get_data(&picked)["verified"], true, "{picked}");
+    assert_evaluate(
+        &mut state,
+        "value",
+        "document.querySelector('[name=country]').value",
+        json!("JP"),
+    )
+    .await;
+    let view = Box::pin(execute_command(
+        &json!({"id":"v", "action":"scrollintoview", "selector":"#space"}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&view);
+    let _ = Box::pin(execute_command(
+        &json!({"id":"c", "action":"close"}),
+        &mut state,
+    ))
+    .await;
+    server.abort();
+}

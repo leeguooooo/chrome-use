@@ -4109,7 +4109,7 @@ pub fn unchanged_note(
         return "the target is outside the viewport. The action was still dispatched to it, but                 a page that acts on visibility may have ignored it — `scroll` it into view and                 repeat if nothing happened."
             .to_string();
     }
-    "the target is present, enabled and unobstructed — this action legitimately changed nothing      visible, or its result has not arrived yet. Do NOT treat an empty delta as failure; re-read      before repeating anything."
+    "the target is present, enabled and unobstructed — no visible result was observed. The action may have had no visible effect, may have been ignored, or its result has not arrived yet. Do NOT treat an empty delta as failure; re-read      before repeating anything."
         .to_string()
 }
 
@@ -4782,7 +4782,7 @@ mod tests {
         // The case that matters most: everything is fine, so an empty delta is
         // NOT evidence of failure.
         let fine = unchanged_note(false, true, true, None, false);
-        assert!(fine.contains("legitimately changed nothing"), "{fine}");
+        assert!(fine.contains("no visible result was observed"), "{fine}");
         assert!(
             fine.contains("Do NOT treat an empty delta as failure"),
             "{fine}"

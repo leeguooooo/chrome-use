@@ -3108,6 +3108,9 @@ chrome-use pick - Choose an option in any combobox, including autocomplete field
 Usage: chrome-use pick <selector|@ref> --option "<text>"
        chrome-use pick <selector|@ref> "<text>"
 
+Custom controls scroll instantly into view and open with trusted pointer input.
+An unconfirmed choice reports verified: false with a warning.
+
 Native <select>: selects the matching option. Custom combobox (ARIA listbox,
 react-select, portal menus): opens it, waits for the option, clicks it.
 Autocomplete / type-to-search field (an input with role=combobox,
@@ -3423,6 +3426,9 @@ Use Cases:
             r##"
 chrome-use scroll - Scroll the page
 
+Page/container scrolling is instant even with CSS smooth scrolling.
+An unchanged position returns scrolled: false with a warning.
+
 Usage: chrome-use scroll [direction] [amount] [options]
 
 Scrolls the page or a specific element in the specified direction.
@@ -3475,6 +3481,9 @@ Examples:
         "scrollintoview" | "scrollinto" => {
             r##"
 chrome-use scrollintoview - Scroll element into view
+
+Uses instant scrolling even with CSS smooth scrolling; errors if the target
+stays outside the viewport.
 
 Usage: chrome-use scrollintoview <selector>
 

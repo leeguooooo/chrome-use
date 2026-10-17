@@ -49,6 +49,7 @@ Showcase your product here and support ongoing maintenance.
 </td></tr>
 </table>
 
+
 ## Paid setup and project sponsorship
 
 Need help connecting your agent to your signed-in Chrome or setting up a browser workflow? Email us with your environment, the workflow and expected result, and where you are stuck. We review feasibility and agree on scope, acceptance criteria and a quote before work starts.
@@ -274,6 +275,8 @@ Free for 7 days, then **US$4.99 one-time for up to 3 Macs**. Notarized `.dmg`; m
 <br clear="all">
 
 ## Usage
+
+Custom comboboxes are scrolled into view instantly and opened with trusted pointer input. `pick` reports `verified: false` with a warning when the choice is unconfirmed. Page/container scrolling uses instant movement even with CSS smooth scrolling; an unchanged position returns `scrolled: false` with a warning.
 
 A wait-condition timeout alone does not diagnose a browser connection failure. `wait --text` matches a case-sensitive substring: use the actual page wording, and do not wait again after the requested receipt is already visible.
 

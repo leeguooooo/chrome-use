@@ -1,5 +1,7 @@
 # Interacting
 
+Custom comboboxes are scrolled into view instantly and opened with trusted pointer input. `pick` reports `verified: false` with a warning when the choice is unconfirmed. Page/container scrolling uses instant movement even with CSS smooth scrolling; an unchanged position returns `scrolled: false` with a warning.
+
 ## Ordinary actions
 
 Choose refs from the live page; the numbers below are examples.

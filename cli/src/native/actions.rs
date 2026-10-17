@@ -9220,7 +9220,7 @@ const PICK_JS_PRELUDE: &str = r#"
     };
 "#;
 
-/// Open (optionally) and poll for option candidates. Resolves once a
+/// Poll for option candidates after a trusted click or typing. Resolves once a
 /// candidate containing `want` is visible and the list stopped changing
 /// between two polls (an async suggestion list refines as results land), or
 /// at the deadline. Also reports whether the target is a type-to-search
@@ -9242,11 +9242,6 @@ fn pick_collect_function() -> String {
                 t.getAttribute('role') === 'listbox' || t.querySelector('[role=option]'));
             const typeahead = editable && (ac === 'list' || ac === 'both' || role === 'combobox' || ownsListbox);
 
-            if (open) {{
-                const fire = (n, t) => n.dispatchEvent(new MouseEvent(t, {{ bubbles: true, cancelable: true, view: window }}));
-                (el.focus && el.focus());
-                ['pointerdown', 'mousedown', 'mouseup', 'click'].forEach(t => fire(el, t));
-            }}
             // An empty type-to-search field rarely lists anything on open, so
             // don't spend the full wait there before typing.
             const deadline = Date.now() + (open && typeahead ? Math.min(waitMs, 700) : waitMs);
@@ -9280,7 +9275,7 @@ const PICK_DOM_CLICK_JS: &str = r#"function(opts, idx) {
     const opt = opts && opts[idx];
     if (!opt || !opt.isConnected) return false;
     const fire = t => opt.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
-    (opt.scrollIntoView && opt.scrollIntoView({ block: 'center' }));
+    (opt.scrollIntoView && opt.scrollIntoView({ block: 'center', behavior: 'instant' }));
     ['pointermove', 'pointerover', 'mouseover', 'pointerdown', 'mousedown', 'mouseup', 'click'].forEach(fire);
     return true;
 }"#;
@@ -9308,7 +9303,7 @@ fn pick_verify_function() -> String {
                     .filter(k => after[k] !== (hiddenBefore || {{}})[k])
                     .map(k => k + '=' + after[k]);
                 const valueOk = !!lv && (lv === lc || lv.includes(lc) || lc.includes(lv));
-                r = {{ value, closed, hiddenChanged, verified: valueOk && (closed || hiddenChanged.length > 0) }};
+                r = {{ value, closed, hiddenChanged, verified: (valueOk && closed) || (closed && hiddenChanged.length > 0) }};
                 if (r.verified || Date.now() > deadline) break;
                 await new Promise(res => setTimeout(res, 100));
             }}
@@ -9626,6 +9621,20 @@ async fn pick_inner(
         ));
     }
 
+    // Custom widgets can require trusted pointer input to mount their menu.
+    // Scroll instantly before placing that click, even in a hidden smooth page.
+    interaction::click_reporting(
+        &mgr.client,
+        &session_id,
+        &state.ref_map,
+        selector,
+        "left",
+        1,
+        &state.iframe_sessions,
+        true,
+    )
+    .await?;
+
     // Custom widget: open it and look for the option.
     *held = Some(effective_session_id.clone());
     let (opened, opts) = pick_collect(
@@ -9642,14 +9651,22 @@ async fn pick_inner(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     if let Some(idx) = pick_best_option(option, &texts) {
-        pick_call(
-            &mgr.client,
-            &effective_session_id,
-            &object_id,
-            PICK_DOM_CLICK_JS.to_string(),
-            vec![pick_obj(&opts), pick_val(json!(idx))],
-        )
-        .await?;
+        let pin = pick_option_pin(&mgr.client, &effective_session_id, &opts, idx).await?;
+        let outcome = super::element::SEMANTIC_PIN
+            .scope(
+                pin,
+                interaction::click_reporting(
+                    &mgr.client,
+                    &session_id,
+                    &state.ref_map,
+                    super::element::PINNED_SELECTOR,
+                    "left",
+                    1,
+                    &state.iframe_sessions,
+                    true,
+                ),
+            )
+            .await?;
         let verify = pick_call(
             &mgr.client,
             &effective_session_id,
@@ -9662,16 +9679,19 @@ async fn pick_inner(
                 pick_val(opened["hidden"].clone()),
             ],
         )
-        .await
-        .unwrap_or(Value::Null);
+        .await?;
+        let verified = verify["verified"].as_bool().unwrap_or(false);
         let mut out = json!({
-            "picked": texts[idx],
-            "selector": selector,
-            "kind": "custom",
-            "via": "open",
+            "picked": texts[idx], "selector": selector, "kind": "custom", "via": "open",
+            "dispatch": outcome.dispatch, "verified": verified,
         });
         if let Some(h) = pick_hidden_changed(&verify) {
             out["hiddenChanged"] = h;
+        }
+        if !verified {
+            out["warning"] = json!("clicked the option, but the field did not confirm the choice; check with snapshot -i / get value before continuing");
+        } else if let Some(w) = outcome.warning {
+            out["warning"] = json!(w);
         }
         return Ok(out);
     }
@@ -10074,7 +10094,7 @@ async fn handle_scroll(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     // An explicit `--selector` keeps the precise element-scroll path (scrollBy on
     // the resolved node, same-origin only).
     if let Some(sel) = selector {
-        interaction::scroll(
+        let moved = interaction::scroll(
             &mgr.client,
             &session_id,
             &state.ref_map,
@@ -10084,7 +10104,9 @@ async fn handle_scroll(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
             &state.iframe_sessions,
         )
         .await?;
-        return Ok(json!({ "scrolled": true, "via": "selector" }));
+        return Ok(
+            json!({ "scrolled": moved, "via": "selector", "warning": if moved { Value::Null } else { json!("scroll did not move: boundary reached or target cannot scroll") } }),
+        );
     }
 
     // `--at x,y` / `--frame n`: dispatch a real (isTrusted) wheel at a viewport
@@ -10110,7 +10132,7 @@ async fn handle_scroll(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     // viewport centre is NOT a dependable substitute (it no-ops on some pages,
     // e.g. headless), so the wheel stays opt-in via `--at`/`--frame` for the
     // cross-origin-iframe case (issue #36).
-    interaction::scroll(
+    let moved = interaction::scroll(
         &mgr.client,
         &session_id,
         &state.ref_map,
@@ -10120,7 +10142,9 @@ async fn handle_scroll(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         &state.iframe_sessions,
     )
     .await?;
-    Ok(json!({ "scrolled": true, "via": "page" }))
+    Ok(
+        json!({ "scrolled": moved, "via": "page", "warning": if moved { Value::Null } else { json!("scroll did not move: boundary reached or page cannot scroll") } }),
+    )
 }
 
 /// Step budget for `scroll --until` when `--max-steps` isn't given.
