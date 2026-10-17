@@ -9814,7 +9814,7 @@ async fn pick_inner(
         let value = verify.get("value").and_then(|v| v.as_str()).unwrap_or("");
         let mut w = format!(
             "clicked suggestion {chosen:?}, but the field did not confirm the choice (value now \
-             {value:?}, suggestion list still open). Check with `snapshot -i` / `get value {selector}`"
+             {value:?}). Check with `snapshot -i` / `get value {selector}`"
         );
         if let Some(cw) = click_warning {
             w.push_str(&format!("; {cw}"));
