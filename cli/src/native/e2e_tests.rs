@@ -14768,6 +14768,14 @@ async fn e2e_background_form_instant_scroll_and_trusted_pick() {
     assert_success(&scroll);
     assert_eq!(get_data(&scroll)["scrolled"], true);
     assert_evaluate(&mut state, "pos", "scrollY === 500", json!(true)).await;
+    let unchanged = Box::pin(execute_command(
+        &json!({"id":"zero", "action":"scroll", "x":0, "y":0}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&unchanged);
+    assert_eq!(get_data(&unchanged)["scrolled"], false);
+    assert!(get_data(&unchanged)["warning"].as_str().is_some());
     let picked = Box::pin(execute_command(
         &json!({"id":"p", "action":"pick", "selector":"#combo", "option":"Japan"}),
         &mut state,
