@@ -39,30 +39,52 @@ def ev(c, kind, data):
     c["updated"] = now()
 
 
-def initial(demo):
+# Demo content per language, for App Store screenshots (--demo-lang).
+DEMO = {
+    "en": {"weekly": "Weekly report", "ask": "Write this week's report: open Jira and list the tickets I closed",
+           "answer": "You closed 7 tickets this week:\n• PAY-812 Refund callback timeout\n• PAY-815 Exchange-rate cache\n• WEB-301 Login page flicker\n…\nShall I turn this into a draft report?",
+           "more": "Yes, and add my commits", "inbox": "Clean up my inbox", "deploy": "Check the deploy dashboard",
+           "deploy_preview": "Login wall on the dashboard", "schedule": "Daily standup summary", "elevated": "Release with full access"},
+    "zh-Hans": {"weekly": "周报", "ask": "整理本周的周报：打开 Jira 看看我这周关了哪些单",
+                "answer": "本周你关闭了 7 个单：\n• PAY-812 退款回调超时\n• PAY-815 汇率缓存\n• WEB-301 登录页闪烁\n……\n要我把它整理成周报草稿吗？",
+                "more": "好，把提交记录也加上", "inbox": "清理收件箱", "deploy": "检查部署看板",
+                "deploy_preview": "看板需要登录", "schedule": "每日站会摘要", "elevated": "以完全访问发布版本"},
+    "zh-Hant": {"weekly": "週報", "ask": "整理本週的週報：打開 Jira 看看我這週關了哪些單",
+                "answer": "本週你關閉了 7 張單：\n• PAY-812 退款回呼逾時\n• PAY-815 匯率快取\n• WEB-301 登入頁閃爍\n……\n要我把它整理成週報草稿嗎？",
+                "more": "好，把提交紀錄也加上", "inbox": "整理收件匣", "deploy": "檢查部署儀表板",
+                "deploy_preview": "儀表板需要登入", "schedule": "每日站會摘要", "elevated": "以完整存取發布版本"},
+    "ja": {"weekly": "週次レポート", "ask": "今週のレポートをまとめて：Jira で今週クローズしたチケットを確認して",
+           "answer": "今週クローズしたチケットは 7 件です：\n• PAY-812 返金コールバックのタイムアウト\n• PAY-815 為替レートのキャッシュ\n• WEB-301 ログイン画面のちらつき\n…\nレポートの下書きにまとめますか？",
+           "more": "はい、コミット履歴も追加して", "inbox": "受信トレイを整理", "deploy": "デプロイダッシュボードを確認",
+           "deploy_preview": "ダッシュボードにログインが必要", "schedule": "毎日のスタンドアップ要約", "elevated": "フルアクセスでリリース"},
+}
+
+
+def initial(demo, lang="en"):
     t = now()
-    weekly = {"id": WEEKLY, "agentId": "claude", "title": "Weekly report", "phase": "idle", "updated": t - 5000, "events": []}
+    text = DEMO.get(lang, DEMO["en"]) if demo else DEMO["en"]
+    weekly = {"id": WEEKLY, "agentId": "claude", "title": "Weekly report" if not demo else text["weekly"], "phase": "idle", "updated": t - 5000, "events": []}
     # Created on the desktop with full access: a phone needs `mobile access <id> full`.
-    elevated = {"id": ELEVATED, "agentId": "claude", "title": "Release with full access", "phase": "idle", "updated": t - 7200_000,
+    elevated = {"id": ELEVATED, "agentId": "claude", "title": text["elevated"], "phase": "idle", "updated": t - 7200_000,
                 "events": [], "fullAccess": True}
     convs = {WEEKLY: weekly, ELEVATED: elevated}
     if demo:
         m = "1b4e28ba-2fa1-41d2-883f-0016d3cca427"
-        ev(weekly, "user", {"messageId": m, "text": "整理本周的周报：打开 Jira 看看我这周关了哪些单"})
+        ev(weekly, "user", {"messageId": m, "text": text["ask"]})
         ev(weekly, "turnStarted", {"messageId": m, "generation": 1})
         ev(weekly, "tool", {"messageId": m, "item": {"id": "t1", "tool": "mcp__chrome_use__chrome_use_open", "input": {"url": "https://jira.example.com/issues?filter=closed-this-week"}}, "completed": True})
         ev(weekly, "tool", {"messageId": m, "item": {"id": "t2", "tool": "mcp__chrome_use__chrome_use_read", "input": {"ref": "issue-table"}}, "completed": True})
-        ev(weekly, "textFinal", {"messageId": m, "itemId": "a1", "part": 0, "text": "本周你关闭了 7 个单：\n• PAY-812 退款回调超时\n• PAY-815 汇率缓存\n• WEB-301 登录页闪烁\n……\n要我把它整理成周报草稿发到飞书吗？"})
+        ev(weekly, "textFinal", {"messageId": m, "itemId": "a1", "part": 0, "text": text["answer"]})
         m2 = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b"
-        ev(weekly, "user", {"messageId": m2, "text": "好，把提交记录也加上"})
+        ev(weekly, "user", {"messageId": m2, "text": text["more"]})
         ev(weekly, "turnStarted", {"messageId": m2, "generation": 2})
         ev(weekly, "request", {"requestId": 7, "method": "can_use_tool", "generation": 2, "requestRevision": 1,
                                "params": {"tool_name": "Bash", "input": {"command": "git log --since=monday --author=leo --oneline"}}})
         weekly["phase"] = "waitingInput"
-        inbox = {"id": INBOX, "agentId": "codex", "title": "Clean up my inbox", "phase": "running", "updated": t - 1000, "events": []}
-        ev(inbox, "user", {"messageId": str(uuid.uuid4()), "text": "Clean up my inbox"})
-        deploy = {"id": DEPLOY, "agentId": "claude", "title": "Check the deploy dashboard", "phase": "failed", "updated": t - 3600_000, "events": [],
-                  "lastTurn": {"messageId": "x", "outcome": "failed", "ended": t - 3600_000, "preview": "Login wall on the dashboard"}}
+        inbox = {"id": INBOX, "agentId": "codex", "title": text["inbox"], "phase": "running", "updated": t - 1000, "events": []}
+        ev(inbox, "user", {"messageId": str(uuid.uuid4()), "text": text["inbox"]})
+        deploy = {"id": DEPLOY, "agentId": "claude", "title": text["deploy"], "phase": "failed", "updated": t - 3600_000, "events": [],
+                  "lastTurn": {"messageId": "x", "outcome": "failed", "ended": t - 3600_000, "preview": text["deploy_preview"]}}
         convs[INBOX] = inbox
         convs[DEPLOY] = deploy
     return convs
@@ -73,10 +95,12 @@ def main():
     ap.add_argument("--relay", required=True)
     ap.add_argument("--binary", required=True)
     ap.add_argument("--demo", action="store_true")
+    ap.add_argument("--demo-lang", default="en")
     a = ap.parse_args()
     binary_hash = hashlib.sha256(open(a.binary, "rb").read()).hexdigest()
-    state = {"convs": initial(a.demo), "schedules": [
-        {"id": SCHEDULE, "name": "每日站会摘要", "prompt": "Summarize standup", "agentId": "claude", "rule": {"kind": "daily", "time": "09:30"},
+    schedule_name = DEMO.get(a.demo_lang, DEMO["en"])["schedule"] if a.demo else "Daily standup summary"
+    state = {"convs": initial(a.demo, a.demo_lang), "schedules": [
+        {"id": SCHEDULE, "name": schedule_name, "prompt": "Summarize standup", "agentId": "claude", "rule": {"kind": "daily", "time": "09:30"},
          "enabled": True, "nextRun": now() + 3600_000, "lastResult": "completed", "lastChat": WEEKLY, "finishedAt": now() - 86400_000}]}
     out_lock = threading.Lock()
 

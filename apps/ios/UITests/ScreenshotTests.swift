@@ -65,9 +65,10 @@ final class ScreenshotTests: XCTestCase {
         pair.tap()
         allowNotifications()
 
-        let weekly = app.staticTexts["Weekly report"]
+        // The demo content is in the walkthrough's language; the waiting
+        // conversation's row is found by its phase.
+        let weekly = app.buttons["phase-waitingInput"]
         XCTAssertTrue(weekly.waitForExistence(timeout: 40), "conversation list after pairing")
-        XCTAssertTrue(element("phase-waitingInput").waitForExistence(timeout: 20))
         snap("03-conversations")
 
         weekly.tap()
@@ -92,7 +93,7 @@ final class ScreenshotTests: XCTestCase {
         app.buttons["cancel"].tap()
 
         app.buttons["schedules"].tap()
-        XCTAssertTrue(app.staticTexts["每日站会摘要"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.switches.firstMatch.waitForExistence(timeout: 30), "a schedule with its toggle")
         snap("07-schedules")
         back()
         back()
