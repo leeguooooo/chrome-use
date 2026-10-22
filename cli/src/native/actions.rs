@@ -2894,7 +2894,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             // is blocked no page events arrive, so the cache still names the page
             // where the block began even after the tab has moved on (#357).
             if super::browser::is_debugger_access_denied(&e) {
-                msg.push_str(&super::browser::foreign_frame_hint());
+                msg.push_str(&super::browser::foreign_frame_hint(&e));
                 let summary = match state.browser.as_mut() {
                     Some(mgr) => mgr.live_pinned_tab_summary().await,
                     None => None,
