@@ -94,7 +94,7 @@ export async function sendTabCommand(tabId, method, params, childSessionId, deps
       deps.health?.mark(tabId)
       throw e
     }
-    if (isDebuggerAccessDenied(e)) throw debuggerAccessError(e)
+    if (isDebuggerAccessDenied(e)) throw debuggerAccessError(e, await deps.foreignFrameExtensions?.() ?? [])
     if (childSessionId) throw e
     const msg = String((e && e.message) || e)
     if (!/detached|not attached|target.*(closed|gone)|no target|cannot access|frame.*detached/i.test(msg)) {

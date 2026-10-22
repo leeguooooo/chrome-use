@@ -70,7 +70,7 @@ import {
 import { createAgentTabQueue } from './agent-tab-queue.js';
 import { createAttachmentHealth, sendTabCommand } from './tab-command.js';
 import { HostConnectionState, HostReconnectScheduler } from './host-connection.js';
-import { isDebuggerAccessDenied, debuggerAccessError } from './debugger-access.js';
+import { isDebuggerAccessDenied, debuggerAccessError, foreignFrameExtensions } from './debugger-access.js';
 import {
   IDLE_DETACH_DEFAULT_SECS,
   idleDetachMsFrom,
@@ -1274,7 +1274,7 @@ async function recoverSessionTab(sessionId) {
         if (tabs.has(tabId)) return tabId;
       } catch (e) {
         if (isRelayTimeoutError(e)) throw e;
-        if (isDebuggerAccessDenied(e)) throw debuggerAccessError(e);
+        if (isDebuggerAccessDenied(e)) throw debuggerAccessError(e, await listForeignFrameExtensions());
         // Permanently off-limits (other extension's page etc.) — stop the tabId
         // fast-path and let the stable-targetId path below try a different tab.
         if (isPermanentAttachError(e)) break;
@@ -1309,7 +1309,7 @@ async function recoverSessionTab(sessionId) {
           }
         } catch (e) {
           if (isRelayTimeoutError(e)) throw e;
-          if (isDebuggerAccessDenied(e)) throw debuggerAccessError(e);
+          if (isDebuggerAccessDenied(e)) throw debuggerAccessError(e, await listForeignFrameExtensions());
           // fall through to the stable-targetId path below
         }
       }
@@ -1350,7 +1350,7 @@ async function recoverSessionTab(sessionId) {
             }
           } catch (e) {
             if (isRelayTimeoutError(e)) throw e;
-            if (isDebuggerAccessDenied(e)) throw debuggerAccessError(e);
+            if (isDebuggerAccessDenied(e)) throw debuggerAccessError(e, await listForeignFrameExtensions());
             // The tab hosting our target is a page we can never attach to — no
             // amount of waiting fixes that, so give up the recovery now.
             if (isPermanentAttachError(e)) return null;
@@ -1395,6 +1395,15 @@ async function trackedDebuggerCommand(target, method, params) {
 
 const attachmentHealth = createAttachmentHealth();
 
+// Best effort: a failed lookup leaves the access error as it was.
+async function listForeignFrameExtensions() {
+  const targets = await withRelayTimeout(
+    chrome.debugger.getTargets(),
+    'chrome.debugger.getTargets'
+  ).catch(() => []);
+  return foreignFrameExtensions(targets, chrome.runtime.id);
+}
+
 function tabCommandDependencies() {
   return {
     health: attachmentHealth,
@@ -1410,6 +1419,7 @@ function tabCommandDependencies() {
     detachTab,
     recoverSessionTab,
     reportTabIfGone,
+    foreignFrameExtensions: listForeignFrameExtensions,
   };
 }
 
