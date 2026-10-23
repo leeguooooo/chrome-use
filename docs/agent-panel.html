@@ -73,7 +73,7 @@
         <li><strong>Pi：</strong>没有逐次审批机制。<strong>Browser only</strong> 只开放 <code>chrome_use</code> MCP 工具，不开放 shell 或文件工具；完整权限模式使用 CLI 的完整工具集。</li>
       </ul>
       <h2 id="queue">排队、停止与继续</h2>
-      <p>历史显示流式回复，工具行可展开查看。工具返回不代表浏览器任务成功。回复中发送的消息进入队列，失败或中断后需点 <strong>Resume queue</strong> 恢复。<strong>Stop &amp; send</strong> 或 Ctrl/Cmd+Enter 等确认终止或进程退出后才优先发送，普通队列仍暂停。重连只读回历史，不重发。</p>
+      <p>历史显示流式回复，工具行可展开查看。工具返回不代表浏览器任务成功。回复中发送的消息进入队列，失败或中断后需点 <strong>Resume queue</strong> 恢复。 失败或中断后，新发的消息会在原会话中使用原模型立即开始；旧队列仍暂停，需手动恢复。<strong>Stop &amp; send</strong> 或 Ctrl/Cmd+Enter 等确认终止或进程退出后才优先发送，普通队列仍暂停。重连只读回历史，不重发。</p>
       <h2 id="history">历史与删除</h2>
       <p>删除前先停止回复，再点顶部删除按钮并确认。删除内容包括面板历史和该会话的浏览器 session，以及 Codex rollout 文件、Claude 会话文件及目录、通过 <code>session/delete</code> 删除的 OpenCode 历史，或会话文件夹内的 Pi 会话文件。Codex 的 SQLite 缓存不改动。清理失败或标签页关闭未确认时会提示。</p>
       <h2 id="resume">继续终端里的会话（/resume）</h2>

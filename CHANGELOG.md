@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.261
+## 1.5.262
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.83.
+
+### Bug Fixes
+
+- **Continue a conversation after a model capacity error.** Sending a new message after a failed or interrupted turn now starts it in the same conversation with the same model, instead of leaving it in the paused queue. Older queued messages stay paused until explicitly resumed; failed tasks are not automatically replayed.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.261
+
 Works with extension ab-connect 0.5.82.
 
 ### Bug Fixes
@@ -12,7 +25,6 @@ Works with extension ab-connect 0.5.82.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.260
 

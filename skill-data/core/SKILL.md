@@ -19,7 +19,9 @@ never replay it automatically. Isolation and journal details: [connection](refer
 
 The toolbar side panel supports Codex (app-server), Claude Code (stream-json),
 OpenCode (ACP) and Pi (JSONL RPC) when advertised by the native host. It uses
-local CLI logins and adds no page content script. Each chat has its own browser
+local CLI logins and adds no page content script. After a failed or interrupted
+turn, a new message starts in the same chat/model; older queued messages stay
+paused until explicitly resumed. Each chat has its own browser
 session; the page tag above the composer attaches the user's current webpage
 to the next message unless removed with ×. Settings opens connection options.
 Full access automatically handles supported approvals for Codex/Claude/OpenCode;

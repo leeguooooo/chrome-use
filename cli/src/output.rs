@@ -6649,6 +6649,8 @@ Setup:
                              unconfirmed and never automatically replayed.
                              Stop & send (Ctrl/Cmd+Enter) waits for confirmed stop
                              before priority sending; ordinary queues remain paused.
+                             New panel messages after failure/interruption start in the
+                             same chat/model; older queued messages remain paused.
                              Read CLI models fetches bounded CLI metadata without
                              a prompt; account reports do not verify model access.
                              Metadata probes use owned process groups or Windows jobs.

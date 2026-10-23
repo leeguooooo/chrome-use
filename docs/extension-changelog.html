@@ -51,6 +51,7 @@
 
       <h2>0.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v0.5.83</strong>（未发布）： 修复模型容量不足或回复中断后，重新发送消息仍卡在暂停队列的问题。新消息继续原会话和模型，旧队列需手动恢复。贡献者：@leeguooooo。</li>
         <li><strong>v0.5.82</strong>（未发布）：设置页新增「隐身模式」开关，默认开启。开启时不管光标自己的设置如何都不画 agent 光标，光标开关变灰并说明原因；状态里新增 <code>stealthMode</code>。贡献者：@leeguooooo。</li>
         <li><strong>v0.5.81</strong>（未发布）：Chrome 恢复上次的标签页时，把恢复出来的 AI 标签组里的标签移出分组，Chrome 保存的这些组随之删除，不关闭任何标签（#692）。贡献者：@leeguooooo。</li>
         <li><strong>v0.5.80</strong>（未发布）：CLI 升级后旧的 <code>__nm-host</code> 还在跑时，先在空闲时重连一次再判断 CLI 是否太旧，不再误报「请重新安装」（#684）。贡献者：@Jerryx333。</li>
