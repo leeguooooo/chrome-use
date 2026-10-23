@@ -657,23 +657,21 @@ fn both_cli_protocols_keep_conversations_alive_across_native_host_disconnects() 
             json!({"conversationId":id,"messageId":queued_id,"expectedText":"queued-after-failure"}),
         );
         assert!(stale["error"].is_string());
-        let discard = uuid::Uuid::new_v4().to_string();
+        let fresh = uuid::Uuid::new_v4().to_string();
         panel_reply(
             &mut host,
             &rx,
-            "queue-discard",
+            "send-after-failure",
             "conversationSend",
-            json!({"conversationId":id,"messageId":discard,"text":"discard-before-running"}),
+            json!({"conversationId":id,"messageId":fresh,"text":"continue-after-failure"}),
         );
-        let removed = panel_reply(
-            &mut host,
-            &rx,
-            "queue-remove",
-            "conversationQueueRemove",
-            json!({"conversationId":id,"messageId":discard,"expectedText":"discard-before-running"}),
-        );
-        assert_eq!(removed["result"]["queueChange"]["kind"], "removed");
-        let before_resume = conversation_poll(&mut host, &rx, &id, "failed");
+        let before_resume = conversation_poll(&mut host, &rx, &id, "idle");
+        assert_eq!(before_resume["conversation"]["queuePaused"], true);
+        assert!(before_resume["journal"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["kind"] == "textDelta" && event["data"]["messageId"] == fresh));
         assert_eq!(before_resume["queuedMessages"].as_array().unwrap().len(), 1);
         assert_eq!(
             before_resume["queuedMessages"][0]["text"],
@@ -696,7 +694,7 @@ fn both_cli_protocols_keep_conversations_alive_across_native_host_disconnects() 
             .filter_map(|event| event["data"]["text"].as_str())
             .collect();
         assert!(output.contains("synthetic reply: edited-after-failure"));
-        assert!(!output.contains("synthetic reply: discard-before-running"));
+        assert!(output.contains("synthetic reply: continue-after-failure"));
         let busy_id = uuid::Uuid::new_v4().to_string();
         panel_reply(
             &mut host,
