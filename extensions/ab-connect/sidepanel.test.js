@@ -1394,13 +1394,13 @@ for (const phase of ['failed', 'interrupted', 'idle']) {
     const f = await fixture({
       conversationList: () => ({ success: true, result: { conversations: [paused] } }),
       conversationRead: () => ({ success: true, result: { conversation: paused, journal: { events: [], cursor: 0, more: false } } }),
-      conversationSendDirect: () => ({ success: true, result: { conversation: { ...paused, phase: 'running' } } }),
+      conversationSend: () => ({ success: true, result: { conversation: { ...paused, phase: 'running' } } }),
     }, { ab_panel_conversation: 'a' });
     f.nodes.get('message').value = 'continue';
     f.nodes.get('composer').fire('submit'); await settle(); await settle();
     const sends = f.calls.filter(call => ['conversationSend', 'conversationSendDirect'].includes(call.operation));
     assert.equal(sends.length, 1);
-    assert.equal(sends[0].operation, 'conversationSendDirect');
+    assert.equal(sends[0].operation, 'conversationSend');
     assert.equal(sends[0].params.conversationId, 'a');
     assert.equal(sends[0].params.text, 'continue');
     assert.ok(!f.calls.some(call => ['conversationCreate', 'conversationResume'].includes(call.operation)));

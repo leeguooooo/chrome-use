@@ -226,7 +226,7 @@ test('forking selects the new conversation; a fork links back to the original', 
 test('the record toggle sends record: true for one message, only when the host supports recording', async () => {
   for (const recording of [1, undefined]) {
     const sent = [];
-    const f = await panel({ support: { ...turnSupport, recording }, conversation: { ...turnsJournal.conversation, phase: 'idle', control: 'stopped', queuePaused: false }, events: [], overrides: { conversationSend: params => { sent.push(params); return { success: true, result: { schemaVersion: 1, conversation: { ...turnsJournal.conversation, phase: 'running' }, message: { id: params.messageId, accepted: true, replayed: false } } }; } } });
+    const f = await panel({ support: { ...turnSupport, recording }, conversation: { ...turnsJournal.conversation, phase: 'idle', control: 'stopped' }, events: [], overrides: { conversationSend: params => { sent.push(params); return { success: true, result: { schemaVersion: 1, conversation: { ...turnsJournal.conversation, phase: 'running' }, message: { id: params.messageId, accepted: true, replayed: false } } }; } } });
     assert.equal(f.nodes.get('recordTaskLabel').hidden, !recording);
     f.nodes.get('recordTask').checked = true; f.nodes.get('message').value = 'record it';
     await f.panel.send();

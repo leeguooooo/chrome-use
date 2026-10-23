@@ -1240,9 +1240,6 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     // A built-in command, looked up before skills.
     const command = parseResumeCommand(nodes.message.value);
     if (command) { await openResume(command.query); return; }
-    // A fresh user message after a confirmed end is a new instruction.
-    // Send it ahead of the paused queue without replaying older work.
-    if (conversation?.queuePaused && !busyPhases.has(conversation.phase)) direct = true;
     if (direct && conversation?.directMessageId) throw new Error(t('panel_error_direct_waiting'));
     const typed = nodes.message.value, chosen = chosenSkill(typed);
     const images = [...(imageDrafts.get(selected) || [])];
