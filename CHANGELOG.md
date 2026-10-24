@@ -11,6 +11,7 @@ Works with extension ab-connect 0.5.85.
 
 ### Bug Fixes
 
+- **Confirm saved webpage cleanup.** Deleting a conversation waits for saved address cleanup, reports storage failures, and prevents late browser observations from recreating deleted records (#715).
 - **Clean up cursor artifacts when enabling stealth.** Enabling stealth or turning the cursor off removes existing cursor artifacts and reports unconfirmed cleanup (#712).
 - **Name extensions that block debugger access.** Debugger errors identify the extensions whose frames prevent access (#695).
 - **Report QR sign-in security verification.** A login waiting on a security-verification scan now explains that state (#694).
