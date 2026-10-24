@@ -25,7 +25,7 @@ const drafts = ['', ''];
 const output = id => document.getElementById(id);
 const bump = id => output(id).textContent = String(Number(output(id).textContent) + 1);
 for (const [index, field] of fields.entries()) {
-  field.addEventListener('focus', () => { active = index; output('calendar').hidden = false; if (mode !== 'tab' && field.dataset.locked !== 'true') queueMicrotask(() => { field.readOnly = false; }); });
+  field.addEventListener('focus', () => { active = index; output('calendar').hidden = false; if (mode === 'transparent') output('calendar').style.opacity = '0'; if (mode !== 'tab' && field.dataset.locked !== 'true') queueMicrotask(() => { field.readOnly = false; }); });
   field.addEventListener('input', event => {
     if (!event.isTrusted) { bump('untrusted'); return; }
     if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(field.value)) {

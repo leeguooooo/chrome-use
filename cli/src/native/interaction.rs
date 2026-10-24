@@ -2145,7 +2145,7 @@ async fn confirm_range_date_button(
 ) -> Result<(), String> {
     const FIND: &str = r#"function() {
         const doc = this.ownerDocument;
-        const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+        const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity || '1') > 0 && (!el.checkVisibility || el.checkVisibility({opacityProperty:true, visibilityProperty:true})); };
         if (doc.activeElement !== this) return {error:'date input lost focus before confirmation'};
         const panels = [...doc.querySelectorAll('.ant-picker-dropdown-range:not(.ant-picker-dropdown-hidden), .rc-picker-dropdown-range:not(.rc-picker-dropdown-hidden)')].filter(visible);
         if (!panels.length) return {retry:true};

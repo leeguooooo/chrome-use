@@ -114,3 +114,27 @@ async fn e2e_range_date_fill_commits_both_bounds_without_submitting_the_form() {
         server.abort();
     }
 }
+
+#[tokio::test]
+#[ignore]
+async fn e2e_range_date_fill_refuses_an_invisible_confirmation_popup() {
+    let (port, server) = spawn_html_server(
+        include_str!("test_fixtures/range_date_commit_probe.html")
+            .replace("__MODE__", "transparent"),
+    )
+    .await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let response = run_cmd(&mut state, json!({"id":"invisible", "action":"fill", "selector":"#start", "value":"2026-10-20 01:00:00"})).await;
+    assert_eq!(response["success"], false);
+    assert_eq!(
+        eval_in(&mut state, "document.getElementById('model').textContent").await,
+        "[\"\",\"\"]"
+    );
+    assert_eq!(
+        eval_in(&mut state, "document.getElementById('submits').textContent").await,
+        "0"
+    );
+    close_state(&mut state).await;
+    server.abort();
+}
