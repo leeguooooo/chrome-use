@@ -536,7 +536,7 @@ Don't take our word for it. Point your connected Chrome at the toughest public d
 - **[bot.sannysoft.com](https://bot.sannysoft.com)**: the classic automation-marker checklist
 - **[pixelscan.net](https://pixelscan.net/)** · **[iphey.com](https://iphey.com/)**: consistency & identity
 
-We deliberately **don't ship our own bot detector**. The strongest, most honest benchmark is the market's best detectors run against your real browser.
+Use independent detectors to evaluate fingerprints. [Botcheck](https://botcheck.leeguoo.com/) complements them with page-artifact and input-sequence checks; its pass does not replace Worker consistency or real-site acceptance.
 
 ## More in the docs
 

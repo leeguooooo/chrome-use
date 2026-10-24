@@ -492,7 +492,7 @@ CDP 的 IME 路径会产生 composition 事件，但 Chrome 可能将 `compositi
 - **[bot.sannysoft.com](https://bot.sannysoft.com)**：经典自动化特征清单
 - **[pixelscan.net](https://pixelscan.net/)** · **[iphey.com](https://iphey.com/)**：一致性与身份
 
-我们故意**不自带 bot 检测器**。最强、最诚实的基准，就是拿市面上最好的检测器去测你的真实浏览器。
+用独立检测器验证指纹。[Botcheck](https://botcheck.leeguoo.com/) 补充检查页面痕迹和输入序列；它的通过结果不能替代 Worker 一致性或真实站点验收。
 
 ## 文档里还有
 

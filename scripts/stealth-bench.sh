@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Re-run the public bot detectors that docs/stealth.html quotes, against a real
 # headed Chrome, and fail if any result regressed. Run it locally before a
-# release that touches stealth, the relay or launch flags: it drives a real
-# browser, so it cannot run in CI or on a remote build box.
+# release that touches stealth, the relay or launch flags. Use a headed display
+# on the SSH acceptance host; a virtual display is supported on Linux.
 #
 #   scripts/stealth-bench.sh              # --launch and relay (your real Chrome)
 #   scripts/stealth-bench.sh --launch     # isolated launched Chrome only
@@ -44,7 +44,7 @@ poll() {
   done
 }
 
-WORKER_LANGS='(async()=>{const w=new Worker(URL.createObjectURL(new Blob(["postMessage(navigator.languages)"])));const r=await new Promise(res=>w.onmessage=e=>res(e.data));return JSON.stringify(navigator.languages)===JSON.stringify(r)?"same "+r:"main "+navigator.languages+" / worker "+r})()'
+WORKER_LANGS='(async()=>{const u=URL.createObjectURL(new Blob(["postMessage(navigator.languages)"]));const w=new Worker(u);try{const r=await new Promise((res,rej)=>{w.onmessage=e=>res(e.data);w.onerror=()=>rej(new Error("worker probe failed"))});return JSON.stringify(navigator.languages)===JSON.stringify(r)?"same "+r:"main "+navigator.languages+" / worker "+r}finally{w.terminate();URL.revokeObjectURL(u)}})()'
 
 # Cloudflare's managed challenge: a real browser passes without interaction.
 # Cloudflare grows stricter and less consistent toward an IP that has solved
@@ -79,8 +79,8 @@ check_detectors() {
   cu "$s" "$m" open https://abrahamjuliot.github.io/creepjs/ >/dev/null
   out=$(poll "$s" "$m" '(()=>{const t=document.body.innerText;const h=t.match(/(\d+)% headless: [0-9a-f]{8}/),st=t.match(/(\d+)% stealth: [0-9a-f]{8}/);return h&&st?h[1]+" "+st[1]:""})()' 40)
   local headless=${out%% *} stealth=${out##* } max_stealth=0
-  # The launch path's srcdoc-iframe proxy trips CreepJS hasIframeProxy (documented ~20%).
-  [ "$m" = launch ] && [ "${AGENT_BROWSER_DISABLE_IFRAME_PROXY:-}" != 1 ] && max_stealth=20
+  # Default headed launches preserve native functions, just like relay mode.
+  # A detectable iframe proxy is a regression, not an accepted 20% allowance.
   if [ -z "$out" ]; then fail "creepjs" "did not finish"
   elif [ "$headless" -eq 0 ] && [ "$stealth" -le "$max_stealth" ]; then pass "creepjs" "${headless}% headless, ${stealth}% stealth"
   else fail "creepjs" "${headless}% headless, ${stealth}% stealth (max ${max_stealth}%)"; fi
