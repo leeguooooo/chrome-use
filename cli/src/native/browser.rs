@@ -2031,7 +2031,7 @@ fn foreign_frame_hint_with(error: &str, name_of: impl Fn(&str) -> Option<String>
         .collect();
     if !listed.is_empty() {
         let candidates = match listed.as_slice() {
-            [one] => format!("{one}"),
+            [one] => one.clone(),
             many => many.join(", "),
         };
         return format!(
