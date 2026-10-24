@@ -76,6 +76,7 @@ pub struct CdpClient {
     >,
     next_id: AtomicU64,
     pending: PendingMap,
+    pub(crate) quiet_worlds: Arc<crate::native::quiet_dom::WorldCache>,
     // Only the reader owns strong senders: a dead transport must close event
     // subscriptions even while a BrowserManager or inspector holds this client.
     event_tx: broadcast::WeakSender<CdpEvent>,
@@ -171,6 +172,8 @@ impl CdpClient {
         let (event_tx, _) = broadcast::channel(4096);
         let (raw_tx, _) = broadcast::channel(4096);
 
+        let quiet_worlds = Arc::new(crate::native::quiet_dom::WorldCache::default());
+        let reader_worlds = quiet_worlds.clone();
         let pending_clone = pending.clone();
         let event_tx_clone = event_tx.clone();
         let raw_tx_clone = raw_tx.clone();
@@ -253,6 +256,7 @@ impl CdpClient {
                         session_id: parsed.session_id.clone(),
                         received_at: std::time::Instant::now(),
                     };
+                    reader_worlds.on_event(&event);
                     let _ = event_tx_clone.send(event);
                 }
             }
@@ -289,6 +293,7 @@ impl CdpClient {
             ws_tx,
             next_id: AtomicU64::new(1),
             pending,
+            quiet_worlds,
             event_tx: event_tx.downgrade(),
             raw_tx: raw_tx.downgrade(),
             _reader_handle: reader_handle,
@@ -364,8 +369,10 @@ impl CdpClient {
         if main || named || std::env::var("AGENT_BROWSER_MAIN_WORLD").as_deref() == Ok("1") {
             return self.send_command_untimed(method, Some(p), session_id).await;
         }
-        let Ok(ctx) = Box::pin(crate::native::quiet_dom::world(self, session)).await else {
-            return self.send_command_untimed(method, Some(p), session_id).await;
+        let ctx = match Box::pin(crate::native::quiet_dom::world(self, session)).await {
+            Ok(ctx) => ctx,
+            Err(error) if error == crate::native::quiet_dom::WORLD_CHANGED => return Err(error),
+            Err(_) => return self.send_command_untimed(method, Some(p), session_id).await,
         };
         let mut quiet = p.clone();
         quiet[ctx_key] = Value::from(ctx);
@@ -391,6 +398,7 @@ impl CdpClient {
                             other => other,
                         }
                     }
+                    Err(error) if error == crate::native::quiet_dom::WORLD_CHANGED => Err(error),
                     Err(_) => self.send_command_untimed(method, Some(p), session_id).await,
                 }
             }
@@ -875,3 +883,7 @@ mod malformed_reply_tests {
         server.abort();
     }
 }
+
+#[cfg(test)]
+#[path = "quiet_world_tests.rs"]
+mod quiet_world_tests;

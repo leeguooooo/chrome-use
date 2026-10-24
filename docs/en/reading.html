@@ -64,6 +64,7 @@
       <p>Valid incremental snapshots return JSON <code>refs</code> only for nodes in the delta. A no-change delta has empty <code>refs</code>; the complete live session map and previously captured refs remain available. A full-tree fallback keeps the normal full-snapshot behavior.</p>
       <p><code>read --filter</code> uses literal, ASCII-case-insensitive text matching, not a regex. It prefers matching page headings with their descendants, then matching sections. Use <code>read --outline</code> to find a heading. <code>snapshot --filter</code> separately accepts a regex. <code>read --help</code> lists the reading options.</p>
       <h2>snapshot: a structured view of the page</h2>
+      <p>After cross-site navigation or reconnecting, page reads use the current document. If the page keeps changing while its private reading context is being recreated, the read fails explicitly; observe the page again before acting.</p>
       <p>
         <code>snapshot</code> generates the page structure from the accessibility tree. By default it prints the full tree (fairly verbose);
         in practice you almost always add <code>-i</code>: <span class="mark">keep only interactive elements</span>,

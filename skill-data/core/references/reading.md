@@ -1,5 +1,7 @@
 # Reading a page
 
+After cross-site navigation or reconnecting, page reads use the current document. If the page keeps changing while its private reading context is being recreated, the read fails explicitly; observe the page again before acting.
+
 ```bash
 chrome-use snapshot                    # full tree (verbose)
 chrome-use snapshot -i                 # interactive elements only (preferred)

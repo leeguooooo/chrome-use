@@ -19,13 +19,77 @@ use serde_json::{json, Value};
 
 use super::cdp::client::CdpClient;
 
-/// Per tab session: its isolated world's context, or None when one could
-/// not be made there (not a page, or the target refused), so a tab that has
-/// none is not asked again on every read.
-fn worlds() -> &'static Mutex<HashMap<String, Option<i64>>> {
-    static W: OnceLock<Mutex<HashMap<String, Option<i64>>>> = OnceLock::new();
-    W.get_or_init(|| Mutex::new(HashMap::new()))
+/// Worlds belong to a transport and document, not just a numeric context id.
+/// Chrome can reuse an id after navigation without reporting a missing context.
+#[derive(Default)]
+pub(crate) struct WorldCache(Mutex<WorldCacheState>);
+
+#[derive(Default)]
+struct WorldCacheState {
+    generation: u64,
+    worlds: HashMap<String, Option<i64>>,
 }
+
+impl WorldCache {
+    fn cached(&self, session: &str) -> (u64, Option<Option<i64>>) {
+        let state = self.0.lock().unwrap();
+        (state.generation, state.worlds.get(session).copied())
+    }
+
+    fn store(&self, session: &str, generation: u64, context: Option<i64>) -> bool {
+        let mut state = self.0.lock().unwrap();
+        if state.generation != generation {
+            return false;
+        }
+        state.worlds.insert(session.to_string(), context);
+        true
+    }
+
+    fn invalidate(&self, session: &str) {
+        let mut state = self.0.lock().unwrap();
+        state.generation = state.generation.wrapping_add(1);
+        state.worlds.remove(session);
+    }
+
+    /// Invalidate before broadcasting, so readers observing a commit cannot
+    /// reuse its predecessor's world. Child navigation keeps the main world.
+    pub(crate) fn on_event(&self, event: &super::cdp::types::CdpEvent) {
+        let session = if event.method == "Target.detachedFromTarget" {
+            event.params.get("sessionId").and_then(Value::as_str)
+        } else {
+            event.session_id.as_deref()
+        };
+        let Some(session) = session else { return };
+        let invalidate = match event.method.as_str() {
+            "Page.frameNavigated" => event
+                .params
+                .pointer("/frame/parentId")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty),
+            "Page.frameDetached"
+            | "Runtime.executionContextsCleared"
+            | "Inspector.detached"
+            | "Target.detachedFromTarget" => true,
+            "Runtime.executionContextDestroyed" => {
+                let (_, cached) = self.cached(session);
+                cached.flatten().is_some_and(|context| {
+                    event
+                        .params
+                        .get("executionContextId")
+                        .and_then(Value::as_i64)
+                        == Some(context)
+                })
+            }
+            _ => false,
+        };
+        if invalidate {
+            self.invalidate(session);
+        }
+    }
+}
+
+pub(crate) const WORLD_CHANGED: &str =
+    "Page changed while creating its isolated world; observe the page again";
 
 fn world_name() -> &'static str {
     static N: OnceLock<String> = OnceLock::new();
@@ -33,12 +97,19 @@ fn world_name() -> &'static str {
 }
 
 async fn create_world(client: &CdpClient, session_id: &str) -> Result<i64, String> {
-    let made = try_create_world(client, session_id).await;
-    worlds()
-        .lock()
-        .unwrap()
-        .insert(session_id.to_string(), made.as_ref().ok().copied());
-    made
+    // An event can arrive while createIsolatedWorld is in flight. Never
+    // repopulate a cache invalidated in the meantime with its old response.
+    for _ in 0..2 {
+        let (generation, _) = client.quiet_worlds.cached(session_id);
+        let made = try_create_world(client, session_id).await;
+        if client
+            .quiet_worlds
+            .store(session_id, generation, made.as_ref().ok().copied())
+        {
+            return made;
+        }
+    }
+    Err(WORLD_CHANGED.to_string())
 }
 
 async fn try_create_world(client: &CdpClient, session_id: &str) -> Result<i64, String> {
@@ -89,7 +160,7 @@ fn gone(e: &str) -> bool {
 
 /// The isolated world's context for this tab, created when there is none.
 pub async fn world(client: &CdpClient, session_id: &str) -> Result<i64, String> {
-    let cached = worlds().lock().unwrap().get(session_id).copied();
+    let (_, cached) = client.quiet_worlds.cached(session_id);
     match cached {
         Some(Some(ctx)) => Ok(ctx),
         Some(None) => Err("no isolated world on this target".to_string()),

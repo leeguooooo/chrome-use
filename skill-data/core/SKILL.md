@@ -6,6 +6,8 @@ allowed-tools: Bash(chrome-use:*), Bash(npx chrome-use:*)
 
 # chrome-use core
 
+After cross-site navigation or reconnecting, page reads use the current document. If the page keeps changing while its private reading context is being recreated, the read fails explicitly; observe the page again before acting.
+
 `mobile serve --bind IP:PORT` waits with exponential backoff (1–60s) if the selected IP is unavailable. Waiting is not readiness. It never broadens the bind address; after a network change, update the bind and phone endpoint explicitly. Other bind errors fail immediately.
 
 Custom comboboxes are scrolled into view instantly and opened with trusted pointer input. `pick` reports `verified: false` with a warning when the choice is unconfirmed. Page/container scrolling uses instant movement even with CSS smooth scrolling; an unchanged position returns `scrolled: false` with a warning.

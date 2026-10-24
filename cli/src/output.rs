@@ -4241,6 +4241,8 @@ chrome-use get - Retrieve information from elements or page
 Usage: chrome-use get <subcommand> [args]
 
 Retrieves various types of information from elements or the page.
+Reads follow the current document after navigation or reconnecting.
+If repeated navigation prevents a private context read, observe the page again.
 
 Subcommands:
   text [selector]            Element text; no selector = WHOLE PAGE, all frames

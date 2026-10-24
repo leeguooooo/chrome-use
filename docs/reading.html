@@ -64,6 +64,7 @@
       <p>有效增量快照的 JSON <code>refs</code> 只包含增量片段中的节点；无变化时为空。会话仍保留完整实时映射和先前引用；回退完整树时保持普通完整快照的行为。</p>
       <p><code>read --filter</code> 按字面文本匹配，忽略 ASCII 大小写，不支持正则；优先返回匹配标题及其子章节，否则按正文内容筛选章节。可先用 <code>read --outline</code> 找标题。<code>snapshot --filter</code> 则支持正则。读取选项见 <code>read --help</code>。</p>
       <h2>snapshot：结构化的页面视图</h2>
+      <p>跨站导航或重新连接后，页面读取使用当前文档。重建私有读取环境时，如果页面持续跳转，命令会明确失败；请重新观察页面再操作。</p>
       <p>
         <code>snapshot</code> 从可访问性树生成页面结构。默认输出完整树（较冗长），
         实际使用几乎总是加 <code>-i</code>：<span class="mark">只保留可交互元素</span>，
