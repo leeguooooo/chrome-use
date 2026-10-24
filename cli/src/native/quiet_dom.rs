@@ -26,28 +26,47 @@ pub(crate) struct WorldCache(Mutex<WorldCacheState>);
 
 #[derive(Default)]
 struct WorldCacheState {
+    next_generation: u64,
+    worlds: HashMap<String, WorldEntry>,
+}
+
+struct WorldEntry {
     generation: u64,
-    worlds: HashMap<String, Option<i64>>,
+    context: Option<Option<i64>>,
 }
 
 impl WorldCache {
     fn cached(&self, session: &str) -> (u64, Option<Option<i64>>) {
-        let state = self.0.lock().unwrap();
-        (state.generation, state.worlds.get(session).copied())
+        let mut state = self.0.lock().unwrap();
+        if let Some(entry) = state.worlds.get(session) {
+            return (entry.generation, entry.context);
+        }
+        let generation = state.next_generation;
+        state.next_generation = state.next_generation.wrapping_add(1);
+        state.worlds.insert(
+            session.to_string(),
+            WorldEntry {
+                generation,
+                context: None,
+            },
+        );
+        (generation, None)
     }
 
     fn store(&self, session: &str, generation: u64, context: Option<i64>) -> bool {
         let mut state = self.0.lock().unwrap();
-        if state.generation != generation {
+        let Some(entry) = state.worlds.get_mut(session) else {
+            return false;
+        };
+        if entry.generation != generation {
             return false;
         }
-        state.worlds.insert(session.to_string(), context);
+        entry.context = Some(context);
         true
     }
 
     fn invalidate(&self, session: &str) {
         let mut state = self.0.lock().unwrap();
-        state.generation = state.generation.wrapping_add(1);
         state.worlds.remove(session);
     }
 
@@ -71,14 +90,18 @@ impl WorldCache {
             | "Inspector.detached"
             | "Target.detachedFromTarget" => true,
             "Runtime.executionContextDestroyed" => {
-                let (_, cached) = self.cached(session);
-                cached.flatten().is_some_and(|context| {
-                    event
-                        .params
-                        .get("executionContextId")
-                        .and_then(Value::as_i64)
-                        == Some(context)
-                })
+                let state = self.0.lock().unwrap();
+                state
+                    .worlds
+                    .get(session)
+                    .and_then(|entry| entry.context.flatten())
+                    .is_some_and(|context| {
+                        event
+                            .params
+                            .get("executionContextId")
+                            .and_then(Value::as_i64)
+                            == Some(context)
+                    })
             }
             _ => false,
         };

@@ -12,6 +12,7 @@ async fn fixture(session: String, context: i64) -> (CdpClient, tokio::task::Join
         let mut creations = 0;
         let mut race_once = false;
         let mut race_always = false;
+        let mut race_other = false;
         let mut evaluations = 0;
         let mut refuse_first_world = false;
         while let Some(Ok(message)) = ws.next().await {
@@ -38,6 +39,13 @@ async fn fixture(session: String, context: i64) -> (CdpClient, tokio::task::Join
                         document += 1;
                         event = Some(
                             json!({"method":"Page.frameNavigated","sessionId":session,"params":{"frame":{"id":"main","loaderId":format!("loader-{document}"),"url":format!("https://fixture.test/{document}")}}}),
+                        );
+                        event_before_reply = true;
+                    }
+                    if race_other {
+                        race_other = false;
+                        event = Some(
+                            json!({"method":"Page.frameNavigated","sessionId":format!("{session}-other"),"params":{"frame":{"id":"other","loaderId":"other-loader"}}}),
                         );
                         event_before_reply = true;
                     }
@@ -69,6 +77,10 @@ async fn fixture(session: String, context: i64) -> (CdpClient, tokio::task::Join
                 }
                 "Test.raceAlways" => {
                     race_always = true;
+                    json!({})
+                }
+                "Test.otherSessionRace" => {
+                    race_other = true;
                     json!({})
                 }
                 "Test.refuseWorld" => {
@@ -254,6 +266,24 @@ async fn navigation_retries_a_world_previously_unavailable_on_the_session() {
     assert_eq!(read(&client, &session).await, "about:blank");
     event(&client, &session, "Page.navigate").await;
     assert_eq!(read(&client, &session).await, "current-1");
+    drop(client);
+    server.abort();
+}
+
+#[tokio::test]
+async fn another_tabs_navigation_does_not_discard_an_inflight_world() {
+    let session = uuid::Uuid::new_v4().to_string();
+    let (client, server) = fixture(session.clone(), 90).await;
+    client
+        .send_command("Test.otherSessionRace", None, Some(&session))
+        .await
+        .unwrap();
+    assert_eq!(read(&client, &session).await, "current-0");
+    let stats = client
+        .send_command("Test.stats", None, Some(&session))
+        .await
+        .unwrap();
+    assert_eq!(stats["creations"], 1);
     drop(client);
     server.abort();
 }
