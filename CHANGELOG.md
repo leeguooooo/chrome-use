@@ -7,7 +7,7 @@ Works with extension ab-connect 0.5.84.
 
 ### New Features
 
-- **Jump to a conversation's webpage.** Each conversation now has a separate window button beside its title. It focuses the last recorded agent tab and verifies the active tab and focused window. If the page was closed, it reopens its last HTTP(S) URL without sending a message or rerunning a task. The compact buttons support light and dark themes, keyboard focus and narrow panels.
+- **Jump to a conversation's webpage.** Each conversation now has a separate window button beside its title. It focuses the last recorded agent tab and verifies the active tab and focused window. If the page was closed, it reopens its last HTTP(S) URL without sending a message or rerunning a task. The compact buttons support light and dark themes, keyboard focus and narrow panels (#714).
 
 ### Bug Fixes
 
