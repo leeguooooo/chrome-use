@@ -48,18 +48,19 @@ pub fn build_stealth_script(mode: StealthMode, locale: Option<&str>) -> String {
     // natively via Chrome's --accept-lang switch instead.
     let locale = locale.unwrap_or("en-US");
     let config_line = format!(
-        r#"const __abStealth = {{ locale: "{}", languages: [], allowWebGLContextFallback: false, hideCanvas: {}, canvasSeed: {}, disableIframeProxy: {} }};"#,
+        r#"const __abStealth = {{ locale: "{}", languages: [], allowWebGLContextFallback: false, hideCanvas: {}, canvasSeed: {}, disableIframeProxy: {}, disableDevtoolShim: {} }};"#,
         locale,
         hide_canvas_enabled(),
         canvas_noise_seed(),
         disable_iframe_proxy_enabled(),
+        disable_devtool_shim_enabled(),
     );
 
     // NB: this prefix MUST match the first line of stealth_scripts.js verbatim,
     // otherwise the fallback below prepends a SECOND `const __abStealth`
     // declaration and the whole script dies with a redeclaration SyntaxError.
     let body = if let Some(rest) = STEALTH_SCRIPTS_RAW.strip_prefix(
-        r#"const __abStealth = { locale: "en-US", languages: ["en-US", "en"], allowWebGLContextFallback: false, hideCanvas: false, canvasSeed: 0, disableIframeProxy: false };"#,
+        r#"const __abStealth = { locale: "en-US", languages: ["en-US", "en"], allowWebGLContextFallback: false, hideCanvas: false, canvasSeed: 0, disableIframeProxy: false, disableDevtoolShim: false };"#,
     ) {
         format!("{}{}", config_line, rest)
     } else {
@@ -94,6 +95,16 @@ fn hide_canvas_enabled() -> bool {
 /// fingerprintable tell (CreepJS `hasIframeProxy` → ~20% stealth). Off by default
 /// (keep the patch); `AGENT_BROWSER_DISABLE_IFRAME_PROXY=1` drops it for a clean
 /// 0% CreepJS at the cost of that niche srcdoc-iframe masking.
+/// `AGENT_BROWSER_DISABLE_DEVTOOL_SHIM=1`: wrap querySelector so the
+/// disable-devtool library's auto-start selector never matches. Off by
+/// default (stealth first): the wrapper is a detectable non-native function.
+fn disable_devtool_shim_enabled() -> bool {
+    std::env::var("AGENT_BROWSER_DISABLE_DEVTOOL_SHIM")
+        .ok()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 fn disable_iframe_proxy_enabled() -> bool {
     std::env::var("AGENT_BROWSER_DISABLE_IFRAME_PROXY")
         .ok()

@@ -886,3 +886,36 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
         "pre-auth timeout"
     );
 }
+
+/// A missing interface must not make a service manager repeatedly respawn us,
+/// or produce the machine-readable readiness line before a socket exists.
+#[test]
+fn missing_bind_address_waits_in_one_process_without_ready_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let stdout = temp.path().join("stdout");
+    let stderr = temp.path().join("stderr");
+    let mut gateway = Gateway(
+        Command::new(test_binary())
+            .args(["mobile", "serve", "--bind", "192.0.2.123:17345"])
+            .env("CHROME_USE_RELAY_DIR", temp.path().join("relay"))
+            .env("HOME", temp.path())
+            .env("CHROME_USE_NO_UPDATE_CHECK", "1")
+            .stdout(std::fs::File::create(&stdout).unwrap())
+            .stderr(std::fs::File::create(&stderr).unwrap())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(gateway.0.try_wait().unwrap().is_none(), "gateway exited");
+        let errors = std::fs::read_to_string(&stderr).unwrap();
+        if errors.contains("retrying in 2s") {
+            assert!(errors.contains("192.0.2.123:17345"));
+            assert!(errors.contains("No listener is ready"));
+            break;
+        }
+        assert!(Instant::now() < deadline, "no retry diagnostic: {errors}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(std::fs::read(&stdout).unwrap().is_empty());
+}

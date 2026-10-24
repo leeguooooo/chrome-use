@@ -1,4 +1,4 @@
-const __abStealth = { locale: "en-US", languages: ["en-US", "en"], allowWebGLContextFallback: false, hideCanvas: false, canvasSeed: 0, disableIframeProxy: false };
+const __abStealth = { locale: "en-US", languages: ["en-US", "en"], allowWebGLContextFallback: false, hideCanvas: false, canvasSeed: 0, disableIframeProxy: false, disableDevtoolShim: false };
 // Redefine a navigator property on its PROTOTYPE (Navigator / WorkerNavigator),
 // the way real Chrome exposes these — as prototype getters, NOT instance own
 // properties. Adding an own property to the `navigator` instance is itself a
@@ -85,6 +85,11 @@ const __abRedefineNavProto = (name, getterImpl) => {
   }
 })();
 (function(){
+  // Off unless AGENT_BROWSER_DISABLE_DEVTOOL_SHIM=1: wrapping querySelector is
+  // itself visible to a page that checks its natives (botcheck, CreepJS), so
+  // stealth mode leaves them native and the shim is a compatibility opt-in
+  // for sites that use the disable-devtool library.
+  if (!__abStealth.disableDevtoolShim) return;
   if (typeof Document === 'undefined') return;
   const AUTO_SELECTOR = '[disable-devtool-auto]';
   const NEVER_MATCH_SELECTOR = 'script[__ab_disable_devtool_never_match__="1"]';
@@ -715,52 +720,6 @@ const __abRedefineNavProto = (name, getterImpl) => {
   };
   clean(document);
   if (document.documentElement) clean(document.documentElement);
-})();
-(function(){
-  if (typeof Error === 'undefined') return;
-  const sanitizeStack = (value) => {
-    if (typeof value !== 'string') return value;
-    let stack = value;
-    stack = stack.replace(/\/\/# sourceURL=.*$/gm, '');
-    stack = stack.replace(/__playwright_evaluation_script__/g, '<anonymous>');
-    stack = stack.replace(/__puppeteer_evaluation_script__/g, '<anonymous>');
-    stack = stack.replace(/__pw_evaluation_script__/g, '<anonymous>');
-    return stack;
-  };
-
-  const nativePrepare = Error.prepareStackTrace;
-  Error.prepareStackTrace = function(error, structuredStackTrace) {
-    let stackString;
-    if (typeof nativePrepare === 'function') {
-      stackString = nativePrepare.call(this, error, structuredStackTrace);
-    } else {
-      const name = error && error.name ? String(error.name) : 'Error';
-      const message = error && error.message ? String(error.message) : '';
-      const header = message ? name + ': ' + message : name;
-      const frames = Array.isArray(structuredStackTrace)
-        ? structuredStackTrace.map((frame) => '    at ' + String(frame))
-        : [];
-      stackString = [header].concat(frames).join('\n');
-    }
-    return sanitizeStack(String(stackString));
-  };
-
-  if (typeof Error.captureStackTrace === 'function') {
-    const nativeCapture = Error.captureStackTrace;
-    Error.captureStackTrace = function(targetObject, constructorOpt) {
-      nativeCapture.call(this, targetObject, constructorOpt);
-      try {
-        const stack = targetObject && targetObject.stack;
-        if (typeof stack === 'string') {
-          Object.defineProperty(targetObject, 'stack', {
-            value: sanitizeStack(stack),
-            configurable: true,
-            writable: true,
-          });
-        }
-      } catch {}
-    };
-  }
 })();
 (function(){
   const widthDelta = 12;

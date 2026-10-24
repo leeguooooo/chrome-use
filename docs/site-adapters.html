@@ -218,6 +218,8 @@
         <li>适配器在页面后台运行，由 chrome-use 轮询，不受扩展 relay 单条命令约 8 秒的限制。<code>--timeout &lt;300|90s|10m&gt;</code> 设定总时长，默认取适配器 <code>@meta.timeout</code>，没有则 120 秒。</li>
         <li><code>--until-done</code>：适配器返回 <code>status: "incomplete"</code> / <code>"uploading"</code>，或者页面跳转中断了这次运行时，自动重跑，直到完成或超时（默认 600 秒）。不加它就把这个状态原样返回，由你再跑一次同样的命令。</li>
         <li>适配器用 <code>args.progress(...)</code> 报告的进度会打印到 stderr，<code>--json</code> 里在 <code>progress</code> 字段，另有 <code>attempts</code> 和 <code>elapsedMs</code>。</li>
+        <li>写操作的适配器（发布、删除、评论、关注）用 <code>args.ui</code> 让 chrome-use 代为输入（1.5.253 起）：<code>args.ui.click(el)</code>、<code>hover</code>、<code>type(el, text, {clear})</code>、<code>press('Enter')</code>、<code>scroll(el | 像素)</code>。用的是真实的 CDP 输入事件（<code>isTrusted: true</code>），鼠标走曲线、按键间隔有变化，先用滚轮把元素滚进可见区，落点在元素内部；元素不见了、没有尺寸或被别的东西挡住时会报错并说明原因。适配器自己的 <code>el.click()</code> / <code>dispatchEvent</code> 是 <code>isTrusted: false</code>，网站能看出来。</li>
+        <li>在 <code>@meta</code> 里写 <code>"world": "isolated"</code>（1.5.259 起），适配器就在标签页的隔离环境里运行：DOM、cookie、存储和页面共享，但 JS 是自己的一套，页面包装过的 <code>querySelector</code>、<code>fetch</code> 等一次都不会被调用。只有页面 JS 才有的东西（React fiber 等元素私有属性、应用状态、页面自己带签名的 <code>fetch</code>）通过 <code>args.page(fn, ...args)</code> 拿：<code>fn</code> 按源码送到主环境、带 JSON 参数执行，返回 JSON 结果；它看不到适配器的变量，要传选择器而不是元素。旧版 chrome-use 会忽略这个字段、仍在主环境运行：<code>const page = args.page || ((fn, ...a) =&gt; fn(...a))</code>。</li>
       </ul>
 
       <div class="du-callout note">

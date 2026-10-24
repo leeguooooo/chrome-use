@@ -920,7 +920,7 @@
     "message": "Agent cursor"
   },
   "options_cursor_hint": {
-    "message": "A soft cursor + click ripple while chrome-use drives a tab. Off by default — the cursor is a visible DOM overlay, so leaving it off keeps automation invisible to the page (stealth)."
+    "message": "A soft cursor and click ripple while chrome-use drives a tab. It is drawn into the page, so it needs stealth mode off."
   },
   "options_cursor_lead": {
     "message": "Watch a friendly cursor glide where the agent clicks."
@@ -3626,5 +3626,20 @@
   },
   "panel_copy_failed": {
     "message": "Could not copy to the clipboard"
+  },
+  "options_stealth_heading": {
+    "message": "Stealth mode"
+  },
+  "options_stealth_lead": {
+    "message": "Leave nothing in the pages the agent drives that a site could see."
+  },
+  "options_stealth_name": {
+    "message": "Stealth mode"
+  },
+  "options_stealth_hint": {
+    "message": "On by default. chrome-use then adds nothing of its own to a page: no overlay, no page globals, real input events. Turn it off to use features that draw into pages, such as the agent cursor. Inspect & Ask still works either way, since you start it yourself."
+  },
+  "options_cursor_locked": {
+    "message": "Turn off stealth mode above to use it."
   }
 }

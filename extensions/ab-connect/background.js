@@ -24,6 +24,7 @@ import { InspectController } from './inspect-controller.js';
 import { configureAgentPanel } from './sidepanel-entry.js';
 import { cliSwitchPending, compareVersions } from './version-notice.js';
 import { t } from './i18n.js';
+import { STEALTH_DEFAULT, cursorAllowed } from './stealth-mode.js';
 import { extensionInstallIdentity } from './relay-identity.js';
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
 import {
@@ -835,6 +836,9 @@ async function handleTabGrantMessage(msg) {
 // ---- settings + UX (cursor overlay, connection notifications) -------------
 
 let cursorEnabled = false;
+// Settings the cursor depends on; cursorEnabled is derived from both, so the
+// overlay stays dark under stealth mode whatever ab_cursor says.
+const cursorSettings = { ab_cursor: false, ab_stealth: STEALTH_DEFAULT };
 let notifyEnabled = false;
 let lastConnected = null;
 // Idle auto-detach (issue #201): release chrome.debugger from a tab after this
@@ -848,9 +852,11 @@ let idleDetachMs = IDLE_DETACH_DEFAULT_SECS * 1000;
 function loadUxSettings() {
   try {
     chrome.storage.sync.get(
-      { ab_cursor: false, ab_notify: false, ab_idle_detach_secs: IDLE_DETACH_DEFAULT_SECS },
+      { ab_cursor: false, ab_stealth: STEALTH_DEFAULT, ab_notify: false, ab_idle_detach_secs: IDLE_DETACH_DEFAULT_SECS },
       (s) => {
-        cursorEnabled = !!s.ab_cursor;
+        cursorSettings.ab_cursor = !!s.ab_cursor;
+        cursorSettings.ab_stealth = s.ab_stealth;
+        cursorEnabled = cursorAllowed(cursorSettings);
         notifyEnabled = !!s.ab_notify;
         idleDetachMs = idleDetachMsFrom(s.ab_idle_detach_secs);
       }
@@ -861,7 +867,9 @@ loadUxSettings();
 try {
   chrome.storage.onChanged.addListener((ch, area) => {
     if (area !== 'sync') return;
-    if ('ab_cursor' in ch) cursorEnabled = !!ch.ab_cursor.newValue;
+    if ('ab_cursor' in ch) cursorSettings.ab_cursor = !!ch.ab_cursor.newValue;
+    if ('ab_stealth' in ch) cursorSettings.ab_stealth = ch.ab_stealth.newValue;
+    if ('ab_cursor' in ch || 'ab_stealth' in ch) cursorEnabled = cursorAllowed(cursorSettings);
     if ('ab_notify' in ch) notifyEnabled = !!ch.ab_notify.newValue;
     if ('ab_idle_detach_secs' in ch)
       idleDetachMs = idleDetachMsFrom(ch.ab_idle_detach_secs.newValue);
@@ -1849,6 +1857,7 @@ async function handleForwardCdpCommand(msg) {
       agentWindowRejected,
       tabGrants: (await tabGrants.load(), tabGrants.list().map(({ tabId, conversationId }) => ({ tabId, conversationId }))),
       cursorEnabled,
+      stealthMode: cursorSettings.ab_stealth !== false,
       notifyEnabled,
       idleDetachMs,
     };

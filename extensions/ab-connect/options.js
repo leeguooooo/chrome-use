@@ -8,18 +8,19 @@ import { t, applyI18n } from './i18n.js'
 
 applyI18n(document)
 
-const DEFAULTS = { ab_notify: false, ab_turn_notify: true, ab_cursor: false, ab_idle_detach_secs: 0, ab_work_in: 'tab' }
+const DEFAULTS = { ab_stealth: true, ab_notify: false, ab_turn_notify: true, ab_cursor: false, ab_idle_detach_secs: 0, ab_work_in: 'tab' }
 const hasChrome = typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync
 
 // ---- elements ----
 const el = (id) => document.getElementById(id)
 const dot = el('dot'), statusLabel = el('statusLabel'), statusSub = el('statusSub'), tabPill = el('tabPill')
 const optWorkIn = el('optWorkIn'), optNotify = el('optNotify'), optTurnNotify = el('optTurnNotify'), optCursor = el('optCursor'), optIdleSecs = el('optIdleSecs')
+const optStealth = el('optStealth'), cursorCard = el('cursorCard'), cursorLocked = el('cursorLocked')
 const saved = el('saved')
 
 // ---- settings ----
 function loadSettings(cb) {
-  if (!hasChrome) { cb({ ...DEFAULTS, ab_notify: true, ab_cursor: true }); return }
+  if (!hasChrome) { cb({ ...DEFAULTS, ab_notify: true }); return }
   chrome.storage.sync.get(DEFAULTS, (s) => cb(s))
 }
 function save(patch) {
@@ -69,6 +70,8 @@ loadSettings((s) => {
   optTurnNotify.checked = s.ab_turn_notify !== false
   optWorkIn.value = s.ab_work_in === 'window' ? 'window' : 'tab'
   optCursor.checked = !!s.ab_cursor
+  optStealth.checked = s.ab_stealth !== false
+  renderStealth()
   optIdleSecs.value = Number.isFinite(Number(s.ab_idle_detach_secs)) ? Number(s.ab_idle_detach_secs) : 0
 })
 
@@ -76,6 +79,16 @@ optNotify.addEventListener('change', () => save({ ab_notify: optNotify.checked }
 optTurnNotify.addEventListener('change', () => save({ ab_turn_notify: optTurnNotify.checked }))
 optWorkIn.addEventListener('change', () => save({ ab_work_in: optWorkIn.value === 'window' ? 'window' : 'tab' }))
 optCursor.addEventListener('change', () => save({ ab_cursor: optCursor.checked }))
+optStealth.addEventListener('change', () => { save({ ab_stealth: optStealth.checked }); renderStealth() })
+
+// Under stealth mode the cursor setting is kept but has no effect, so its row
+// is greyed out and says why.
+function renderStealth() {
+  const locked = optStealth.checked
+  optCursor.disabled = locked
+  cursorCard.classList[locked ? 'add' : 'remove']('locked')
+  cursorLocked.style.display = locked ? '' : 'none'
+}
 optIdleSecs.addEventListener('change', () => {
   const n = Math.max(0, Math.min(3600, Number(optIdleSecs.value) || 0))
   optIdleSecs.value = n

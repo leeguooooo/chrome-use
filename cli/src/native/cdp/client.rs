@@ -311,9 +311,94 @@ impl CdpClient {
     ) -> Result<Value, String> {
         // Charged to the command being served, for its `timing` summary.
         let started = std::time::Instant::now();
-        let out = self.send_command_untimed(method, params, session_id).await;
+        let out = match method {
+            "Runtime.evaluate" | "DOM.resolveNode" => {
+                self.send_quietly(method, params, session_id).await
+            }
+            _ => {
+                // The main-world marker means nothing to other methods.
+                let mut params = params;
+                if let Some(o) = params.as_mut().and_then(|p| p.as_object_mut()) {
+                    o.remove("__cuMain");
+                }
+                self.send_command_untimed(method, params, session_id).await
+            }
+        };
         crate::native::timing::record_span(method, started, std::time::Instant::now());
         out
+    }
+
+    /// chrome-use's own page reads run in an isolated world (see
+    /// `quiet_dom`): a `Runtime.evaluate` or `DOM.resolveNode` that names no
+    /// context gets the tab's isolated world, so the JS it runs (and every
+    /// `callFunctionOn` on the objects it hands out) never calls a function
+    /// the page could have wrapped. Code that has to see the page's own JS
+    /// (the user's `eval`, site adapters, the passkey guard, React tools)
+    /// marks its params `"__cuMain": true`. A node the isolated world cannot
+    /// reach (a same-process frame) falls back to the main world.
+    async fn send_quietly(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        session_id: Option<&str>,
+    ) -> Result<Value, String> {
+        let Some(mut p) = params else {
+            return self.send_command_untimed(method, None, session_id).await;
+        };
+        let main = p
+            .as_object_mut()
+            .and_then(|o| o.remove("__cuMain"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let ctx_key = if method == "Runtime.evaluate" {
+            "contextId"
+        } else {
+            "executionContextId"
+        };
+        let named = p.get(ctx_key).is_some()
+            || p.get("uniqueContextId").is_some()
+            || p.get("replMode").and_then(|v| v.as_bool()) == Some(true);
+        let Some(session) = session_id.filter(|s| !s.is_empty()) else {
+            return self.send_command_untimed(method, Some(p), session_id).await;
+        };
+        if main || named || std::env::var("AGENT_BROWSER_MAIN_WORLD").as_deref() == Ok("1") {
+            return self.send_command_untimed(method, Some(p), session_id).await;
+        }
+        let Ok(ctx) = Box::pin(crate::native::quiet_dom::world(self, session)).await else {
+            return self.send_command_untimed(method, Some(p), session_id).await;
+        };
+        let mut quiet = p.clone();
+        quiet[ctx_key] = Value::from(ctx);
+        match self
+            .send_command_untimed(method, Some(quiet.clone()), session_id)
+            .await
+        {
+            Err(e) if crate::native::quiet_dom::context_gone(&e) => {
+                // A navigation took the world: make it again, once.
+                match Box::pin(crate::native::quiet_dom::recreate(self, session)).await {
+                    Ok(ctx) => {
+                        quiet[ctx_key] = Value::from(ctx);
+                        match self
+                            .send_command_untimed(method, Some(quiet), session_id)
+                            .await
+                        {
+                            Err(e)
+                                if method == "DOM.resolveNode"
+                                    && crate::native::quiet_dom::other_frame(&e) =>
+                            {
+                                self.send_command_untimed(method, Some(p), session_id).await
+                            }
+                            other => other,
+                        }
+                    }
+                    Err(_) => self.send_command_untimed(method, Some(p), session_id).await,
+                }
+            }
+            Err(e) if method == "DOM.resolveNode" && crate::native::quiet_dom::other_frame(&e) => {
+                self.send_command_untimed(method, Some(p), session_id).await
+            }
+            other => other,
+        }
     }
 
     async fn send_command_untimed(

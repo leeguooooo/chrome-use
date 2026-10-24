@@ -236,14 +236,17 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
       </p>
       <p>
         It's <strong>adaptive</strong>—each navigation probes for known anti-bot vendors (cookies / scripts / globals),
-        and guarded pages auto-upgrade to full <code>human</code> motion, while ordinary sites stay instant (zero overhead).
+        and guarded pages auto-upgrade to full <code>human</code> motion. Every other page gets <code>fast</code> (since
+        1.5.255): a short curved path, landing jitter, key presses for <code>type</code> and wheel scrolling, at a small
+        cost in speed. Sites that run their own bot checks the vendor probe cannot see (Douyin, Xiaohongshu, Bilibili, X,
+        Weibo, Kuaishou, Zhihu, Taobao, JD, YouTube and others) always get <code>human</code>.
       </p>
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">bash · humanize</span>
         </div>
-<pre><code><span class="du-cmt"># off (default, instant) | fast (lightweight eased trajectory) | human (full curve + landing jitter + typing rhythm + eased scroll/drag)</span>
+<pre><code><span class="du-cmt"># off (instant) | fast (default: lightweight eased trajectory) | human (full curve + landing jitter + typing rhythm + eased scroll/drag)</span>
 <span class="du-prompt">$</span> chrome-use <span class="du-flag">--humanize</span> human click <span class="du-str">"@ref=e42"</span>
 
 <span class="du-cmt"># or set the default for the whole session via an env var</span>
@@ -251,9 +254,9 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
       </div>
       <div class="du-callout tip">
         <div class="du-callout-title">✅ Leave it on auto</div>
-        The default is <code>off</code>, and the adaptive detector auto-upgrades pages guarded by Akamai/PerimeterX/DataDome
-        to <code>human</code>.
-        Only force <code>human</code> manually when you <strong>already know for sure</strong> the target scores behavior.
+        The default is <code>fast</code>; the adaptive detector raises pages guarded by Akamai/PerimeterX/DataDome, and the
+        high-risk sites above, to <code>human</code>. Use <code>off</code> only where nothing watches and speed matters
+        (local test pages, internal tools).
       </div>
 
       <hr class="du-divider" />
@@ -289,6 +292,20 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
         <code>proceed</code> (already through, don't re-solve), <code>solve</code> (challenge present, no clearance),
         <code>reissue</code> (has clearance but the page is still blocked → IP/UA drifted, re-solve). Treat it as a
         preflight, don't re-solve a challenge that's already passed.
+      </div>
+
+      <h2>Stealth mode switch (extension options)</h2>
+      <p>
+        The extension's options page has a <strong>Stealth mode</strong> switch, <strong>on by default</strong>. While it is on,
+        chrome-use adds nothing of its own to the pages it drives: no overlay, no named page globals, and site adapters'
+        clicks and typing go through <code>args.ui</code> as real input events. Features that draw into pages only work with it
+        off; today that is the agent cursor (a soft cursor and click ripple), whose switch is greyed out until stealth mode
+        is turned off. Inspect &amp; Ask works either way, since you start it yourself.
+      </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ For contributors</div>
+        A new feature that the page could see (a DOM node, a global, a listener, a synthetic event, a fixed timing) must stay
+        off while stealth mode is on. Pull requests and releases are checked for it; see "Stealth first" in AGENTS.md.
       </div>
 
       <h2>Self-check: chrome-use stealth status</h2>

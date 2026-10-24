@@ -42,6 +42,8 @@
   .pill { font: 12px var(--font-mono); padding: 3px 10px; border-radius: 999px; background: var(--surface); color: var(--ink); white-space: nowrap; }
 
   .toggle { position: relative; width: 40px; height: 24px; flex: none; cursor: pointer; }
+  .card.locked .row { opacity: .5; }
+  .card.locked .toggle, .card.locked .toggle input { cursor: not-allowed; }
   .toggle input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; z-index: 1; }
   .track { position: absolute; inset: 0; background: var(--line); border-radius: 999px; transition: background .2s; }
   .knob { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(var(--shadow-color) / .3); transition: transform .2s; }
@@ -101,6 +103,19 @@
     </div>
   </section>
 
+  <!-- Stealth mode -->
+  <section class="card">
+    <h2 data-i18n="options_stealth_heading">Stealth mode</h2>
+    <p class="lead" data-i18n="options_stealth_lead">Leave nothing in the pages the agent drives that a site could see.</p>
+    <div class="row">
+      <div class="grow">
+        <div class="name" data-i18n="options_stealth_name">Stealth mode</div>
+        <div class="hint" data-i18n="options_stealth_hint">On by default. chrome-use then adds nothing of its own to a page: no overlay, no page globals, real input events. Turn it off to use features that draw into pages, such as the agent cursor. Inspect &amp; Ask still works either way, since you start it yourself.</div>
+      </div>
+      <label class="toggle"><input type="checkbox" id="optStealth" /><span class="track"></span><span class="knob"></span></label>
+    </div>
+  </section>
+
   <!-- Notifications -->
   <section class="card">
     <h2 data-i18n="options_notifications_heading">Notifications</h2>
@@ -139,15 +154,14 @@
   </section>
 
   <!-- Agent cursor -->
-  <section class="card">
+  <section class="card" id="cursorCard">
     <h2 data-i18n="options_cursor_heading">Agent cursor</h2>
     <p class="lead" data-i18n="options_cursor_lead">Watch a friendly cursor glide where the agent clicks.</p>
     <div class="row">
       <div class="grow">
         <div class="name" data-i18n="options_cursor_name">Show the agent cursor</div>
-        <div class="hint" data-i18n="options_cursor_hint">A soft cursor + click ripple while chrome-use drives a tab.
-          Off by default — the cursor is a visible DOM overlay, so leaving it off
-          keeps automation invisible to the page (stealth).</div>
+        <div class="hint" data-i18n="options_cursor_hint">A soft cursor and click ripple while chrome-use drives a tab. It is drawn into the page, so it needs stealth mode off.</div>
+        <div class="hint" id="cursorLocked" data-i18n="options_cursor_locked">Turn off stealth mode above to use it.</div>
       </div>
       <label class="toggle"><input type="checkbox" id="optCursor" /><span class="track"></span><span class="knob"></span></label>
     </div>

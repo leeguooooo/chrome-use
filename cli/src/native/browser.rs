@@ -5970,9 +5970,18 @@ impl BrowserManager {
         Ok(result.as_str().unwrap_or("").to_string())
     }
 
+    /// chrome-use's own reads: run in the tab's isolated world, where the
+    /// page cannot see them (see `quiet_dom`).
     pub async fn evaluate(&self, script: &str, _args: Option<Value>) -> Result<Value, String> {
         let session_id = self.active_session_id()?.to_string();
-        self.eval_in_context(script, &session_id, None).await
+        self.eval_in_context(script, &session_id, None, false).await
+    }
+
+    /// Code that has to run with the page's own JS: the user's `eval`,
+    /// React tools, the vendor probe. The page can see it.
+    pub async fn evaluate_main(&self, script: &str) -> Result<Value, String> {
+        let session_id = self.active_session_id()?.to_string();
+        self.eval_in_context(script, &session_id, None, true).await
     }
 
     /// Evaluate `script` in a specific frame's context (issue #58 `eval --frame`).
@@ -5993,7 +6002,9 @@ impl BrowserManager {
         iframe_sessions: &HashMap<String, String>,
     ) -> Result<Value, String> {
         if let Some(oopif_session) = iframe_sessions.get(frame_id) {
-            return self.eval_in_context(script, oopif_session, None).await;
+            return self
+                .eval_in_context(script, oopif_session, None, true)
+                .await;
         }
 
         let session_id = self.active_session_id()?.to_string();
@@ -6011,7 +6022,7 @@ impl BrowserManager {
             .ok_or_else(|| {
                 format!("Could not resolve an execution context for frame {frame_id}")
             })?;
-        self.eval_in_context(script, &session_id, Some(ctx_id))
+        self.eval_in_context(script, &session_id, Some(ctx_id), false)
             .await
     }
 
@@ -6022,6 +6033,7 @@ impl BrowserManager {
         script: &str,
         session_id: &str,
         context_id: Option<i64>,
+        main_world: bool,
     ) -> Result<Value, String> {
         // `replMode: true` lets successive `eval`s re-declare top-level
         // `let`/`const` instead of throwing "Identifier 'x' has already been
@@ -6034,13 +6046,28 @@ impl BrowserManager {
         // `awaitPromise` (no replMode) — exactly the pre-#38 behaviour.
         let mentions_async = script_may_return_promise(script);
         let declares = script.contains("let ") || script.contains("const ");
-        let repl_mode = declares && !mentions_async;
+        // chrome-use's own reads go to the isolated world, where replMode is
+        // not allowed (it needs the default context): a block keeps their
+        // top-level `let`/`const` from colliding between calls, and its last
+        // expression is still the result.
+        let quiet_block = !main_world && context_id.is_none() && declares && !mentions_async;
+        let repl_mode = declares && !mentions_async && !quiet_block;
+        let wrapped;
+        let script = if quiet_block {
+            wrapped = format!("{{\n{script}\n}}");
+            wrapped.as_str()
+        } else {
+            script
+        };
         let mut params = json!({
             "expression": script,
             "returnByValue": true,
             "awaitPromise": !repl_mode,
             "replMode": repl_mode,
         });
+        if main_world {
+            params["__cuMain"] = json!(true);
+        }
         if let Some(cid) = context_id {
             // `contextId` and `replMode` are mutually exclusive in Chrome; when we
             // pin a frame context, drop replMode (a fresh isolated world per call

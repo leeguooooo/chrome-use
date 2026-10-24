@@ -192,7 +192,7 @@ Codex 走 app-server 协议，Claude Code 走 stream-json，OpenCode 走 ACP，P
 - **OpenCode**：关闭后显示 **CLI permissions**，遵循 OpenCode 自己的规则，部分工具可能无需询问。收到的审批会显示在侧栏，完整权限模式按 **Allow once** 自动回复，不改它保存的权限规则。
 - **Pi**：没有逐次审批机制。关闭后显示 **Browser only**，只开放 `chrome_use` MCP 工具，不开放 shell 或文件工具；开启后使用 CLI 的完整工具集。
 
-历史显示流式回复、可展开的工具行和请求。工具返回不代表浏览器任务成功。回复中发送的消息进入队列，开始前可编辑或删除；长预览先点 **Load full text**。失败或中断后队列暂停，点 **Resume queue** 恢复。**Stop & send** 或 Ctrl/Cmd+Enter 等收到终止确认或确认进程退出后才优先发送，普通队列仍暂停。重连只读回历史，不重发。发送结果未确认时，可明确选择按原消息 ID 重试；清除提示不会取消可能已送达的任务。
+历史显示流式回复、可展开的工具行和请求。工具返回不代表浏览器任务成功。回复中发送的消息进入队列，开始前可编辑或删除；长预览先点 **Load full text**。失败或中断后队列暂停，点 **Resume queue** 恢复。 失败或中断后，新发的消息会在原会话中使用原模型立即开始；旧队列仍暂停，需手动恢复。**Stop & send** 或 Ctrl/Cmd+Enter 等收到终止确认或确认进程退出后才优先发送，普通队列仍暂停。重连只读回历史，不重发。发送结果未确认时，可明确选择按原消息 ID 重试；清除提示不会取消可能已送达的任务。
 
 删除会话前先停止回复，再点顶部删除按钮并确认。删除内容包括面板历史和该会话的浏览器 session，以及 Codex rollout 文件、Claude 会话文件及目录、通过 `session/delete` 删除的 OpenCode 历史，或会话文件夹内的 Pi 会话文件。Codex 的 SQLite 缓存不改动。清理失败或标签页关闭未确认时，侧栏会提示。
 
@@ -267,6 +267,8 @@ $ chrome-use open https://github.com/my-org/repo
 已安装的发现入口应引导 agent 执行 `chrome-use skills get core`，不应另带一套命令手册。若旧副本只有自己的操作说明而没有这一步，应先用 `chrome-use skills update` 刷新入口，再比较 core 指南的变化。
 
 ## 用法
+
+`chrome-use mobile serve --bind IP:17345` 在指定 IP 不可用时按 1–60 秒指数退避等待，保持原监听地址，监听成功后才报告就绪。换网后需更新 `--bind` 和手机连接地址，不会自动改为监听所有网卡。其他监听错误仍立即报错。
 
 自定义下拉框会先即时滚入视口，再用真实指针事件打开。`pick` 未确认选中时返回 `verified: false` 和警告。页面及容器滚动使用即时移动，避免 CSS 平滑滚动在后台标签页停滞；位置未变化时返回 `scrolled: false` 和警告。
 

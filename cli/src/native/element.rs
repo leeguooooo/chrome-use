@@ -2291,8 +2291,8 @@ pub async fn verify_kept_ref(
 
 /// Resolve a `@ref` or CSS selector to a click point. Returns
 /// `(centre_x, centre_y, width, height, session_id)`. Width/height come from the
-/// element's box model and feed humanize's in-bounds landing jitter; the CSS
-/// selector path returns zero size (→ land on centre, no jitter).
+/// element's box model and feed humanize's in-bounds landing jitter; both paths
+/// report the real size.
 pub async fn resolve_element_center(
     client: &CdpClient,
     session_id: &str,
@@ -2407,9 +2407,10 @@ pub async fn resolve_element_center(
     }
 
     // CSS selector
-    let (x, y) = resolve_by_selector(client, session_id, selector_or_ref).await?;
-    // No box model on the CSS-selector fast path → zero size → land on centre.
-    Ok((x, y, 0.0, 0.0, session_id.to_string()))
+    // The box size feeds humanize's landing jitter, as on the @ref path:
+    // without it every CSS-selector click landed on the exact centre.
+    let (x, y, w, h) = resolve_by_selector(client, session_id, selector_or_ref).await?;
+    Ok((x, y, w, h, session_id.to_string()))
 }
 
 pub async fn resolve_element_object_id(
@@ -3473,7 +3474,7 @@ fn build_selector_js(selector: &str) -> String {
             const el = {find_expr};
             if (!el) return null;
             const rect = el.getBoundingClientRect();
-            return {{ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }};
+            return {{ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, w: rect.width, h: rect.height }};
         }})()"#,
     )
 }
@@ -3599,7 +3600,7 @@ async fn resolve_by_selector(
     client: &CdpClient,
     session_id: &str,
     selector: &str,
-) -> Result<(f64, f64), String> {
+) -> Result<(f64, f64, f64, f64), String> {
     let js = build_selector_js(selector);
 
     let result: EvaluateResult = client
@@ -3627,8 +3628,10 @@ async fn resolve_by_selector(
     let x = val.get("x").and_then(|v| v.as_f64());
     let y = val.get("y").and_then(|v| v.as_f64());
 
+    let w = val.get("w").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let h = val.get("h").and_then(|v| v.as_f64()).unwrap_or(0.0);
     match (x, y) {
-        (Some(x), Some(y)) => Ok((x, y)),
+        (Some(x), Some(y)) => Ok((x, y, w, h)),
         _ => match xpath_miss_hint(selector).or_else(|| coordinate_hint(selector)) {
             Some(hint) => Err(format!("Element not found: {}\n{}", selector, hint)),
             None => Err(format!("Element not found: {}", selector)),
@@ -4455,6 +4458,11 @@ pub async fn get_element_input_value(
         iframe_sessions,
     )
     .await?;
+    // Monaco / CodeMirror keep the value in page JS: read it from the main world.
+    let object_id =
+        super::interaction::rich_editor_main_twin(client, &effective_session_id, &object_id)
+            .await
+            .unwrap_or(object_id);
 
     let result: EvaluateResult = client
         .send_command_typed(

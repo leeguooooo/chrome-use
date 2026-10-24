@@ -2314,14 +2314,14 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                         usage: "eval --background <js expression>",
                     });
                 }
-                let run_key = format!("__cu_eval_{}", uuid::Uuid::new_v4().simple());
+                let run_key = uuid::Uuid::new_v4().simple().to_string();
                 let timeout = crate::site::DEFAULT_RUN_TIMEOUT_MS;
                 return Ok(json!({
                     "id": id,
                     "action": "site",
                     // No domain: run on the page as it is, don't navigate.
                     "domain": "",
-                    "script": crate::site::build_expr_start(&script, &run_key),
+                    "script": crate::site::build_expr_start(&script),
                     "runKey": run_key,
                     "files": {},
                     "runTimeoutMs": timeout,
@@ -2425,14 +2425,9 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // findGraphQLQueryId) so adapters that call it don't ReferenceError (#99).
             let family = spec.split('/').next().unwrap_or("");
             let helper = crate::site::load_family_helper(family);
-            let run_key = format!("__cu_site_{}", uuid::Uuid::new_v4().simple());
-            let script = crate::site::build_start(
-                &adapter,
-                &inv.args,
-                helper.as_deref(),
-                &run_key,
-                &inv.files,
-            );
+            let run_key = uuid::Uuid::new_v4().simple().to_string();
+            let script =
+                crate::site::build_start(&adapter, &inv.args, helper.as_deref(), &inv.files);
             let run_timeout_ms = inv.options.effective_timeout_ms(&adapter);
             Ok(json!({
                 "id": id,
@@ -2443,6 +2438,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 "files": inv.files,
                 "untilDone": inv.options.until_done,
                 "retryStatuses": crate::site::retry_statuses(&adapter),
+                "isolated": adapter.isolated(),
                 "runTimeoutMs": run_timeout_ms,
                 // The CLI's socket read waits timeout_ms + a margin, so a long run
                 // is not cut off client-side before the daemon answers.

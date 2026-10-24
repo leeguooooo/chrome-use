@@ -2534,7 +2534,12 @@ async fn dispatch(
             let p: Send = serde_json::from_value(params.clone())
                 .map_err(|_| "conversationSend requires conversationId, messageId and text")?;
             let mut e = engine.lock().await;
-            let direct = operation == "conversationSendDirect";
+            // New user input after a confirmed end can run ahead of paused
+            // work. Decide under the engine lock: a stale panel must never
+            // turn an ordinary send into an interruption of a newer turn.
+            let chat = e.chat(&p.conversation_id)?;
+            let direct =
+                operation == "conversationSendDirect" || (chat.queue_paused && !chat.phase.busy());
             // A turn still waiting for its process is ended here instead of
             // interrupting the retiring process.
             if direct
@@ -6020,6 +6025,52 @@ mod turn_tests {
         p.started_on_new_generation(&direct).await;
         let started = p.kinds("turnStarted").await;
         assert_eq!(started.last().unwrap()["continuation"], "afterStop");
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_send_to_a_busy_paused_chat_does_not_interrupt() {
+        let mut c = chat("claude").await;
+        c.send("first").await;
+        c.engine.lock().await.chat(&c.id).unwrap().queue_paused = true;
+        let queued = c.send("new instruction").await;
+        assert!(matches!(
+            c.commands.try_recv(),
+            Ok(BackendCommand::Start(_))
+        ));
+        assert!(c.commands.try_recv().is_err());
+        let mut e = c.engine.lock().await;
+        let chat = e.chat(&c.id).unwrap();
+        assert!(chat.phase.busy());
+        assert!(chat.direct_message_id.is_none());
+        assert_eq!(chat.queue[0].id, queued);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_new_send_after_capacity_failure_runs_without_replaying_the_paused_queue() {
+        let _env = crate::test_utils::EnvGuard::new(&[]);
+        let mut p = pumped().await;
+        p.send("conversationSend", "first").await;
+        assert!(matches!(
+            p.commands.recv().await,
+            Some(BackendCommand::Start(_))
+        ));
+        let old = p.send("conversationSend", "older queued work").await;
+        p.emit("terminal", json!({"status":"failed","error":"Selected model is at capacity. Please try a different model."})).await;
+        assert!(matches!(
+            p.commands.recv().await,
+            Some(BackendCommand::Shutdown)
+        ));
+        p.emit("exited", json!({"error":null,"processExitConfirmed":true}))
+            .await;
+        let fresh = p.send("conversationSend", "continue").await;
+        p.started_on_new_generation(&fresh).await;
+        let mut e = p.engine.lock().await;
+        let chat = e.chat(&p.id).unwrap();
+        assert_eq!(chat.active.as_ref().unwrap().id, fresh);
+        assert_eq!(chat.queue[0].id, old);
+        assert!(chat.queue_paused);
     }
 
     #[tokio::test]

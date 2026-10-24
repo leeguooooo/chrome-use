@@ -53,6 +53,8 @@
 
       <h2>0.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v0.5.83</strong> (Pending review): New messages after a model capacity error or interrupted turn continue the same conversation and model. Older queued messages remain paused until explicitly resumed. Contributors: @leeguooooo.</li>
+        <li><strong>v0.5.82</strong> (Unreleased): Stealth mode switch on the options page, on by default. While it is on, the agent cursor overlay is not drawn whatever its own setting says, and its switch is greyed out with the reason; the status reports <code>stealthMode</code>. Contributors: @leeguooooo.</li>
         <li><strong>v0.5.81</strong> (Unreleased): When Chrome restores the last session, the tabs of restored agent tab groups leave their group, which deletes the saved groups Chrome kept for them; no tab is closed (#692). Contributors: @leeguooooo.</li>
         <li><strong>v0.5.80</strong> (Unreleased): When an old <code>__nm-host</code> is still running after a CLI upgrade, the extension reconnects once while idle before calling the CLI too old, instead of wrongly asking you to reinstall (#684). Contributors: @Jerryx333.</li>
         <li><strong>v0.5.79</strong> (Unreleased): Copy elements and Copy message under the picked elements put their context (and your words) on the clipboard as text, for handing to another agent or tool (#680). Agent tabs always leave their group before closing, so Chrome keeps no saved tab group; right after a worker restart, for agent pop-ups and for tabs the cleanup closed directly they used to be missed (#674). Contributors: @leeguooooo.</li>

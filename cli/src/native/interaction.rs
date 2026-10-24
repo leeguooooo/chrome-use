@@ -1846,6 +1846,55 @@ pub async fn fill_reporting(
     }
 }
 
+/// Elements are resolved in the isolated world (`quiet_dom`), where the
+/// page's own JS is out of reach. Monaco and CodeMirror keep their model in
+/// page JS (`window.monaco`, the `CodeMirror` instance), so `fill` has to
+/// reach them from the main world: the same element's main-world handle, or
+/// None to keep the one we have.
+pub(crate) async fn rich_editor_main_twin(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+) -> Option<String> {
+    let probe = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({
+                "objectId": object_id,
+                "functionDeclaration": "function () { const s = '.monaco-editor, .CodeMirror, .cm-editor'; return !!((this.closest && this.closest(s)) || (this.querySelector && this.querySelector(s))); }",
+                "returnByValue": true,
+            })),
+            Some(session_id),
+        )
+        .await
+        .ok()?;
+    if probe.pointer("/result/value").and_then(|v| v.as_bool()) != Some(true) {
+        return None;
+    }
+    let node = client
+        .send_command(
+            "DOM.describeNode",
+            Some(json!({ "objectId": object_id })),
+            Some(session_id),
+        )
+        .await
+        .ok()?;
+    let backend = node
+        .pointer("/node/backendNodeId")
+        .and_then(|v| v.as_i64())?;
+    let main = client
+        .send_command(
+            "DOM.resolveNode",
+            Some(json!({ "backendNodeId": backend, "__cuMain": true })),
+            Some(session_id),
+        )
+        .await
+        .ok()?;
+    main.pointer("/object/objectId")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
 /// A CDP error meaning a remote object id we hold is no longer valid: the
 /// inspector session or execution context that minted it is gone. The element
 /// itself may well still be there under a fresh handle.
@@ -1862,7 +1911,9 @@ pub async fn fill_object(
     object_id: &str,
     value: &str,
 ) -> Result<FillOutcome, String> {
-    let object_id = object_id.to_string();
+    let object_id = rich_editor_main_twin(client, session_id, object_id)
+        .await
+        .unwrap_or_else(|| object_id.to_string());
     let effective_session_id = session_id.to_string();
     let result: EvaluateResult = client
         .send_command_typed(
@@ -2029,6 +2080,8 @@ async fn call_on(
 }
 
 async fn read_value_of(client: &CdpClient, session_id: &str, object_id: &str) -> Option<String> {
+    let twin = rich_editor_main_twin(client, session_id, object_id).await;
+    let object_id = twin.as_deref().unwrap_or(object_id);
     let result = call_on(
         client,
         session_id,
@@ -2952,6 +3005,8 @@ async fn verify_fill_value(
     // Let framework-controlled inputs and editor models finish their synchronous
     // update plus the next paint before reading the authoritative value back.
     wait_for_paint_settled(client, session_id).await;
+    let twin = rich_editor_main_twin(client, session_id, object_id).await;
+    let object_id = twin.as_deref().unwrap_or(object_id);
 
     let result: EvaluateResult = client
         .send_command_typed(
@@ -3275,6 +3330,9 @@ pub async fn read_editable_value(
     .await
     .ok()?;
     wait_for_paint_settled(client, &effective_session_id).await;
+    let object_id = rich_editor_main_twin(client, &effective_session_id, &object_id)
+        .await
+        .unwrap_or(object_id);
     let result: EvaluateResult = client
         .send_command_typed(
             "Runtime.callFunctionOn",
@@ -3431,6 +3489,115 @@ pub async fn type_text_into_active_context(
     delay_ms: Option<u64>,
     key_events: bool,
 ) -> Result<(), String> {
+    // Typing with key events goes the way a person types: ASCII as key
+    // presses, other text (Chinese, emoji) through an IME composition, a few
+    // characters per commit.
+    if key_events && !text.is_ascii() {
+        for (run, ascii) in split_ascii_runs(text) {
+            if ascii {
+                type_chars(client, session_id, &run, delay_ms, true).await?;
+            } else {
+                for chunk in ime_chunks(&run, humanize::next_seed()) {
+                    ime_commit(client, session_id, &chunk).await?;
+                }
+            }
+        }
+        return Ok(());
+    }
+    type_chars(client, session_id, text, delay_ms, key_events).await
+}
+
+/// Split text into runs of ASCII and non-ASCII characters, in order.
+pub fn split_ascii_runs(text: &str) -> Vec<(String, bool)> {
+    let mut out: Vec<(String, bool)> = Vec::new();
+    for ch in text.chars() {
+        let ascii = ch.is_ascii();
+        match out.last_mut() {
+            Some((run, a)) if *a == ascii => run.push(ch),
+            _ => out.push((ch.to_string(), ascii)),
+        }
+    }
+    out
+}
+
+/// One IME commit the way an input method sends it: a key press the page
+/// sees as `Process` (keyCode 229) per composition step, the composition
+/// growing (compositionstart / compositionupdate), then the commit
+/// (compositionend, insertFromComposition-style input), after a pause that
+/// grows with the chunk while the candidate is picked.
+pub async fn ime_commit(client: &CdpClient, session_id: &str, chunk: &str) -> Result<(), String> {
+    let chars: Vec<char> = chunk.chars().collect();
+    for i in 1..=chars.len() {
+        let partial: String = chars[..i].iter().collect();
+        for kind in ["rawKeyDown", "keyUp"] {
+            client
+                .send_command(
+                    "Input.dispatchKeyEvent",
+                    Some(json!({
+                        "type": kind,
+                        "key": "Process",
+                        "code": "",
+                        "windowsVirtualKeyCode": 229,
+                        "nativeVirtualKeyCode": 229,
+                    })),
+                    Some(session_id),
+                )
+                .await?;
+        }
+        let n = partial.chars().count() as i64;
+        client
+            .send_command(
+                "Input.imeSetComposition",
+                Some(json!({ "text": partial, "selectionStart": n, "selectionEnd": n })),
+                Some(session_id),
+            )
+            .await?;
+        tokio::time::sleep(pause_ms(90, 220)).await;
+    }
+    let n = chars.len() as u64;
+    tokio::time::sleep(pause_ms(120 + 60 * n, 260 + 120 * n)).await;
+    client
+        .send_command(
+            "Input.insertText",
+            Some(json!({ "text": chunk })),
+            Some(session_id),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Split non-ASCII text into IME-sized commits of 1-4 characters; whitespace
+/// and punctuation end a commit.
+pub fn ime_chunks(run: &str, seed: u64) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut s = seed;
+    let mut want = 1 + (s % 4) as usize;
+    for ch in run.chars() {
+        cur.push(ch);
+        if !ch.is_alphanumeric() || cur.chars().count() >= want {
+            out.push(std::mem::take(&mut cur));
+            s = s.rotate_left(13) ^ 0x9E37_79B9;
+            want = 1 + (s % 4) as usize;
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn pause_ms(lo: u64, hi: u64) -> std::time::Duration {
+    std::time::Duration::from_millis(lo + humanize::next_seed() % (hi - lo + 1))
+}
+
+async fn type_chars(
+    client: &CdpClient,
+    session_id: &str,
+    text: &str,
+    delay_ms: Option<u64>,
+    key_events: bool,
+) -> Result<(), String> {
     // Per-character timing: an explicit `delay_ms` wins (caller asked for a
     // fixed cadence); otherwise fall back to humanize — variable, human-like
     // inter-keystroke gaps at Fast/Human, all-zero (instant) at Off.
@@ -3487,6 +3654,16 @@ pub async fn type_text_into_active_context(
             // `text` still inserts the character, so the field also fills.
             let (key, code, key_code) = char_to_key_info(ch);
             let s = ch.to_string();
+            // Capitals and shifted symbols come with Shift held, as from a
+            // keyboard: a "#" keydown with shiftKey false is a tell.
+            let shift = needs_shift(ch);
+            let modifiers = shift.then_some(8);
+            if shift {
+                shift_key(client, session_id, true).await?;
+                // A finger reaches for the key after Shift is down: not 3 ms
+                // later, which is what back-to-back events give.
+                shift_gap(humanize::active_level(), 45, 130).await;
+            }
             client
                 .send_command_typed::<_, Value>(
                     "Input.dispatchKeyEvent",
@@ -3498,7 +3675,7 @@ pub async fn type_text_into_active_context(
                         unmodified_text: Some(s),
                         windows_virtual_key_code: Some(key_code),
                         native_virtual_key_code: Some(key_code),
-                        modifiers: None,
+                        modifiers,
                     },
                     Some(session_id),
                 )
@@ -3514,11 +3691,15 @@ pub async fn type_text_into_active_context(
                         unmodified_text: None,
                         windows_virtual_key_code: Some(key_code),
                         native_virtual_key_code: Some(key_code),
-                        modifiers: None,
+                        modifiers,
                     },
                     Some(session_id),
                 )
                 .await?;
+            if shift {
+                shift_gap(humanize::active_level(), 15, 70).await;
+                shift_key(client, session_id, false).await?;
+            }
         } else {
             // VS Code/Electron webviews reject repeated dispatchKeyEvent calls
             // carrying printable `text`. Insert printable characters directly
@@ -3559,7 +3740,7 @@ pub async fn commit_with_enter(client: &CdpClient, session_id: &str) -> Result<(
 
 /// The CDP modifier bit for the platform's command key: Meta (Cmd) on macOS,
 /// Control elsewhere.
-fn platform_command_modifier() -> i32 {
+pub fn platform_command_modifier() -> i32 {
     if cfg!(target_os = "macos") {
         4
     } else {
@@ -4994,25 +5175,28 @@ pub async fn click_at_point(
     dispatch_click(client, session_id, x, y, button, click_count).await
 }
 
-async fn dispatch_click(
+/// Move the pointer to a viewport point with trusted `mouseMoved` events,
+/// along the humanize path from where the cursor last landed. No click.
+pub async fn move_pointer(
     client: &CdpClient,
     session_id: &str,
     x: f64,
     y: f64,
-    button: &str,
-    click_count: i32,
 ) -> Result<(), String> {
-    // Move toward the target along a human-like path. At HumanizeLevel::Off this
-    // is a single zero-delay step to (x, y) — identical to the old teleport — so
-    // the default behaviour is unchanged. At Fast/Human it's a curved,
-    // decelerating trajectory starting from where the cursor last landed, which
-    // removes the "instant jump to exact centre, no prior movement" tell that
-    // behavioural anti-bot systems flag.
     restore_rendering_if_hidden(client, session_id).await;
     let level = humanize::active_level();
-    let start = humanize::last_cursor();
-    let seed = humanize::next_seed();
-    for step in humanize::move_path(start, (x, y), level, seed) {
+    move_pointer_with(client, session_id, x, y, level, humanize::next_seed()).await
+}
+
+async fn move_pointer_with(
+    client: &CdpClient,
+    session_id: &str,
+    x: f64,
+    y: f64,
+    level: humanize::HumanizeLevel,
+    seed: u64,
+) -> Result<(), String> {
+    for step in humanize::move_path(humanize::last_cursor(), (x, y), level, seed) {
         client
             .send_command_typed::<_, Value>(
                 "Input.dispatchMouseEvent",
@@ -5035,6 +5219,27 @@ async fn dispatch_click(
         }
     }
     humanize::set_last_cursor((x, y));
+    Ok(())
+}
+
+async fn dispatch_click(
+    client: &CdpClient,
+    session_id: &str,
+    x: f64,
+    y: f64,
+    button: &str,
+    click_count: i32,
+) -> Result<(), String> {
+    // Move toward the target along a human-like path. At HumanizeLevel::Off this
+    // is a single zero-delay step to (x, y) — identical to the old teleport — so
+    // the default behaviour is unchanged. At Fast/Human it's a curved,
+    // decelerating trajectory starting from where the cursor last landed, which
+    // removes the "instant jump to exact centre, no prior movement" tell that
+    // behavioural anti-bot systems flag.
+    restore_rendering_if_hidden(client, session_id).await;
+    let level = humanize::active_level();
+    let seed = humanize::next_seed();
+    move_pointer_with(client, session_id, x, y, level, seed).await?;
 
     let button_value = match button {
         "right" => 2,
@@ -5147,8 +5352,58 @@ fn punctuation_key_info(ch: char) -> (&'static str, i32) {
         ']' | '}' => ("BracketRight", 221),
         // VK_OEM_7 (0xDE = 222) — "'\""" key
         '\'' | '"' => ("Quote", 222),
+        // Shifted digits.
+        ')' => ("Digit0", 48),
+        '!' => ("Digit1", 49),
+        '@' => ("Digit2", 50),
+        '#' => ("Digit3", 51),
+        '$' => ("Digit4", 52),
+        '%' => ("Digit5", 53),
+        '^' => ("Digit6", 54),
+        '&' => ("Digit7", 55),
+        '*' => ("Digit8", 56),
+        '(' => ("Digit9", 57),
         _ => ("", 0),
     }
+}
+
+/// Whether a character is typed with Shift held on a US layout.
+fn needs_shift(ch: char) -> bool {
+    ch.is_ascii_uppercase() || "~!@#$%^&*()_+{}|:\"<>?".contains(ch)
+}
+
+/// A human-sized pause around a Shift press; none at HumanizeLevel::Off.
+async fn shift_gap(level: humanize::HumanizeLevel, lo: u64, hi: u64) {
+    if level.is_off() {
+        return;
+    }
+    let (lo, hi) = if matches!(level, humanize::HumanizeLevel::Fast) {
+        (lo / 3, hi / 3)
+    } else {
+        (lo, hi)
+    };
+    let ms = lo + humanize::next_seed() % (hi - lo + 1);
+    tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+}
+
+async fn shift_key(client: &CdpClient, session_id: &str, down: bool) -> Result<(), String> {
+    client
+        .send_command_typed::<_, Value>(
+            "Input.dispatchKeyEvent",
+            &DispatchKeyEventParams {
+                event_type: if down { "rawKeyDown" } else { "keyUp" }.to_string(),
+                key: Some("Shift".to_string()),
+                code: Some("ShiftLeft".to_string()),
+                text: None,
+                unmodified_text: None,
+                windows_virtual_key_code: Some(16),
+                native_virtual_key_code: Some(16),
+                modifiers: if down { Some(8) } else { None },
+            },
+            Some(session_id),
+        )
+        .await
+        .map(|_| ())
 }
 
 /// Return the `text` value that CDP `Input.dispatchKeyEvent` needs on the
@@ -6139,11 +6394,27 @@ mod tests {
         assert_eq!(vk, 190);
     }
 
+    /// Shifted digits are the digit keys with Shift (`type_text` sends the
+    /// modifier), as on a US keyboard.
+    #[test]
+    fn test_shifted_digits_map_to_digit_keys() {
+        for (ch, code, vk) in [
+            ('!', "Digit1", 49),
+            ('@', "Digit2", 50),
+            ('#', "Digit3", 51),
+            (')', "Digit0", 48),
+        ] {
+            assert_eq!(char_to_key_info(ch), (ch.to_string(), code.to_string(), vk));
+            assert!(needs_shift(ch));
+        }
+        assert!(needs_shift('H') && !needs_shift('h') && !needs_shift('3'));
+    }
+
     /// Characters outside the US keyboard layout should return (key, "", 0)
     /// so that `type_text` falls back to `Input.insertText`.
     #[test]
     fn test_unmapped_chars_return_zero_keycode() {
-        for ch in ['@', '#', '$', '%', '^', '&', '*', '(', ')', '€', '£', '你'] {
+        for ch in ['€', '£', '你'] {
             let (key, code, vk) = char_to_key_info(ch);
             assert_eq!(
                 code, "",
@@ -6345,6 +6616,11 @@ mod hidden_page_tests {
         let (client, seen) = fake_page("hidden").await;
         assert!(restore_rendering_if_hidden(&client, "S1").await);
         let seen = seen.lock().unwrap().clone();
+        // The isolated world chrome-use reads from is set up first (quiet_dom).
+        let seen: Vec<_> = seen
+            .into_iter()
+            .filter(|(m, _)| !m.starts_with("Page."))
+            .collect();
         let methods: Vec<&str> = seen.iter().map(|(m, _)| m.as_str()).collect();
         assert_eq!(
             methods,
@@ -6365,7 +6641,11 @@ mod hidden_page_tests {
         let (client, seen) = fake_page("visible").await;
         assert!(!restore_rendering_if_hidden(&client, "S1").await);
         let seen = seen.lock().unwrap().clone();
-        let methods: Vec<&str> = seen.iter().map(|(m, _)| m.as_str()).collect();
+        let methods: Vec<&str> = seen
+            .iter()
+            .map(|(m, _)| m.as_str())
+            .filter(|m| !m.starts_with("Page."))
+            .collect();
         assert_eq!(methods, ["Runtime.evaluate"]);
     }
 }

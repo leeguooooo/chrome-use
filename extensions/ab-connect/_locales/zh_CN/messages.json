@@ -920,7 +920,7 @@
     "message": "Agent 光标"
   },
   "options_cursor_hint": {
-    "message": "chrome-use 操作标签页时显示柔和的光标和点击波纹。默认关闭：光标是页面上可见的 DOM 浮层，关掉它，页面就察觉不到自动化（隐身）。"
+    "message": "chrome-use 操作标签页时显示一个柔和的光标和点击波纹。它画在网页里，所以要先关闭隐身模式。"
   },
   "options_cursor_lead": {
     "message": "看着一个光标滑到 agent 点击的位置。"
@@ -3626,5 +3626,20 @@
   },
   "panel_copy_failed": {
     "message": "无法复制到剪贴板"
+  },
+  "options_stealth_heading": {
+    "message": "隐身模式"
+  },
+  "options_stealth_lead": {
+    "message": "在 agent 操作的网页里不留下任何网站能看到的痕迹。"
+  },
+  "options_stealth_name": {
+    "message": "隐身模式"
+  },
+  "options_stealth_hint": {
+    "message": "默认开启。开启时 chrome-use 不往网页里加任何自己的东西：没有浮层，没有页面全局变量，用真实的输入事件。关闭后才能用会画进网页的功能，比如 agent 光标。Inspect & Ask 由你自己触发，开关不影响它。"
+  },
+  "options_cursor_locked": {
+    "message": "在上面关闭隐身模式后才能使用。"
   }
 }

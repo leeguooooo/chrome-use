@@ -239,7 +239,7 @@ async fn call_in_frame(
                             .map(|a| a.iter().map(Value::to_string).collect::<Vec<_>>().join(", "))
                             .unwrap_or_default()
                     ),
-                    "objectGroup": GROUP,
+                    "objectGroup": GROUP, "__cuMain": true,
                 })),
                 Some(session),
             )
@@ -272,7 +272,7 @@ async fn call_in_frame(
         let doc = client
             .send_command(
                 "DOM.resolveNode",
-                Some(json!({ "backendNodeId": doc, "objectGroup": GROUP })),
+                Some(json!({ "backendNodeId": doc, "objectGroup": GROUP, "__cuMain": true })),
                 Some(session),
             )
             .await?;
@@ -290,7 +290,7 @@ async fn call_in_frame(
                     "objectId": doc,
                     "functionDeclaration": function,
                     "arguments": args,
-                    "objectGroup": GROUP,
+                    "objectGroup": GROUP, "__cuMain": true,
                 })),
                 Some(session),
             )
@@ -734,7 +734,7 @@ async fn holders(
                     Some(json!({
                         "objectId": global,
                         "functionDeclaration": "function () { return this.navigator; }",
-                        "objectGroup": GROUP,
+                        "objectGroup": GROUP, "__cuMain": true,
                     })),
                     Some(session),
                 )
@@ -791,7 +791,7 @@ async fn holders(
             Some(json!({
                 "objectId": navigator,
                 "functionDeclaration": "function () { return this.credentials; }",
-                "objectGroup": GROUP,
+                "objectGroup": GROUP, "__cuMain": true,
             })),
             Some(session),
         )

@@ -227,6 +227,27 @@ impl Drop for PreAuth {
     }
 }
 
+/// Wait for the explicitly selected interface after startup or a network change.
+/// Never fall back to another address, and never announce readiness before bind.
+/// Other errors (including an occupied port) still fail immediately.
+async fn bind_when_available(address: SocketAddr) -> Result<TcpListener, String> {
+    let mut delay = Duration::from_secs(1);
+    loop {
+        match TcpListener::bind(address).await {
+            Ok(listener) => return Ok(listener),
+            Err(error) if error.kind() == std::io::ErrorKind::AddrNotAvailable => {
+                eprintln!(
+                    "mobile gateway waiting: {address} is not available ({error}); retrying in {}s. No listener is ready; check --bind if the network changed.",
+                    delay.as_secs()
+                );
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(60));
+            }
+            Err(error) => return Err(format!("Cannot listen on {address}: {error}")),
+        }
+    }
+}
+
 pub async fn serve(options: Options) -> Result<(), String> {
     let store = Store::open()?;
     let computer_name = match options.name {
@@ -243,9 +264,7 @@ pub async fn serve(options: Options) -> Result<(), String> {
             .computer_name
             .unwrap_or_else(super::computer_name),
     };
-    let listener = TcpListener::bind(options.bind)
-        .await
-        .map_err(|e| format!("Cannot listen on {}: {e}", options.bind))?;
+    let listener = bind_when_available(options.bind).await?;
     let local = listener
         .local_addr()
         .map_err(|_| "Cannot read the listening address")?;
@@ -1293,6 +1312,29 @@ pub(crate) fn jpeg(bytes: &[u8]) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn bind_waits_for_missing_address_without_claiming_readiness() {
+        let address = "192.0.2.123:17345".parse().unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), bind_when_available(address))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn bind_reports_occupied_port_and_accepts_available_address() {
+        let listener = bind_when_available("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(1), bind_when_available(address))
+            .await
+            .expect("occupied ports must fail without retrying")
+            .unwrap_err();
+        assert!(error.contains(&format!("Cannot listen on {address}")));
+    }
 
     #[test]
     fn backoff_starts_after_free_failures_and_clears_on_success() {

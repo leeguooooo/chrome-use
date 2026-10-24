@@ -28,6 +28,45 @@ This applies to changes that either human users or AI agents would need to know 
 
 `skill-data/` is compiled into the binary via `include_dir!` (`cli/src/skills.rs`). **Docs must land in the same tag as the feature** — a release whose binary carries the old skill text ships a feature its agents cannot discover, which is the same as not shipping it.
 
+## Stealth first
+
+chrome-use drives the user's real, signed-in browser on sites that watch for
+automation (Douyin, Xiaohongshu, Bilibili, X...). A trace a page can see can
+get the user's account flagged, so **stealth mode is the default and every
+change has to keep it intact**. Stealth mode is the extension's `ab_stealth`
+setting (options page, on by default; `stealth-mode.js`).
+
+While stealth mode is on, nothing chrome-use adds on its own may be visible to
+the page:
+
+- no named property on `window` or other page globals (use a closure, an
+  isolated world, or a `Symbol.for(<random id>)` slot as site runs do);
+- no DOM nodes, attributes, styles or event listeners left in the page;
+- no synthetic input when real input is possible: CDP `Input.*` events, and
+  `args.ui` for site adapters, never `el.click()` / `dispatchEvent` /
+  `execCommand` as the primary path;
+- no fixed timings or fixed sequences: pacing goes through `humanize`, with
+  jitter, seeded per process;
+- no extra requests to the site beyond what the task needs.
+
+A feature that needs any of these (the agent cursor overlay is one) is gated
+behind stealth mode off, and its setting says so. Something the user starts
+by hand (Inspect & Ask) may inject while they use it.
+
+**Contributors:** say in the PR how the change behaves under stealth mode (the
+PR template asks). A change that adds something page-visible without a gate is
+not merged.
+
+**Reviewers and mergers:** check every PR that touches the extension, anything
+evaluated in pages, input, timing or site adapters against the list above
+before merging. When unsure, probe a page: `Object.getOwnPropertyNames(window)`
+before and after, and the events' `isTrusted`, as
+`e2e_site_ui_requests_send_trusted_input` does.
+
+**Releases:** before tagging, review the release's changes against this list,
+and run `scripts/stealth-bench.sh` when they touch stealth, the relay, launch
+flags, input or anything injected into pages (see Releasing).
+
 ## Never ship a silent success
 
 The recurring defect in this codebase is not a crash. It is a command that
@@ -217,6 +256,7 @@ To prepare a release:
 4. Write the changelog entry in `CHANGELOG.md` at the top, under a new `## <version>` heading, wrapped in `<!-- release:start -->` and `<!-- release:end -->` markers. Remove the `<!-- release:start -->` and `<!-- release:end -->` markers from the previous release entry so only the new release has markers.
 5. Add a matching entry to both `docs/changelog.html` and `docs/en/changelog.html`, at the top of their version lists
 6. Open a PR and merge to `main`
+7. Check the release against "Stealth first": nothing new that a page can see while stealth mode is on
 
 When the release touches stealth, the relay, launch flags or anything injected
 into pages, run `scripts/stealth-bench.sh` locally first. It re-runs the public

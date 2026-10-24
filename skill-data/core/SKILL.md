@@ -6,6 +6,8 @@ allowed-tools: Bash(chrome-use:*), Bash(npx chrome-use:*)
 
 # chrome-use core
 
+`mobile serve --bind IP:PORT` waits with exponential backoff (1–60s) if the selected IP is unavailable. Waiting is not readiness. It never broadens the bind address; after a network change, update the bind and phone endpoint explicitly. Other bind errors fail immediately.
+
 Custom comboboxes are scrolled into view instantly and opened with trusted pointer input. `pick` reports `verified: false` with a warning when the choice is unconfirmed. Page/container scrolling uses instant movement even with CSS smooth scrolling; an unchanged position returns `scrolled: false` with a warning.
 
 Read and act on Chrome's live accessibility state through short `@eN` refs.
@@ -19,7 +21,9 @@ never replay it automatically. Isolation and journal details: [connection](refer
 
 The toolbar side panel supports Codex (app-server), Claude Code (stream-json),
 OpenCode (ACP) and Pi (JSONL RPC) when advertised by the native host. It uses
-local CLI logins and adds no page content script. Each chat has its own browser
+local CLI logins and adds no page content script. After a failed or interrupted
+turn, a new message starts in the same chat/model; older queued messages stay
+paused until explicitly resumed. Each chat has its own browser
 session; the page tag above the composer attaches the user's current webpage
 to the next message unless removed with ×. Settings opens connection options.
 Full access automatically handles supported approvals for Codex/Claude/OpenCode;

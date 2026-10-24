@@ -40,6 +40,7 @@ pub mod popup_guard;
 pub mod progress;
 #[allow(dead_code)]
 pub mod providers;
+pub mod quiet_dom;
 #[allow(dead_code)]
 pub mod react;
 #[allow(dead_code)]

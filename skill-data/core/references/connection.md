@@ -225,7 +225,7 @@ the relay registry override when present. No separate browser transport is
 introduced for displaying progress. Reconnect retrieves journal events by cursor
 without sending an old message again. A repeated message ID is idempotent, and
 reusing it with different text fails. Failure/interruption pauses queued messages
-until explicitly resumed. A stop remains pending until backend terminal output
+until explicitly resumed. In the side panel, a new message after a confirmed end starts immediately in the same conversation and model via conversationSend, even while older queued messages stay paused. The host checks the live phase under its lock: if a newer turn is already busy, an ordinary send queues without interrupting it. Capacity errors do not trigger automatic replay or a model switch. A stop remains pending until backend terminal output
 or owned-process exit is confirmed. An unconfirmed process or recovered active
 turn requires inspection; it is not marked successful or automatically replayed.
 

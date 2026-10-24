@@ -1,8 +1,171 @@
 # Changelog
 
-## 1.5.252
+## 1.5.263
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.83.
+
+### Bug Fixes
+
+- **Keep the mobile gateway alive while its network address is unavailable.** `mobile serve` now waits with exponential backoff from 1 to 60 seconds instead of exiting and triggering repeated service restarts. It keeps the exact requested address and reports readiness only after listening succeeds. Other bind errors still fail immediately. After a permanent network change, update the bind and phone endpoint or use a stable Tailscale address or named tunnel (#713).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.262
+
+Works with extension ab-connect 0.5.83.
+
+### Bug Fixes
+
+- **Continue a conversation after a model capacity error.** Sending a new message after a failed or interrupted turn now starts it in the same conversation with the same model, instead of leaving it in the paused queue. Older queued messages stay paused until explicitly resumed; failed tasks are not automatically replayed (#711).
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.261
+
+Works with extension ab-connect 0.5.82.
+
+### Bug Fixes
+
+- **`args.ui` no longer reports a target on a scrolled page as covered.** The isolated-world hit test used CDP's `DOM.getNodeForLocation`, which does not take viewport coordinates: on a page scrolled down (Douyin's post page) it answered for a different spot, so clicks on the 自主声明 and visibility selects were refused and fell back to synthetic clicks. It now uses `elementFromPoint` in the isolated world, where the page's own copy is never called; it takes viewport coordinates and passes through `pointer-events: none`, as a real click does.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.260
+
+Works with extension ab-connect 0.5.82.
+
+### Bug Fixes
+
+- **`args.ui` clicks through overlays with `pointer-events: none`.** The isolated-world hit test (1.5.257) counted an element the pointer passes through (a select's arrow, an icon laid over a button) as covering the target, so `args.ui.click` refused it and the adapter fell back to a synthetic click; seen twice on Douyin's post page. It now passes through them, as a real click and `elementFromPoint` do.
+- **The `--launch` stealth script no longer replaces natives a page can check.** Its `Error.prepareStackTrace` / `Error.captureStackTrace` wrappers, which hid evaluated frames from stack traces, are gone (chrome-use's own code runs in an isolated world since 1.5.258, so its frames are not in the page's stacks), and the `querySelector` wrapper for sites using the disable-devtool library is off unless `AGENT_BROWSER_DISABLE_DEVTOOL_SHIM=1`. botcheck's patched-natives check passes in `--launch` mode, and `scripts/stealth-bench.sh --launch` passes everything it did before (#703).
+
+### Improvements
+
+- **`setOn` takes an element.** A site adapter can hand the file input itself to `args.<file>.setOn(el)`, also one that is not in the page, and chrome-use sets the file on that node; adapters no longer have to mark an input with an attribute or id to name it by selector.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.259
+
+Works with extension ab-connect 0.5.82.
+
+### Features
+
+- **Site adapters can run where the page cannot see them: `"world": "isolated"`.** chrome-use's own reads moved to an isolated world in 1.5.258, but an adapter's own code still ran in the page's main world, so its `querySelector`, `fetch` and the like went through any wrapper the page installed. An adapter that declares `"world": "isolated"` in `@meta` now runs in the tab's isolated world: same DOM, cookies and storage, its own JS. What only page JS has (a React fiber or other element expando, an app store, the page's own signed `fetch`) comes through the new `args.page(fn, ...args)`: `fn` is sent by its source, run in the main world with the JSON `args`, and its JSON result comes back. Adapters without the key run as before. A `fetch` from the isolated world sends the page's cookies but skips the page's own fetch wrapper, so a site that signs its requests there needs `args.page` for them. The douyin, bilibili-creator, youtube-studio and twitter write adapters in chrome-use-sites move to it.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.258
+
+Works with extension ab-connect 0.5.82.
+
+### Improvements
+
+- **Every command reads the page from an isolated world.** 1.5.257 did this for `args.ui` and `scrollintoview`; now `snapshot`, `click`, `type`, `fill`, `hover`, `find` / `getby*`, `get text` and the rest do too. chrome-use's own page reads (finding elements, measuring them, checking what covers them, reading values and text) used to run in the page's main world, where a page that wraps `querySelector`, `getBoundingClientRect`, `getComputedStyle`, `innerText` and the like sees an `<anonymous>` caller that is not one of its scripts. Each `Runtime.evaluate` and `DOM.resolveNode` chrome-use sends without naming a context now goes to the tab's isolated world (one per tab, recreated after a navigation; a node in a same-process frame falls back to the main world), so the page's own functions are never called. What has to see the page's JS still runs in the main world: your `eval`, `wait --fn`, `extract`, `addscript`, `pushstate`, site adapters, the React tools, the anti-bot vendor probe, `site analyze`, `stealth status` and the passkey guard, and `fill` / value reads on Monaco and CodeMirror editors (their model lives in page JS). `AGENT_BROWSER_MAIN_WORLD=1` puts everything back in the main world. As a side effect the popup guard no longer leaves `window.__chromeUsePopupGuard` in the page.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.257
+
+Works with extension ab-connect 0.5.82.
+
+### Improvements
+
+- **`args.ui` and `scrollintoview` read the page without the page seeing it.** botcheck 0.2 wraps the page's `querySelector`, `getBoundingClientRect`, `elementFromPoint`, `getComputedStyle` and friends and looks at who calls them; rebrowser's `mainWorldExecution` test does the same for one function. chrome-use called them from the page's main world to find, measure and hit-test elements, and the caller showed up as `<anonymous>`, not one of the page's scripts. `args.ui` (the input site adapters such as `douyin-creator/video-publish` use) and `scrollintoview` now find elements in an isolated world, read an adapter's element handle off the run object by property, measure in the isolated world and hit-test with CDP's `DOM.getNodeForLocation`, so the page's own functions are never called. An adapter's own page reads are still the adapter's: this covers what chrome-use does on its behalf. Other commands (`click`, `type`, `fill`, `hover`, `snapshot`, `find`, `get text`) follow in later releases.
+- **Scrolling an element into view no longer gives up after 12 wheel steps.** `args.ui.scroll` and `scrollintoview` keep wheeling until the element is in view, up to 60 steps, and stop early only when two steps in a row leave it where it was.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.256
+
+Works with extension ab-connect 0.5.82.
+
+### Improvements
+
+- **`scroll` and `scrollintoview` use the wheel by default.** 1.5.255 moved `scroll --until` to the wheel; plain `scroll` (direction and amount, with or without `--selector`) and `scrollintoview` still moved the page with `scrollBy` / `scrollIntoView`, which a page sees as scrolling with no input at all (botcheck's scroll-source check, run in a real Chrome through the side panel). With humanize on (the default) they now wheel over the element or the page; `scrollintoview` wheels over the container the element scrolls in, re-measuring after each step, as `args.ui.scroll` does. A wheel that moves nothing falls back to the old way; `AGENT_BROWSER_HUMANIZE=off` keeps it.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.255
+
+Works with extension ab-connect 0.5.82.
+
+### Improvements
+
+- **Stealth by default for the everyday commands.** botcheck (botcheck.leeguoo.com, our own detector for what automation leaves in a page and how its input looks) found that `click`, `type` and `scroll --until` gave themselves away, and they now behave like a person by default:
+  - Input is humanized at the Fast level everywhere (a curved pointer path, landing jitter, varied key gaps), and at the Human level on sites that run their own bot checks the vendor detector cannot see (Douyin, TikTok, Xiaohongshu, Bilibili, X, Weibo, Kuaishou, Zhihu, Taobao, Tmall, JD, Pinduoduo, Instagram, Facebook, LinkedIn, YouTube).
+  - A click by CSS selector no longer lands on the exact centre every time: the selector path now knows the element's size, as the `@ref` path did.
+  - `type` on a web page types with key presses without `--key-events`, and Chinese or emoji go through an IME composition (key presses the page sees as `Process`, compositionstart / compositionupdate, then the commit), a few characters per commit. A bulk insert put text in with no keydown at all. Pages that are not http(s) (VS Code and Electron webviews) keep the bulk insert.
+  - `scroll --until` scrolls with the wheel over what it scrolls, falling back to `scrollBy` for a step the wheel does not move.
+  - Capitals and shifted symbols wait a human-sized moment after Shift (3–7 ms before).
+  - `AGENT_BROWSER_HUMANIZE=off` restores the instant behaviour.
+
+### Bug Fixes
+
+- **A running site adapter leaves nothing on `window`.** botcheck found 1.5.253's `Symbol.for(<id>)` slot through `Object.getOwnPropertySymbols(window)`. The start script now returns the run object and the daemon reaches it by its CDP handle (`Runtime.callFunctionOn`); a navigation still ends the run and is reported as interrupted, and `--until-done` reruns it.
+- **`args.ui.type` writes Chinese through an IME composition**, as `type` now does.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.254
+
+Works with extension ab-connect 0.5.82.
+
+### Features
+
+- **Stealth mode switch, on by default.** The extension's options page has a Stealth mode switch (ab-connect 0.5.82). While it is on, chrome-use adds nothing of its own to the pages it drives; features that draw into pages work only with it off. Today that is the agent cursor: its switch is greyed out under stealth mode, and an agent cursor turned on before this stays dark until stealth mode is turned off. Inspect & Ask works either way, since you start it yourself. The extension's status reports `stealthMode`. Contributors, reviewers and releases now check every change for anything a page could see ("Stealth first" in AGENTS.md, and a new pull request template).
+
+### Bug Fixes
+
+- **The daemon's pointer follows `args.ui`.** After a site adapter's click, hover or scroll, a coordinate-less `mouse down` / `mouse up` pressed where the pointer was before the adapter ran (#698).
+- **`args.ui` waits a varied time between scroll steps** while bringing an element into view, instead of a fixed 120 ms (#699).
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.253
+
+Works with extension ab-connect 0.5.81.
+
+### Features
+
+- **Site adapters can have chrome-use do their input: `args.ui`.** An adapter runs inside the page, so its own `el.click()`, `dispatchEvent` and `execCommand` are `isTrusted: false` events with no pointer movement and no key presses, which a site's bot checks can see. A write adapter can now call `args.ui.click(el)`, `hover`, `type(el, text, {clear})`, `typeHere(text)`, `press(key, {repeat})` (chords such as `Mod+a`) and `scroll(el | pixels)`, with an element or a CSS selector. The daemon wheels the element into view inside its scroll container, picks a point that is really on it, and clicks or types with real CDP input at a human pace: a curved pointer path, press dwell and varied keystroke gaps, whatever the anti-bot detector made of the site. ASCII goes as key presses, capitals and shifted symbols with Shift held; Chinese and emoji go in a few characters at a time after a pause, the way an IME commits them. A call fails with a reason when the element is gone, has no size or is covered, and names what covers it. A request the adapter does not wait for is still served before its result is read, so a last click before the page navigates still lands. The douyin, douyin-creator, bilibili-creator, youtube-studio and twitter write adapters in chrome-use-sites use it and keep their old events on older chrome-use.
+
+### Bug Fixes
+
+- **A running adapter no longer shows up as a named `window` property.** The run lived at `window.__cu_site_<id>` (`window.__cu_eval_<id>` for `eval --background`), which any page script listing `Object.getOwnPropertyNames(window)` could match on its fixed prefix. It now lives under `Symbol.for(<random id>)`, which `Object.keys`, `getOwnPropertyNames` and `for…in` do not list.
+- **Typed capitals and symbols carry Shift.** `type --key-events` and `args.ui` sent `H`, `#` or `@` as key presses with `shiftKey` false, which no keyboard produces; Shift is now pressed around them, and `!@#$%^&*()` use their digit keys (`Digit1`…) instead of an empty code.
+- **Humanized input no longer repeats from one daemon start to the next.** The seed for pointer paths, landing jitter and keystroke gaps started from a constant, so every daemon replayed the same sequence; it now starts from a random value.
+- **`find … click` reports where the element really is.** The `at (x,y) WxH` in its reply read fractional coordinates as 0 (`at (0,205) 0x18` for an element at x 525, 66 wide); the click itself was not affected.
+- **An adapter that sends input no longer waits up to a second per request.** The page is polled every 100 ms again after a request was served.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.252
+
 Works with extension ab-connect 0.5.81.
 
 ### Bug Fixes
@@ -12,7 +175,6 @@ Works with extension ab-connect 0.5.81.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.251
 

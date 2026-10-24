@@ -6249,6 +6249,9 @@ and tests on an SSH host, load core/development. Prefer the usage guide over
   skills path [name]           Print skill directory path
 
 Core Commands:
+  mobile serve [--bind IP:PORT]  Start the paired-phone gateway (default 127.0.0.1:17345)
+                             Unavailable IP: wait/retry in 1–60s, without changing
+                             the address. Ready only after bind; other errors fail.
   open <url>                 Navigate to URL
   read [url]                 Fetch a URL (or the active tab) as agent-readable text
                              [--raw --require-md --llms <index|full> --outline --filter <t> --timeout <ms>]
@@ -6649,6 +6652,8 @@ Setup:
                              unconfirmed and never automatically replayed.
                              Stop & send (Ctrl/Cmd+Enter) waits for confirmed stop
                              before priority sending; ordinary queues remain paused.
+                             New panel messages after failure/interruption start in the
+                             same chat/model; older queued messages remain paused.
                              Read CLI models fetches bounded CLI metadata without
                              a prompt; account reports do not verify model access.
                              Metadata probes use owned process groups or Windows jobs.

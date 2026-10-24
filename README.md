@@ -204,7 +204,7 @@ The permission switch applies to one conversation. New conversations start with 
 - **OpenCode:** turning it off selects **CLI permissions**. OpenCode's own rules may allow tools without asking. Requests it does send appear in the panel; full access answers them with **Allow once** and does not change its stored permission rules.
 - **Pi:** there is no per-tool approval mechanism. Turning full access off selects **Browser only**, exposing only the `chrome_use` MCP tools, without shell or file tools. Turning it on enables the CLI's full tool set.
 
-History streams replies, expandable tool rows and requests. Tool output does not prove the browser task succeeded. Messages sent during a reply enter a queue; edit or remove them before they start, using **Load full text** for truncated previews. Failure or interruption pauses the queue until **Resume queue**. **Stop & send** or Ctrl/Cmd+Enter waits for confirmed interruption or process exit before sending ahead of the ordinary queue, which remains paused. Reconnect reads existing history without resending. An unconfirmed send can be retried explicitly with its original message ID; clearing its warning does not cancel a task that may already have arrived.
+History streams replies, expandable tool rows and requests. Tool output does not prove the browser task succeeded. Messages sent during a reply enter a queue; edit or remove them before they start, using **Load full text** for truncated previews. Failure or interruption pauses the queue until **Resume queue**. After a failed or interrupted turn, a new message starts immediately in the same conversation and model; older queued messages stay paused until you resume them explicitly. **Stop & send** or Ctrl/Cmd+Enter waits for confirmed interruption or process exit before sending ahead of the ordinary queue, which remains paused. Reconnect reads existing history without resending. An unconfirmed send can be retried explicitly with its original message ID; clearing its warning does not cancel a task that may already have arrived.
 
 To delete a conversation, stop its response, click the header's delete button and confirm. Deletion removes panel history and that conversation's browser session, plus Codex rollout files, Claude session files/directories, OpenCode history through `session/delete`, or Pi session files inside the conversation folder. Codex's SQLite cache is left untouched. The panel reports cleanup failures or unconfirmed tab closure.
 
@@ -277,6 +277,8 @@ Free for 7 days, then **US$4.99 one-time for up to 3 Macs**. Notarized `.dmg`; m
 <br clear="all">
 
 ## Usage
+
+`chrome-use mobile serve --bind IP:17345` waits with exponential backoff (1–60 seconds) when that IP is unavailable. It keeps the exact address and reports readiness only after listening succeeds. Update `--bind` and the phone endpoint after changing networks; it never switches to all interfaces automatically. Other bind errors fail immediately.
 
 Custom comboboxes are scrolled into view instantly and opened with trusted pointer input. `pick` reports `verified: false` with a warning when the choice is unconfirmed. Page/container scrolling uses instant movement even with CSS smooth scrolling; an unchanged position returns `scrolled: false` with a warning.
 
