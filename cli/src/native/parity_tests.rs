@@ -207,6 +207,13 @@ fn minimal_command(action: &str, id: &str) -> Value {
     let obj = cmd.as_object_mut().unwrap();
 
     match action {
+        "launch" => {
+            obj.insert("headless".to_string(), json!(true));
+            obj.insert(
+                "args".to_string(),
+                json!(["--no-sandbox", "--disable-dev-shm-usage"]),
+            );
+        }
         "navigate" | "diff_url" | "waitforurl" => {
             obj.insert("url".to_string(), json!(PARITY_PAGE));
         }
@@ -410,6 +417,7 @@ async fn e2e_all_documented_actions_are_handled() {
     for (i, action) in DOCUMENTED_ACTIONS.iter().enumerate() {
         let id = format!("parity-{}", i);
         let cmd = minimal_command(action, &id);
+        eprintln!("Dispatch parity: {action}");
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(15),
             execute_command(&cmd, &mut state),
