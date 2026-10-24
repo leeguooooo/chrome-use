@@ -476,7 +476,11 @@ chrome-use jev run --goal "查苏黎世到伦敦的航班" --url https://www.goo
 
 CreepJS 上的 `0% stealth` 是关键数字：因为连接路径**什么都不打补丁**，根本没有可供说谎检测器抓的 override。（读 `navigator.languages` 顺序或 IP 地理位置的面板可能给个软性的「navigator」/「location」标记。那反映的是*你真实 Chrome* 的语言列表和网络，不是自动化破绽。）
 
-`--launch` 独立模式（全新浏览器）会改用一整套隐身补丁，也能过上述检测，唯一例外：CreepJS 报 **~20% stealth**，因为 srcdoc-iframe 的 `contentWindow` 补丁触发了它的 `hasIframeProxy` 探测（用来藏自动化的 proxy 本身成了破绽）。其余全干净（`0% headless`、sannysoft/browserscan 全绿、Cloudflare 通过）。设 **`AGENT_BROWSER_DISABLE_IFRAME_PROXY=1`** 去掉那个补丁即可拿到干净的 **0% stealth**（代价是放弃小众的 srcdoc-iframe 遮蔽）。**扩展连接路径**（你的真实 Chrome）零 JS 注入、不受影响，它才是货真价实的 0% 路径。
+有头 `--launch` 默认保留 Chrome 的原生指纹，包括 CPU、GPU、UA Client Hints、屏幕尺寸和 iframe 函数。页面、Web Worker 和 Service Worker 使用同一个真实浏览器的属性。Canvas/音频噪声和 disable-devtool 兼容包装仍需显式开启，开启后可能被检测到。扩展连接路径也保留原生指纹。
+
+没有桌面的 Linux 服务器建议用 Xvfb 等虚拟显示运行有头 Chrome。`AGENT_BROWSER_ALLOW_HEADLESS=1` 仅作为兼容选项：headless 仍可能被识别，Worker 也可能暴露它。`stealth status` 会报告实际启动方式并提示这一限制；基础页面探针通过不代表反爬验收通过。检测结果取决于浏览器、主机、图形支持和网络，不能保证 Cloudflare 放行或账号安全。
+
+CDP 的 IME 路径会产生 composition 事件，但 Chrome 可能将 `compositionend` 标记为 untrusted。检测页通过不代表每个事件都是 trusted。
 
 ### 自己验证
 

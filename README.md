@@ -520,7 +520,11 @@ When connected to your real Chrome, we inject **zero** JavaScript patches. Your 
 
 `0% stealth` on CreepJS is the key number: because the connect path patches **nothing**, there is no override for a lie-detector to catch. (Dashboards that read `navigator.languages` order or IP geolocation may show a soft "navigator"/"location" flag. That tracks *your real Chrome's* language list and network, not an automation tell.)
 
-When using `--launch` mode (standalone browser), a full suite of stealth patches is applied instead, and it passes the suite above, with one caveat: CreepJS reports **~20% stealth** because the srcdoc-iframe `contentWindow` patch trips its `hasIframeProxy` probe (the proxy that hides automation is itself a tell). Everything else is clean (`0% headless`, sannysoft/browserscan green, Cloudflare passed). Set **`AGENT_BROWSER_DISABLE_IFRAME_PROXY=1`** to drop that patch for a clean **0% stealth** (trades the niche srcdoc-iframe masking). The **extension-connect path** (your real Chrome) injects zero JS and is unaffected; it's the genuine 0% path.
+Headed `--launch` now preserves Chrome's native fingerprint by default, including CPU, GPU, UA Client Hints, screen metrics and iframe functions. Pages, Web Workers and Service Workers see the same underlying browser. Canvas/audio noise and disable-devtool compatibility wrapping remain explicit opt-ins; they can be detected. The extension-connect path also keeps the native fingerprint.
+
+On a display-less Linux server, prefer headed Chrome on a virtual display such as Xvfb. `AGENT_BROWSER_ALLOW_HEADLESS=1` is an explicit compatibility fallback: headless Chrome can still be detected, including through workers. `stealth status` reports the actual launch mode and warns about that limitation; its page probes are not an external bot-detection verdict. Detector results depend on the browser, host, graphics support and network. A passing result does not guarantee Cloudflare clearance or account safety.
+
+The CDP IME path generates composition events, but Chrome may mark `compositionend` untrusted. Do not interpret a detector's pass as proof that every event is trusted.
 
 ### Verify it yourself
 

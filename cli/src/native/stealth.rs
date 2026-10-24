@@ -10,6 +10,7 @@ use super::cdp::client::CdpClient;
 
 /// Full stealth JS payload compiled at build time (for --launch mode).
 const STEALTH_SCRIPTS_RAW: &str = include_str!("stealth_scripts.js");
+const OPTIONAL_SCRIPTS: &str = include_str!("stealth_optional.js");
 
 /// Minimal stealth script for CDP-attach mode (connecting to user's real Chrome).
 /// Only removes navigator.webdriver — the browser's own fingerprint is already real.
@@ -32,7 +33,9 @@ pub enum StealthMode {
     /// Connected to user's real Chrome — minimal patches only (webdriver removal).
     /// The browser already has a real fingerprint; heavy patches would create detectable lies.
     CdpAttach,
-    /// Launched a new Chrome instance — apply full stealth patches.
+    /// Headed Chrome uses its native fingerprint in pages and workers.
+    NativeLaunch,
+    /// Explicit headless fallback. Legacy page patches cannot hide workers.
     FullLaunch,
 }
 
@@ -40,6 +43,10 @@ pub enum StealthMode {
 pub fn build_stealth_script(mode: StealthMode, locale: Option<&str>) -> String {
     if mode == StealthMode::CdpAttach {
         return MINIMAL_STEALTH_SCRIPT.to_string();
+    }
+
+    if mode == StealthMode::NativeLaunch {
+        return native_launch_script(hide_canvas_enabled(), disable_devtool_shim_enabled());
     }
 
     // Full launch mode: inject all patches. Languages are never patched in
@@ -70,6 +77,16 @@ pub fn build_stealth_script(mode: StealthMode, locale: Option<&str>) -> String {
     // frame's real URL. Rust can't decide this at attach time: an OOPIF
     // attaches before its navigation commits, with an empty URL.
     format!("if (!{CHALLENGE_FRAME_GUARD_JS}) {{\n{body}\n}}")
+}
+
+fn native_launch_script(hide_canvas: bool, devtool_shim: bool) -> String {
+    if !hide_canvas && !devtool_shim {
+        return String::new();
+    }
+    format!(
+        "if (!{CHALLENGE_FRAME_GUARD_JS}) {{\nconst __abStealth = {{ hideCanvas: {hide_canvas}, canvasSeed: {}, disableDevtoolShim: {devtool_shim} }};\n{OPTIONAL_SCRIPTS}\n}}",
+        canvas_noise_seed()
+    )
 }
 
 /// True inside an anti-bot challenge frame (Cloudflare Turnstile / managed
@@ -133,7 +150,8 @@ fn canvas_noise_seed() -> u32 {
 /// Apply stealth patches to a browser session.
 ///
 /// In `CdpAttach` mode (user's real Chrome): only removes `navigator.webdriver`.
-/// In `FullLaunch` mode (new Chrome): injects all 32 patches + UA override.
+/// Headed launches preserve native page/worker fingerprints. Explicit headless
+/// launches retain compatibility patches, which do not guarantee undetectability.
 pub async fn apply_stealth(
     client: &CdpClient,
     session_id: &str,
@@ -155,13 +173,15 @@ pub async fn apply_stealth(
     let script = build_stealth_script(mode, locale);
 
     // Inject stealth scripts to run before page JS
-    client
-        .send_command(
-            "Page.addScriptToEvaluateOnNewDocument",
-            Some(json!({ "source": script })),
-            Some(session_id),
-        )
-        .await?;
+    if !script.is_empty() || mode == StealthMode::CdpAttach {
+        client
+            .send_command(
+                "Page.addScriptToEvaluateOnNewDocument",
+                Some(json!({ "source": script })),
+                Some(session_id),
+            )
+            .await?;
+    }
 
     // In full launch mode, also override UA to remove HeadlessChrome marker
     if mode == StealthMode::FullLaunch {
@@ -174,7 +194,7 @@ pub async fn apply_stealth(
                         "Emulation.setUserAgentOverride",
                         Some(json!({
                             "userAgent": cleaned,
-                            "acceptLanguage": accept_language(locale.unwrap_or("en-US")),
+                            "acceptLanguage": accept_lang_list(locale.unwrap_or("en-US")),
                             "platform": platform_string(),
                             "userAgentMetadata": build_ua_metadata(&cleaned, locale),
                         })),
@@ -183,7 +203,9 @@ pub async fn apply_stealth(
                     .await?;
             }
         }
+    }
 
+    if mode != StealthMode::CdpAttach {
         // Align the timezone for fresh launches when explicitly requested.
         // Headless/launched Chrome often reports UTC (or the host's zone), which
         // can contradict a proxy's geolocation or a spoofed locale.
@@ -216,15 +238,6 @@ pub fn accept_lang_list(locale: &str) -> Option<String> {
         Some((base, _)) if !base.is_empty() => format!("{locale},{base}"),
         _ => locale.to_string(),
     })
-}
-
-/// Accept-Language header value for a locale, shaped like the one Chrome
-/// itself sends: `zh-CN` -> `zh-CN,zh;q=0.9`, `en` -> `en`.
-fn accept_language(locale: &str) -> String {
-    match locale.split_once('-') {
-        Some((base, _)) if !base.is_empty() => format!("{locale},{base};q=0.9"),
-        _ => locale.to_string(),
-    }
 }
 
 /// Resolve the timezone to emulate for a fresh-launch session, if any.
@@ -295,6 +308,9 @@ pub async fn apply_stealth_to_current_page(
     locale: Option<&str>,
 ) -> Result<(), String> {
     let script = build_stealth_script(mode, locale);
+    if script.is_empty() {
+        return Ok(());
+    }
     client
         .send_command(
             "Runtime.evaluate",
@@ -389,7 +405,39 @@ fn build_ua_metadata(ua: &str, locale: Option<&str>) -> serde_json::Value {
 
 #[cfg(test)]
 mod locale_tests {
-    use super::{accept_language, build_stealth_script, StealthMode};
+    use super::{build_stealth_script, StealthMode};
+
+    #[test]
+    fn headed_defaults_preserve_native_page_and_worker_fingerprints() {
+        assert!(super::native_launch_script(false, false).is_empty());
+        for (canvas, shim) in [(true, false), (false, true), (true, true)] {
+            let script = super::native_launch_script(canvas, shim);
+            for property in [
+                "hardwareConcurrency",
+                "userAgentData",
+                "outerWidth",
+                "contentWindow",
+                "getParameter",
+            ] {
+                assert!(
+                    !script.contains(property),
+                    "optional patches must not replace {property}"
+                );
+            }
+            if let Ok(node) = which_node() {
+                let out = std::process::Command::new(node)
+                    .arg("-e")
+                    .arg(format!("new Function({script:?})"))
+                    .output()
+                    .unwrap();
+                assert!(
+                    out.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+        }
+    }
 
     #[test]
     fn challenge_frames_skip_js_patches() {
@@ -451,9 +499,12 @@ mod locale_tests {
     }
 
     #[test]
-    fn accept_language_matches_chrome_shape() {
-        assert_eq!(accept_language("zh-CN"), "zh-CN,zh;q=0.9");
-        assert_eq!(accept_language("en"), "en");
+    fn cdp_languages_are_a_list_without_header_weights() {
+        assert_eq!(
+            super::accept_lang_list("zh-CN").as_deref(),
+            Some("zh-CN,zh")
+        );
+        assert_eq!(super::accept_lang_list("en").as_deref(), Some("en"));
         assert_eq!(
             super::accept_lang_list("ja-JP").as_deref(),
             Some("ja-JP,ja")

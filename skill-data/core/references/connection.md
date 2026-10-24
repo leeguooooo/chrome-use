@@ -388,3 +388,11 @@ A Codex workspace-write conversation cannot schedule Claude/Pi unrestricted
 file writes. Pi's tools always run without per-call approval; a conversation
 that requires approvals cannot schedule automatic Pi work, regardless of its
 saved fullAccess flag.
+
+## Remote Linux browser acceptance
+
+Run the CLI and browser on the SSH host. Prefer headed Chrome on a real or virtual display (for example Xvfb); the default headed launch preserves native CPU, GPU, screen, UA Client Hints and iframe functions across pages and workers. Keep the CDP port on loopback if attaching over an SSH tunnel. Configure the display and browser executable on that host explicitly.
+
+`AGENT_BROWSER_ALLOW_HEADLESS=1` permits a compatibility fallback, not an undetectable browser. Headless page UA patches cannot conceal Worker or Service Worker fingerprints. `stealth status` includes `headless`, `scope` and `warnings`, and marks a known headless launch as needing attention even when the basic page probes pass. Recheck public detectors on the actual host; cloud-provider IPs, graphics support, fonts and site policies still affect results. Do not infer Cloudflare or real-account acceptance from one detector.
+
+Native CDP IME input can produce an untrusted `compositionend`. Keep that evidence when reporting a detector pass; do not rewrite event trust or dispatch synthetic events to conceal it.

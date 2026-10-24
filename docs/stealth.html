@@ -135,13 +135,13 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
         <code>location</code> 标记——那反映的是<em>你真实 Chrome</em> 的语言列表和网络，<strong>不是</strong>自动化痕迹。
       </div>
 
-      <div class="du-callout warn">
-        <div class="du-callout-title">⚠️ <code>--launch</code> 隔离浏览器的一个 caveat</div>
-        用 <code>--launch</code>（独立浏览器）时会改为应用一整套 stealth 补丁，同样能通过上面这套检测——
-        但 CreepJS 会报 <strong>~20% stealth</strong>，因为 srcdoc-iframe 的 <code>contentWindow</code> 补丁触发了它的
-        <code>hasIframeProxy</code> 探针（那个用来藏自动化的 proxy 本身成了破绽）。其余全干净（<code>0% headless</code>，
-        sannysoft/browserscan 全绿，Cloudflare 通过）。设 <code>AGENT_BROWSER_DISABLE_IFRAME_PROXY=1</code> 去掉那个补丁
-        即可拿到干净的 <span class="mark">0% stealth</span>。而扩展连接路径（你真实的 Chrome）注入零 JS，不受影响——它就是那个真正的 0% 路径。
+      <div class="du-callout note">
+        <div class="du-callout-title">有头启动保留原生指纹</div>
+        有头 <code>--launch</code> 默认不再用 JavaScript 改写 CPU、GPU、UA Client Hints、屏幕或 iframe。
+        页面和 Worker 使用 Chrome 的真实属性。Canvas/音频噪声及 disable-devtool 兼容包装仍需显式开启，可能被检测到。
+        无桌面 Linux 主机建议通过 Xvfb 运行有头 Chrome。显式允许 headless 仍可能暴露 Worker 指纹；
+        <code>stealth status</code> 会提示这一限制。基础探针通过不代表 Cloudflare 放行或账号安全。
+        CDP IME 提交产生的 <code>compositionend</code> 也可能被 Chrome 标记为 untrusted。
       </div>
 
       <hr class="du-divider" />
@@ -277,7 +277,7 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
       <h2>自检：chrome-use stealth status</h2>
       <p>
         任何时候都能自查当前的隐身状态：<code>chrome-use stealth status</code> 报告当前模式加上一组实时探针
-        （<code>webdriver</code> / <code>chrome</code> / <code>plugins</code> / UA），以及已生效的覆盖。加 <code>--json</code> 拿机器可读输出。
+        （<code>webdriver</code> / <code>chrome</code> / <code>plugins</code> / UA），以及当前配置。加 <code>--json</code> 拿机器可读输出。<code>headless</code>、<code>scope</code> 和 <code>warnings</code> 说明诊断边界；已知 headless 启动不会报告全部通过。
       </p>
       <div class="du-code">
         <div class="du-code-head">

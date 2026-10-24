@@ -3883,7 +3883,7 @@ fn auto_connect_failure_message(cause: &str, host_installed: bool) -> String {
 
 /// Called after every successful launch / CDP connect / auto-connect.
 /// Uses `CdpAttach` mode for external connections (minimal patches) and
-/// `FullLaunch` mode for newly launched Chrome (all patches).
+/// native fingerprints for headed launches and compatibility patches for headless.
 /// Whether stealth is enabled (default on; `AGENT_BROWSER_STEALTH=0` disables).
 fn stealth_enabled() -> bool {
     !env::var("AGENT_BROWSER_STEALTH")
@@ -3904,9 +3904,12 @@ async fn apply_stealth_via_mgr(mgr: &BrowserManager, session_id: &str) -> bool {
     }
     // Determine mode: an external attach uses minimal patches (the user's real
     // Chrome already has a genuine fingerprint — heavy patches create detectable
-    // "lies" like creepjs hasIframeProxy); a fresh launch uses the full set.
+    // "lies" like creepjs hasIframeProxy). Headed launches likewise preserve
+    // native values; only explicit headless fallback keeps legacy patches.
     let mode = if mgr.is_cdp_connection() {
         stealth::StealthMode::CdpAttach
+    } else if mgr.launched_headless() == Some(false) {
+        stealth::StealthMode::NativeLaunch
     } else {
         stealth::StealthMode::FullLaunch
     };
@@ -6816,7 +6819,7 @@ async fn ui_viewport(
 
 /// Local stealth self-check: reports the active mode, live fingerprint probes,
 /// and the list of applied overrides — so an agent (or human) can confirm
-/// stealth is working without driving an external detector, and audit exactly
+/// basic page properties are configured, and audit exactly
 /// what's patched on this path (issue #5).
 async fn handle_stealth_status(state: &DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
@@ -6845,19 +6848,32 @@ async fn handle_stealth_status(state: &DaemonState) -> Result<Value, String> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
+    let headless = mgr.launched_headless();
     let checks = json!([
         { "name": "navigator.webdriver is false", "pass": !webdriver },
         { "name": "window.chrome present", "pass": has_chrome },
         { "name": "navigator.plugins non-empty", "pass": plugins > 0, "value": plugins },
         { "name": "userAgent has no 'Headless'", "pass": !headless_ua },
+        { "name": "browser was not launched headless", "pass": headless != Some(true) },
     ]);
-    let ok = !webdriver && has_chrome && plugins > 0 && !headless_ua;
+    let ok = !webdriver && has_chrome && plugins > 0 && !headless_ua && headless != Some(true);
 
-    let overrides = if connect {
+    let native_launch = !connect && headless == Some(false);
+    let overrides = if !stealth_enabled() {
+        json!([
+            "Stealth setup is disabled by AGENT_BROWSER_STEALTH=0; no per-page overrides applied"
+        ])
+    } else if connect {
         json!([
             "navigator.webdriver=false via Emulation.setAutomationOverride (native CDP — no JS lie)",
             "Runtime.enable OFF unless console/error capture is opted in (no rebrowser runtime leak)",
             "zero JS patches injected — the browser's real fingerprint is used as-is",
+        ])
+    } else if native_launch {
+        json!([
+            "native Chrome fingerprint: no default JS overrides of CPU, GPU, UA, screen or iframe natives",
+            "locale uses Chrome's --accept-lang switch; explicit timezone uses native emulation",
+            "canvas/audio noise and disable-devtool compatibility wrapping remain explicit opt-ins",
         ])
     } else {
         let iframe_proxy =
@@ -6869,7 +6885,7 @@ async fn handle_stealth_status(state: &DaemonState) -> Result<Value, String> {
                 "navigator.webdriver removed; languages left as the system's (set AGENT_BROWSER_LOCALE to override)"
             },
             "window.chrome / chrome.runtime shimmed; navigator.platform fixed",
-            "WebGL vendor/renderer, plugins, permissions normalized",
+            "native CPU/GPU/screen values retained; legacy plugins/permissions compatibility patches applied",
             format!(
                 "srcdoc-iframe contentWindow proxy: {} (CreepJS hasIframeProxy)",
                 if iframe_proxy {
@@ -6897,6 +6913,11 @@ async fn handle_stealth_status(state: &DaemonState) -> Result<Value, String> {
             "checks": checks,
             "overrides": overrides,
             "probe": p,
+            "headless": headless,
+            "scope": "Basic page probes only; not a bot-detection verdict",
+            "warnings": if headless == Some(true) {
+                json!(["Headless Chrome is detectable. Page UA patches do not conceal Worker or Service Worker fingerprints. Use headed Chrome with a real or virtual display."])
+            } else { json!([]) },
         }
     }))
 }

@@ -152,18 +152,13 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
         an automation trace.
       </div>
 
-      <div class="du-callout warn">
-        <div class="du-callout-title">⚠️ A caveat for <code>--launch</code> isolated browsers</div>
-        With <code>--launch</code> (a standalone browser), a full set of stealth patches is applied instead, which also
-        passes the detections above—
-        but CreepJS will report <strong>~20% stealth</strong>, because the srcdoc-iframe <code>contentWindow</code> patch
-        trips its
-        <code>hasIframeProxy</code> probe (the very proxy used to hide automation becomes the crack). Everything else is
-        clean (<code>0% headless</code>,
-        sannysoft/browserscan all green, Cloudflare passes). Set <code>AGENT_BROWSER_DISABLE_IFRAME_PROXY=1</code> to drop
-        that patch
-        and get a clean <span class="mark">0% stealth</span>. The extension connection path (your real Chrome) injects zero
-        JS and is unaffected—it is the true 0% path.
+      <div class="du-callout note">
+        <div class="du-callout-title">Headed launches preserve the native fingerprint</div>
+        Headed <code>--launch</code> no longer replaces CPU, GPU, UA Client Hints, screen or iframe properties with JavaScript.
+        Pages and workers use Chrome's real values. Canvas/audio noise and disable-devtool compatibility wrapping remain detectable opt-ins.
+        On display-less Linux hosts, use headed Chrome on a virtual display such as Xvfb. Explicit headless launches remain detectable through workers;
+        <code>stealth status</code> warns about this limitation. Basic probes do not guarantee Cloudflare clearance or account safety.
+        Chrome may also mark CDP IME <code>compositionend</code> events untrusted.
       </div>
 
       <hr class="du-divider" />
@@ -318,8 +313,8 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
       <p>
         You can inspect the current stealth state at any time: <code>chrome-use stealth status</code> reports the current
         mode plus a set of live probes
-        (<code>webdriver</code> / <code>chrome</code> / <code>plugins</code> / UA), along with the overrides in effect. Add
-        <code>--json</code> for machine-readable output.
+        (<code>webdriver</code> / <code>chrome</code> / <code>plugins</code> / UA), along with the current configuration. Add
+        <code>--json</code> for machine-readable output. The <code>headless</code>, <code>scope</code> and <code>warnings</code> fields explain the limits; a known headless launch does not report all checks passing.
       </p>
       <div class="du-code">
         <div class="du-code-head">

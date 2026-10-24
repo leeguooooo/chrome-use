@@ -16,6 +16,8 @@ macOS/Linux while that Chrome is running, then reopen the panel. Explicit data
 directories and verification limits: [commands](references/commands.md) and
 [troubleshooting](references/troubleshooting.md).
 
+Headed `--launch` preserves native page/worker fingerprints by default. For a display-less Linux host, prefer headed Chrome on Xvfb. Explicit headless remains detectable; `stealth status` reports the real launch mode, and its basic probes do not prove bot-detection acceptance. CDP IME `compositionend` can be untrusted even when a detector passes. See [connection](references/connection.md).
+
 Read and act on Chrome's live accessibility state through short `@eN` refs.
 This page holds the rules and the routing; load one reference from the table
 at the end only when the task or a symptom needs it.

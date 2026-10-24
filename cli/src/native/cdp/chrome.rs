@@ -389,6 +389,25 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         args.push(format!("--window-size={},{}", w, h));
     }
 
+    // Chrome's headless display otherwise stays 800x600 even when its window
+    // is larger. Configure the native screen rather than lying through getters.
+    if launch_headless()
+        && !has_extensions
+        && !options.args.iter().any(|a| a.starts_with("--screen-info="))
+    {
+        let (w, h) = options
+            .args
+            .iter()
+            .rev()
+            .find_map(|arg| {
+                let (w, h) = arg.strip_prefix("--window-size=")?.split_once(',')?;
+                Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?))
+            })
+            .or(options.viewport_size)
+            .unwrap_or((1280, 720));
+        args.push(format!("--screen-info={{{}x{}}}", w.max(1440), h.max(900)));
+    }
+
     // Custom disabled-feature lists were merged above so a later duplicate
     // switch cannot overwrite the macOS clone guard (Chrome uses one effective
     // feature list). Preserve every other custom argument verbatim.
@@ -1840,8 +1859,37 @@ mod tests {
         let result = build_chrome_args(&opts).unwrap();
         assert!(result.args.iter().any(|a| a == "--headless=new"));
         assert!(result.args.iter().any(|a| a == "--window-size=1280,720"));
+        assert!(result.args.iter().any(|a| a == "--screen-info={1440x900}"));
         if let Some(dir) = result.temp_user_data_dir {
             let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn test_headless_native_screen_respects_window_and_explicit_screen() {
+        let g = EnvGuard::new(&["AGENT_BROWSER_ALLOW_HEADLESS"]);
+        g.set("AGENT_BROWSER_ALLOW_HEADLESS", "1");
+        for (extra, expected) in [
+            (vec!["--window-size=2000,1200"], "--screen-info={2000x1200}"),
+            (
+                vec!["--screen-info={2560x1440}"],
+                "--screen-info={2560x1440}",
+            ),
+        ] {
+            let result = build_chrome_args(&LaunchOptions {
+                args: extra.into_iter().map(str::to_string).collect(),
+                ..Default::default()
+            })
+            .unwrap();
+            let screens: Vec<_> = result
+                .args
+                .iter()
+                .filter(|a| a.starts_with("--screen-info="))
+                .collect();
+            assert_eq!(screens, vec![expected]);
+            if let Some(dir) = result.temp_user_data_dir {
+                let _ = std::fs::remove_dir_all(dir);
+            }
         }
     }
 

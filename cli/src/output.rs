@@ -1341,6 +1341,14 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                     println!("    {}", color::dim(&format!("· {o}")));
                 }
             }
+            if let Some(scope) = s.get("scope").and_then(|v| v.as_str()) {
+                println!("  {scope}");
+            }
+            if let Some(warnings) = s.get("warnings").and_then(|v| v.as_array()) {
+                for warning in warnings.iter().filter_map(|v| v.as_str()) {
+                    eprintln!("{} {warning}", color::warning_indicator());
+                }
+            }
             return;
         }
         if let Some(checked) = data.get("checked").and_then(|v| v.as_bool()) {
@@ -6408,7 +6416,7 @@ Check State:  chrome-use is <what> <selector>
   visible, enabled, checked
 
 Anti-bot:  chrome-use stealth | cf-status
-  stealth         stealth self-check (webdriver/UA/plugins + overrides)
+  stealth         Basic page probes and actual headless state; not a bot verdict
   cf-status       Cloudflare challenge + cf_clearance preflight (skip re-solving)
   Extension settings: enabling stealth or disabling the cursor removes existing
   cursor overlays through current connections. If cleanup is unconfirmed, settings
@@ -6746,6 +6754,7 @@ Authentication:
   --auto-connect             Connect to a running Chrome (DEFAULT - shares cookies/sessions)
                              Tip: enable CDP via chrome://inspect/#remote-debugging
   --launch, --new            Launch a fresh browser instead of connecting to existing
+                             Headed launches preserve native page/worker fingerprints
                              (macOS disables Chrome code-sign clones to prevent crash leaks)
   --headers <json>           HTTP headers scoped to URL's origin (e.g., Authorization bearer token)
 
