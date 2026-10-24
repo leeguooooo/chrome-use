@@ -1,8 +1,27 @@
 # Changelog
 
-## 1.5.264
+## 1.5.265
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.86.
+
+### New Features
+
+- **Initial and final conversation webpages.** Each conversation row has separate Initial page and Final page buttons, plus Delete with confirmation. Initial page opens the first recorded HTTP(S) address; Final page opens the latest recorded address. Opening the initial page preserves the final address. Older chats without an initial address report it as unavailable.
+
+### Bug Fixes
+
+- **Commit date-range values before leaving the field.** Ant Design / rc-picker range inputs use trusted keyboard input or their visible confirmation control and read the bound back, instead of losing a draft on blur (#717).
+- **Preserve native headed-browser fingerprints.** Headed launches keep Chrome's native CPU, GPU, language, screen and iframe properties consistent with workers. Compatibility wrapping and noise remain opt-in; headless detection limits are explicit (#718).
+- **iOS camera permissions and scanner lifecycle.** Fix camera authorization and scanner teardown; add App Store archive tooling and declare system-provided exempt encryption. iOS app distribution remains separate from this CLI release.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.264
+
 Works with extension ab-connect 0.5.85.
 
 ### New Features
@@ -27,7 +46,6 @@ Works with extension ab-connect 0.5.85.
 - @euvoor
 - @Jerryx333
 - @leinaldo
-<!-- release:end -->
 
 ## 1.5.263
 

@@ -34,8 +34,9 @@ h3 { font-size:14px; font-weight:600; }
 .conversation-item { display:flex; align-items:center; gap:6px; width:100%; text-align:left; border:0; background:transparent; border-radius:9px; padding:2px 4px; }
 .conversation-item.new { display:block; padding:8px 10px; }
 .conversation-choose { flex:1; min-width:0; border:0; padding:7px 6px; background:transparent; text-align:left; }
-.conversation-jump { flex:none; display:grid; place-items:center; width:32px; height:32px; padding:0; margin-right:2px; color:var(--muted); background:var(--bg); border-color:var(--line); border-radius:8px; }
+.conversation-jump { flex:none; display:grid; place-items:center; min-width:32px; height:32px; padding:0 6px; font-size:11px; margin-right:2px; color:var(--muted); background:var(--bg); border-color:var(--line); border-radius:8px; }
 .conversation-jump:hover:not(:disabled) { color:var(--accent); border-color:var(--accent); background:var(--accent-soft); }
+.conversation-remove:hover:not(:disabled) { color:var(--error); border-color:currentColor; }
 .conversation-item:hover,.conversation-item.selected { background:var(--surface); }
 .conversation-item .title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
 .conversation-item .meta { display:block; font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

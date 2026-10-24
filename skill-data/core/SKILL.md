@@ -31,7 +31,7 @@ browser actions. Saved configuration proves file readback, not a model change
 in an existing session. Inspect current values after an unconfirmed write;
 never replay it automatically. Isolation and journal details: [connection](references/connection.md).
 
-The conversation menu has a separate window button for the last recorded agent webpage. It focuses the existing tab or reopens its last HTTP(S) URL after closure, without sending a message or replaying tasks. Unsaved page input is not restored; missing destinations report an error. URLs stay in local extension storage. Deletion waits for saved address cleanup; storage failures are reported, and late browser observations cannot restore deleted records.
+Each conversation row offers **Initial page**, **Final page**, and **Delete conversation**. Initial page opens the first recorded HTTP(S) URL; Final page opens the most recently recorded URL, including while a task is running. A matching recorded tab is focused, otherwise the saved URL opens in a new tab. Opening the initial page preserves the final address. Older conversations without an initial address report it as unavailable. The title switches chats; opening a page does not send messages, rerun tasks or restore unsaved input. Addresses stay in local extension storage. Deletion requires confirmation and reports cleanup failures; stop a running reply before deleting.
 
 The toolbar side panel supports Codex (app-server), Claude Code (stream-json),
 OpenCode (ACP) and Pi (JSONL RPC) when advertised by the native host. It uses

@@ -3645,9 +3645,6 @@
   "options_cursor_cleanup_pending": {
     "message": "部分标签页的光标清理尚未确认。依赖隐身模式前请重新加载相关页面。Agent 下次正常连接标签页时会重试清理。"
   },
-  "panel_show_window": {
-    "message": "查看网页（已关闭时重新打开）"
-  },
   "panel_window_unconfirmed": {
     "message": "无法确认对应窗口，请刷新后重试。"
   },
@@ -3659,5 +3656,8 @@
   },
   "panel_delete_page_failed": {
     "message": "保存的网页地址清理失败：$1"
-  }
+  },
+  "panel_open_initial_page": { "message": "初始网页" },
+  "panel_open_final_page": { "message": "最终网页" },
+  "panel_window_no_initial_page": { "message": "这个会话没有记录初始网页。" }
 }

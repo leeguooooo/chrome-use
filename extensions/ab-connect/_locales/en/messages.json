@@ -3645,9 +3645,6 @@
   "options_cursor_cleanup_pending": {
     "message": "Cursor cleanup is not yet confirmed for all tabs. Reload affected pages before relying on stealth. Cleanup retries when the agent next attaches."
   },
-  "panel_show_window": {
-    "message": "Show webpage (reopen if closed)"
-  },
   "panel_window_unconfirmed": {
     "message": "Could not confirm the browser window. Refresh and try again."
   },
@@ -3659,5 +3656,8 @@
   },
   "panel_delete_page_failed": {
     "message": "Saved page address cleanup failed: $1"
-  }
+  },
+  "panel_open_initial_page": { "message": "Initial page" },
+  "panel_open_final_page": { "message": "Final page" },
+  "panel_window_no_initial_page": { "message": "No initial webpage was recorded for this conversation." }
 }

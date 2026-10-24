@@ -1430,6 +1430,10 @@ test('conversation window action preserves selected chat and reports unconfirmed
   assert.equal(f.nodes.get('conversation').value, 'a');
   assert.equal(f.calls.at(-1).type, 'ab-conversation-window');
   assert.equal(f.calls.at(-1).conversationId, 'b');
+  assert.equal(f.calls.at(-1).destination, 'initial');
+  row.children[2].fire('click'); await settle();
+  assert.equal(f.calls.at(-1).destination, 'final');
+  assert.equal(f.nodes.get('conversation').value, 'a');
   assert.equal(f.nodes.get('notice').textContent, en.panel_window_unconfirmed.message);
   assert.equal(f.nodes.get('notice').hidden, false);
   f.panel.close();
@@ -1442,5 +1446,29 @@ test('a deleted chat is removed while saved page cleanup failure stays visible',
   f.chats.splice(1,1);f.nodes.get('confirmDelete').fire('click');await settle();await settle();
   assert.equal(f.nodes.get('conversation').value,'');
   assert.match(f.nodes.get('notice').textContent,/Saved page address cleanup failed: storage unavailable/);
+  f.panel.close();
+});
+
+
+test('row deletion confirms the chosen conversation and cancellation leaves it intact', async () => {
+  let deleted = [];
+  const f = await fixture({ status: () => ({ connected: true, agentPanel: { ...fullSupport, conversationDelete: true } }),
+    conversationDelete: params => { deleted.push(params.conversationId); return { success: true, result: { deleted: { id: params.conversationId, cliHistory: { failed: [] }, browserSession: { closed: true } } } }; },
+  });
+  f.panel.select('a'); await settle();
+  f.nodes.get('conversationButton').fire('click');
+  let rows = f.nodes.get('conversationItems').children;
+  assert.equal(rows[1].children[3].disabled, true); // Running chat must stop first.
+  rows[2].children[3].fire('click'); await settle();
+  assert.equal(f.nodes.get('conversation').value, 'b');
+  assert.equal(f.nodes.get('deleteConfirm').hidden, false);
+  assert.deepEqual(deleted, []);
+  f.nodes.get('cancelDelete').fire('click');
+  assert.equal(f.nodes.get('deleteConfirm').hidden, true);
+  f.nodes.get('conversationButton').fire('click');
+  rows = f.nodes.get('conversationItems').children;
+  rows[2].children[3].fire('click'); await settle();
+  f.nodes.get('confirmDelete').fire('click'); await settle();
+  assert.deepEqual(deleted, ['b']);
   f.panel.close();
 });

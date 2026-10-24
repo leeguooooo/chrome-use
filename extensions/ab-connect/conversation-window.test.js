@@ -10,7 +10,7 @@ function fixture() {
   const storage = Object.fromEntries(Object.entries(saved).map(([area, data]) => [area, { async get() { return structuredClone(data); }, async set(value) { Object.assign(data, structuredClone(value)); } }]));
   const tabs = {
     async get(id) { if (!live.has(id)) throw new Error(`No tab with id: ${id}`); return { ...live.get(id) }; },
-    async create(options) { calls.push(['create', options]); const tab = { id: 22, windowId: 8, ...options }; live.set(tab.id, tab); return tab; },
+    async create(options) { calls.push(['create', options]); const tab = { id: Math.max(21, ...live.keys()) + 1, windowId: 8, ...options }; live.set(tab.id, tab); return tab; },
     async update(id, options) { calls.push(['activate', id]); Object.assign(live.get(id), options); },
   };
   const windows = { async update(id) { calls.push(['focus', id]); }, async get() { return { focused: true }; } };
@@ -120,4 +120,58 @@ test('deletion waits for saved page cleanup and reports partial failure', async 
   const reply=await new Promise(r=>failed({type:'ab-agent-request',operation:'conversationDelete'}, {}, r));
   assert.equal(reply.result.deleted.id,'a');
   assert.equal(reply.result.deleted.pageCleanup.error,'storage unavailable');
+});
+
+
+test('initial and final destinations stay distinct across navigation, reopening and restart', async () => {
+  const f = fixture();
+  await f.api.binding('a', f.live.get(21));
+  f.live.get(21).url = 'https://example.com/result'; await f.api.observe('panel-a', 21);
+  await Promise.all([f.api.show('a', 'initial'), f.api.show('a', 'initial')]);
+  assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 1);
+  assert.equal(f.calls[0][1].url, 'https://example.com/task');
+  assert.equal(f.saved.local.ab_conversation_pages.a.url, 'https://example.com/result');
+  assert.equal((await f.api.show('a', 'final')).tabId, 21);
+  await f.make().show('a', 'initial');
+  assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 1);
+  f.saved.session = {}; // Simulate browser restart with only persistent URLs.
+  const restarted = createConversationWindows({ tabs: f.tabs, windows: f.windows,
+    storage: { local: { async get() { return f.saved.local; }, async set() {} }, session: { async get() { return {}; }, async set() {} } }, boundTab: async () => null });
+  await restarted.show('a', 'initial');
+  assert.equal(f.calls.filter(([kind]) => kind === 'create').at(-1)[1].url, 'https://example.com/task');
+  await restarted.show('a', 'final');
+  assert.equal(f.calls.filter(([kind]) => kind === 'create').at(-1)[1].url, 'https://example.com/result');
+});
+
+test('legacy records never invent an initial destination and invalid selectors refuse', async () => {
+  const f = fixture();
+  f.saved.local.ab_conversation_pages = { a: { url: 'https://example.com/latest' } };
+  await assert.rejects(f.api.show('a', 'initial'), /No initial webpage/);
+  await assert.rejects(f.api.show('a', 'typo'), /Unknown webpage destination/);
+  assert.deepEqual(f.calls, []);
+  await f.api.show('a', 'final');
+  assert.equal(f.calls[0][1].url, 'https://example.com/latest');
+});
+
+test('a new conversation initially bound to a blank tab records its first web URL', async () => {
+  const f = fixture();
+  await f.api.binding('a', { id: 21, url: 'about:blank' });
+  f.live.get(21).url = 'https://example.com/start'; await f.api.updated(f.live.get(21));
+  assert.equal((await f.api.show('a', 'initial')).tabId, 21);
+  assert.equal(f.saved.local.ab_conversation_pages.a.initialUrl, 'https://example.com/start');
+});
+
+
+test('explicit final destination does not focus a tab that moved to an unrelated URL', async () => {
+  const f = fixture(); await f.api.observe('panel-a', 21);
+  f.live.get(21).url = 'https://other.example/unrecorded';
+  const result = await f.api.show('a', 'final');
+  assert.notEqual(result.tabId, 21);
+  assert.equal(f.calls[0][1].url, 'https://example.com/task');
+});
+
+test('explicit navigation reports uncertainty when Chrome returns the wrong destination', async () => {
+  const f = fixture(); await f.api.observe('panel-a', 21);
+  f.tabs.update = async id => { Object.assign(f.live.get(id), { active: true, url: 'https://other.example/' }); };
+  await assert.rejects(f.api.show('a', 'initial'), /Could not confirm/);
 });

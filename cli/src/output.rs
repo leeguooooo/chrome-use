@@ -6704,8 +6704,10 @@ Setup:
                              still be read/stopped. Custom programs use absolute paths.
                              Browser-tool approvals preview arguments and allow one
                              call. Replies remain pending until backend confirmation.
-                             Panel conversation menu: right-side window button shows
-                             the last agent webpage or reopens its saved URL.
+                             Panel conversation menu: Initial page opens the first
+                             recorded URL; Final page opens the latest recorded URL.
+                             Missing initial addresses are reported, never guessed.
+                             Delete conversation requires confirmation; stop first.
                              Deletion reports saved page address cleanup failures.
                              Agent panel chats, configuration writes, skills, images,
                              options and schedules support macOS/Linux/Windows.

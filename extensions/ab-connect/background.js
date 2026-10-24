@@ -3035,7 +3035,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse({ success: false, error: 'Window navigation requires the packaged extension panel' });
       return false;
     }
-    conversationWindows.show(msg.conversationId).then(
+    conversationWindows.show(msg.conversationId, msg.destination).then(
       result => sendResponse({ success: true, ...result }),
       error => sendResponse({ success: false, error: String(error.message || error) }),
     );
