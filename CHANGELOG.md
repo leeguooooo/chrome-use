@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.262
+## 1.5.263
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.83.
+
+### Bug Fixes
+
+- **Keep the mobile gateway alive while its network address is unavailable.** `mobile serve` now waits with exponential backoff from 1 to 60 seconds instead of exiting and triggering repeated service restarts. It keeps the exact requested address and reports readiness only after listening succeeds. Other bind errors still fail immediately. After a permanent network change, update the bind and phone endpoint or use a stable Tailscale address or named tunnel.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.262
+
 Works with extension ab-connect 0.5.83.
 
 ### Bug Fixes
@@ -12,7 +25,6 @@ Works with extension ab-connect 0.5.83.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.261
 

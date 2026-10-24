@@ -278,6 +278,8 @@ Free for 7 days, then **US$4.99 one-time for up to 3 Macs**. Notarized `.dmg`; m
 
 ## Usage
 
+`chrome-use mobile serve --bind IP:17345` waits with exponential backoff (1–60 seconds) when that IP is unavailable. It keeps the exact address and reports readiness only after listening succeeds. Update `--bind` and the phone endpoint after changing networks; it never switches to all interfaces automatically. Other bind errors fail immediately.
+
 Custom comboboxes are scrolled into view instantly and opened with trusted pointer input. `pick` reports `verified: false` with a warning when the choice is unconfirmed. Page/container scrolling uses instant movement even with CSS smooth scrolling; an unchanged position returns `scrolled: false` with a warning.
 
 A wait-condition timeout alone does not diagnose a browser connection failure. `wait --text` matches a case-sensitive substring: use the actual page wording, and do not wait again after the requested receipt is already visible.

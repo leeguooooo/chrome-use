@@ -43,6 +43,7 @@ chrome-use mobile serve --bind 100.101.102.103 # 只监听 Tailscale 地址
 chrome-use mobile serve --bind 0.0.0.0 --allow-all-interfaces
 chrome-use mobile serve --name "书房 Mac"         # 手机上显示的电脑名，默认取系统的电脑名称</code></pre>
       </div>
+      <p>指定 IP 暂不可用时，网关在进程内按 1–60 秒指数退避等待，监听成功后才输出就绪信息，不会自动换地址或扩大监听范围。换网后请更新 <code>--bind</code> 和手机连接地址；端口占用等其他错误仍立即报错。</p>
       <p>
         监听非 loopback 地址时会打印警告；监听所有网卡必须加
         <code>--allow-all-interfaces</code>。网关不转发 <code>/api/v1/*</code>、stream
@@ -100,6 +101,8 @@ chrome-use mobile pair --url wss://mobile.example.com --name "我的 Pixel"</cod
 chrome-use mobile pair --url ws://192.168.1.20:17345</code></pre>
       </div>
       <p>不带 <code>--url</code> 运行 <code>pair</code> 会列出本机检测到的 Tailscale 和局域网地址。</p>
+
+      <p>局域网 IP 会随网络或 DHCP 分配改变。需要跨网络长期连接时，优先使用 Tailscale 的稳定地址，或让网关监听本机地址并通过命名隧道连接。配置 launchd 常驻服务时，使用 <code>KeepAlive = { SuccessfulExit = false }</code> 并设置 <code>ThrottleInterval = 60</code>，避免其他启动错误造成频繁重启。</p>
 
       <h2>配对</h2>
       <p>

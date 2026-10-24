@@ -81,6 +81,7 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v1.5.263</strong>（未发布）：手机网关在指定 IP 暂不可用时按 1–60 秒指数退避等待，避免启动失败后被服务管理器反复拉起；保留原监听地址，监听成功后才报告就绪，端口占用等其他错误仍立即报错。补充换网和 launchd 重启间隔配置说明。兼容扩展 0.5.83。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.262</strong>（2026-10-23）： 模型容量不足或回复中断后，重新发送消息会在原会话中使用原模型开始，不再卡在暂停队列。旧队列仍需手动恢复，不自动重发失败任务。需扩展 0.5.83。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.261</strong>（2026-10-23）：<code>args.ui</code> 在滚动过的页面上不再把目标误判为被遮挡。隔离环境里的遮挡判断用的是 <code>DOM.getNodeForLocation</code>，它不按视口坐标计算，页面滚动后（抖音发布页）取到的是别处的元素，点击就退回了合成点击。现在改用隔离环境里的 <code>elementFromPoint</code>：按视口坐标、能穿过 <code>pointer-events: none</code>，也不会调用页面自己的那份函数。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.260</strong>（2026-10-23）：<code>args.ui</code> 能点穿 <code>pointer-events: none</code> 的覆盖层（下拉框的箭头、按钮上的图标），不再把目标判成被遮挡、退回合成点击（抖音发布页上出现过）。<code>--launch</code> 模式的隐身脚本不再替换页面能检查的原生函数：去掉了 <code>Error.prepareStackTrace</code> / <code>captureStackTrace</code> 包装，针对 disable-devtool 的 <code>querySelector</code> 改写默认关闭，需要时设 <code>AGENT_BROWSER_DISABLE_DEVTOOL_SHIM=1</code>；<code>--launch</code> 模式下 botcheck 的原生函数检查通过，<code>stealth-bench --launch</code> 原来通过的项全部照常通过（#703）。<code>setOn</code> 可以直接传元素（也可以是没插进页面的元素），适配器不必再给输入框加属性或 id 来按选择器定位。贡献者：@leeguooooo。</li>

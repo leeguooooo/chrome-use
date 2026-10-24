@@ -44,6 +44,7 @@ chrome-use mobile serve --bind 100.101.102.103 # the Tailscale address only
 chrome-use mobile serve --bind 0.0.0.0 --allow-all-interfaces
 chrome-use mobile serve --name "Studio Mac"       # name the phone shows; defaults to the system computer name</code></pre>
       </div>
+      <p>When the selected IP is unavailable, the gateway waits in-process with exponential backoff from 1 to 60 seconds. It reports readiness only after binding succeeds and never changes or broadens the address. After switching networks, update <code>--bind</code> and the phone endpoint. Other errors, including an occupied port, fail immediately.</p>
       <p>
         Listening on a non-loopback address prints a warning; every interface needs
         <code>--allow-all-interfaces</code>. The gateway never forwards <code>/api/v1/*</code> or the
@@ -104,6 +105,8 @@ chrome-use mobile pair --url wss://mobile.example.com --name "My Pixel"</code></
 chrome-use mobile pair --url ws://192.168.1.20:17345</code></pre>
       </div>
       <p>Running <code>pair</code> without <code>--url</code> lists the Tailscale and LAN addresses it finds.</p>
+
+      <p>LAN addresses can change with the network or DHCP lease. For persistent access across networks, prefer a stable Tailscale address or a loopback gateway behind a named tunnel. For a launchd service, use <code>KeepAlive = { SuccessfulExit = false }</code> and <code>ThrottleInterval = 60</code> to limit restarts after other startup errors.</p>
 
       <h2>Pair</h2>
       <p>
