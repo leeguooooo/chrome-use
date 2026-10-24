@@ -9,6 +9,8 @@ use serde_json::{json, Value};
 
 use super::actions::{execute_command, DaemonState};
 
+const PARITY_PAGE: &str = "data:text/html,<title>dispatch parity</title><body><button>test</button><input><select><option>test</option></select></body>";
+
 const ENCRYPTION_KEY_ENV: &str = "AGENT_BROWSER_ENCRYPTION_KEY";
 
 struct TestKeyGuard {
@@ -201,12 +203,12 @@ const DOCUMENTED_ACTIONS: &[&str] = &[
 ];
 
 fn minimal_command(action: &str, id: &str) -> Value {
-    let mut cmd = json!({ "action": action, "id": id });
+    let mut cmd = json!({ "action": action, "id": id, "timeout": 100 });
     let obj = cmd.as_object_mut().unwrap();
 
     match action {
         "navigate" | "diff_url" | "waitforurl" => {
-            obj.insert("url".to_string(), json!("https://example.com"));
+            obj.insert("url".to_string(), json!(PARITY_PAGE));
         }
         "evaluate" | "expose" => {
             obj.insert("script".to_string(), json!("1"));
@@ -307,7 +309,8 @@ fn minimal_command(action: &str, id: &str) -> Value {
             obj.insert("password".to_string(), json!("p"));
         }
         "auth_login" => {
-            obj.insert("name".to_string(), json!("parity-test-cred"));
+            // Exercise validation without starting a login on an external site.
+            obj.insert("name".to_string(), json!("invalid/parity-profile"));
         }
         "route" => {
             obj.insert("url".to_string(), json!("*"));
@@ -332,7 +335,7 @@ fn minimal_command(action: &str, id: &str) -> Value {
             obj.insert("path".to_string(), json!("/tmp/parity-download"));
         }
         "download_url" => {
-            obj.insert("url".to_string(), json!("https://example.com/file"));
+            obj.insert("url".to_string(), json!("data:text/plain,dispatch-parity"));
         }
         "multiselect" => {
             obj.insert("selector".to_string(), json!("select"));
@@ -400,11 +403,19 @@ fn tab_parity_commands_use_tab_references() {
 // The e2e prefix is part of the CI filter contract.
 async fn e2e_all_documented_actions_are_handled() {
     let mut state = DaemonState::new();
+    // Invalid fixture inputs still need to answer. Focused E2E tests cover
+    // successful effects; this pass checks that every action reaches a handler.
+    state.default_timeout_ms = 100;
 
     for (i, action) in DOCUMENTED_ACTIONS.iter().enumerate() {
         let id = format!("parity-{}", i);
         let cmd = minimal_command(action, &id);
-        let result = execute_command(&cmd, &mut state).await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            execute_command(&cmd, &mut state),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("Action '{action}': dispatch did not answer within 15 seconds"));
 
         assert!(
             result.get("id").is_some(),
@@ -420,6 +431,7 @@ async fn e2e_all_documented_actions_are_handled() {
             action
         );
     }
+    let _ = execute_command(&json!({"action":"close","id":"parity-cleanup"}), &mut state).await;
 }
 
 // ---------------------------------------------------------------------------
