@@ -189,15 +189,20 @@ pub async fn apply_stealth(
         if let Some(ua) = ua {
             let cleaned = ua.replace("HeadlessChrome", "Chrome");
             if cleaned != ua {
+                let mut params = json!({
+                    "userAgent": cleaned,
+                    "platform": platform_string(),
+                    "userAgentMetadata": build_ua_metadata(&cleaned, locale),
+                });
+                // Omit the override when no locale was requested: adding an
+                // English fallback to only the page disagrees with workers.
+                if let Some(languages) = locale.and_then(accept_lang_list) {
+                    params["acceptLanguage"] = json!(languages);
+                }
                 client
                     .send_command(
                         "Emulation.setUserAgentOverride",
-                        Some(json!({
-                            "userAgent": cleaned,
-                            "acceptLanguage": accept_lang_list(locale.unwrap_or("en-US")),
-                            "platform": platform_string(),
-                            "userAgentMetadata": build_ua_metadata(&cleaned, locale),
-                        })),
+                        Some(params),
                         Some(session_id),
                     )
                     .await?;
