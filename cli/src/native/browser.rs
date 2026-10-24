@@ -1960,7 +1960,14 @@ fn extension_name_in(ext_dir: &std::path::Path) -> Option<String> {
         .flatten()
         .map(|e| e.path())
         .collect();
-    versions.sort();
+    // Chrome versions are numeric components; the suffix distinguishes installs.
+    versions.sort_by_key(|path| {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let (version, install) = name.split_once('_').unwrap_or((&name, "0"));
+        let mut parts: Vec<u64> = version.split('.').map(|p| p.parse().unwrap_or(0)).collect();
+        parts.resize(4, 0);
+        (parts, install.parse::<u64>().unwrap_or(0))
+    });
     let dir = versions
         .into_iter()
         .rev()
@@ -2023,15 +2030,14 @@ fn foreign_frame_hint_with(error: &str, name_of: impl Fn(&str) -> Option<String>
         })
         .collect();
     if !listed.is_empty() {
-        let culprit = match listed.as_slice() {
-            [one] => format!("a frame of the extension {one}"),
-            many => format!("a frame of one of these extensions: {}", many.join(", ")),
+        let candidates = match listed.as_slice() {
+            [one] => format!("{one}"),
+            many => many.join(", "),
         };
         return format!(
-            "\nCause: {culprit}. While that frame is in the tab Chrome refuses every debugger \
-             command on it; the tab works again once it closes. To stop it happening, the user \
-             can turn that extension off for this site, or switch it to a mode that keeps its UI \
-             out of the page."
+            "\nPossible blocking extensions: {candidates}. These frames are listed browser-wide, \
+             not attributed to this tab. Check which extension injects a frame into the blocked \
+             tab before disabling it for this site or moving its UI out of the page."
         );
     }
     let installed = installed_inline_menu_extensions();
@@ -11485,18 +11491,37 @@ mod tests {
         let hint = foreign_frame_hint_with(&error, names);
         assert!(
             hint.contains(&format!(
-                "one of these extensions: Ajax Modifier ({ajax}), {other}."
+                "Possible blocking extensions: Ajax Modifier ({ajax}), {other}."
             )),
             "{hint}"
         );
         assert!(!hint.contains("password manager"), "{hint}");
+        assert!(!hint.contains("Cause:"), "{hint}");
+        assert!(hint.contains("not attributed to this tab"), "{hint}");
 
         let one = format!("x (chrome://extensions/?id={ajax}) y chrome://extensions/?id={ajax}");
         let hint = foreign_frame_hint_with(&one, names);
         assert!(
-            hint.contains(&format!("a frame of the extension Ajax Modifier ({ajax}).")),
+            hint.contains(&format!(
+                "Possible blocking extensions: Ajax Modifier ({ajax})."
+            )),
             "{hint}"
         );
+    }
+
+    #[test]
+    fn extension_name_uses_numeric_versions() {
+        let root = tempfile::tempdir().unwrap();
+        for (version, name) in [
+            ("9.0.0_0", "Old"),
+            ("10.0.0_0", "New"),
+            ("10.0.0_1", "Newest"),
+        ] {
+            let dir = root.path().join(version);
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(dir.join("manifest.json"), json!({"name": name}).to_string()).unwrap();
+        }
+        assert_eq!(extension_name_in(root.path()).as_deref(), Some("Newest"));
     }
 
     #[test]

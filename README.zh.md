@@ -548,3 +548,5 @@ Apache-2.0
 > 由 **leeguooooo** 打造。AI agent、逆向工程与 Cloudflare Workers 的实战笔记见 **[blog.leeguoo.com](https://blog.leeguoo.com)** · 关注 **[X @leeguooooo](https://x.com/leeguooooo)**
 
 `read --filter` 按字面文本匹配，忽略 ASCII 大小写，不支持正则；优先返回匹配标题及其子章节，否则按正文内容筛选章节。可先用 `read --outline` 找标题。`snapshot --filter` 则支持正则。读取选项见 `read --help`。
+
+`debugger_access_denied` 会尽可能列出浏览器范围内的候选扩展名称和 ID。先确认哪个扩展向被阻挡的标签页注入了框架，再禁用它；候选列表不能证明原因。

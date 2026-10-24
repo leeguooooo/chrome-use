@@ -25,6 +25,8 @@ test('only foreign extension frames are reported, once per extension', () => {
 test('the access error names the candidate extensions', () => {
   const error = debuggerAccessError(new Error('Cannot access a chrome-extension:// URL of different extension'), [ajax])
   assert.match(error.message, /^debugger_access_denied:/)
+  assert.match(error.message, /not confirmed blockers of this tab/)
+  assert.doesNotMatch(error.message, /blocking frame belongs/)
   assert.ok(error.message.includes(`${ajax} (chrome://extensions/?id=${ajax})`))
 })
 

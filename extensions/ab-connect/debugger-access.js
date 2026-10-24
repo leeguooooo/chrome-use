@@ -7,8 +7,7 @@ export function isDebuggerAccessDenied(error) {
 
 // webNavigation.getAllFrames omits another extension's frame, but
 // chrome.debugger.getTargets lists it as an `other` target (without a tabId).
-// Every foreign extension frame in the browser shows up here, so the frame
-// that blocks a tab belongs to one of these extensions.
+// The list is browser-wide: candidates cannot be attributed to the blocked tab.
 export function foreignFrameExtensions(targets, ownId) {
   const ids = new Set()
   for (const target of targets || []) {
@@ -22,8 +21,8 @@ export function foreignFrameExtensions(targets, ownId) {
 export function debuggerAccessError(error, extensionIds = []) {
   const culprits = extensionIds.length
     ? `Frames of other extensions open in this browser: ${extensionIds
-      .map(id => `${id} (chrome://extensions/?id=${id})`).join(', ')}; the blocking frame belongs ` +
-      'to one of them. Turn that extension off for this site, or move its UI out of the page. '
+      .map(id => `${id} (chrome://extensions/?id=${id})`).join(', ')}; these are browser-wide candidates, ` +
+      'not confirmed blockers of this tab. Check the blocked tab before disabling an extension. '
     : ''
   return new Error(
     'debugger_access_denied: Chrome blocked debugger access to protected extension content ' +
