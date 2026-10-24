@@ -521,10 +521,28 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
       items.push(resumeItem);
     }
     for (const c of shown) {
-      const item = element('button', undefined, `conversation-item${c.id === selected ? ' selected' : ''}`); item.type = 'button';
-      item.setAttribute('role', 'option'); item.setAttribute('aria-selected', String(c.id === selected));
-      item.append(element('span', titleOf(c, 'panel_conversation_untitled'), 'title'), element('span', [agentNames[c.agentId] || c.agentId, !siteScope && c.site, relativeTime(c.updated)].filter(Boolean).join(' · '), 'meta'));
-      item.addEventListener('click', () => { closeConversationMenu(); select(c.id); });
+      const item = element('div', undefined, `conversation-item${c.id === selected ? ' selected' : ''}`);
+      const choose = element('button', undefined, 'conversation-choose'); choose.type = 'button';
+      item.setAttribute('role', 'group');
+      item.setAttribute('aria-label', titleOf(c, 'panel_conversation_untitled'));
+      choose.setAttribute('aria-pressed', String(c.id === selected));
+      choose.append(element('span', titleOf(c, 'panel_conversation_untitled'), 'title'), element('span', [agentNames[c.agentId] || c.agentId, !siteScope && c.site, relativeTime(c.updated)].filter(Boolean).join(' · '), 'meta'));
+      choose.addEventListener('click', () => { closeConversationMenu(); select(c.id); });
+      const jump = element('button', undefined, 'conversation-jump'); jump.type = 'button';
+      jump.title = t('panel_show_window');
+      jump.setAttribute('aria-label', `${t('panel_show_window')}: ${titleOf(c, 'panel_conversation_untitled')}`);
+      jump.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9"/><path d="M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></svg>';
+      jump.addEventListener('click', () => void (async () => {
+        if (jump.disabled) return;
+        jump.disabled = true;
+        try {
+          const reply = await runtime.sendMessage({ type: 'ab-conversation-window', conversationId: c.id });
+          if (!reply?.success) throw new Error(reply?.error || t('panel_window_unconfirmed'));
+          closeConversationMenu();
+        } catch (failure) { closeConversationMenu(); error(failure); }
+        finally { jump.disabled = false; }
+      })());
+      item.append(choose, jump);
       items.push(item);
     }
     if (!shown.length) items.push(element('p', siteScope ? t('panel_no_conversations_on', domain) : t('panel_no_conversations'), 'conversation-empty'));

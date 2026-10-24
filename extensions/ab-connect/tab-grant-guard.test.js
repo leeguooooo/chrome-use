@@ -18,6 +18,7 @@ function worker(tabGrants, { onSend = async () => ({}) } = {}) {
   const sent = [], updated = [];
   const context = {
     tabGrants, sent, updated, console,
+    conversationWindows: { observe: async () => {} },
     canUseBrowserNavigationFallback, navigateTabWithBrowserFallback,
     withRelayTimeout: p => p,
     maybeDriveCursor() {},

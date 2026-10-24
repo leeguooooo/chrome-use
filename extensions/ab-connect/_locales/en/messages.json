@@ -3644,5 +3644,17 @@
   },
   "options_cursor_cleanup_pending": {
     "message": "Cursor cleanup is not yet confirmed for all tabs. Reload affected pages before relying on stealth. Cleanup retries when the agent next attaches."
+  },
+  "panel_show_window": {
+    "message": "Show webpage (reopen if closed)"
+  },
+  "panel_window_unconfirmed": {
+    "message": "Could not confirm the browser window. Refresh and try again."
+  },
+  "panel_window_no_page": {
+    "message": "No saved webpage for this conversation. Open the conversation and choose a page first."
+  },
+  "panel_window_focus_failed": {
+    "message": "Could not confirm the requested browser window is in front."
   }
 }

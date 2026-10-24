@@ -29,6 +29,8 @@ browser actions. Saved configuration proves file readback, not a model change
 in an existing session. Inspect current values after an unconfirmed write;
 never replay it automatically. Isolation and journal details: [connection](references/connection.md).
 
+The conversation menu has a separate window button for the last recorded agent webpage. It focuses the existing tab or reopens its last HTTP(S) URL after closure, without sending a message or replaying tasks. Unsaved page input is not restored; missing destinations report an error. URLs stay in local extension storage.
+
 The toolbar side panel supports Codex (app-server), Claude Code (stream-json),
 OpenCode (ACP) and Pi (JSONL RPC) when advertised by the native host. It uses
 local CLI logins and adds no page content script. After a failed or interrupted

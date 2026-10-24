@@ -3644,5 +3644,17 @@
   },
   "options_cursor_cleanup_pending": {
     "message": "部分标签页的光标清理尚未确认。依赖隐身模式前请重新加载相关页面。Agent 下次正常连接标签页时会重试清理。"
+  },
+  "panel_show_window": {
+    "message": "查看网页（已关闭时重新打开）"
+  },
+  "panel_window_unconfirmed": {
+    "message": "无法确认对应窗口，请刷新后重试。"
+  },
+  "panel_window_no_page": {
+    "message": "该会话还没有记录网页，请先打开会话并选择页面。"
+  },
+  "panel_window_focus_failed": {
+    "message": "无法确认对应网页已显示在前台。"
   }
 }

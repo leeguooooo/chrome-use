@@ -1,3 +1,4 @@
+import { createConversationWindows } from './conversation-window.js';
 // chrome-use connect — MV3 service worker.
 //
 // Bridges the user's real Chrome tabs to the local chrome-use daemon over a
@@ -189,6 +190,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (!key.startsWith(PANEL_TAB_PREFIX)) continue;
     const tabId = Number(key.slice(PANEL_TAB_PREFIX.length));
     if (typeof change.newValue === 'string' && change.newValue) panelTabs.set(tabId, change.newValue); else panelTabs.delete(tabId);
+    if (typeof change.newValue === 'string' && change.newValue) void chrome.tabs.get(tabId).then(tab => conversationWindows.binding(change.newValue, tab)).catch(() => {});
   }
 });
 void chrome.tabs.query({ active: true }).then(list => { for (const tab of list) if (!activeTabs.has(tab.windowId)) activeTabs.set(tab.windowId, tab.id); }).catch(() => {});
@@ -203,6 +205,20 @@ function forgetTabPanel(tabId) {
   panelTabs.delete(tabId);
   void chrome.storage.session.remove(panelTabKey(tabId)).catch(() => {});
 }
+const conversationWindows = createConversationWindows({
+  tabs: chrome.tabs, windows: chrome.windows, storage: chrome.storage,
+  boundTab: async id => {
+    await tabGrants.load();
+    return tabGrants.forConversation(id)?.tabId ?? tabForConversation(bindingsFrom(await chrome.storage.session.get(null)), id);
+  },
+  beforeActivate: tabId => userTouched.agentActivating(tabId),
+});
+chrome.tabs.onUpdated.addListener((id, change, tab) => {
+  if (change.url || change.status === 'complete') void conversationWindows.updated(tab).catch(() => {});
+});
+chrome.tabs.onReplaced.addListener((addedId, removedId) => {
+  void chrome.tabs.get(addedId).then(tab => conversationWindows.replaced(removedId, tab)).catch(() => {});
+});
 const notificationPanels = {
   tabFor: conversationId => tabForConversation(panelTabs, conversationId),
   activeTab: windowId => activeTabs.get(windowId) ?? null,
@@ -1875,6 +1891,7 @@ async function handleForwardCdpCommand(msg) {
     const group = typeof params?.agentGroup === 'string' ? params.agentGroup.trim() : '';
     if (group) creatingTabGroups.set(tab.id, group);
     try {
+      void conversationWindows.observe(agentSession, tab.id).catch(() => {});
       await markOwned(tab.id); // agent-created, ours to attach after worker restart
       if (group) {
         try { await groupTabInto(tab.id, group); } catch {}
@@ -2017,6 +2034,7 @@ async function dispatchToTab(tabId, method, params, childSid, agentSession = '')
   // Again here: recovery and earlier steps awaited Chrome, and the tab may
   // have been taken back meanwhile.
   guardTab(tabId, agentSession);
+  void conversationWindows.observe(agentSession, tabId).catch(() => {});
   // Re-enabling Runtime can leave a stale state; bounce it (matches upstream).
   if (method === 'Runtime.enable') {
     try {
@@ -3012,6 +3030,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     );
     return true;
   }
+  if (msg?.type === 'ab-conversation-window') {
+    if (!isAgentPanelSender(_sender, chrome.runtime)) {
+      sendResponse({ success: false, error: 'Window navigation requires the packaged extension panel' });
+      return false;
+    }
+    conversationWindows.show(msg.conversationId).then(
+      result => sendResponse({ success: true, ...result }),
+      error => sendResponse({ success: false, error: String(error.message || error) }),
+    );
+    return true;
+  }
   if (msg?.type === 'ab-tab-grant') {
     if (!isAgentPanelSender(_sender, chrome.runtime)) {
       sendResponse({ success: false, error: 'Agent services require the packaged extension panel' });
@@ -3033,7 +3062,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return false;
     }
     agentPanelBridge.request(msg.operation, msg.params ?? {}).then(
-      result => sendResponse({ success: true, result }),
+      result => {
+        if (msg.operation === 'conversationDelete' && result.deleted?.id) void conversationWindows.forget(result.deleted.id).catch(() => {});
+        sendResponse({ success: true, result });
+      },
       error => sendResponse({ success: false, error: String(error.message || error) }),
     );
     return true;

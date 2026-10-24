@@ -1,8 +1,35 @@
 # Changelog
 
-## 1.5.263
+## 1.5.264
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.84.
+
+### New Features
+
+- **Jump to a conversation's webpage.** Each conversation now has a separate window button beside its title. It focuses the last recorded agent tab and verifies the active tab and focused window. If the page was closed, it reopens its last HTTP(S) URL without sending a message or rerunning a task. The compact buttons support light and dark themes, keyboard focus and narrow panels.
+
+### Bug Fixes
+
+- **Clean up cursor artifacts when enabling stealth.** Enabling stealth or turning the cursor off removes existing cursor artifacts and reports unconfirmed cleanup (#712).
+- **Name extensions that block debugger access.** Debugger errors identify the extensions whose frames prevent access (#695).
+- **Report QR sign-in security verification.** A login waiting on a security-verification scan now explains that state (#694).
+- **Register custom Chrome profiles.** Native-host installation also finds running Chrome instances with a custom user-data directory and supports explicit directories (#706).
+
+### Improvements
+
+- **Make ClawHub publishing opt-in for Git pushes** (#689).
+
+### Contributors
+
+- @leeguooooo
+- @euvoor
+- @Jerryx333
+- @leinaldo
+<!-- release:end -->
+
+## 1.5.263
+
 Works with extension ab-connect 0.5.83.
 
 ### Bug Fixes
@@ -12,7 +39,6 @@ Works with extension ab-connect 0.5.83.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.262
 

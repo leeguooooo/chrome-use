@@ -139,7 +139,8 @@ test('real createTarget announces the requested group before replying even if vi
   const creatingTabGroups = new Map()
   let initialGroup
   const context = {
-    tabGrants: { load: async () => {}, isRefused: () => false, removed: async () => null, get: () => null },    attachCreatedTab, creatingTabGroups, tabs: new Map(),
+    tabGrants: { load: async () => {}, isRefused: () => false, removed: async () => null, get: () => null },    attachCreatedTab, creatingTabGroups, tabs: new Map(), agentSession: 'panel-test',
+    conversationWindows: { observe: async () => {} },
     chrome: { tabs: { create: async () => ({ id: 1 }), get: async () => ({ id: 1, groupId: -1 }) } },
     markOwned: async id => { assert.equal(creatingTabGroups.get(id), 'agent-a') },
     groupTabInto: async () => { throw new Error('Chrome visual grouping unavailable') },

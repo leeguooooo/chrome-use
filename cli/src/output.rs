@@ -6689,6 +6689,8 @@ Setup:
                              still be read/stopped. Custom programs use absolute paths.
                              Browser-tool approvals preview arguments and allow one
                              call. Replies remain pending until backend confirmation.
+                             Panel conversation menu: right-side window button shows
+                             the last agent webpage or reopens its saved URL.
                              Agent panel chats, configuration writes, skills, images,
                              options and schedules support macOS/Linux/Windows.
                              Legacy read-only Windows hosts require a CLI upgrade.

@@ -514,7 +514,7 @@ test('the conversation menu shows this site or everything, by main domain', asyn
   const tabs = { async query() { return [{ id: 3, url: 'https://x.com/someone/status/1', title: 'post' }]; } };
   const f = await fixture({ tabs, status: () => ({connected:true, agentPanel:{...fullSupport, pageContext:true}}), conversationList: () => ({ success: true, result: { conversations: chats } }) });
   await settle();
-  const titles = () => f.nodes.get('conversationItems').children.slice(1).map(item => item.children[0]?.textContent);
+  const titles = () => f.nodes.get('conversationItems').children.slice(1).map(item => item.children[0]?.children[0]?.textContent);
   f.nodes.get('conversationButton').fire('click');
   assert.equal(f.nodes.get('conversationMenu').hidden, false);
   assert.equal(f.nodes.get('scopeSite').textContent, 'This site · x.com');
@@ -522,7 +522,7 @@ test('the conversation menu shows this site or everything, by main domain', asyn
   f.nodes.get('scopeAll').fire('click');
   assert.deepEqual(titles(), ['reply on x', 'mobile x', 'repos', 'no site']);
   assert.ok(f.writes.some(w => w.ab_panel_conversation_scope === 'all'));
-  f.nodes.get('conversationItems').children[3].fire('click'); await settle();
+  f.nodes.get('conversationItems').children[3].children[0].fire('click'); await settle();
   assert.equal(f.nodes.get('conversation').value, 'gh');
   assert.equal(f.nodes.get('conversationTitle').textContent, 'repos');
   assert.equal(f.nodes.get('conversationMenu').hidden, true);
@@ -1420,3 +1420,15 @@ for (const phase of ['failed', 'interrupted', 'idle']) {
     f.panel.close();
   });
 }
+
+test('conversation window action preserves selected chat and reports unconfirmed navigation', async () => {
+  const f = await fixture(); f.panel.select('a'); await settle();
+  f.nodes.get('conversationButton').fire('click');
+  const row = f.nodes.get('conversationItems').children[2];
+  row.children[1].fire('click'); await settle();
+  assert.equal(f.nodes.get('conversation').value, 'a');
+  assert.equal(f.calls.at(-1).type, 'ab-conversation-window');
+  assert.equal(f.calls.at(-1).conversationId, 'b');
+  assert.equal(f.nodes.get('notice').hidden, false);
+  f.panel.close();
+});
