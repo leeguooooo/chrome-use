@@ -1472,3 +1472,16 @@ test('row deletion confirms the chosen conversation and cancellation leaves it i
   assert.deepEqual(deleted, ['b']);
   f.panel.close();
 });
+
+
+test('row deletion follows the polled phase when the listed phase is stale', async () => {
+  let phase = 'running';
+  const f = await fixture({ status: () => ({ connected: true, agentPanel: { ...fullSupport, conversationDelete: true } }),
+    conversationRead: () => ({ success: true, result: { conversation: chat('a', phase), journal: { events: [], cursor: 0, more: false } } }),
+  });
+  f.panel.select('a'); await settle();
+  assert.equal(f.nodes.get('conversationItems').children[1].children[3].disabled, true);
+  phase = 'idle'; await f.panel.refresh(); await settle();
+  assert.equal(f.nodes.get('conversationItems').children[1].children[3].disabled, false);
+  f.panel.close();
+});

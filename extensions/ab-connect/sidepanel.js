@@ -1235,7 +1235,13 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
         // A title set by a message sent from another view (a panel tab, the
         // side panel) shows here too.
         const listed = conversations.find(chat => chat.id === id);
-        if (listed && typeof conversation?.title === 'string' && listed.title !== conversation.title) { listed.title = conversation.title; conversationChoices(); }
+        if (listed && conversation) {
+          const titleChanged = typeof conversation.title === 'string' && listed.title !== conversation.title;
+          const phaseChanged = listed.phase !== conversation.phase;
+          if (titleChanged) listed.title = conversation.title;
+          listed.phase = conversation.phase;
+          if (titleChanged || phaseChanged) conversationChoices();
+        }
         const queued = result.queuedMessages || []; queuedIds = new Set(queued.map(message => message.id));
         renderTimeline(); renderRequests(); renderQueue(queued); controls();
       }
