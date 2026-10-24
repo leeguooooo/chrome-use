@@ -3656,5 +3656,8 @@
   },
   "panel_window_focus_failed": {
     "message": "无法确认对应网页已显示在前台。"
+  },
+  "panel_delete_page_failed": {
+    "message": "保存的网页地址清理失败：$1"
   }
 }

@@ -43,6 +43,7 @@ async function fixture(overrides = {}, saved = {}) {
     async sendMessage(request) {
       if (request.type === 'ab-status') return overrides.status ? {agentPanel:fullSupport,...overrides.status()} : { connected: true,agentPanel:fullSupport };
       calls.push(request);
+      if (request.type === 'ab-conversation-window') return { success: false };
       if (request.type === 'ab-tab-grant') return overrides.tabGrant ? overrides.tabGrant(request) : { success: true, grants: [] };
       if (request.type?.startsWith?.('ab-inspect-pick')) return overrides.pick ? overrides.pick(request) : { success: true, started: true };
       if (overrides[request.operation]) return overrides[request.operation](request.params);
@@ -1429,6 +1430,17 @@ test('conversation window action preserves selected chat and reports unconfirmed
   assert.equal(f.nodes.get('conversation').value, 'a');
   assert.equal(f.calls.at(-1).type, 'ab-conversation-window');
   assert.equal(f.calls.at(-1).conversationId, 'b');
+  assert.equal(f.nodes.get('notice').textContent, en.panel_window_unconfirmed.message);
   assert.equal(f.nodes.get('notice').hidden, false);
+  f.panel.close();
+});
+
+test('a deleted chat is removed while saved page cleanup failure stays visible', async () => {
+  const f=await fixture({status:()=>({connected:true,agentPanel:{...fullSupport,conversationDelete:true}}),
+    conversationDelete:params=>({success:true,result:{deleted:{id:params.conversationId,cliHistory:{removed:[],failed:[]},browserSession:{closed:true},pageCleanup:{error:'storage unavailable'}}}}),
+  },{ab_panel_conversation:'b'});
+  f.chats.splice(1,1);f.nodes.get('confirmDelete').fire('click');await settle();await settle();
+  assert.equal(f.nodes.get('conversation').value,'');
+  assert.match(f.nodes.get('notice').textContent,/Saved page address cleanup failed: storage unavailable/);
   f.panel.close();
 });

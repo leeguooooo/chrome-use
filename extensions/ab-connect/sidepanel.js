@@ -1410,6 +1410,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
       if (deleted.cliHistory.failed.length) problems.push(t('panel_delete_not_removed', deleted.cliHistory.failed.join(', ')));
       if (deleted.cliHistory.error) problems.push(t('panel_delete_session_files', deleted.cliHistory.error));
       if (!deleted.browserSession.closed) problems.push(t('panel_delete_tabs_unconfirmed'));
+      if (deleted.pageCleanup?.error) problems.push(t('panel_delete_page_failed', deleted.pageCleanup.error));
       if (problems.length) error(t('panel_delete_done_with_problems', problems.join(' ')));
       await list();
     } finally { nodes.deleteConfirm.hidden = true; controls(); }

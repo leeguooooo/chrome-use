@@ -8,7 +8,7 @@ const webUrl = url => { try { return ['https:', 'http:'].includes(new URL(url).p
 export function createConversationWindows({ tabs, windows, storage, boundTab, beforeActivate = () => {} }) {
   const records = new Map();
   let loaded, writes = Promise.resolve();
-  const pending = new Map();
+  const pending = new Map(), forgotten = new Set();
   function load() {
     return loaded ??= Promise.all([storage.local.get(HISTORY), storage.session.get(LIVE)]).then(([history, live]) => {
       for (const [id, record] of Object.entries(history[HISTORY] || {})) if (webUrl(record?.url)) records.set(id, { url: record.url });
@@ -26,6 +26,7 @@ export function createConversationWindows({ tabs, windows, storage, boundTab, be
   async function remember(id, tab) {
     if (!id || !Number.isInteger(tab?.id)) return;
     await load();
+    if (forgotten.has(id)) return;
     const previous = records.get(id);
     const url = tab.pendingUrl || tab.url || '';
     const next = { tabId: tab.id, url: webUrl(url) ? url : previous?.url || '' };
@@ -43,6 +44,7 @@ export function createConversationWindows({ tabs, windows, storage, boundTab, be
   }
   async function show(id) {
     await load();
+    if (forgotten.has(id)) throw new Error(t('panel_window_no_page'));
     const record = records.get(id);
     const candidate = record?.tabId ?? await boundTab(id);
     let tab;
@@ -76,7 +78,7 @@ export function createConversationWindows({ tabs, windows, storage, boundTab, be
     await load();
     for (const [id, record] of [...records]) if (record.tabId === removedId) await remember(id, tab);
   }
-  async function forget(id) { await load(); records.delete(id); await save(); }
+  async function forget(id) { forgotten.add(id); await load(); records.delete(id); await save(); }
   return { remember, binding, replaced, observe, updated, forget, show(id) {
     if (typeof id !== 'string' || !id || id.length > 200) return Promise.reject(new Error('A conversation is required'));
     if (pending.has(id)) return pending.get(id);

@@ -3062,8 +3062,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return false;
     }
     agentPanelBridge.request(msg.operation, msg.params ?? {}).then(
-      result => {
-        if (msg.operation === 'conversationDelete' && result.deleted?.id) void conversationWindows.forget(result.deleted.id).catch(() => {});
+      async result => {
+        if (msg.operation === 'conversationDelete' && result.deleted?.id) {
+          try { await conversationWindows.forget(result.deleted.id); }
+          catch (error) { result.deleted.pageCleanup = { error: String(error.message || error) }; }
+        }
         sendResponse({ success: true, result });
       },
       error => sendResponse({ success: false, error: String(error.message || error) }),

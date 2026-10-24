@@ -196,7 +196,7 @@ Codex 走 app-server 协议，Claude Code 走 stream-json，OpenCode 走 ACP，P
 
 删除会话前先停止回复，再点顶部删除按钮并确认。删除内容包括面板历史和该会话的浏览器 session，以及 Codex rollout 文件、Claude 会话文件及目录、通过 `session/delete` 删除的 OpenCode 历史，或会话文件夹内的 Pi 会话文件。Codex 的 SQLite 缓存不改动。清理失败或标签页关闭未确认时，侧栏会提示。
 
-会话菜单每行右侧的窗口按钮会定位该会话最近记录的 agent 网页；页面已关闭时，按最后记录的 HTTP(S) 网址重新打开。左侧标题只切换聊天。此操作不会发送消息或重跑任务，也不会恢复未保存的输入；没有记录网页时会提示。网页地址仅保存在本机扩展存储中。
+会话菜单每行右侧的窗口按钮会定位该会话最近记录的 agent 网页；页面已关闭时，按最后记录的 HTTP(S) 网址重新打开。左侧标题只切换聊天。此操作不会发送消息或重跑任务，也不会恢复未保存的输入；没有记录网页时会提示。网页地址仅保存在本机扩展存储中。删除会话会等待地址清理完成，存储失败时明确提示。
 
 `/resume` 可以接着用你在终端里开始的 Claude Code、Codex、OpenCode 或 Pi 会话；新会话也可以在项目文件夹中工作，网站可以记住它的项目。详见[继续终端里的会话](https://chrome-use.leeguoo.com/agent-panel.html#resume)和[项目文件夹](https://chrome-use.leeguoo.com/agent-panel.html#project)。
 

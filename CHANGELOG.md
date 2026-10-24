@@ -3,7 +3,7 @@
 ## 1.5.264
 
 <!-- release:start -->
-Works with extension ab-connect 0.5.84.
+Works with extension ab-connect 0.5.85.
 
 ### New Features
 

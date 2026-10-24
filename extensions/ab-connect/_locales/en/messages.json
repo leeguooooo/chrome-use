@@ -3656,5 +3656,8 @@
   },
   "panel_window_focus_failed": {
     "message": "Could not confirm the requested browser window is in front."
+  },
+  "panel_delete_page_failed": {
+    "message": "Saved page address cleanup failed: $1"
   }
 }

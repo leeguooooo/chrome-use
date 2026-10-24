@@ -86,3 +86,38 @@ test('ordinary sessions are ignored and panel binding is a fallback for existing
   const f = fixture(); await f.api.observe('panel-a', 21); await f.api.forget('a');
   await assert.rejects(f.make().show('a'), /No saved webpage/);
  });
+
+test('a late relay observation cannot restore data after deletion', async () => {
+  const f = fixture(); await f.api.observe('panel-a', 21);
+  let resolve; f.tabs.get = () => new Promise(r => { resolve=r; });
+  const observing=f.api.observe('panel-a',21);
+  await f.api.forget('a');
+  resolve({id:21,url:'https://example.com/private'}); await observing;
+  await assert.rejects(f.make().show('a'), /No saved webpage/);
+});
+
+// Exercise the shipped background handler, including its asynchronous reply.
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+const background = readFileSync(new URL('./background.js', import.meta.url), 'utf8');
+function deleteHandler(forget, result) {
+  const start=background.indexOf("  if (msg?.type === 'ab-agent-request') {");
+  const end=background.indexOf('  // Version banners',start);
+  assert.ok(start>=0&&end>start);
+  return vm.runInNewContext(`(function(msg,_sender,sendResponse){${background.slice(start,end)}})`, {
+    chrome:{runtime:{}}, isAgentPanelSender:()=>true, pageOperationAllowed:()=>true,
+    agentPanelBridge:{request:async()=>result}, conversationWindows:{forget},
+  });
+}
+test('deletion waits for saved page cleanup and reports partial failure', async () => {
+  let resolve; const pending=new Promise(r=>{resolve=r;}); let response;
+  const result={deleted:{id:'a'}};
+  const handler=deleteHandler(()=>pending,result);
+  handler({type:'ab-agent-request',operation:'conversationDelete'}, {}, reply=>{response=reply;});
+  await new Promise(r=>setImmediate(r)); assert.equal(response,undefined);
+  resolve();await new Promise(r=>setImmediate(r));assert.equal(response.success,true);
+  const failed=deleteHandler(async()=>{throw new Error('storage unavailable');},{deleted:{id:'a'}});
+  const reply=await new Promise(r=>failed({type:'ab-agent-request',operation:'conversationDelete'}, {}, r));
+  assert.equal(reply.result.deleted.id,'a');
+  assert.equal(reply.result.deleted.pageCleanup.error,'storage unavailable');
+});
