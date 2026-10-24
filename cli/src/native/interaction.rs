@@ -1939,8 +1939,55 @@ pub async fn fill_object(
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_else(|| "input".to_string());
 
-    if engine == "input-trusted" {
-        return fill_input_trusted(client, &effective_session_id, &object_id, value).await;
+    let range_commit = match engine.as_str() {
+        "input-date-range-tab" => Some("tab"),
+        "input-date-range-button" => Some("button"),
+        _ => None,
+    };
+    if engine == "input-trusted" || range_commit.is_some() {
+        if range_commit.is_some() {
+            wait_for_paint_settled(client, &effective_session_id).await;
+            let prepared = call_on(
+                client,
+                &effective_session_id,
+                &object_id,
+                PREPARE_RANGE_DATE_JS,
+            )
+            .await?;
+            if prepared.result.value != Some(json!(true)) {
+                return Err("date range input is read-only, disabled, detached or did not keep focus; confirm the other bound or use the picker".to_string());
+            }
+            if range_commit == Some("button") {
+                // rc-picker 2.x opens its editor from a key event, not focus
+                // alone. This navigation key enters editing without submitting.
+                press_key(client, &effective_session_id, "ArrowRight").await?;
+                wait_for_paint_settled(client, &effective_session_id).await;
+                if call_on(
+                    client,
+                    &effective_session_id,
+                    &object_id,
+                    PREPARE_RANGE_DATE_JS,
+                )
+                .await?
+                .result
+                .value
+                    != Some(json!(true))
+                {
+                    return Err(
+                        "date range input did not stay editable after opening its picker"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        return fill_input_trusted(
+            client,
+            &effective_session_id,
+            &object_id,
+            value,
+            range_commit,
+        )
+        .await;
     }
 
     finish_fill(
@@ -1961,6 +2008,7 @@ async fn fill_input_trusted(
     session_id: &str,
     object_id: &str,
     value: &str,
+    range_commit: Option<&str>,
 ) -> Result<FillOutcome, String> {
     let inserted = client
         .send_command_typed::<_, Value>(
@@ -1977,6 +2025,27 @@ async fn fill_input_trusted(
         Ok(_) if value.is_empty() => press_key(client, session_id, "Delete").await,
         other => other.map(|_| ()),
     };
+    if let Some(commit) = range_commit {
+        inserted.map_err(|e| format!("date range input insert failed: {e}"))?;
+        // rc-picker requires confirmation before focus leaves an uncommitted
+        // bound. Tab confirms that bound without submitting the surrounding form.
+        // Never blur/refocus or replay a rejected date with synthetic events.
+        verify_fill_value(client, session_id, object_id, value, "input-date-range").await?;
+        if commit == "tab" {
+            press_key(client, session_id, "Tab").await?;
+        } else {
+            confirm_range_date_button(client, session_id, object_id, value).await?;
+        }
+        let actual =
+            verify_fill_value(client, session_id, object_id, value, "input-date-range").await?;
+        return Ok(FillOutcome {
+            engine: "input-date-range".to_string(),
+            warning: Some(join_warnings(
+                "the picker confirmed this date bound; focus may have moved to the next field. Verify both dates before running the query".to_string(),
+                reformatted_warning(value, &actual, "input-date-range"),
+            )),
+        });
+    }
     if inserted.is_ok() {
         let _ = call_on(client, session_id, object_id, FILL_TRUSTED_TAIL_JS).await;
         if let Ok(actual) = verify_fill_value(client, session_id, object_id, value, "input").await {
@@ -2006,6 +2075,9 @@ async fn fill_input_trusted(
         .await?;
     if let Some(ex) = result.exception_details {
         return Err(format!("fill failed: {}", ex.text));
+    }
+    if result.result.value.as_ref().and_then(Value::as_str) == Some("input-range-no-fallback") {
+        return Err("the control became a date range picker during fill; no synthetic overwrite was attempted".to_string());
     }
     let mut engine = "input".to_string();
     let formatted = finish_fill(client, session_id, object_id, value, &mut engine).await?;
@@ -2039,6 +2111,103 @@ async fn fill_input_trusted(
             formatted,
         )),
     })
+}
+
+/// Recognize public Ant Design / rc-picker range markup with two picker inputs.
+/// Newer fields expose their bound; older controls use a confirmation popup.
+/// Ordinary Ant Design text inputs retain the normal fill path.
+const RANGE_DATE_INPUT_JS: &str = r#"function() {
+    const range = this.closest('.ant-picker-range, .rc-picker-range');
+    if (this.tagName !== 'INPUT' || !range
+        || !this.closest('.ant-picker-input, .rc-picker-input')
+        || range.querySelectorAll('.ant-picker-input input, .rc-picker-input input').length !== 2) return '';
+    return this.hasAttribute('date-range') ? 'input-date-range-tab' : 'input-date-range-button';
+}"#;
+
+// Older rc-picker inputs are initially read-only. React makes them editable
+// after focus; wait for that render instead of overwriting the readOnly flag.
+const PREPARE_RANGE_DATE_JS: &str = r#"function() {
+    let active = this.ownerDocument.activeElement;
+    while (active && active.shadowRoot && active.shadowRoot.activeElement) active = active.shadowRoot.activeElement;
+    if (!this.isConnected || this.readOnly || this.disabled || active !== this) return false;
+    this.select();
+    return true;
+}"#;
+
+/// rc-picker 2.x confirms a time range with its popup's OK button. Only a unique,
+/// visible, enabled type=button in a range popup is eligible; never press Enter
+/// into the containing form or fall back to a synthetic click.
+async fn confirm_range_date_button(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+    expected: &str,
+) -> Result<(), String> {
+    const FIND: &str = r#"function() {
+        const doc = this.ownerDocument;
+        const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+        if (doc.activeElement !== this) return {error:'date input lost focus before confirmation'};
+        const panels = [...doc.querySelectorAll('.ant-picker-dropdown-range:not(.ant-picker-dropdown-hidden), .rc-picker-dropdown-range:not(.rc-picker-dropdown-hidden)')].filter(visible);
+        if (!panels.length) return {retry:true};
+        if (panels.length !== 1) return {error:'no unique visible date range popup'};
+        // Only popup motion affects geometry; a previous button's ripple must not block the next bound.
+        if (panels[0].getAnimations().some(a => a.playState === 'running')) return {retry:true};
+        const allButtons = [...panels[0].querySelectorAll('.ant-picker-ok button, .rc-picker-ok button')];
+        if (!allButtons.length) return {blur:true};
+        if (doc.defaultView !== doc.defaultView.top) return {error:'date popup confirmation in a child frame requires explicit picker interaction'};
+        const buttons = allButtons.filter(b => b.type === 'button' && !b.disabled && visible(b));
+        if (buttons.length !== 1) return {error:'no unique enabled date confirmation button'};
+        const button = buttons[0], r = button.getBoundingClientRect();
+        const x = r.left+r.width/2, y = r.top+r.height/2, hit = doc.elementFromPoint(x,y);
+        if (hit !== button && !button.contains(hit)) return {error:'date confirmation button is covered'};
+        return {x,y};
+    }"#;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        let data = call_on(client, session_id, object_id, FIND)
+            .await?
+            .result
+            .value
+            .unwrap_or(Value::Null);
+        if data["retry"].as_bool() == Some(true) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            continue;
+        }
+        if data["blur"].as_bool() == Some(true) {
+            call_on(
+                client,
+                session_id,
+                object_id,
+                "function() { this.blur(); return true; }",
+            )
+            .await?;
+            return Ok(());
+        }
+        let (Some(x), Some(y)) = (data["x"].as_f64(), data["y"].as_f64()) else {
+            return Err(format!(
+                "date range confirmation failed: {}",
+                data["error"]
+                    .as_str()
+                    .unwrap_or("popup did not become ready")
+            ));
+        };
+        move_pointer(client, session_id, x, y).await?;
+        verify_fill_value(client, session_id, object_id, expected, "input-date-range").await?;
+        // Hover and popup motion can move the button. Recheck the target after
+        // pointer travel, and refuse instead of clicking a time cell by mistake.
+        let current = call_on(client, session_id, object_id, FIND)
+            .await?
+            .result
+            .value
+            .unwrap_or(Value::Null);
+        if current["x"].as_f64() != Some(x) || current["y"].as_f64() != Some(y) {
+            if std::time::Instant::now() < deadline {
+                continue;
+            }
+            return Err("date range confirmation button moved before the click".to_string());
+        }
+        return dispatch_click(client, session_id, x, y, "left", 1).await;
+    }
 }
 
 /// After a trusted insert: leave the field the way a user leaving it would.
@@ -2188,6 +2357,9 @@ fn fill_function(value: &str, allow_trusted: bool) -> String {
                 return 'contenteditable';
             }}
 
+            const rangeDateEngine = ({range_date_input}).call(el);
+            if (rangeDateEngine) return {allow_trusted} ? rangeDateEngine : 'input-range-no-fallback';
+
             // A user's edit: select what is there so the caller's trusted
             // Input.insertText replaces it (issue #358). Read-only and disabled
             // fields take no typed input, so they keep the setter path below.
@@ -2241,6 +2413,7 @@ fn fill_function(value: &str, allow_trusted: bool) -> String {
         monaco_candidates = MONACO_CANDIDATES_FUNCTION,
         allow_trusted = allow_trusted,
         trusted_types = TRUSTED_FILL_INPUT_TYPES,
+        range_date_input = RANGE_DATE_INPUT_JS,
     )
 }
 

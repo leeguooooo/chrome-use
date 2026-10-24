@@ -16,6 +16,9 @@ use crate::test_utils::EnvGuard;
 
 use super::actions::{execute_command, DaemonState};
 
+#[path = "range_date_e2e_tests.rs"]
+mod range_date;
+
 #[path = "cursor_cleanup_e2e_tests.rs"]
 mod cursor_cleanup;
 

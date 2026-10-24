@@ -1,0 +1,53 @@
+<!doctype html><meta charset="utf-8"><title>Range date confirmation</title>
+<!-- rc-picker's confirmation contract, independent of React and CDN availability:
+     input changes a draft; Tab confirms a bound; blur discards an unconfirmed
+     draft. The real Ant Design 4/5 acceptance is recorded in the PR. -->
+<form id="form">
+  <div class="ant-picker-range">
+    <div class="ant-picker-input"><input id="start" date-range="start" aria-label="Start date"></div>
+    <div class="ant-picker-input"><input id="end" date-range="end" aria-label="End date"></div>
+  </div>
+  <button type="button" id="query">Query</button>
+  <input id="ordinary" aria-label="Ordinary input">
+  <output id="model">["",""]</output><output id="result">none</output>
+  <output id="submits">0</output><output id="untrusted">0</output>
+  <output id="tabs">0</output>
+</form>
+<div id="calendar" class="ant-picker-dropdown-range" hidden style="position:fixed;inset:0;background:#eee;z-index:10">Calendar <span class="ant-picker-ok"><button id="confirm" type="button">OK</button></span></div>
+<script>
+const mode = '__MODE__';
+const fields = [document.getElementById('start'), document.getElementById('end')];
+let active = 0;
+if (mode !== 'tab') for (const field of fields) { field.removeAttribute('date-range'); field.readOnly = true; }
+if (mode === 'blur') document.querySelector('.ant-picker-ok').remove();
+const values = ['', ''];
+const drafts = ['', ''];
+const output = id => document.getElementById(id);
+const bump = id => output(id).textContent = String(Number(output(id).textContent) + 1);
+for (const [index, field] of fields.entries()) {
+  field.addEventListener('focus', () => { active = index; output('calendar').hidden = false; if (mode !== 'tab' && field.dataset.locked !== 'true') queueMicrotask(() => { field.readOnly = false; }); });
+  field.addEventListener('input', event => {
+    if (!event.isTrusted) { bump('untrusted'); return; }
+    if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(field.value)) {
+      field.value = '';
+      return;
+    }
+    drafts[index] = field.value;
+  });
+  field.addEventListener('keydown', event => {
+    if (mode !== 'tab' || event.key !== 'Tab' || !event.isTrusted) return;
+    bump('tabs');
+    values[index] = drafts[index];
+    output('model').textContent = JSON.stringify(values);
+    if (index === 1) output('calendar').hidden = true;
+  });
+  field.addEventListener('blur', () => { if (mode === 'blur') { values[index] = drafts[index]; output('model').textContent = JSON.stringify(values); output('calendar').hidden = true; } field.value = values[index]; if (mode !== 'tab') field.readOnly = true; });
+}
+const confirm = document.getElementById('confirm');
+if (confirm) {
+  confirm.addEventListener('mousedown', event => event.preventDefault());
+  confirm.addEventListener('click', event => { if (!event.isTrusted) { bump('untrusted'); return; } values[active] = drafts[active]; output('model').textContent = JSON.stringify(values); output('calendar').hidden = true; });
+}
+output('form').addEventListener('submit', event => { event.preventDefault(); bump('submits'); });
+output('query').addEventListener('click', () => { output('result').textContent = JSON.stringify(values); });
+</script>

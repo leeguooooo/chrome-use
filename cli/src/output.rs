@@ -2993,6 +2993,13 @@ errors quote both values (`read back "" after writing "千代田区"`); when eve
 non-ASCII character vanished while ASCII survived, the error says the page
 filtered non-Latin input (a Latin-only / masked field), so re-typing the
 same text will not help.
+Ant Design / rc-picker ranges: fill the start bound, then the end bound.
+Each bound uses trusted Tab or the picker's visible confirmation button;
+older date-only pickers commit on blur. The engine is input-date-range and
+focus follows the picker. Invalid/read-only inputs are not forced with a
+setter. Unverified or covered popups require explicit picker interaction.
+No Enter is sent to the containing form; verify the final query range.
+
 Text inputs and textareas are filled the way a user edits them: focus,
 select the current value, then a trusted insert (`isTrusted: true`
 beforeinput/input, and a trusted change on blur). Pages that ignore synthetic

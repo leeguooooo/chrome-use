@@ -275,6 +275,21 @@ Semantic find retains the existing `--observe` unsupported warning; use one `bat
 Discover a scope from the page first: `find query "Beta account"` returns candidate selector anchors; choose the article/container corresponding to that heading, then use `find role button click --name Save --exact --within "<returned-selector>"`. Inspect an ambiguous scope with `snapshot -s "<selector>"` and narrow it rather than accepting the first container. Unknown semantic-find options and duplicate `--within` are refused; use `find label Email fill -- --name` to enter literal flag-looking text. `--exact false` requests substring matching.
 
 
+### Date range pickers (issue #690)
+
+Fill the start input, then the end input. Ant Design / rc-picker range inputs
+use `engine: input-date-range`. The current bound is confirmed through a
+trusted Tab in newer pickers, or through the uniquely visible, enabled
+`type=button` confirmation control in older time pickers. Older date-only
+pickers commit on blur. Focus follows the widget; it is not restored to the
+just-filled input. The warning calls this out.
+
+Read-only, disabled and rejected dates are not overwritten with synthetic
+events. Ambiguous, covered or unsettled confirmation buttons are refused;
+older popup confirmation in a child frame requires explicit picker UI. No
+Enter is sent to the surrounding form. Read both bounds and verify the query
+result; confirming one bound does not establish a complete range.
+
 ### An edit that shows but does not save (issue #358)
 
 `fill` and `type` enter text the way a user does: trusted `beforeinput` /

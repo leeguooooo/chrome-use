@@ -332,3 +332,5 @@ Valid incremental snapshots return JSON `refs` only for nodes in the delta. A no
 `read --filter` uses literal, ASCII-case-insensitive text matching, not a regex. It prefers matching page headings with their descendants, then matching sections. Use `read --outline` to find a heading. `snapshot --filter` separately accepts a regex. `read --help` lists the reading options.
 
 `debugger_access_denied` lists browser-wide candidate extension names and IDs when available. Verify which extension injects a frame into the blocked tab before disabling it; the list does not prove the cause.
+
+For Ant Design / rc-picker date ranges, fill start then end. `input-date-range` confirms the current bound through trusted component input and leaves focus where the picker puts it; it does not force rejected values or send Enter to the form. Verify the complete range before querying. See core/interacting for popup and iframe limits.
