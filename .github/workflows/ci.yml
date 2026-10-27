@@ -148,9 +148,12 @@ jobs:
           workspaces: cli
           shared-key: linux-ci
 
-      - name: Run Rust tests
+      # PRs split the test binaries with the Rust PR Tests (2/2) job. The
+      # test binaries run one after another, so
+      # two halves on two runners cut the wall time.
+      - name: Run Rust tests (1/2)
         if: github.event_name == 'pull_request'
-        run: cargo test --profile ci --manifest-path cli/Cargo.toml
+        run: cargo test --profile ci --manifest-path cli/Cargo.toml $(sh scripts/ci-test-shard.sh 0)
 
       # Enabling the internal feature here compiles the ignored browser tests
       # into the same test binary. The following E2E step can then reuse it.
@@ -172,6 +175,32 @@ jobs:
           AGENT_BROWSER_ALLOW_HEADLESS: "1"
           AGENT_BROWSER_EXECUTABLE_PATH: /usr/bin/google-chrome
         run: cargo test --profile ci --features e2e-tests --manifest-path cli/Cargo.toml e2e -- --ignored --test-threads=1
+
+  rust-pr-shard:
+    name: Rust PR Tests (2/2)
+    needs: preflight
+    if: needs.preflight.outputs.run_rust == 'true' && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Setup Node.js for verification probe tests
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: cli
+          shared-key: linux-ci
+          save-if: false
+      - name: Run Rust tests (2/2)
+        run: cargo test --profile ci --manifest-path cli/Cargo.toml $(sh scripts/ci-test-shard.sh 1)
 
   rust-lint:
     name: Rust Clippy

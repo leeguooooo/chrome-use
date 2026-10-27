@@ -618,64 +618,81 @@ fn session(kind: &str) -> String {
     format!("open-inc-{kind}-{}", std::process::id())
 }
 
+/// Runs every case at once, each on its own fake relay and daemon: each
+/// one waits out the full 25s load timeout, so one after another they took
+/// over a minute and a half per test.
+fn each_case<C: Send>(kind: &str, cases: Vec<C>, run: impl Fn(&Fake, &Daemon, C) + Sync) {
+    std::thread::scope(|s| {
+        for (i, c) in cases.into_iter().enumerate() {
+            let run = &run;
+            let name = session(&format!("{kind}{i}"));
+            s.spawn(move || {
+                let (fake, cdp) = Fake::start();
+                let d = Daemon::start(&name, &cdp);
+                run(&fake, &d, c);
+            });
+        }
+    });
+}
+
 #[test]
 fn an_unusable_unfinished_open_keeps_its_code_and_is_never_repeated_through_the_cli() {
-    let (fake, cdp) = Fake::start();
-    let d = Daemon::start(&session("cli-err"), &cdp);
-    for (c, code) in unusable_cases() {
-        arm(&fake, &c);
+    each_case("cli-err", unusable_cases(), |fake, d, (c, code)| {
+        arm(fake, &c);
         let before = fake.counts();
         let (v, out) = d.cli_open(&c.url);
         let label = format!("cli {}", c.label);
         assert!(!out.status.success(), "{label}: {}", text(&out));
-        assert_unfinished_open(&label, &v, &c, code, &fake);
-        assert_one_navigation(&label, &fake, before);
-    }
+        assert_unfinished_open(&label, &v, &c, code, fake);
+        assert_one_navigation(&label, fake, before);
+    });
 }
 
 #[test]
 fn an_unusable_unfinished_open_keeps_its_code_and_is_never_repeated_through_stdio_mcp() {
-    let (fake, cdp) = Fake::start();
-    let d = Daemon::start(&session("mcp-err"), &cdp);
-    for (c, code) in unusable_cases() {
-        arm(&fake, &c);
+    each_case("mcp-err", unusable_cases(), |fake, d, (c, code)| {
+        arm(fake, &c);
         let before = fake.counts();
         let r = d.mcp_open(&c.url);
         let label = format!("mcp {}", c.label);
         assert_eq!(r["result"]["isError"], true, "{label}: {r}");
         let response = &r["result"]["structuredContent"]["response"];
-        assert_unfinished_open(&label, response, &c, code, &fake);
-        assert_one_navigation(&label, &fake, before);
-    }
+        assert_unfinished_open(&label, response, &c, code, fake);
+        assert_one_navigation(&label, fake, before);
+    });
 }
 
 #[test]
 fn a_usable_unfinished_open_succeeds_with_what_is_known_through_the_cli() {
-    let (fake, cdp) = Fake::start();
-    let d = Daemon::start(&session("cli-ok"), &cdp);
-    for (c, commit, has, lacks) in usable_cases() {
-        arm(&fake, &c);
-        let before = fake.counts();
-        let (v, out) = d.cli_open(&c.url);
-        let label = format!("cli {}", c.label);
-        assert!(out.status.success(), "{label}: {}", text(&out));
-        assert_usable_open(&label, &v, &c, commit, &has, &lacks);
-        assert_one_navigation(&label, &fake, before);
-    }
+    each_case(
+        "cli-ok",
+        usable_cases(),
+        |fake, d, (c, commit, has, lacks)| {
+            arm(fake, &c);
+            let before = fake.counts();
+            let (v, out) = d.cli_open(&c.url);
+            let label = format!("cli {}", c.label);
+            assert!(out.status.success(), "{label}: {}", text(&out));
+            assert_usable_open(&label, &v, &c, commit, &has, &lacks);
+            assert_one_navigation(&label, fake, before);
+        },
+    );
 }
 
 #[test]
 fn a_usable_unfinished_open_succeeds_with_what_is_known_through_stdio_mcp() {
-    let (fake, cdp) = Fake::start();
-    let d = Daemon::start(&session("mcp-ok"), &cdp);
-    for (c, commit, has, lacks) in usable_cases() {
-        arm(&fake, &c);
-        let before = fake.counts();
-        let r = d.mcp_open(&c.url);
-        let label = format!("mcp {}", c.label);
-        assert_ne!(r["result"]["isError"], true, "{label}: {r}");
-        let response = &r["result"]["structuredContent"]["response"];
-        assert_usable_open(&label, response, &c, commit, &has, &lacks);
-        assert_one_navigation(&label, &fake, before);
-    }
+    each_case(
+        "mcp-ok",
+        usable_cases(),
+        |fake, d, (c, commit, has, lacks)| {
+            arm(fake, &c);
+            let before = fake.counts();
+            let r = d.mcp_open(&c.url);
+            let label = format!("mcp {}", c.label);
+            assert_ne!(r["result"]["isError"], true, "{label}: {r}");
+            let response = &r["result"]["structuredContent"]["response"];
+            assert_usable_open(&label, response, &c, commit, &has, &lacks);
+            assert_one_navigation(&label, fake, before);
+        },
+    );
 }
