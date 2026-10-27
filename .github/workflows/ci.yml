@@ -148,9 +148,8 @@ jobs:
           workspaces: cli
           shared-key: linux-ci
 
-      # PRs split the test binaries with the Rust PR Tests (2/2) job. The
-      # test binaries run one after another, so
-      # two halves on two runners cut the wall time.
+      # PRs split the test binaries with the Rust PR Tests (2/2) job. They
+      # run one after another, so two halves on two runners cut the wall time.
       - name: Run Rust tests (1/2)
         if: github.event_name == 'pull_request'
         run: cargo test --profile ci --manifest-path cli/Cargo.toml $(sh scripts/ci-test-shard.sh 0)
