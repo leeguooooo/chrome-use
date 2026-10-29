@@ -16588,13 +16588,13 @@ async fn e2e_humanize_input_probe() {
         "probe requires no env override"
     );
     let pointer = r##"<!doctype html><style>body{margin:0;width:1000px;height:700px}button{position:absolute;left:700px;top:300px;width:120px;height:50px}</style><button id="target">Probe target</button><script>
-window.probe={moves:0,raw:0,coalesced:[],gap:null,trusted:true,clicks:0,last:0,x:20,y:20,maxJump:0};
+window.probe={moves:0,downs:0,raw:0,coalesced:[],gap:null,trusted:true,clicks:0,last:0,x:20,y:20,maxJump:0};
 for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.addEventListener(type,e=>{
  const p=window.probe;p.trusted=p.trusted&&e.isTrusted;
  if(type==='pointerrawupdate')p.raw++;
  if(type==='pointermove'){p.moves++;p.maxJump=Math.max(p.maxJump,Math.hypot(e.clientX-p.x,e.clientY-p.y));p.x=e.clientX;p.y=e.clientY;p.last=e.timeStamp;try{p.coalesced.push(typeof e.getCoalescedEvents==='function'?e.getCoalescedEvents().length:null)}catch(_){p.coalesced.push(null)}}
- if(type==='pointerdown')p.gap=e.timeStamp-p.last;
-},{capture:true});target.onclick=()=>probe.clicks++;
+ if(type==='pointerdown'){p.downs++;p.gap=e.timeStamp-p.last;}
+},{capture:true});target.onclick=e=>{probe.clicks++;probe.trusted=probe.trusted&&e.isTrusted;};
 </script>"##;
     let (port, server) = spawn_html_server(pointer.to_string()).await;
     let mut state = DaemonState::new();
@@ -16623,7 +16623,7 @@ for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.add
                     .await
                     .unwrap();
             }
-            eval_in(&mut state,"probe={moves:0,raw:0,coalesced:[],gap:null,trusted:true,clicks:0,last:0,x:20,y:20,maxJump:0}").await;
+            eval_in(&mut state,"probe={moves:0,downs:0,raw:0,coalesced:[],gap:null,trusted:true,clicks:0,last:0,x:20,y:20,maxJump:0}").await;
             humanize::set_detected_level(level);
             let started = std::time::Instant::now();
             {
@@ -16636,6 +16636,12 @@ for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.add
             let elapsed = started.elapsed().as_secs_f64() * 1000.0;
             let mut sample = eval_in(&mut state, "probe").await;
             assert_eq!(sample["clicks"], 1, "{sample}");
+            assert_eq!(sample["downs"], 1, "{sample}");
+            assert!(sample["moves"].as_u64().is_some_and(|n| n > 0), "{sample}");
+            assert!(
+                sample["gap"].as_f64().is_some_and(f64::is_finite),
+                "{sample}"
+            );
             assert_eq!(sample["trusted"], true, "{sample}");
             sample["clickMs"] = json!(elapsed);
             if run > 0 {
