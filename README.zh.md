@@ -445,12 +445,27 @@ chrome-use 会保留该标签并报告目标 ID。保持相同 session 和连接
 `signedIn: true` 和 `evidence`（看到了什么）；等不到就报 `the sign-in was not confirmed: …`，
 并说明页面现在是什么样。它会确认回车键确实到了页面上，没到就改点表单的登录按钮。
 
+默认密码登录会等验证码框出现后再取 TOTP，使用同一个密码库条目和来源继续一次。
+每一步都通过 `bwu run` 读取并记录审计，因此取动态码时可能再次要求授权。
+已经停在身份验证器验证页时，用 `chrome-use auth login --bwu --totp --item <id|name>`
+只取动态码，不重填账号密码，也不执行条目的 `_autotype`。
+验证码框可能自动提交，所以 `--totp` 不能与 `--passkey` 或 `--no-submit` 同用。
+验证码被拒绝后不会自动重试。
+
+Bitwarden 登录条目的身份验证器字段必须存有 TOTP 设置密钥或 `otpauth://` URI。
+只存密码、或保存当前验证码的截图，都不能生成后续验证码。请通过密码库界面迁移设置密钥，
+不要把它发进聊天或放进命令参数。短信、邮件和推送确认需要各自的来源。
+验证尚未完成时返回 `needs` 和 `next`，不标记 `signedIn`，自动登录也会留在验证页。
+自定义 `_autotype` 保留原有时序，仍在执行前读取全部字段；动态码过期时，先查看页面，
+再在身份验证器验证页使用 `--totp`。
+
 | 登录选项 | 作用 |
 |---|---|
 | `--bwu` | 使用当前网站的密码库账号（bwu 0.7.0+） |
 | `--item <id\|name>` | 选择一个匹配的账号 |
+| `--totp` | 只填写并提交当前 TOTP 验证，不读取密码 |
 | `--passkey` | 在 `--launch` 浏览器中用密码库 passkey 登录 |
-| `--no-submit` | 只填不提交，跳过 TOTP 和 passkey 验证器；不能与 `--passkey` 同用 |
+| `--no-submit` | 只填不提交，跳过 TOTP 和 passkey 验证器；不能与 `--passkey` 或 `--totp` 同用 |
 
 ```bash
 chrome-use open https://github.com/login

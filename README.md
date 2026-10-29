@@ -475,12 +475,30 @@ A login is reported only when the site took it: after submitting, `auth login
 confirmed: …` and what the page shows instead. It checks that its Enter reached
 the page; one that did not is replaced by a click on the form's sign-in button.
 
+Default password login fetches TOTP only after a code field appears, then continues
+once with the same vault item and origin. Each phase uses an audited `bwu run`;
+authorization may be requested again for the code. On an existing authenticator
+challenge, use `chrome-use auth login --bwu --totp --item <id|name>` to read only
+TOTP, without replaying username/password or the item's `_autotype` sequence.
+`--totp` cannot be combined with `--passkey` or `--no-submit` because code fields
+may submit automatically. Rejected codes are not retried automatically.
+
+The login's authenticator field in Bitwarden must contain the TOTP setup key or
+`otpauth://` URI. A saved password or a screenshot of a current code cannot
+generate future codes. Migrate the setup key through the vault UI; never paste
+it into chat or shell arguments. SMS, email and push approval require their own
+source. Pending verification is shown as `needs` + `next`, never `signedIn`;
+auto-login leaves that page in place. Custom `_autotype` sequences retain their
+original timing and fetch all fields before the sequence starts. If their code
+expires, inspect the page and use `--totp` on its authenticator challenge.
+
 | Login option | Effect |
 |---|---|
 | `--bwu` | Use the vault account for the current page (bwu 0.7.0+) |
 | `--item <id\|name>` | Select one matching account |
+| `--totp` | Fill and submit only the current TOTP challenge; read no password |
 | `--passkey` | Sign in with a vault passkey in `--launch` mode |
-| `--no-submit` | Fill only; skips TOTP and passkey authenticators; incompatible with `--passkey` |
+| `--no-submit` | Fill only; skips TOTP and passkey authenticators; incompatible with `--passkey` and `--totp` |
 
 ```bash
 chrome-use open https://github.com/login

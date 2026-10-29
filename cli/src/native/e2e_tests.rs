@@ -8011,6 +8011,119 @@ async fn bwu_login_on(state: &mut DaemonState, base_url: &str, path: &str) -> Va
     .await
 }
 
+/// The fixture owns all page globals; auth must leave no additional ones.
+async fn otp_fixture(
+    code_only: bool,
+    reject: bool,
+) -> (DaemonState, tokio::task::JoinHandle<()>, String) {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>Login</title>
+<form id="credentials"><input id="user" type="email"><input id="pw" type="password"><button>Sign in</button></form>
+<form id="challenge" hidden><input id="otp" name="totp" autocomplete="one-time-code"><button>Verify</button><p role="alert"></p></form>
+<script>
+window.passwordSubmits = 0; window.codeSubmits = 0; window.trustedCode = false;
+const params = new URLSearchParams(location.search);
+if (params.has('codeOnly')) challenge.hidden = false;
+credentials.onsubmit = e => { e.preventDefault(); passwordSubmits++; credentials.hidden = true; setTimeout(() => challenge.hidden = false, 300); };
+challenge.onsubmit = e => {
+  e.preventDefault(); codeSubmits++;
+  if (params.has('reject')) { challenge.querySelector('[role=alert]').textContent = 'Invalid authenticator code'; }
+  else { challenge.hidden = true; credentials.hidden = true; document.title = 'Dashboard'; }
+};
+otp.oninput = e => { trustedCode = e.isTrusted; };
+window.baseNames = Object.getOwnPropertyNames(window);
+window.mutations = [];
+new MutationObserver(rs => rs.forEach(r => { if (r.type === 'attributes' && r.attributeName !== 'hidden') mutations.push(r.attributeName); })).observe(document.documentElement, {subtree:true, attributes:true});
+baseNames.push('baseNames', 'mutations');
+</script>"##.to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let origin = format!("http://127.0.0.1:{port}");
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let page = format!(
+        "{origin}/login?{}{}",
+        if code_only { "codeOnly&" } else { "" },
+        if reject { "reject" } else { "" }
+    );
+    assert_success(
+        &execute_command(
+            &json!({"id":"n", "action":"navigate", "url":page}),
+            &mut state,
+        )
+        .await,
+    );
+    (state, server, origin)
+}
+
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_defers_code_until_challenge() {
+    let (mut state, server, origin) = otp_fixture(false, false).await;
+    let first = Box::pin(execute_command(&json!({"id":"p", "action":"auth_login_bwu", "origin":origin, "username":"fixture@example.com", "password":"fixture-password", "deferOtp":true}), &mut state)).await;
+    assert_success(&first);
+    let d = get_data(&first);
+    assert_eq!(d["needs"], "a verification code", "{d}");
+    assert_eq!(d["otp"], "deferred");
+    assert_ne!(d["signedIn"], true);
+    assert_evaluate(
+        &mut state,
+        "untouched",
+        "[passwordSubmits, codeSubmits, otp.value]",
+        json!([1, 0, ""]),
+    )
+    .await;
+    let second = Box::pin(execute_command(&json!({"id":"c", "action":"auth_login_bwu", "origin":origin, "otp":"123456", "totpOnly":true}), &mut state)).await;
+    assert_success(&second);
+    assert_eq!(get_data(&second)["signedIn"], true, "{second}");
+    assert_evaluate(&mut state, "once", "[passwordSubmits, codeSubmits, trustedCode, mutations, Object.getOwnPropertyNames(window).filter(n => !baseNames.includes(n))]", json!([1,1,true,[],[]])).await;
+    let _ = execute_command(&json!({"id":"close", "action":"close"}), &mut state).await;
+    server.abort();
+}
+
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_totp_only_never_types_credentials_or_retries_rejection() {
+    let (mut state, server, origin) = otp_fixture(true, true).await;
+    let code = Box::pin(execute_command(&json!({"id":"c", "action":"auth_login_bwu", "origin":origin, "username":"must-not-type", "password":"must-not-type", "otp":"123456", "totpOnly":true}), &mut state)).await;
+    assert_eq!(code["success"], false, "{code}");
+    assert!(
+        code["error"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid authenticator code"),
+        "{code}"
+    );
+    assert_evaluate(
+        &mut state,
+        "once",
+        "[user.value, pw.value, passwordSubmits, codeSubmits, trustedCode]",
+        json!(["", "", 0, 1, true]),
+    )
+    .await;
+    let _ = execute_command(&json!({"id":"close", "action":"close"}), &mut state).await;
+    server.abort();
+}
+
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_reports_missing_code_on_challenge_page() {
+    let (mut state, server, origin) = otp_fixture(true, false).await;
+    assert_evaluate(&mut state, "hide", "credentials.hidden = true", json!(true)).await;
+    let first = Box::pin(execute_command(&json!({"id":"p", "action":"auth_login_bwu", "origin":origin, "username":"fixture@example.com"}), &mut state)).await;
+    assert_success(&first);
+    let d = get_data(&first);
+    assert_eq!(d["needs"], "a verification code", "{d}");
+    assert_ne!(d["signedIn"], true);
+    assert_evaluate(
+        &mut state,
+        "untouched",
+        "[passwordSubmits, codeSubmits, otp.value]",
+        json!([0, 0, ""]),
+    )
+    .await;
+    let _ = execute_command(&json!({"id":"close", "action":"close"}), &mut state).await;
+    server.abort();
+}
+
 /// #482: a submit the site did not take is a failure that says what the page
 /// shows, never `submitted: true` on its own.
 #[tokio::test]

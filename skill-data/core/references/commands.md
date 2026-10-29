@@ -1167,3 +1167,18 @@ Valid incremental snapshots return JSON `refs` only for nodes in the delta. A no
 `stealth status` runs basic page probes. Its JSON adds `headless` (true/false for a locally launched browser, null for an external connection), `scope` and `warnings`. A known headless launch needs attention even if page UA/WebDriver probes pass. Headed launches preserve native page/worker fingerprints by default. Canvas/audio noise and disable-devtool wrapping remain explicit opt-ins. Headless uses a native virtual screen covering its initial window; an explicit `--args` screen configuration takes precedence. See [remote browser acceptance](connection.md#remote-linux-browser-acceptance).
 
 A refused dynamic-form ref now reports `code: "stale_ref"` with `retryable: false`. Refresh `snapshot -i`, then use the current dialog's ref or a unique stable CSS/semantic locator; no input is sent by the refusal. Keep verification enabled and do not replace trusted input with a DOM click. For `debugger_access_denied`, close a visible autofill menu or save-login bar first; hiding a tab may not dismiss a save-login bar. Candidate-extension lookup is best effort and never replaces the original access denial.
+
+### Bitwarden authenticator challenges
+
+```bash
+chrome-use auth login --bwu --item <id>
+chrome-use auth login --bwu --totp --item <id>
+```
+
+The default flow fetches TOTP after observing a code field. `--totp` reads only
+TOTP and submits the current challenge; it skips passwords and `_autotype`.
+It cannot be combined with `--no-submit` or `--passkey`. The selected login
+must contain the authenticator setup key. Codes stay inside `bwu run` and the
+secret command; do not retrieve them into the conversation. Pending verification
+returns `needs` and `next`; only an observed completed sign-in gets `signedIn`.
+See `core/authentication` for setup, authorization and custom-sequence limits.

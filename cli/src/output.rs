@@ -447,6 +447,47 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
     }
 }
 
+/// Describe the observed login outcome, including a pending human step.
+fn bwu_login_message(data: &serde_json::Value) -> (bool, String) {
+    if let Some(needs) = data["needs"].as_str() {
+        return (
+            false,
+            format!(
+                "Login needs {needs}. {}",
+                data["next"]
+                    .as_str()
+                    .unwrap_or("Complete verification on the current page.")
+            ),
+        );
+    }
+    if data["signedIn"] == true {
+        return (
+            true,
+            format!(
+                "Signed in with vault item '{}': {}",
+                data["item"].as_str().unwrap_or(""),
+                data["evidence"].as_str().unwrap_or("sign-in confirmed")
+            ),
+        );
+    }
+    if data["alreadySignedIn"] == true {
+        return (
+            false,
+            data["hint"]
+                .as_str()
+                .unwrap_or("This page looks signed in; nothing was typed. Verify the destination.")
+                .to_string(),
+        );
+    }
+    (
+        false,
+        format!(
+            "Filled {}. Sign-in was not confirmed (submitted: {}).",
+            data["filled"], data["submitted"]
+        ),
+    )
+}
+
 fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptions) {
     if opts.json {
         if opts.content_boundaries {
@@ -487,6 +528,22 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
     }
 
     if let Some(data) = &resp.data {
+        if action == Some("auth_login_bwu") {
+            let (ok, message) = bwu_login_message(data);
+            println!(
+                "{} {}",
+                if ok {
+                    color::success_indicator()
+                } else {
+                    color::warning_indicator()
+                },
+                message
+            );
+            if let Some(w) = data["warning"].as_str() {
+                eprintln!("{} {w}", color::warning_indicator());
+            }
+            return;
+        }
         // What `snapshot`/`get text`/`read` left out because a person can't
         // see it (#781). Stderr, so piped text stays the page's text.
         if let Some(note) = data.get("hiddenNote").and_then(|v| v.as_str()) {
@@ -4978,8 +5035,16 @@ Bitwarden Login Options:
                            or its sign-in frame's host, else the matches are
                            listed)
   --passkey                Sign in with a vault passkey in --launch mode (bwu 0.9.0+)
+  --totp                   Only fill/submit the current authenticator challenge;
+                           read no username/password; ignore _autotype
+                           Cannot be combined with --passkey or --no-submit
   --no-submit              Fill only; skip TOTP and passkey authenticators
-                           Cannot be combined with --passkey
+                           Cannot be combined with --passkey or --totp
+  Default login fetches TOTP after a code field appears (a second bwu run,
+  possibly a second authorization). Rejected codes are never retried automatically.
+  Store the authenticator setup key in the Bitwarden login, not just its password.
+  Pending verification returns needs + next and leaves the page in place.
+  Custom _autotype sequences still fetch all fields before starting.
   On the extension relay, passkeys are unsupported; password/TOTP still work.
   In --launch mode, password login can also answer a passkey second factor.
   Unexpected registration or unconfirmed authenticator cleanup aborts the command.
@@ -5024,6 +5089,7 @@ Examples:
   chrome-use auth login github
   chrome-use auth login github --no-navigate
   chrome-use auth login --bwu
+  chrome-use auth login --bwu --totp --item <id>
   chrome-use --session passkey-demo --launch open https://github.com/login
   chrome-use --session passkey-demo --launch auth login --bwu --item github.com --passkey
   chrome-use auth list
@@ -6790,7 +6856,7 @@ Site adapters:  turn a website into a structured-data CLI (runs as you, in your 
 Auth Vault:
   auth save <name> [opts]    Save auth profile (--url, --username, --password/--password-stdin)
   auth login <name> [opts]   Login using saved credentials (--no-navigate: fill the open page)
-  auth login --bwu [opts]    Bitwarden login (--item, --passkey, --no-submit)
+  auth login --bwu [opts]    Bitwarden login (--item, --passkey, --totp, --no-submit)
   auth list                  List saved auth profiles
   auth show <name>           Show auth profile metadata
   auth delete <name>         Delete auth profile
@@ -7878,5 +7944,28 @@ mod tests {
             eval_result_text(&json!({"a": [1]})),
             "{\n  \"a\": [\n    1\n  ]\n}"
         );
+    }
+}
+
+#[cfg(test)]
+mod bwu_outcome_tests {
+    use super::bwu_login_message;
+    use serde_json::json;
+
+    #[test]
+    fn pending_verification_and_fill_only_do_not_claim_sign_in() {
+        let (ok, message) = bwu_login_message(
+            &json!({"needs":"a verification code", "next":"Use your authenticator."}),
+        );
+        assert!(!ok);
+        assert!(message.contains("Use your authenticator"));
+        let (ok, message) = bwu_login_message(&json!({"filled":["password"], "submitted":false}));
+        assert!(!ok);
+        assert!(message.contains("not confirmed"));
+        let (ok, message) = bwu_login_message(
+            &json!({"signedIn":true, "item":"example", "evidence":"form is gone"}),
+        );
+        assert!(ok);
+        assert!(message.contains("form is gone"));
     }
 }

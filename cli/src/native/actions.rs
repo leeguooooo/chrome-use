@@ -23973,6 +23973,8 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     let username = text("username");
     let password = text("password");
     let otp = text("otp");
+    let defer_otp = cmd["deferOtp"].as_bool().unwrap_or(false);
+    let totp_only = cmd["totpOnly"].as_bool().unwrap_or(false);
     let item = text("item").unwrap_or_default();
     let origin = text("origin").ok_or("auth login --bwu: missing origin")?;
     let custom: HashMap<String, String> = cmd
@@ -24004,6 +24006,16 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
         .get("passkeyFirst")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    if totp_only && (no_submit || passkey_first) {
+        return Err(
+            "auth login --bwu: --totp cannot be combined with --passkey or --no-submit".into(),
+        );
+    }
+    let explicit = if totp_only {
+        Some(vec!["totp".to_string(), "enter".to_string()])
+    } else {
+        explicit
+    };
     let auto = explicit.is_none();
     let steps = explicit.unwrap_or_else(|| {
         let mut v = Vec::new();
@@ -24103,9 +24115,16 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     let mut pending: Vec<(String, usize)> = Vec::new();
     let mut filled: Vec<String> = Vec::new();
     let mut submitted = false;
-    let mut otp_state = if otp.is_some() { "not asked" } else { "none" };
+    let mut otp_state = if defer_otp {
+        "deferred"
+    } else if otp.is_some() {
+        "not asked"
+    } else {
+        "none"
+    };
     // A code the site submitted by itself: the sequence's next `enter` is skipped.
     let mut skip_enter = false;
+    let mut otp_attempted = false;
     // A code typed but not yet submitted: checked after the next `enter`.
     let mut code_pending = false;
     // Where the fields are: the top document, or a sign-in frame of the same
@@ -24180,12 +24199,14 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             .iter()
             .any(|s| matches!(s.as_str(), "username" | "password" | "totp"));
         if auto || fills_fields {
-            let any: Vec<&str> = AUTH_USER_SELECTORS
-                .iter()
-                .chain(&["input[type=password]"])
-                .chain(if otp.is_some() { AUTH_OTP_SELECTORS } else { &[] })
-                .copied()
-                .collect();
+            let any: Vec<&str> = if totp_only {
+                AUTH_OTP_SELECTORS.to_vec()
+            } else {
+                AUTH_USER_SELECTORS.iter()
+                    .chain(&["input[type=password]"])
+                    .chain(if otp.is_some() || defer_otp { AUTH_OTP_SELECTORS } else { AUTH_CODE_HINT_SELECTORS })
+                    .copied().collect()
+            };
             let probe = format!("bwuprobe-{marker}");
             // Already signed in? A page that isn't a sign-in URL and shows no
             // login field after a short look has nothing to fill. Waiting the
@@ -24328,7 +24349,9 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                 // Typed once, never re-written (see type_code_once); a site
                 // that submits by itself makes a following `enter` moot.
                 filled.push(step.clone());
+                filled_tags.push(tag.clone());
                 otp_state = "filled";
+                otp_attempted = true;
                 if type_code_once(&mgr.client, &scope, &sel, value, here).await? {
                     submitted = true;
                     skip_enter = true;
@@ -24425,8 +24448,10 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                 if let Ok(sel) =
                     unblocked!(mark_usable_auth_element(&mgr.client, &scope, AUTH_OTP_SELECTORS, &tag, wait, true, pin).await)
                 {
+                    otp_attempted = true;
                     let auto_submitted = type_code_once(&mgr.client, &scope, &sel, code, here).await?;
                     filled.push("totp".to_string());
+                    filled_tags.push(tag.clone());
                     otp_state = "filled";
                     if auto_submitted {
                         submitted = true;
@@ -24444,15 +24469,17 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
         }
         // The page now asks for a code this login has no value for (an SMS
         // or a trusted-device code): report it rather than a finished login.
-        if submitted && !no_submit && otp_state != "filled" && passkey_state != "used" {
+        if (submitted || (auto && filled.is_empty())) && !no_submit && otp_state != "filled" && passkey_state != "used" {
             // The login went through either way: a menu this cannot close is
             // reported with the result, not as a failed login.
             let tag = format!("bwuneed-{marker}");
-            let mut found = mark_usable_auth_element(&mgr.client, &scope, AUTH_CODE_HINT_SELECTORS, &tag, AUTH_BWU_PROBE_MS, true, pin).await;
+            let selectors = if defer_otp { AUTH_OTP_SELECTORS } else { AUTH_CODE_HINT_SELECTORS };
+            let wait = if defer_otp && submitted { AUTH_BWU_OTP_WAIT_MS } else { AUTH_BWU_PROBE_MS };
+            let mut found = mark_usable_auth_element(&mgr.client, &scope, selectors, &tag, wait, true, pin).await;
             if matches!(&found, Err(e) if super::browser::is_debugger_access_denied(e))
                 && auth_close_menu(&mut *mgr, &mut menu_closed, "").await.is_ok()
             {
-                found = mark_usable_auth_element(&mgr.client, &scope, AUTH_CODE_HINT_SELECTORS, &tag, 0, true, pin).await;
+                found = mark_usable_auth_element(&mgr.client, &scope, selectors, &tag, 0, true, pin).await;
             }
             if found.is_ok() {
                 needs = Some("a verification code");
@@ -24485,7 +24512,14 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
         None => Ok(()),
     };
     match (outcome, cleanup) {
-        (Err(e), cleanup) => return Err(with_cleanup(e, cleanup)),
+        (Err(e), cleanup) => {
+            let e = if otp_attempted {
+                format!("TOTP verification stopped: {e}")
+            } else {
+                e
+            };
+            return Err(with_cleanup(e, cleanup));
+        }
         (Ok(()), Err(c)) => {
             return Err(format!(
                 "auth login --bwu: the login may have gone through, but {c}"
@@ -24507,7 +24541,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                      accounts.",
         }));
     }
-    if filled.is_empty() && passkey_state != "used" {
+    if filled.is_empty() && passkey_state != "used" && needs.is_none() {
         return Err("auth login --bwu: found no login field on this page to fill".to_string());
     }
     let url = mgr
@@ -24537,7 +24571,11 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     }
     if let Some(what) = needs {
         out["needs"] = json!(what);
-        out["next"] = json!(auth_needs_code_hint(scope.frame_origin.as_deref()));
+        out["next"] = json!(if defer_otp {
+            "The code field is ready; fetch a fresh TOTP from the selected vault item and continue with --totp.".to_string()
+        } else {
+            auth_needs_code_hint(scope.frame_origin.as_deref())
+        });
     }
     if let Some(w) = auth_warning(menu_closed, menu_left_open) {
         out["warning"] = json!(w);
@@ -24817,9 +24855,12 @@ fn auth_needs_code_hint(frame: Option<&str>) -> String {
         None => "`snapshot -i` lists the code field.".to_string(),
     };
     format!(
-        "The page now asks for a verification code (2FA), which this vault item does not hold. \
-         Get it from the user, or from their messages (message-use) or mail (mail-use), then type \
-         it into the code field. {place}"
+        "The page now asks for a verification code (2FA), which this login has not supplied. \
+         For an authenticator code, add the setup key or otpauth URI to this login's authenticator \
+         field in Bitwarden, then run `auth login --bwu --totp --item <id|name>` here. \
+         A saved password alone cannot generate codes. Do not paste setup keys into chat. \
+         For SMS or email, get the code from the user or their authorized messages (message-use) \
+         or mail (mail-use). Push approval needs the user. {place}"
     )
 }
 
