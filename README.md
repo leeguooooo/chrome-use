@@ -451,6 +451,15 @@ than given to another tab. If the tab the agent was driving is gone, commands
 on the current tab are refused until it picks one with `tab select <ref>`,
 `tab new` or `--tab <ref>`, so nothing runs in a tab it never chose.
 
+When an autofill extension frame blocks debugger access, `get url` can still read
+Chrome's live record for the exact pinned tab. Explicit `open <url>` uses the
+browser tab API before attempting debugger recovery, so an old protected frame
+or a failed attachment cannot permanently trap navigation. Tab grants still
+apply; child-frame or referrer-bearing navigation still needs CDP. No input,
+form submission or login is replayed. This restores an explicit exit path; it
+does not guarantee that a third-party menu can be closed automatically under
+stealth mode. These navigation changes require relay extension 0.5.98+.
+
 ### Bitwarden login
 
 Open the site's login page, then run `chrome-use auth login --bwu`. Among

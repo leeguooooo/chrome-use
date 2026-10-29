@@ -2788,6 +2788,11 @@ chrome-use open - Launch the browser, optionally navigate
 
 Usage: chrome-use open [url] [--new-tab]
 
+On relay 0.5.98+, explicit top-level navigation uses Chrome's tab API before
+recovering debugger access. A protected autofill frame cannot permanently veto
+this exit path; no form/input is replayed. Tab grants still apply. `get url`
+can read the pinned tab's live Chrome metadata while its renderer is blocked.
+
 Without a URL, launches the browser but stays on about:blank. This lets
 you stage state (network routes, cookies, init scripts) before the first
 real navigation — useful for SSR debug, auth setup, and capturing fresh

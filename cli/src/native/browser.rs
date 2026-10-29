@@ -6122,9 +6122,20 @@ impl BrowserManager {
         poll_network_idle(session_id, rx, timeout).await
     }
 
+    /// Read the live document URL. On a protected extension frame, Chrome's
+    /// exact pinned-tab metadata can still answer without debugger access.
     pub async fn get_url(&self) -> Result<String, String> {
-        let result = self.evaluate_simple("location.href").await?;
-        Ok(result.as_str().unwrap_or("").to_string())
+        match self.evaluate_simple("location.href").await {
+            Ok(result) => Ok(result.as_str().unwrap_or("").to_string()),
+            Err(error) if self.on_relay() && is_debugger_access_denied(&error) => {
+                self.active_session_id()?;
+                self.pinned_tab_url_from_browser()
+                    .await
+                    .filter(|url| !url.is_empty())
+                    .ok_or(error)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn get_title(&self) -> Result<String, String> {
@@ -15289,3 +15300,117 @@ mod foreign_popup_tests {
 /// How long a shown tab gets for a password manager's menu that waited for
 /// it (see `BrowserManager::wake_pinned_tab`): measured 10-80 ms.
 const PENDING_MENU_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+
+#[cfg(test)]
+mod protected_url_tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    struct RelayGuard;
+    impl Drop for RelayGuard {
+        fn drop(&mut self) {
+            relay_for_test(false);
+        }
+    }
+
+    async fn read_url(
+        relay: bool,
+        error: &str,
+        live_url: Option<&str>,
+    ) -> (Result<String, String>, Vec<Value>) {
+        relay_for_test(relay);
+        let _guard = RelayGuard;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = log.clone();
+        let error = error.to_string();
+        let live_url = live_url.map(str::to_string);
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(Message::Text(text))) = ws.next().await {
+                let r: Value = serde_json::from_str(&text).unwrap();
+                seen.lock().unwrap().push(r.clone());
+                let result = match r["method"].as_str().unwrap() {
+                    "Page.getFrameTree" => json!({"frameTree":{"frame":{"id":"frame"}}}),
+                    "Page.createIsolatedWorld" => json!({"executionContextId":42}),
+                    "ABExt.inspectTab" => {
+                        assert_eq!(r["params"]["targetId"], "target-7");
+                        json!({"url":live_url})
+                    }
+                    _ => json!({}),
+                };
+                let mut reply = if r["method"] == "Runtime.evaluate" {
+                    json!({"id":r["id"],"error":{"code":-32000,"message":error}})
+                } else {
+                    json!({"id":r["id"],"result":result})
+                };
+                if let Some(sid) = r.get("sessionId") {
+                    reply["sessionId"] = sid.clone();
+                }
+                if ws.send(Message::Text(reply.to_string())).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let mut browser = BrowserManager::for_test(
+            &endpoint,
+            vec![PageInfo {
+                tab_id: 7,
+                label: None,
+                target_id: "target-7".into(),
+                session_id: "cb-tab-7".into(),
+                url: "https://stale.invalid/".into(),
+                title: "Fixture".into(),
+                target_type: "page".into(),
+            }],
+        )
+        .await;
+        browser.reown_target("target-7").unwrap();
+        let result = browser.get_url().await;
+        server.abort();
+        let requests = log.lock().unwrap().clone();
+        (result, requests)
+    }
+
+    #[tokio::test]
+    async fn protected_url_uses_only_the_live_pinned_tab_record() {
+        let (url, requests) = read_url(
+            true,
+            "debugger_access_denied: protected frame",
+            Some("https://fixture.invalid/current"),
+        )
+        .await;
+        assert_eq!(url.unwrap(), "https://fixture.invalid/current");
+        assert!(requests.iter().any(|r| r["method"] == "ABExt.inspectTab"));
+        assert!(!requests.iter().any(|r| matches!(
+            r["method"].as_str(),
+            Some("Page.navigate" | "Input.dispatchKeyEvent")
+        )));
+    }
+
+    #[tokio::test]
+    async fn protected_url_never_uses_cached_metadata_or_masks_other_failures() {
+        for (relay, error, live) in [
+            (true, "debugger_access_denied: protected frame", None),
+            (
+                false,
+                "debugger_access_denied: protected frame",
+                Some("https://fixture.invalid/current"),
+            ),
+            (
+                true,
+                "ordinary renderer error",
+                Some("https://fixture.invalid/current"),
+            ),
+        ] {
+            let (url, requests) = read_url(relay, error, live).await;
+            assert!(url.unwrap_err().contains(error));
+            if !relay || !error.starts_with("debugger_access_denied") {
+                assert!(!requests.iter().any(|r| r["method"] == "ABExt.inspectTab"));
+            }
+        }
+    }
+}

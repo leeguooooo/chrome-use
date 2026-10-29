@@ -2021,6 +2021,10 @@ async function handleForwardCdpCommand(msg) {
   // exactly the "ran on the wrong page with no warning" failure in issue #8.1,
   // and the blank-screenshot symptom after a service-worker restart (#8.2).
   // Fail loudly instead so the agent sees an actionable error, not bad data.
+  const childSid =
+    sessionId && tabIdFromSession(sessionId) == null && childSessionToTab.has(sessionId)
+      ? sessionId
+      : undefined;
   let tabId;
   if (sessionId) {
     // The stable Chrome tabId encoded in `cb-tab-<tabId>` is the source of truth
@@ -2034,7 +2038,12 @@ async function handleForwardCdpCommand(msg) {
       throw new Error(`unknown sessionId ${sessionId} for ${method}`);
     }
     guardTab(tabId, agentSession);
-    if (!tabs.has(tabId)) {
+    if (!tabs.has(tabId) && canUseBrowserNavigationFallback(method, params, childSid)) {
+      const live = await withRelayTimeout(chrome.tabs.get(tabId), 'chrome.tabs.get(Page.navigate)');
+      if (!eligible(live)) throw new Error(`Chrome tab ${tabId} is not a navigable web tab`);
+      // The exact stable tab still exists. Navigating it needs no attachment;
+      // the subsequent page command recovers the debugger after it leaves.
+    } else if (!tabs.has(tabId)) {
       const recovered = await recoverSessionTab(sessionId);
       if (!recovered) {
         // A dead tab's host record goes now, so the next getTargets does not
@@ -2062,10 +2071,6 @@ async function handleForwardCdpCommand(msg) {
   // page session — is dispatched to that sub-frame directly so e.g.
   // Accessibility.getFullAXTree pierces the OOPIF instead of re-reading the top
   // frame. `cb-tab-*` ids resolve to the page (no child sessionId). (OAuth/OOPIF)
-  const childSid =
-    sessionId && tabIdFromSession(sessionId) == null && childSessionToTab.has(sessionId)
-      ? sessionId
-      : undefined;
 
   // Idle auto-detach bookkeeping (issue #201): re-attach a released tab before
   // the command and count in-flight commands so the sweep never detaches under
@@ -2084,6 +2089,15 @@ async function handleForwardCdpCommand(msg) {
           `stable enough to drive. Try a deep link or adopt an already-rendered tab.`
       );
     }
+  }
+  // An explicit top-level navigation uses Chrome's tab API. Requiring a
+  // debugger attachment first would trap the caller on a protected overlay.
+  if (canUseBrowserNavigationFallback(method, params, childSid)) {
+    const result = await dispatchToTab(tabId, method, params, childSid, agentSession);
+    if (result?.relayFallback?.method === 'browser-level chrome.tabs.update') {
+      attachmentHealth.navigationStarted(tabId);
+    }
+    return result;
   }
   const reset = await attachmentHealth.recover(tabId, tabCommandDependencies());
   if (reset && childSid)

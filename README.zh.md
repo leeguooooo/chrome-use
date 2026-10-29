@@ -432,6 +432,12 @@ chrome-use 会保留该标签并报告目标 ID。保持相同 session 和连接
 
 ### 用 Bitwarden 登录
 
+自动填充扩展的框架阻止调试器访问时，`get url` 仍可读取 Chrome 中当前固定标签页的实时记录。
+显式 `open <url>` 会先走浏览器标签 API，再处理调试器恢复，旧页面的受保护框架或恢复失败
+不会永久拦住这次导航。标签页授权检查仍然生效；子框架导航和带 referrer 的导航仍需要 CDP。
+不会重放输入、表单提交或登录。这提供的是显式离开阻塞页的路径，不保证隐身模式下能自动关闭
+第三方扩展的弹层。导航恢复需要 relay 扩展 0.5.98+。
+
 打开网站登录页后运行 `chrome-use auth login --bwu`。多个账号匹配时，先用上次在这个主机上登录成功的那个，
 其次用名字正好是站点主机名、或是它登录 iframe 主机名的那个（App Store Connect 的登录框是 `idmsa.apple.com`
 的 iframe）；都没有时用 `--item <id|name>` 选一个。在 `--launch` 浏览器中加 `--passkey` 只用 passkey
