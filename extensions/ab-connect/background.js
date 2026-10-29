@@ -2093,10 +2093,13 @@ async function handleForwardCdpCommand(msg) {
   if (entry) {
     entry.inflight++;
     entry.lastActivity = Date.now();
-    if (!childSid) rememberReplayable(entry, method, params);
+    if (!childSid && method !== 'Emulation.clearDeviceMetricsOverride') rememberReplayable(entry, method, params);
   }
   try {
-    return await dispatchToTab(tabId, method, params, childSid, agentSession);
+    const result = await dispatchToTab(tabId, method, params, childSid, agentSession);
+    // A refused or unconfirmed clear must retain the last known override.
+    if (!childSid && method === 'Emulation.clearDeviceMetricsOverride') rememberReplayable(entry, method, params);
+    return result;
   } finally {
     if (entry) {
       entry.inflight = Math.max(0, entry.inflight - 1);

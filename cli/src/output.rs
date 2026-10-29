@@ -4560,6 +4560,9 @@ Settings:
   device <name|off>          Emulate device (e.g., "iPhone 13"); off/reset/none clears
                             device metrics, UA and touch overrides; new tabs use
                             the browser UA again (viewport reset clears only metrics)
+                            Does not restore prior --user-agent/set useragent values;
+                            existing headless UA compatibility remains enabled
+                            Relay 0.5.98+ also keeps cleared metrics out of idle replay
   geo <lat> <lng>            Set geolocation
   offline [on|off]           Toggle offline mode; off restores the new-tab default
   headers <json>             Set extra HTTP headers; use {} to clear them for new tabs

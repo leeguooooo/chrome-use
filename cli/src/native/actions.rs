@@ -18647,6 +18647,26 @@ async fn handle_device(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
             Some(json!({ "enabled": false })),
             Some(session_id),
         ).await.map_err(|e| format!("device reset incomplete: metrics and user-agent overrides were cleared, but touch emulation could not be disabled: {e}"))?;
+        // Headless opt-in launches retain their existing compatibility UA;
+        // derive it from browser metadata, never the page's own getter.
+        if stealth_enabled() && mgr.launched_headless() == Some(true) {
+            let version = mgr.client.send_command("Browser.getVersion", None, None).await
+                .map_err(|e| format!("device overrides were cleared, but the native browser user agent could not be read: {e}"))?;
+            let native_ua = version["userAgent"]
+                .as_str()
+                .filter(|ua| !ua.is_empty())
+                .ok_or(
+                "device overrides were cleared, but Chrome did not report its native user agent",
+            )?;
+            let locale = env::var("AGENT_BROWSER_LOCALE").ok();
+            let expected = stealth::apply_headless_user_agent(&mgr.client, session_id, native_ua, locale.as_deref()).await
+                .map_err(|e| format!("device overrides were cleared, but headless user-agent compatibility could not be restored: {e}"))?;
+            let actual = mgr.evaluate("navigator.userAgent", None).await
+                .map_err(|e| format!("device overrides were cleared, but the restored user agent could not be verified: {e}"))?;
+            if actual.as_str() != Some(expected.as_str()) {
+                return Err("device overrides were cleared, but the restored user agent did not match the browser default".into());
+            }
+        }
         let metrics = mgr.client.send_command("Page.getLayoutMetrics", None, Some(session_id)).await
             .map_err(|e| format!("device overrides were cleared, but the resulting viewport could not be read: {e}"))?;
         let viewport = metrics

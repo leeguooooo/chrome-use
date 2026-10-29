@@ -308,7 +308,11 @@ chrome-use set media light reduced-motion  # Light mode + reduced motion
 `set device "iPhone 13"` uses a 390 × 844 CSS viewport at 3× scale and an iOS 15 user agent.
 Use `set device off` (aliases: `reset`, `none`, or `device off`) to clear device metrics,
 user-agent and touch overrides on the current tab. Future tabs stop inheriting the emulated UA.
+The reset returns to the browser default UA, not a previous `--user-agent` or `set useragent` value.
+Explicit headless launches retain their existing UA compatibility normalization.
 The reset reads the resulting native viewport and does not resize the Chrome window.
+On the relay, extension 0.5.98+ also forgets cleared metrics after successful reset,
+so an idle reattachment cannot replay the old mobile viewport.
 A partial failure reports which overrides were cleared. `viewport reset` only clears metrics;
 it deliberately keeps any user-agent override.
 

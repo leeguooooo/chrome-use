@@ -149,3 +149,37 @@ async fn iphone_13_uses_its_css_geometry_and_user_agent() {
         .contains("iPhone OS 15_0"));
     server.abort();
 }
+
+#[tokio::test]
+async fn headless_compatibility_uses_the_supplied_browser_ua_and_propagates_failure() {
+    let (state, log, server) = fixture(None).await;
+    let mgr = state.browser.as_ref().unwrap();
+    let ua = "Mozilla/5.0 HeadlessChrome/155.0.0.0 Safari/537.36";
+    let expected = "Mozilla/5.0 Chrome/155.0.0.0 Safari/537.36";
+    assert_eq!(
+        stealth::apply_headless_user_agent(&mgr.client, "session", ua, None)
+            .await
+            .unwrap(),
+        expected
+    );
+    assert_eq!(
+        stealth::apply_headless_user_agent(&mgr.client, "session", "NativeBrowser/1.0", None)
+            .await
+            .unwrap(),
+        "NativeBrowser/1.0"
+    );
+    let requests = log.lock().unwrap().clone();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["method"], "Emulation.setUserAgentOverride");
+    assert_eq!(requests[0]["params"]["userAgent"], expected);
+    assert!(requests[0]["params"].get("acceptLanguage").is_none());
+    server.abort();
+
+    let (state, _, server) = fixture(Some("Emulation.setUserAgentOverride")).await;
+    let mgr = state.browser.as_ref().unwrap();
+    let error = stealth::apply_headless_user_agent(&mgr.client, "session", ua, None)
+        .await
+        .unwrap_err();
+    assert!(error.contains("fixture refused reset"));
+    server.abort();
+}

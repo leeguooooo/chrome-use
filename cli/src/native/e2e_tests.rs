@@ -4106,7 +4106,7 @@ async fn e2e_device_off_restores_browser_defaults_for_current_and_future_tabs() 
     let mut state = DaemonState::new();
     assert_success(
         &Box::pin(execute_command(
-            &json!({"id":"launch","action":"launch","headless":true}),
+            &json!({"id":"launch","action":"launch","headless":true,"userAgent":"DeviceResetLaunchOverride/1.0"}),
             &mut state,
         ))
         .await,
@@ -4114,7 +4114,20 @@ async fn e2e_device_off_restores_browser_defaults_for_current_and_future_tabs() 
     let read = json!({"id":"read","action":"evaluate","script":"({ua:navigator.userAgent,dpr:devicePixelRatio,touch:navigator.maxTouchPoints,screenWidth:screen.width})"});
     let before = Box::pin(execute_command(&read, &mut state)).await;
     assert_success(&before);
-    let defaults = get_data(&before)["result"].clone();
+    let mut defaults = get_data(&before)["result"].clone();
+    assert_eq!(defaults["ua"], "DeviceResetLaunchOverride/1.0");
+    let native = state
+        .browser
+        .as_ref()
+        .unwrap()
+        .client
+        .send_command("Browser.getVersion", None, None)
+        .await
+        .unwrap();
+    defaults["ua"] = json!(native["userAgent"]
+        .as_str()
+        .unwrap()
+        .replace("HeadlessChrome", "Chrome"));
     let device = Box::pin(execute_command(
         &json!({"id":"device","action":"device","device":"iPhone 13"}),
         &mut state,
