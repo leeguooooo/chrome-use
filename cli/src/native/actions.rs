@@ -25911,7 +25911,8 @@ async fn site_policy_layers(
 
 /// `download`, `payment_input`, `password_input` or `purchase` for the
 /// actions that may deserve a look. Reads only what the daemon already holds
-/// (the ref map, the command) plus, for a typed-into ref, `DOM.describeNode`
+/// (the intended target’s saved ref map and iframe sessions, the command) plus
+/// `DOM.describeNode` for a typed-into field
 /// (a CDP read that runs nothing in the page). `fill --from-env` is judged by
 /// its target field like any other fill: a secret is not a payment by itself.
 async fn site_gate_kind(
@@ -25919,96 +25920,117 @@ async fn site_gate_kind(
     category: &str,
     cmd: &Value,
     state: &DaemonState,
-) -> Option<&'static str> {
+) -> Result<Option<&'static str>, String> {
     use super::site_policy::{field_kind_from_attributes, field_kind_from_text, is_purchase_name};
     if category == "download" {
-        return Some("download");
+        return Ok(Some("download"));
     }
-    let selector = cmd.get("selector").and_then(|v| v.as_str()).unwrap_or("");
-    let entry = super::element::parse_ref(selector).and_then(|r| state.ref_map.get(&r).cloned());
+    if !matches!(category, "typing" | "click") {
+        return Ok(None);
+    }
+    let unavailable = || {
+        "Cannot classify the intended field for site policy; observe that target again before retrying".to_string()
+    };
+    let mgr = state.browser.as_ref().ok_or_else(unavailable)?;
+    let (target, session, _) = mgr.confirmation_page(confirmation_tab_spec(cmd, action))?;
+    let selector = cmd.get("selector").and_then(Value::as_str).unwrap_or("");
+    let ref_id = super::element::parse_ref(selector);
+    // Before --tab routing, the active ref map belongs to another page. Peek
+    // the intended target's saved map and iframe sessions without switching it.
+    let context = if ref_id.is_some() && mgr.active_target_id().ok() != Some(target.as_str()) {
+        Some(state.tab_states.get(&target).ok_or_else(unavailable)?)
+    } else {
+        None
+    };
+    let (refs, frames) = context
+        .map(|tab| (&tab.ref_map, &tab.iframe_sessions))
+        .unwrap_or((&state.ref_map, &state.iframe_sessions));
+    let entry = match ref_id {
+        Some(id) => Some(refs.get(&id).ok_or_else(unavailable)?),
+        None => None,
+    };
     match category {
         "typing" => {
             if action == "form_fill" {
-                // The field names a form-fill map writes to; payment wins.
                 let fields = cmd.get("map").map(|m| m.to_string()).unwrap_or_default();
-                return field_kind_from_text(&fields);
+                return Ok(field_kind_from_text(&fields));
+            }
+            if selector.is_empty() {
+                return Ok(None);
             }
             let by_selector = field_kind_from_text(selector);
-            if by_selector == Some("payment_input") {
-                return by_selector;
-            }
-            let by_name = entry.as_ref().and_then(|e| field_kind_from_text(&e.name));
-            if by_name == Some("payment_input") {
-                return by_name;
-            }
-            // The field's attributes, read over CDP: by the ref's node, or a
-            // CSS selector resolved in the top document. Nothing runs in the
-            // page.
-            let by_dom = async {
-                let mgr = state.browser.as_ref()?;
-                let session = mgr.active_session_id().ok()?.to_string();
-                let target = match entry.as_ref() {
-                    Some(e) => json!({ "backendNodeId": e.backend_node_id? }),
-                    None if !selector.is_empty() && !selector.starts_with('@') => {
-                        let doc = mgr
-                            .client
-                            .send_command(
-                                "DOM.getDocument",
-                                Some(json!({ "depth": 0 })),
-                                Some(&session),
-                            )
-                            .await
-                            .ok()?;
-                        let root = doc.pointer("/root/nodeId")?.as_i64()?;
-                        let found = mgr
-                            .client
-                            .send_command(
-                                "DOM.querySelector",
-                                Some(json!({ "nodeId": root, "selector": selector })),
-                                Some(&session),
-                            )
-                            .await
-                            .ok()?;
-                        let node = found.get("nodeId")?.as_i64().filter(|n| *n > 0)?;
-                        json!({ "nodeId": node })
-                    }
-                    None => return None,
-                };
-                let described = mgr
-                    .client
-                    .send_command("DOM.describeNode", Some(target), Some(&session))
-                    .await
-                    .ok()?;
-                let attrs: Vec<String> = described
-                    .pointer("/node/attributes")
-                    .and_then(|v| v.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|s| s.as_str().map(str::to_string))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                field_kind_from_attributes(&attrs)
-            }
-            .await;
-            match by_dom {
-                Some("payment_input") => Some("payment_input"),
-                other => other.or(by_name).or(by_selector),
-            }
+            let by_name = entry.and_then(|e| field_kind_from_text(&e.name));
+            let (_, effective_session) = super::element::resolve_ax_session(
+                entry.and_then(|e| e.frame_id.as_deref()),
+                &session,
+                frames,
+            );
+            let node = match entry {
+                Some(e) => json!({"backendNodeId":e.backend_node_id.ok_or_else(unavailable)?}),
+                None => {
+                    let doc = mgr
+                        .client
+                        .send_command(
+                            "DOM.getDocument",
+                            Some(json!({"depth":0})),
+                            Some(effective_session),
+                        )
+                        .await
+                        .map_err(|_| unavailable())?;
+                    let root = doc
+                        .pointer("/root/nodeId")
+                        .and_then(Value::as_i64)
+                        .ok_or_else(unavailable)?;
+                    let found = mgr
+                        .client
+                        .send_command(
+                            "DOM.querySelector",
+                            Some(json!({"nodeId":root,"selector":selector})),
+                            Some(effective_session),
+                        )
+                        .await
+                        .map_err(|_| unavailable())?;
+                    let id = found["nodeId"]
+                        .as_i64()
+                        .filter(|id| *id > 0)
+                        .ok_or_else(unavailable)?;
+                    json!({"nodeId":id})
+                }
+            };
+            let described = mgr
+                .client
+                .send_command("DOM.describeNode", Some(node), Some(effective_session))
+                .await
+                .map_err(|_| unavailable())?;
+            let attrs = described
+                .pointer("/node/attributes")
+                .and_then(Value::as_array)
+                .ok_or_else(unavailable)?;
+            let attrs: Vec<String> = attrs
+                .iter()
+                .map(|v| v.as_str().map(str::to_string).ok_or_else(unavailable))
+                .collect::<Result<_, _>>()?;
+            let by_dom = field_kind_from_attributes(&attrs);
+            // Payment wins across the exact field's DOM, name and selector.
+            Ok(
+                if [by_dom, by_name, by_selector].contains(&Some("payment_input")) {
+                    Some("payment_input")
+                } else {
+                    by_dom.or(by_name).or(by_selector)
+                },
+            )
         }
         "click" => {
-            let name = match entry {
-                Some(e) => e.name,
-                None => selector
+            let name = entry.map(|e| e.name.as_str()).unwrap_or_else(|| {
+                selector
                     .trim()
                     .strip_prefix("text=")
                     .unwrap_or(selector)
                     .trim_matches('"')
-                    .to_string(),
-            };
-            is_purchase_name(&name).then_some("purchase")
+            });
+            Ok(is_purchase_name(name).then_some("purchase"))
         }
-        _ => None,
+        _ => Ok(None),
     }
 }
 
@@ -26094,10 +26116,20 @@ async fn site_gate(cmd: &Value, action: &str, id: &str, state: &mut DaemonState)
             Some(url) => sp::host_of(&url)?,
             None => current_host()?,
         };
+        // Domain denials precede even read-only field classification.
+        if let SiteGate::Deny(reason) = policy.decide(&host, category, None) {
+            return Some(error_response(
+                id,
+                &format!("Action '{action}' refused: {reason}"),
+            ));
+        }
         let kind = if policy.ask().is_empty() {
             None
         } else {
-            site_gate_kind(action, category, cmd, state).await
+            match site_gate_kind(action, category, cmd, state).await {
+                Ok(kind) => kind,
+                Err(error) => return Some(error_response(id, &error)),
+            }
         };
         match policy.decide(&host, category, kind) {
             SiteGate::Allow => return None,

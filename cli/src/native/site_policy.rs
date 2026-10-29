@@ -10,7 +10,8 @@
 //! default: agents routinely sign in (`auth login`, `fill --from-env`) and
 //! run download automations unattended, so the other two are opt-in. The site is
 //! the host the action lands on: the URL argument for a navigation, else the
-//! page the session drives (the daemon's tracked URL, never a page read).
+//! intended command target (resolved without selecting another tab). Pending
+//! approvals also verify its renderer origin, without evaluating page JavaScript.
 //!
 //! Rules come in layers, highest first:
 //!

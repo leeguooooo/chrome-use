@@ -31,6 +31,20 @@ async fn fixture_with_site(
     Arc<Mutex<Vec<Value>>>,
     RelayMode,
 ) {
+    fixture_with_fields(managed, host, decision, HashMap::new()).await
+}
+
+async fn fixture_with_fields(
+    managed: Value,
+    host: &str,
+    decision: &str,
+    fields: HashMap<String, Value>,
+) -> (
+    DaemonState,
+    tokio::task::JoinHandle<()>,
+    Arc<Mutex<Vec<Value>>>,
+    RelayMode,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}", listener.local_addr().unwrap());
     let commands = Arc::new(Mutex::new(Vec::new()));
@@ -52,6 +66,21 @@ async fn fixture_with_site(
                 "ABExt.siteApproval" => json!({"held":true}),
                 "Page.getFrameTree" => {
                     json!({"frameTree":{"frame":{"id":"root","url":renderer_url}}})
+                }
+                "DOM.getDocument"
+                    if fields.contains_key(request["sessionId"].as_str().unwrap_or("")) =>
+                {
+                    json!({"root":{"nodeId":1}})
+                }
+                "DOM.querySelector"
+                    if fields.contains_key(request["sessionId"].as_str().unwrap_or("")) =>
+                {
+                    json!({"nodeId":2})
+                }
+                "DOM.describeNode"
+                    if fields.contains_key(request["sessionId"].as_str().unwrap_or("")) =>
+                {
+                    json!({"node":{"attributes":fields[request["sessionId"].as_str().unwrap()]}})
                 }
                 "Browser.getVersion" => json!({"product":"Chrome/156.0.0.0"}),
                 _ => {
@@ -479,5 +508,232 @@ async fn confirmation_refuses_a_target_released_while_pending() {
         .unwrap_err();
     assert!(error.contains("target or origin changed"), "{error}");
     assert!(commands.lock().unwrap().is_empty());
+    server.abort();
+}
+
+fn select_other_fixture_page(state: &mut DaemonState) {
+    let browser = state.browser.as_mut().unwrap();
+    browser.add_background_page(super::super::browser::PageInfo {
+        tab_id: 2,
+        label: None,
+        target_id: "other".into(),
+        session_id: "cb-tab-2".into(),
+        url: "https://other.test/editor".into(),
+        title: "Other".into(),
+        target_type: "page".into(),
+    });
+    browser.reown_target("other").unwrap();
+    browser.set_active_for_test("other");
+}
+
+fn field_policy() -> Value {
+    json!({"ask":["password_input","payment_input"],"sensitiveSites":false,"firstVisit":[]})
+}
+
+#[tokio::test]
+async fn named_css_field_policy_reads_only_the_intended_renderer_in_both_directions() {
+    for (a, b, expected) in [
+        (
+            json!(["type", "password"]),
+            json!(["type", "text"]),
+            Some("password_input"),
+        ),
+        (
+            json!(["autocomplete", "cc-number"]),
+            json!(["type", "text"]),
+            Some("payment_input"),
+        ),
+        (json!(["type", "text"]), json!(["type", "password"]), None),
+        (
+            json!(["type", "text"]),
+            json!(["autocomplete", "cc-number"]),
+            None,
+        ),
+    ] {
+        let (mut state, server, commands, _mode) = fixture_with_fields(
+            field_policy(),
+            "fixture.test",
+            "once",
+            [("cb-tab-1".into(), a), ("cb-tab-2".into(), b)]
+                .into_iter()
+                .collect(),
+        )
+        .await;
+        select_other_fixture_page(&mut state);
+        let cmd = json!({"id":"field","action":"fill","tab":"t1","selector":"#field","value":"synthetic"});
+        let gate = site_gate(&cmd, "fill", "field", &mut state).await;
+        match expected {
+            Some(kind) => {
+                let gate = gate.unwrap();
+                assert_eq!(gate["data"]["site"], "fixture.test", "{gate}");
+                assert_eq!(gate["data"]["reason"], kind, "{gate}");
+                assert_eq!(gate["data"]["approval"], "user");
+            }
+            None => assert!(gate.is_none(), "{gate:?}"),
+        }
+        let log = commands.lock().unwrap();
+        let reads: Vec<_> = log
+            .iter()
+            .filter(|r| r["method"].as_str().unwrap().starts_with("DOM."))
+            .collect();
+        assert_eq!(reads.len(), 3);
+        assert!(
+            reads.iter().all(|r| r["sessionId"] == "cb-tab-1"),
+            "{reads:?}"
+        );
+        assert_eq!(
+            state.browser.as_ref().unwrap().active_target_id().unwrap(),
+            "other"
+        );
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn named_ref_field_policy_uses_saved_target_map_and_iframe_session() {
+    for (a, b, expected) in [
+        (
+            json!(["type", "password"]),
+            json!(["type", "text"]),
+            Some("password_input"),
+        ),
+        (
+            json!(["autocomplete", "cc-number"]),
+            json!(["type", "text"]),
+            Some("payment_input"),
+        ),
+        (json!(["type", "text"]), json!(["type", "password"]), None),
+    ] {
+        let (mut state, server, commands, _mode) = fixture_with_fields(
+            field_policy(),
+            "fixture.test",
+            "once",
+            [("frame-a".into(), a), ("cb-tab-2".into(), b)]
+                .into_iter()
+                .collect(),
+        )
+        .await;
+        let mut refs = RefMap::new();
+        refs.add_with_frame(
+            "e1".into(),
+            Some(41),
+            "textbox",
+            "ordinary",
+            None,
+            Some("child-a"),
+        );
+        state.tab_states.insert(
+            "fixture".into(),
+            TabState {
+                ref_map: refs,
+                last_snapshot: None,
+                iframe_sessions: [("child-a".into(), "frame-a".into())].into_iter().collect(),
+                active_frame_id: None,
+            },
+        );
+        select_other_fixture_page(&mut state);
+        state.ref_map.add(
+            "e1".into(),
+            Some(99),
+            "textbox",
+            "payment card number",
+            None,
+        );
+        let cmd = json!({"id":"ref-field","action":"fill","tab":"t1","selector":"@e1","value":"synthetic"});
+        let gate = site_gate(&cmd, "fill", "ref-field", &mut state).await;
+        match expected {
+            Some(kind) => {
+                let gate = gate.unwrap();
+                assert_eq!(gate["data"]["reason"], kind, "{gate}");
+                assert_eq!(gate["data"]["site"], "fixture.test");
+            }
+            None => assert!(gate.is_none(), "{gate:?}"),
+        }
+        let log = commands.lock().unwrap();
+        let reads: Vec<_> = log
+            .iter()
+            .filter(|r| r["method"].as_str().unwrap().starts_with("DOM."))
+            .collect();
+        assert_eq!(reads.len(), 1);
+        assert_eq!(reads[0]["sessionId"], "frame-a");
+        assert_eq!(reads[0]["params"]["backendNodeId"], 41);
+        assert_eq!(
+            state.browser.as_ref().unwrap().active_target_id().unwrap(),
+            "other"
+        );
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn missing_or_unreadable_saved_ref_context_refuses_without_current_tab_fallback() {
+    for saved in [false, true] {
+        let (mut state, server, commands, _mode) = fixture_with_fields(
+            field_policy(),
+            "fixture.test",
+            "once",
+            [("cb-tab-2".into(), json!(["type", "text"]))]
+                .into_iter()
+                .collect(),
+        )
+        .await;
+        if saved {
+            let mut refs = RefMap::new();
+            refs.add_with_frame(
+                "e1".into(),
+                Some(41),
+                "textbox",
+                "ordinary",
+                None,
+                Some("child-a"),
+            );
+            state.tab_states.insert(
+                "fixture".into(),
+                TabState {
+                    ref_map: refs,
+                    last_snapshot: None,
+                    iframe_sessions: [("child-a".into(), "lost-frame-a".into())]
+                        .into_iter()
+                        .collect(),
+                    active_frame_id: None,
+                },
+            );
+        }
+        select_other_fixture_page(&mut state);
+        state
+            .ref_map
+            .add("e1".into(), Some(99), "textbox", "ordinary", None);
+        let cmd = json!({"id":"missing-ref","action":"fill","tab":"t1","selector":"@e1","value":"synthetic"});
+        let gate = site_gate(&cmd, "fill", "missing-ref", &mut state)
+            .await
+            .unwrap();
+        assert_eq!(gate["success"], false, "{gate}");
+        assert!(gate["error"]
+            .as_str()
+            .unwrap()
+            .contains("Cannot classify the intended field"));
+        let log = commands.lock().unwrap();
+        assert!(log.iter().all(|r| r["sessionId"] != "cb-tab-2"), "{log:?}");
+        assert!(!log.iter().any(|r| r["method"] == "ABExt.siteApproval"));
+        assert!(state.pending_confirmation.is_none());
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn managed_domain_denial_precedes_intended_field_reads() {
+    let (mut state, server, commands, _mode) =
+        fixture(json!({"blockedDomains":["fixture.test"],"ask":["password_input"]})).await;
+    let cmd = json!({"id":"blocked-field","action":"fill","selector":"#field","value":"synthetic"});
+    let gate = site_gate(&cmd, "fill", "blocked-field", &mut state)
+        .await
+        .unwrap();
+    assert_eq!(gate["success"], false, "{gate}");
+    assert!(gate["error"].as_str().unwrap().contains("blocked"));
+    assert!(commands
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|r| r["method"].as_str().unwrap().starts_with("AB")));
     server.abort();
 }

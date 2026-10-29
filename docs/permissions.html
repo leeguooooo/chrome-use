@@ -101,7 +101,7 @@ Confirmation required:
 
       <p>同时 Chrome 会弹一条通知，侧栏和选项页的“权限与安全”里会出现一张卡片，有三个选项：<strong>仅允许这一次</strong>、<strong>始终允许此站点</strong>、<strong>拒绝</strong>。agent 运行 <code>chrome-use confirm &lt;id&gt;</code> 后会等你最多 40 秒，你选了允许就执行原命令。</p>
       <p>只有你能在扩展里批准：agent 自己运行 <code>confirm</code> 不会让操作通过。<code>chrome-use deny &lt;id&gt;</code> 会撤回请求。</p>
-      <p>扩展持有请求时，<code>--confirm-interactive</code> 也不能代替用户在扩展里批准。没有扩展持有决定的终端请求仍可交互确认。批准后的执行会重新检查拒绝规则和站点限制；策略变化可以拒绝操作，后续站点审批仍返回等待状态，不会被报告为已完成。确认绑定原来由此会话持有的目标标签页和页面来源。目标或来源改变、或无法核实时，必须重新运行原命令获取确认；显式标签页引用也必须仍指向同一个目标。</p>
+      <p>扩展持有请求时，<code>--confirm-interactive</code> 也不能代替用户在扩展里批准。没有扩展持有决定的终端请求仍可交互确认。批准后的执行会重新检查拒绝规则和站点限制；策略变化可以拒绝操作，后续站点审批仍返回等待状态，不会被报告为已完成。确认绑定原来由此会话持有的目标标签页和页面来源。目标或来源改变、或无法核实时，必须重新运行原命令获取确认；显式标签页引用也必须仍指向同一个目标。 字段策略检查也使用同一目标的元素引用和 iframe 会话；上下文缺失或无法读取时，在输入前拒绝操作。</p>
       <p>没有扩展（<code>--launch</code>、<code>--cdp</code>）或扩展版本早于 0.5.93 时，<code>confirm &lt;id&gt;</code> 直接批准，与 <code>--confirm-actions</code> 一样。</p>
 
       <h2 id="history">已允许站点与权限记录</h2>
