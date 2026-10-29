@@ -103,6 +103,9 @@ explain it, wait, then `session resume`. Full text, including QR
 permission: tell the user, who decides in the extension; `confirm <id>` then
 waits for that choice, and your own `confirm` never approves it.
 
+After device emulation, `set device off` clears metrics, UA and touch overrides;
+`viewport reset` clears only metrics. See `core/commands` for aliases and presets.
+
 ## Load detail when the task needs it
 
 `chrome-use skills get <name>`:

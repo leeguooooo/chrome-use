@@ -295,7 +295,8 @@ chrome-use find nth 2 "a" hover
 ```bash
 chrome-use set viewport 1920 1080          # Set viewport size
 chrome-use set viewport 1920 1080 2        # 2x retina (same CSS size, higher res screenshots)
-chrome-use set device "iPhone 14"          # Emulate device
+chrome-use set device "iPhone 13"          # Emulate device
+chrome-use set device off                  # Clear metrics, user-agent and touch overrides
 chrome-use set geo 37.7749 -122.4194       # Set geolocation (alias: geolocation)
 chrome-use set offline on                  # Toggle offline mode
 chrome-use set headers '{"X-Key":"v"}'     # Extra HTTP headers
@@ -303,6 +304,13 @@ chrome-use set credentials user pass       # HTTP basic auth (alias: auth)
 chrome-use set media dark                  # Emulate color scheme
 chrome-use set media light reduced-motion  # Light mode + reduced motion
 ```
+
+`set device "iPhone 13"` uses a 390 × 844 CSS viewport at 3× scale and an iOS 15 user agent.
+Use `set device off` (aliases: `reset`, `none`, or `device off`) to clear device metrics,
+user-agent and touch overrides on the current tab. Future tabs stop inheriting the emulated UA.
+The reset reads the resulting native viewport and does not resize the Chrome window.
+A partial failure reports which overrides were cleared. `viewport reset` only clears metrics;
+it deliberately keeps any user-agent override.
 
 ## Cookies and Storage
 

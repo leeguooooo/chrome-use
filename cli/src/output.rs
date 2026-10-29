@@ -487,6 +487,10 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
     }
 
     if let Some(data) = &resp.data {
+        if action == Some("device") && data["reset"] == true {
+            println!("{} Device emulation off: metrics, user-agent and touch overrides cleared (native viewport {}x{})", color::success_indicator(), data["width"], data["height"]);
+            return;
+        }
         // What `snapshot`/`get text`/`read` left out because a person can't
         // see it (#781). Stderr, so piped text stays the page's text.
         if let Some(note) = data.get("hiddenNote").and_then(|v| v.as_str()) {
@@ -4553,7 +4557,9 @@ Configures various browser settings and emulation options.
 
 Settings:
   viewport <w> <h> [scale]   Set viewport size (scale = deviceScaleFactor, e.g. 2 for retina)
-  device <name>              Emulate device (e.g., "iPhone 12")
+  device <name|off>          Emulate device (e.g., "iPhone 13"); off/reset/none clears
+                            device metrics, UA and touch overrides; new tabs use
+                            the browser UA again (viewport reset clears only metrics)
   geo <lat> <lng>            Set geolocation
   offline [on|off]           Toggle offline mode; off restores the new-tab default
   headers <json>             Set extra HTTP headers; use {} to clear them for new tabs
@@ -4568,7 +4574,8 @@ Global Options:
 Examples:
   chrome-use set viewport 1920 1080
   chrome-use set viewport 1920 1080 2    # 2x retina
-  chrome-use set device "iPhone 12"
+  chrome-use set device "iPhone 13"
+  chrome-use set device off
   chrome-use set geo 37.7749 -122.4194
   chrome-use set offline on
   chrome-use set headers '{"X-Custom": "value"}'
@@ -5926,12 +5933,14 @@ Examples:
         }
         "device" => {
             r##"
-chrome-use device - Manage iOS simulators
+chrome-use device - List iOS simulators or stop browser device emulation
 
-Usage: chrome-use device <subcommand>
+Usage: chrome-use device <list|off|reset|none>
 
 Subcommands:
   list    List available iOS simulators
+  off     Clear browser device metrics, UA and touch overrides (aliases: reset, none)
+          Same as set device off; does not resize the Chrome window
 
 Options:
   --json               Output as JSON
@@ -6632,7 +6641,7 @@ Mouse:  chrome-use mouse <action> [args]
   move <x> <y>, down [btn], up [btn], wheel <dy> [dx]
 
 Browser Settings:  chrome-use set <setting> [value]
-  viewport <w> <h>, device <name>, geo <lat> <lng>
+  viewport <w> <h>, device <name|off>, geo <lat> <lng>
   offline [on|off], headers <json>, credentials <user> <pass>
   media [dark|light] [reduced-motion]
 

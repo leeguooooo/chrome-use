@@ -389,6 +389,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use tab new [url] --activate` · `tab select t2 --activate` · `tab adopt <targetId> --activate` | 在初始化或存活探针之前激活目标；`--front` 是别名 |
 | `chrome-use tab list --all [--limit <n>]` | 列出当前 Chrome profile 所有窗口里的全部标签，包括用户自己的和其他会话的：handle、窗口、是否当前标签、标题、URL、归属（本会话 / `session <名字>` / 用户）。首次查询也只读，不启动 daemon、不开窗口或标签、不 attach 页面。首次 open 被拒绝后，仍可通过会话绑定的 profile 或已配置的 CDP 地址只读查询，不建立页面驱动连接、不绕过混合窗口保护。URL 按 Chrome 原样给出，可能带 token |
 | `chrome-use --tab <handle> --force <命令>` · `tab close <handle> --force` | 在不属于本会话的标签（比如用户自己的）上原地、后台执行命令或关闭它，只在用户要求时使用。结果带 `forced: true` 和该标签的标题、URL；`close` 不会关掉 forced 标签 |
+| `chrome-use set device "iPhone 13"` · `set device off` | 模拟设备，或清除尺寸、用户代理和触摸模拟覆盖；`device off` 是别名 |
 | `chrome-use dialog status` · `dialog accept\|dismiss` | 处理点击触发的原生 `confirm()` / `prompt()` |
 | `chrome-use download @e2 ./video.mp4` | 用已登录浏览器的同一份 cookie 下载，且不导航当前标签页 |
 | `chrome-use network route "*/api/me" --body '{"vip":true}'` | 伪造响应、改写出站请求或拦截请求 |
@@ -400,6 +401,13 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use auth login --bwu --passkey` | 在 `--launch` 浏览器中用 passkey 登录（bwu 0.9.0+） |
 | `chrome-use status` | 中继传输、近期 debugger 超时、重复扩展、版本偏差与会话健康总览。ab-connect 0.5.50+ 的 host 断线后首次重试定时为 1 秒，连续失败逐步退避到 30 秒。旧 socket 的命令与事件等待会结束，旧回复不重放；发送失败或回复丢失报告 action_outcome_unknown 和 retryable: false；中断的写操作须先检查页面再决定是否重复 |
 | `chrome-use close --forget-untracked` | 显式恢复：仅放弃没有标签身份、且两次有效 Chrome registry 查询都未列出的旧归属记录。返回 ownershipDropped，不声称原来的标签已关闭。不能与单个标签或 --all 合用 |
+
+`set device "iPhone 13"` 使用 390 × 844 CSS 视口、3× 缩放和 iOS 15 用户代理。
+`set device off`（别名 `reset`、`none`，也可写 `device off`）清除当前标签页的设备尺寸、
+用户代理和触摸模拟覆盖，新标签页也不再继承模拟的用户代理。
+复位后会读取真实视口尺寸，不调整 Chrome 窗口大小；中途失败会说明已清除了哪些覆盖。
+`viewport reset` 只清尺寸覆盖，保留用户代理设置。
+
 
 升级磁盘上的程序不会替换正在运行的 native host。升级时 Chrome 已打开的，等 agent 会话空闲后，在 chrome://extensions 重新加载 chrome-use 扩展。重连会话 daemon 不会替换 host。status 的 health.nativeHostVersion 来自运行中 host 的握手，无法取得时为 null；与磁盘 CLI 版本及 hostLauncherHealthy 分开显示，无法核实或版本不一致时给出警告。
 
