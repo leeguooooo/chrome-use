@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import vm from 'node:vm'
+import { isMissingTabError } from './tab-presence.js'
+import { followReplacement, forgetReplacement } from './tab-replacement.js'
 import { canUseBrowserNavigationFallback, navigateTabWithBrowserFallback } from './tab-navigation.js'
 
 const source = readFileSync(new URL('./background.js', import.meta.url), 'utf8')
@@ -119,4 +121,78 @@ test('a child-session navigation keeps debugger recovery and never updates its p
   f.tabIdFromSession = () => null
   await assert.rejects(f.forward('Page.navigate', { url: 'https://fixture.invalid/frame' }, 'child-session', 'session'), /tab_reset_failed/)
   assert.deepEqual(f.calls, ['recover'])
+})
+
+
+function replacementFixture({ replacement = 8, denied = false, discarded = false } = {}) {
+  const f = fixture('missing')
+  Object.assign(f, {
+    isMissingTabError, followReplacement, forgetReplacement,
+    replacedTabs: new Map(replacement ? [[7, replacement]] : []), sessionTargets: new Map(),
+    loadReplacedTabs: async () => {}, saveReplacedTabs() {},
+    isRelayTimeoutError: () => false, isDebuggerAccessDenied: () => false,
+    isPermanentAttachError: () => false, transferReloadState() {},
+    reportTabIfGone: async id => f.calls.push(['gone', id]),
+    attachTab: async id => { f.calls.push(['attach', id]); f.tabs.set(id, { attached: true, inflight: 0 }) },
+    reviveDiscardedTab: async (api, id) => { f.calls.push(['reload', id]); return true },
+    guardTab: id => { if (denied && id === replacement) throw new Error('taken back replacement') },
+  })
+  f.chrome.tabs.get = async id => {
+    f.calls.push(['get', id])
+    if (id === 7) throw new Error('No tab with id: 7.')
+    return { id, url: 'https://fixture.invalid/replaced', discarded }
+  }
+  vm.runInContext(part('async function recoverSessionTab(', '// Send a CDP command to a tab'), f)
+  return f
+}
+
+test('explicit navigation follows only the Chrome-recorded replacement of a missing encoded tab', async () => {
+  const f = replacementFixture()
+  await f.forward('Page.navigate', { url: 'https://fixture.invalid/next' }, 'cb-tab-7', 'session')
+  assert.equal(f.sessionToTab.get('cb-tab-7'), 8)
+  assert.ok(f.calls.some(c => Array.isArray(c) && c[0] === 'navigate' && c[1] === 8))
+  assert.ok(!f.calls.some(c => Array.isArray(c) && c[0] === 'navigate' && c[1] !== 8))
+})
+
+test('closed encoded tab reports absence and never navigates an arbitrary tab', async () => {
+  const f = replacementFixture({ replacement: null })
+  await assert.rejects(f.forward('Page.navigate', { url: 'https://fixture.invalid/next' }, 'cb-tab-7', 'session'), /stale sessionId/)
+  assert.ok(f.calls.some(c => Array.isArray(c) && c[0] === 'gone' && c[1] === 7))
+  assert.ok(!f.calls.some(c => Array.isArray(c) && ['attach', 'navigate'].includes(c[0])))
+})
+
+test('replacement ownership is checked again before navigating', async () => {
+  for (const discarded of [false, true]) {
+    const f = replacementFixture({ denied: true, discarded })
+    await assert.rejects(f.forward('Page.navigate', { url: 'https://fixture.invalid/next' }, 'cb-tab-7', 'session'), /taken back replacement/)
+    assert.ok(!f.calls.some(c => Array.isArray(c) && ['attach', 'reload', 'navigate'].includes(c[0])))
+  }
+})
+
+test('unknown tab lookup failures never authorize replacement recovery', async () => {
+  const f = replacementFixture()
+  for (const error of ['tabs permission denied', 'relay timeout', 'No tab with id: 8.']) {
+    f.chrome.tabs.get = async () => { throw new Error(error) }
+    await assert.rejects(f.forward('Page.navigate', { url: 'https://fixture.invalid/next' }, 'cb-tab-7', 'session'), e => e.message === error)
+    assert.ok(!f.calls.some(c => Array.isArray(c) && ['attach', 'navigate'].includes(c[0])))
+  }
+})
+
+
+test('Chrome-confirmed stable target recovery checks ownership before attachment', async () => {
+  for (const denied of [false, true]) {
+    const f = replacementFixture({ denied })
+    f.replacedTabs.clear()
+    f.sessionTargets.set('cb-tab-7', 'stable-target')
+    f.reloadStates = new Map()
+    f.chrome.debugger = { getTargets: async () => [{ id: 'stable-target', tabId: 8 }] }
+    const navigation = f.forward('Page.navigate', { url: 'https://fixture.invalid/next' }, 'cb-tab-7', 'session')
+    if (denied) {
+      await assert.rejects(navigation, /taken back replacement/)
+      assert.ok(!f.calls.some(c => Array.isArray(c) && ['attach', 'reload', 'navigate'].includes(c[0])))
+    } else {
+      await navigation
+      assert.ok(f.calls.some(c => Array.isArray(c) && c[0] === 'navigate' && c[1] === 8))
+    }
+  }
 })

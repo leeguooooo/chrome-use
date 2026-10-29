@@ -6138,10 +6138,17 @@ impl BrowserManager {
 
     /// Read the relay tab's live browser URL without requiring access to its
     /// renderer. A protected extension frame can block even context creation.
-    /// Direct-CDP sessions keep their renderer URL read.
+    /// Direct-CDP and legacy relays without inspectTab keep the renderer URL
+    /// read. Other browser-metadata errors never fall back.
     pub async fn get_address_bar_url(&self) -> Result<String, String> {
         if self.on_relay() {
-            let live = self.pinned_tab_browser_record().await?;
+            let live = match self.pinned_tab_browser_record().await {
+                Ok(live) => live,
+                Err(error) if inspect_tab_method_unsupported(&error) => {
+                    return self.get_url().await
+                }
+                Err(error) => return Err(error),
+            };
             let url = if let Some(url) = live.get("committedUrl").and_then(Value::as_str) {
                 url.to_string()
             } else {
@@ -15379,6 +15386,26 @@ mod foreign_popup_tests {
 /// it (see `BrowserManager::wake_pinned_tab`): measured 10-80 ms.
 const PENDING_MENU_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
 
+// Legacy workers forward this unknown extension method to Chrome. Match only
+// its unsupported-method reply; permissions, missing tabs and timeouts remain errors.
+fn inspect_tab_method_unsupported(error: &str) -> bool {
+    let detail = error
+        .strip_prefix("CDP error (ABExt.inspectTab): ")
+        .unwrap_or(error);
+    let parsed = serde_json::from_str::<Value>(detail).ok();
+    let message = match parsed.as_ref() {
+        Some(value) if value["code"] == -32601 => value["message"].as_str().unwrap_or(""),
+        Some(_) => return false,
+        None => detail,
+    };
+    matches!(
+        message,
+        "'ABExt.inspectTab' wasn't found"
+            | "Unknown method: ABExt.inspectTab"
+            | "Method not found: ABExt.inspectTab"
+    )
+}
+
 #[cfg(test)]
 mod protected_url_tests {
     use super::*;
@@ -15447,12 +15474,14 @@ mod protected_url_tests {
                     }
                     _ => json!({}),
                 };
-                let failed = (method == "Runtime.evaluate" && !error.is_empty())
+                let inspect_error = records.0.get("inspectError").and_then(Value::as_str);
+                let failed = (method == "ABExt.inspectTab" && inspect_error.is_some())
+                    || (method == "Runtime.evaluate" && !error.is_empty())
                     || (!matches!(query, Query::Url)
                         && !error.is_empty()
                         && method == "Page.getFrameTree");
                 let mut reply = if failed {
-                    json!({"id":r["id"],"error":{"code":-32000,"message":error}})
+                    json!({"id":r["id"],"error":{"code":-32000,"message":if method == "ABExt.inspectTab" { inspect_error.unwrap_or(&error) } else { &error }}})
                 } else {
                     json!({"id":r["id"],"result":result})
                 };
@@ -15497,6 +15526,55 @@ mod protected_url_tests {
         server.abort();
         let requests = log.lock().unwrap().clone();
         (result, requests)
+    }
+
+    #[tokio::test]
+    async fn old_relay_url_falls_back_only_for_an_unsupported_inspect_method() {
+        for inspect_error in [
+            "'ABExt.inspectTab' wasn't found",
+            "Unknown method: ABExt.inspectTab",
+            "Method not found: ABExt.inspectTab",
+            r#"{"code":-32601,"message":"'ABExt.inspectTab' wasn't found"}"#,
+        ] {
+            let (result, requests) = query(
+                true,
+                "",
+                (json!({"inspectError":inspect_error}), json!({})),
+                Query::Url,
+            )
+            .await;
+            assert_eq!(result.unwrap(), "https://renderer.invalid/current");
+            assert!(requests.iter().any(|r| r["method"] == "Runtime.evaluate"));
+        }
+        for inspect_error in [
+            "debugger_access_denied: protected extension",
+            "inspectTab: Chrome tab 7 no longer exists",
+            "relay timeout",
+            "permission denied",
+            "permission denied: 'ABExt.inspectTab' wasn't found",
+            r#"{"code":-32000,"message":"'ABExt.inspectTab' wasn't found"}"#,
+        ] {
+            let (result, requests) = query(
+                true,
+                "",
+                (json!({"inspectError":inspect_error}), json!({})),
+                Query::Url,
+            )
+            .await;
+            assert!(result.unwrap_err().contains(inspect_error));
+            assert!(!requests.iter().any(|r| r["method"] == "Runtime.evaluate"));
+        }
+        let (result, _) = query(
+            true,
+            "debugger_access_denied: protected frame",
+            (
+                json!({"inspectError":"'ABExt.inspectTab' wasn't found"}),
+                json!({}),
+            ),
+            Query::Url,
+        )
+        .await;
+        assert!(result.unwrap_err().contains("debugger_access_denied"));
     }
 
     #[tokio::test]

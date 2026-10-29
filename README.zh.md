@@ -461,6 +461,8 @@ chrome-use 会保留该标签并报告目标 ID。保持相同 session 和连接
 
 ### 用 Bitwarden 登录
 
+旧 relay 仅在明确不支持 `ABExt.inspectTab` 时，回退到原有 renderer 方式读取 `get url`；权限、受保护框架等其他错误仍报错。显式导航遇到已消失的 tab id 时，只沿已有的 Chrome replacement/target 记录恢复并复查授权，已关闭的标签仍拒绝。
+
 自动填充扩展的框架阻止调试器访问时，`get url` 仍可读取 Chrome 中当前固定标签页的实时记录。地址栏诊断不证明页面可操作或已登录；内部来源检查仍读取实际文档。
 显式 `open <url>` 会先走浏览器标签 API，再处理调试器恢复，旧页面的受保护框架或恢复失败
 不会永久拦住这次导航。标签页授权检查仍然生效；子框架导航和带 referrer 的导航仍需要 CDP。

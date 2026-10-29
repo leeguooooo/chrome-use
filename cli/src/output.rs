@@ -2853,6 +2853,9 @@ On relay 0.5.98+, explicit top-level navigation uses Chrome's tab API before
 recovering debugger access. A protected autofill frame cannot permanently veto
 this exit path; no form/input is replayed. Tab grants still apply. `get url`
 can read the pinned tab's live Chrome metadata while its renderer is blocked.
+Legacy relays missing inspectTab retain the renderer URL read; other errors
+still fail. Missing tab ids use only confirmed replacement/target recovery,
+with grants rechecked; closed tabs still fail.
 
 Without a URL, launches the browser but stays on about:blank. This lets
 you stage state (network routes, cookies, init scripts) before the first

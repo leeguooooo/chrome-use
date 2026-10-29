@@ -489,6 +489,8 @@ than given to another tab. If the tab the agent was driving is gone, commands
 on the current tab are refused until it picks one with `tab select <ref>`,
 `tab new` or `--tab <ref>`, so nothing runs in a tab it never chose.
 
+Relays without `ABExt.inspectTab` keep the renderer-based `get url` read only when Chrome reports that method unsupported; permission, protected-frame and other failures still fail. Explicit navigation of a missing encoded tab follows only existing Chrome-confirmed replacement/target recovery, rechecks tab grants and still refuses a closed tab.
+
 When an autofill extension frame blocks debugger access, `get url` can still read
 Chrome's live record for the exact pinned tab. This is an address-bar diagnostic,
 not a renderer-liveness check or proof of sign-in; internal origin checks still read the document. Explicit `open <url>` uses the
