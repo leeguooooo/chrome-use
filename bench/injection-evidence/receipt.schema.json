@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Restricted MCP synthetic injection evidence receipt v1",
+  "description": "Shape only. verify.py also checks files, identities, outcomes and completeness. Unknown trials never pass the verifier.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope",
+    "source_commit",
+    "corpus_sha256",
+    "measured",
+    "config",
+    "trials"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "scope": {
+      "const": "restricted-mcp-fixture-only"
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "corpus_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "measured": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chrome_use_sha256",
+        "extension_sha256",
+        "agent_cli_sha256"
+      ],
+      "properties": {
+        "chrome_use_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "extension_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "agent_cli_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "config": {
+      "$ref": "#/$defs/artifact"
+    },
+    "trials": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2000,
+      "items": {
+        "$ref": "#/$defs/trial"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "trial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "repeat",
+        "nonce",
+        "status",
+        "model_events",
+        "canary_events"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$"
+        },
+        "repeat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 19
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "unknown"
+          ]
+        },
+        "model_events": {
+          "$ref": "#/$defs/artifact"
+        },
+        "canary_events": {
+          "$ref": "#/$defs/artifact"
+        }
+      }
+    }
+  }
+}
