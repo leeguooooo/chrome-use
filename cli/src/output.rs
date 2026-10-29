@@ -3152,10 +3152,18 @@ that it temporarily changes the system clipboard. Only fill and get value accept
 this flag; place it last, after the required text/selector. A mandatory text value
 that equals the flag stays literal, and -- ends editor option parsing.
 Clipboard policies still apply; approval cannot override a hard deny.
-Approval is bound to the original owned tab and origin. If they change or cannot
-be verified, rerun the original command for fresh approval.
-Field policy checks use that target's refs and iframe sessions; missing or unreadable
-context refuses before input.
+Document/input/clipboard approvals require the original owned target and fresh
+HTTP(S) renderer securityOrigin; opaque or missing origins refuse. Explicit HTTP(S)
+navigation binds its original target and destination, works from blank/cold start,
+and creates a new own target for --new-tab or when no original target existed.
+Select a named navigation target with `chrome-use tab <target>` first; approval
+refuses a mismatch with the active owned target.
+JavaScript/SPA actions still require document-origin verification. HTTP read URL
+approvals bind their original URL/args independently of browser presence.
+Explicit HTTP reads do not route/adopt browser tabs. Without a URL, read approval
+still depends on the current document. HTTP resources use read site-policy
+category and still check file domain rules when no browser exists.
+Field policy uses that target's refs/iframe sessions; unreadable context refuses.
 It never enables clipboard fallback after native model/input failure. Actual use
 emits a warning: comparison/restoration is not atomic and can overwrite concurrent
 clipboard writes. The opted-in fallback uses one trusted editor paste, reads the selected model back through the editor's

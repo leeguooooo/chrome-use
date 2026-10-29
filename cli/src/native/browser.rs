@@ -6768,14 +6768,15 @@ impl BrowserManager {
         Ok((target, session, url.to_string()))
     }
 
-    /// Read the intended renderer frame without selecting a tab or evaluating
+    /// Read the renderer security origin without inferring it from its URL.
+    /// A sandbox can give an HTTP URL an opaque origin. Without selecting a tab or evaluating
     /// JavaScript in either the page or an isolated world.
-    pub async fn confirmation_page_url(&self, target: &str) -> Result<String, String> {
+    pub async fn confirmation_page_origin(&self, target: &str) -> Result<String, String> {
         let (_, session, _) = self.confirmation_page(Some(target))?;
         self.client
             .send_command("Page.getFrameTree", None, Some(&session))
             .await?
-            .pointer("/frameTree/frame/url")
+            .pointer("/frameTree/frame/securityOrigin")
             .and_then(Value::as_str)
             .filter(|url| !url.is_empty())
             .map(str::to_string)
