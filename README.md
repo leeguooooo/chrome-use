@@ -461,7 +461,8 @@ on the current tab are refused until it picks one with `tab select <ref>`,
 `tab new` or `--tab <ref>`, so nothing runs in a tab it never chose.
 
 When an autofill extension frame blocks debugger access, `get url` can still read
-Chrome's live record for the exact pinned tab. Explicit `open <url>` uses the
+Chrome's live record for the exact pinned tab. This is an address-bar diagnostic,
+not a renderer-liveness check or proof of sign-in; internal origin checks still read the document. Explicit `open <url>` uses the
 browser tab API before attempting debugger recovery, so an old protected frame
 or a failed attachment cannot permanently trap navigation. Tab grants still
 apply; child-frame or referrer-bearing navigation still needs CDP. No input,

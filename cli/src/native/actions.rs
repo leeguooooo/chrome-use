@@ -17593,8 +17593,8 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
         let mut out = first;
         if let Some(Value::String(e)) = out.get_mut("error") {
             e.push_str(
-                "\nchrome-use closed the menu (it hid the tab for a moment or took focus out of the field), so the tab works \
-                 again, but did not repeat this command: it may already have run in part. \
+                "\nChrome accepted a direct frame-tree read after menu recovery was attempted. This does not prove \
+                 that the renderer or login is ready. This command was not repeated: it may already have run in part. \
                  Check the page (`snapshot -i`), then run it again if it did not take effect. \
                  Do not close the tab or the session over this.",
             );
@@ -17634,8 +17634,8 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
 /// The warning on a command that succeeded after the menu was closed.
 fn with_menu_warning(mut out: Value, what: &str, note: Option<String>) -> Value {
     let mut warning = format!(
-        "a password manager's inline menu (another extension's frame) blocked this tab; \
-         chrome-use closed it (it hid the tab for a moment or took focus out of the field), {what}"
+        "another extension's frame blocked debugger access to this tab; chrome-use attempted menu recovery \
+         and Chrome then accepted a direct frame-tree read, {what}"
     );
     if let Some(note) = note {
         warning.push_str(&format!(". {note}"));
@@ -24916,10 +24916,9 @@ fn auth_warning(closed: u32, left_open: Option<String>) -> Option<String> {
 /// The warning on a login that had to close a password manager's inline menu.
 fn auth_menu_warning(times: u32) -> String {
     format!(
-        "a password manager's inline menu (another extension's frame, which blocks every debugger \
-         command on the tab) opened on a login field {times} time(s); chrome-use hid the tab for a \
-         moment each time to close it, and took focus out of the field. To stop it, the user can \
-         turn off that extension's inline menu for this site."
+        "another extension's frame blocked debugger access during this login. Menu recovery was attempted \
+         {times} time(s), with a direct frame-tree read accepted afterward. The recovery may have \
+         moved focus out of the input; if its UI reopens, close it in the browser before continuing."
     )
 }
 

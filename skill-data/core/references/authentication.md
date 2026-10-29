@@ -41,7 +41,8 @@ have been replaced; inspect state instead of assuming the previous form/login
 survived.
 
 When an autofill extension frame blocks debugger access, `get url` can still read
-Chrome's live record for the exact pinned tab. Explicit `open <url>` uses the
+Chrome's live record for the exact pinned tab. This is an address-bar diagnostic,
+not a renderer-liveness check or proof of sign-in; internal origin checks still read the document. Explicit `open <url>` uses the
 browser tab API before attempting debugger recovery, so an old protected frame
 or a failed attachment cannot permanently trap navigation. Tab grants still
 apply; child-frame or referrer-bearing navigation still needs CDP. No input,

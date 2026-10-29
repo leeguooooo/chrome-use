@@ -7254,9 +7254,17 @@ impl BrowserManager {
         let session_id = self.active_session_id()?;
         // This protocol read does not need an isolated world. A cached world
         // setup failure must not masquerade as successful menu cleanup.
-        self.client
+        let tree = self
+            .client
             .send_command("Page.getFrameTree", None, Some(session_id))
             .await?;
+        if tree
+            .pointer("/frameTree/frame/id")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            return Err("the pinned tab did not return a readable frame tree".to_string());
+        }
         Ok(())
     }
 
@@ -15355,6 +15363,7 @@ mod protected_url_tests {
         RendererUrl,
         Auth,
         Accessible,
+        MalformedAccessible,
         Blocked,
     }
 
@@ -15386,6 +15395,7 @@ mod protected_url_tests {
                 seen.lock().unwrap().push(r.clone());
                 let method = r["method"].as_str().unwrap();
                 let result = match method {
+                    "Page.getFrameTree" if matches!(query, Query::MalformedAccessible) => json!({}),
                     "Page.getFrameTree" => json!({"frameTree":{"frame":{"id":"frame"}}}),
                     "Page.createIsolatedWorld" => json!({"executionContextId":42}),
                     "Runtime.evaluate" => {
@@ -15445,7 +15455,9 @@ mod protected_url_tests {
                     Box::pin(crate::native::actions::execute_command(&cmd, &mut state)).await;
                 Ok(response.to_string())
             }
-            Query::Accessible => Ok(browser.pinned_tab_accessible().await.to_string()),
+            Query::Accessible | Query::MalformedAccessible => {
+                Ok(browser.pinned_tab_accessible().await.to_string())
+            }
             Query::Blocked => Ok(browser.pinned_tab_blocked().await.to_string()),
         };
         server.abort();
@@ -15569,6 +15581,9 @@ mod protected_url_tests {
 
     #[tokio::test]
     async fn protected_menu_cleanup_requires_a_positive_protocol_reply() {
+        let (result, requests) = query(true, "", committed(None), Query::MalformedAccessible).await;
+        assert_eq!(result.unwrap(), "false");
+        assert_eq!(requests[0]["method"], "Page.getFrameTree");
         for (error, accessible, blocked) in [
             ("", "true", "false"),
             ("debugger_access_denied: protected frame", "false", "true"),
