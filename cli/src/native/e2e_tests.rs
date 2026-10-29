@@ -16940,6 +16940,8 @@ new MutationObserver(rs=>targetMutations.push(...rs)).observe(document.documentE
         .await;
         eval_in(&mut state, "armed=true;targetMutations=[]").await;
         let names = eval_in(&mut state, "Object.getOwnPropertyNames(window).sort()").await;
+        // Navigation's adaptive detector can reset the runtime level.
+        humanize::set_detected_level(humanize::HumanizeLevel::Human);
         let response = run_cmd(
             &mut state,
             json!({"id":"click","action":"click","selector":format!("@{reference}")}),
@@ -16979,7 +16981,7 @@ new MutationObserver(rs=>targetMutations.push(...rs)).observe(document.documentE
         }
         println!(
             "HUMANIZE_TARGET_SAFETY {}",
-            json!({"case":mode,"response":response,"after":after})
+            json!({"case":mode,"level":format!("{:?}",humanize::active_level()),"response":response,"after":after})
         );
         server.abort();
     }
