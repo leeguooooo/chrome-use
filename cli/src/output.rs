@@ -5754,6 +5754,9 @@ cookie NAMES in the profile's on-disk cookie store (never values; no tab is
 opened). "signed in" = a cookie the site only sets for a signed-in user (known
 sites); "session cookies present" = session-like names, not proof. Where a site
 adapter <site>/me exists, the row shows the command that reports the account.
+On macOS, reads prefer PATH sqlite3 and use /usr/bin/sqlite3 only after a missing
+or unsupported-format executable cannot start. Execution permission denials and
+started-query failures stay errors; locked/corrupt databases are not retried.
 
 Pick a profile:
   --browser <name|prefix|dir|email|id>   e.g. --browser Davian, --browser d,

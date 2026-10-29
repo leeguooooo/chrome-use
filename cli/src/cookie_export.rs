@@ -94,11 +94,8 @@ fn read_cookie_rows(db: &Path, domain: Option<&str>) -> Result<Vec<CookieRow>, S
          FROM cookies{};",
         where_clause
     );
-    let output = std::process::Command::new("sqlite3")
-        .arg(tmp_db.to_string_lossy().to_string())
-        .arg(&sql)
-        .output()
-        .map_err(|e| {
+    let output =
+        crate::sqlite::output(&[tmp_db.as_os_str(), std::ffi::OsStr::new(&sql)]).map_err(|e| {
             format!(
                 "could not run sqlite3 (required to read the cookie store): {}",
                 e

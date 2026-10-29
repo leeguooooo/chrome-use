@@ -276,6 +276,13 @@ inherited relay override. To refresh an existing launcher, rerun `extension
 install` with the intended environment; private rigs should also pass
 `--no-open --no-profile` and set `CHROME_USE_NO_BROWSER_SCAN=1`.
 
+`browsers --who <domain>` inspects cookie names on disk, never values; presence
+is not proof that a session is still accepted. On macOS, SQLite reads use the
+PATH `sqlite3` first and fall back to `/usr/bin/sqlite3` only when it cannot
+start because it is missing or has an unsupported executable format. Execution
+permission denials and errors from an already-started SQLite query remain
+explicit errors; locked or corrupt databases are not retried with another tool.
+
 `extension install` is the one-time setup. `chrome-use extension connect` (alias `chrome-use reconnect`) re-attaches to an already-installed extension's relay without reinstalling anything. Chrome still shows its "chrome-use started debugging this browser" bar on attached agent tabs; `chrome-use extension connect --silent` removes it by restarting Chrome once with `--silent-debugger-extension-api` (tabs and logins are restored; it refuses when several Chrome instances are running). `--keep-banner` leaves Chrome alone, and without either flag it asks first in an interactive terminal.
 
 All AI sessions in a Chrome profile share one background agent window, with one tab group per session; your own window stays separate. Existing windows with verified agent ownership are reused, including fullscreen windows. Unknown ownership or failed placeholder cleanup refuses instead of creating more windows. User tabs are never moved or deleted to reclaim a window. If you open or drag your own tabs into the agent window, that window becomes yours: agent tabs already there keep working, and new agent tabs go to one fresh agent window that later sessions share.

@@ -171,6 +171,7 @@
         relay 绑定的是<strong>当前正在和原生宿主通信的那个 profile</strong> 的扩展 worker。
         如果某个站点回来显示未登录，先确认接管的是不是对的 profile，再下结论说登录丢了。
       </p>
+      <p><code>browsers --who &lt;域名&gt;</code> 只检查磁盘上的 Cookie 名称，不读取值；存在 Cookie 不代表会话仍有效。 macOS 先使用 PATH 中的 <code>sqlite3</code>，只有工具缺失或可执行格式不支持、无法启动时，才回退到 <code>/usr/bin/sqlite3</code>。执行权限拒绝，以及 SQLite 已启动后返回的查询错误，仍会明确报错； 数据库锁定或损坏不会通过换一个工具重试。</p>
 
       <div class="du-code">
         <div class="du-code-head">

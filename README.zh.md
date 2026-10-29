@@ -262,6 +262,11 @@ chrome-use status                 # 中继、profile、扩展与会话健康总�
 启动器会清除从 Chrome 继承的目录覆盖。已有启动器需要在目标环境下重跑 `extension install`
 才会更新；隔离测试安装还应加 `--no-open --no-profile`，并设置 `CHROME_USE_NO_BROWSER_SCAN=1`。
 
+`browsers --who <域名>` 只检查磁盘上的 Cookie 名称，不读取值；存在 Cookie 不代表会话仍有效。
+macOS 先使用 PATH 中的 `sqlite3`，只有工具缺失或可执行格式不支持、无法启动时，才回退到
+`/usr/bin/sqlite3`。执行权限拒绝，以及 SQLite 已启动后返回的查询错误，仍会明确报错；
+数据库锁定或损坏不会通过换一个工具重试。
+
 `extension install` 是一次性的安装步骤。`chrome-use extension connect`（别名 `chrome-use reconnect`）在扩展已装好的前提下重新连上它的中继，不重装任何东西。被 attach 的 agent 标签页上 Chrome 仍会显示「chrome-use started debugging this browser」提示条；`chrome-use extension connect --silent` 会带 `--silent-debugger-extension-api` 把 Chrome 重启一次来去掉它（标签和登录自动恢复；同时开着多个 Chrome 实例时不会重启）。`--keep-banner` 完全不碰浏览器；两个 flag 都不带时，交互终端里会先问一句。详见[静音提示条](https://chrome-use.leeguoo.com/debugger-banner-silence.html)。
 
 AI 标签默认开在你正在用的窗口里，以后台标签打开、不抢焦点；每个会话有自己的标签组，组名前面带 ✦，一眼能和你自己的标签分开。加 `--window dedicated` 则改为同一 Chrome profile 的所有 AI 会话共用一个后台专用窗口：已有窗口只要标签归属都能确认是 AI，就会复用，全屏也不另开窗口。归属不明或空白占位页清理失败时会报错，避免继续增加窗口。不会为回收窗口而搬走或删除用户页。你在 AI 窗口里开了或拖进了自己的页面，这个窗口就归你：里面已有的 AI 标签照常工作，新的 AI 标签开到一个新的 AI 窗口，之后的会话共用它。
