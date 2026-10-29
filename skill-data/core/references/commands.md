@@ -1171,3 +1171,19 @@ A refused dynamic-form ref now reports `code: "stale_ref"` with `retryable: fals
 Ordinary selector and `--clip` screenshots use the same CLI pixel-cropping path, including after page scroll. Viewport regions capture the existing surface; off-screen regions capture the full page before cropping. Neither path scrolls or activates the tab.
 
 `scrollintoview` bounds the entire humanized wheel phase to 10 seconds, including target lookup and CDP replies. A stalled or errored phase stops without a direct-scroll fallback. If input was attempted, the error is `action_outcome_unknown`: Chrome may still be processing it, so inspect before retrying. A completed wheel phase that cannot reach the target may still use the existing direct-scroll fallback, which has its own 15-second limit.
+
+### Bitwarden authenticator challenges
+
+```bash
+chrome-use auth login --bwu --item <id>
+chrome-use auth login --bwu --totp --item <id>
+```
+
+The default flow fetches TOTP after observing a code field. `--totp` reads only
+TOTP and submits the current challenge; it skips passwords and `_autotype`.
+It cannot be combined with `--no-submit` or `--passkey`. The selected login
+must contain the authenticator setup key. Codes stay inside `bwu run` and the
+secret command; do not retrieve them into the conversation. Pending verification
+returns `needs` and `next`; only an observed completed sign-in gets `signedIn`.
+Fields that only indicate verification, including inputs limited to fewer than six characters, stay pending (`otp: unsupported`); no TOTP is fetched or submitted automatically. This includes five-character Steam fields; inspect those before explicit `--totp`.
+See `core/authentication` for setup, authorization and custom-sequence limits.
