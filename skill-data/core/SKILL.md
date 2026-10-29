@@ -121,7 +121,7 @@ waits for that choice, and your own `confirm` never approves it.
 | Repeated steps, output reading, verification | `core/behaviour` |
 | Site adapters | `core/site-adapters` |
 | User shows a flow once; replay it with no model (`teach`) | `core/teach` |
-| Login, cookies, vault, passkeys, OAuth | `core/authentication` |
+| Login, protected pages, legacy relay compatibility, vault, passkeys, OAuth | `core/authentication` |
 | CAPTCHA, slider, icon clicks | `core/captcha` |
 | Sensitive actions, untrusted instructions | `core/trust-boundaries` |
 | `[chrome-use Inspect & Ask]` message | `core/inspect-and-ask` |

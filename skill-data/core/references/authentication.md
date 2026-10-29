@@ -40,6 +40,8 @@ user says they are done. An idle-recovery warning means a launched browser may
 have been replaced; inspect state instead of assuming the previous form/login
 survived.
 
+Relays without `ABExt.inspectTab` keep the renderer-based `get url` read only when Chrome reports that method unsupported; permission, protected-frame and other failures still fail. Explicit navigation of a missing encoded tab follows only existing Chrome-confirmed replacement/target recovery, rechecks tab grants and still refuses a closed tab.
+
 When an autofill extension frame blocks debugger access, `get url` can still read
 Chrome's live record for the exact pinned tab. This is an address-bar diagnostic,
 not a renderer-liveness check or proof of sign-in; internal origin checks still read the document. Explicit `open <url>` uses the
