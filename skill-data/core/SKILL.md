@@ -110,12 +110,13 @@ waits for that choice, and your own `confirm` never approves it.
 
 | Need or symptom | Name |
 |---|---|
-| Loop and observation details | `core/loop` |
-| `tab list --all`, other sessions' tabs, `close`, reconnect, cleanup | `core/tabs` |
+| Loop, observation | `core/loop` |
+| Tab ownership, reconnect, cleanup | `core/tabs` |
 | Side panel, schedules, `mobile serve` | `core/agent-panel` |
-| Actions, uploads, widgets, `eval` alternatives | `core/interacting` |
-| Reads, frames, shadow roots, screenshots and region crops | `core/reading` |
-| `wait`, mid-transition reads, observation limits | `core/waiting` |
+| Actions, bounded scrolling, uploads, widgets, `eval` alternatives | `core/interacting` |
+| Reads, frames, shadow roots, screenshot crops | `core/reading` |
+
+| Waiting and observation limits | `core/waiting` |
 | Ref identity, snapshot detail | `core/snapshot-refs` |
 | `status`/`doctor`, extension, profiles, launch, stealth | `core/connection` |
 | Repeats, output and verification | `core/behaviour` |
