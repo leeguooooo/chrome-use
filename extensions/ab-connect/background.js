@@ -2090,15 +2090,18 @@ async function handleForwardCdpCommand(msg) {
     throw new Error('tab_reset: child session invalidated; rediscover frames before retrying');
   if (reset) entry = tabs.get(tabId);
   if (!reset && entry && entry.attached === false) await reattachTab(tabId, entry);
+  const rememberAfterSuccess = method === 'Emulation.clearDeviceMetricsOverride' ||
+    (method === 'Emulation.setUserAgentOverride' && params?.userAgent === '') ||
+    (method === 'Emulation.setTouchEmulationEnabled' && params?.enabled === false);
   if (entry) {
     entry.inflight++;
     entry.lastActivity = Date.now();
-    if (!childSid && method !== 'Emulation.clearDeviceMetricsOverride') rememberReplayable(entry, method, params);
+    if (!childSid && !rememberAfterSuccess) rememberReplayable(entry, method, params);
   }
   try {
     const result = await dispatchToTab(tabId, method, params, childSid, agentSession);
-    // A refused or unconfirmed clear must retain the last known override.
-    if (!childSid && method === 'Emulation.clearDeviceMetricsOverride') rememberReplayable(entry, method, params);
+    // A refused or unconfirmed reset must retain the last known override.
+    if (!childSid && rememberAfterSuccess) rememberReplayable(entry, method, params);
     return result;
   } finally {
     if (entry) {
