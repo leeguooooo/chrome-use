@@ -6876,6 +6876,9 @@ Setup:
                              browsers of the current user with existing --user-data-dir=<path>
                              directories. Discovered-directory failures warn and skip;
                              default and explicit directory failures remain errors.
+                             The launcher pins the installation's HOME and optional
+                             absolute CHROME_USE_RELAY_DIR; without one it clears an
+                             inherited relay override. Reinstall to refresh old launchers.
   extension install --user-data-dir <path>
                              Add an existing custom data directory explicitly (repeatable;
                              also accepts --user-data-dir=<path>). Missing directories

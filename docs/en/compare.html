@@ -308,12 +308,12 @@
         </tbody>
       </table>
       </div>
-      <h3>Where Claude in Chrome is ahead</h3>
+      <h3>Changes since this comparison</h3>
       <ul>
-        <li><b>Prompt-injection defense:</b> training, injection scanning and a per-action classifier, with published attack-success rates (0% for Opus 5 and Sonnet 5 in the GA post). chrome-use has no classifier, only opt-in content boundaries and domain and action policies.</li>
-        <li><b>Permissions:</b> per-site allow and decline with a permission history, default blocks on some high-risk categories, and admin allow and block lists for teams.</li>
-        <li><b>Setup:</b> install from the store, sign in, start. No terminal.</li>
-        <li><b>Teach by demonstration:</b> it can record a workflow while you do it yourself.</li>
+        <li><b>Prompt-injection defense:</b> since 1.5.273, chrome-use filters hidden page text, marks MCP and side-panel browser results as untrusted by default, and holds approval requests containing page-sourced command strings. It has no per-action model classifier. Backends or full-access modes that never request approval are outside that pre-execution check.</li>
+        <li><b>Site permissions:</b> since 1.5.273, chrome-use supports allow once, always allow, decline, permission history and managed policy. Banking, brokerage, crypto exchanges, payment fields and purchases ask by default. Password fields and downloads can be set to ask; their defaults remain off for unattended login and downloads.</li>
+        <li><b>Setup:</b> since 1.5.274, macOS users can download a signed, notarized installer from the extension and check agent installation and sign-in state. Windows and Linux still use a copied terminal command, so zero-terminal setup is not a cross-platform claim.</li>
+        <li><b>Teach by demonstration:</b> since 1.5.274, chrome-use records top-level page actions, lets the user review redacted steps, and saves a script or adapter draft. Actions inside cross-origin iframes are outside the current recorder scope.</li>
       </ul>
       <h3>Where chrome-use is ahead</h3>
       <ul>

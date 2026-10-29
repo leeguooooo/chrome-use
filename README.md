@@ -269,6 +269,13 @@ On macOS/Linux, `chrome-use extension install` also registers the native host in
 
 `chrome-use open` then drives your real, logged-in Chrome over **native messaging**: no debug port, no token, and **no "Allow remote debugging?" dialog, ever**. The raw remote-debugging-port alternative (which pops a consent dialog) is described in the [real Chrome guide](https://chrome-use.leeguoo.com/en/real-chrome.html).
 
+On macOS/Linux, the generated native-host launcher keeps the installation's
+`HOME` and optional absolute `CHROME_USE_RELAY_DIR`, even if Chrome starts it
+with a different environment. Without an override at installation it clears an
+inherited relay override. To refresh an existing launcher, rerun `extension
+install` with the intended environment; private rigs should also pass
+`--no-open --no-profile` and set `CHROME_USE_NO_BROWSER_SCAN=1`.
+
 `extension install` is the one-time setup. `chrome-use extension connect` (alias `chrome-use reconnect`) re-attaches to an already-installed extension's relay without reinstalling anything. Chrome still shows its "chrome-use started debugging this browser" bar on attached agent tabs; `chrome-use extension connect --silent` removes it by restarting Chrome once with `--silent-debugger-extension-api` (tabs and logins are restored; it refuses when several Chrome instances are running). `--keep-banner` leaves Chrome alone, and without either flag it asks first in an interactive terminal.
 
 All AI sessions in a Chrome profile share one background agent window, with one tab group per session; your own window stays separate. Existing windows with verified agent ownership are reused, including fullscreen windows. Unknown ownership or failed placeholder cleanup refuses instead of creating more windows. User tabs are never moved or deleted to reclaim a window. If you open or drag your own tabs into the agent window, that window becomes yours: agent tabs already there keep working, and new agent tabs go to one fresh agent window that later sessions share.
