@@ -104,9 +104,6 @@ explain it, wait, then `session resume`. Full text, including QR
 permission: tell the user, who decides in the extension; `confirm <id>` then
 waits for that choice, and your own `confirm` never approves it.
 
-After device emulation, `set device off` clears metrics, UA and touch overrides;
-`viewport reset` clears only metrics. See `core/commands` for aliases and presets.
-
 ## Load detail when the task needs it
 
 `chrome-use skills get <name>`:
@@ -130,7 +127,7 @@ After device emulation, `set device off` clears metrics, UA and touch overrides;
 | `[chrome-use Inspect & Ask]` message | `core/inspect-and-ask` |
 | Persistence, idle recovery, parallel sessions | `core/session-management` |
 | Failures, friction log | `core/known-traps`, `core/troubleshooting` |
-| Every command, flag, env var | `core/commands` |
+| Commands, flags, env vars, device resets | `core/commands` |
 | Page leaks (`diag pages`) | `core/diag-pages` |
 | Install, runners, `--full`, Git hooks | `core/installation` |
 | Changing this repository | `core/development` |
