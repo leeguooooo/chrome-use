@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import { rememberReplayable } from './idle-detach.js'
 import { resolveSessionTab } from './tab-liveness.js'
+import { canUseBrowserNavigationFallback } from './tab-navigation.js'
 
 const source = readFileSync(new URL('./background.js', import.meta.url), 'utf8')
 const start = source.indexOf('  // Everything else → chrome.debugger on the resolved tab.')
@@ -17,7 +18,7 @@ function worker(dispatch) {
   rememberReplayable(entry.replay, 'Emulation.setTouchEmulationEnabled', { enabled: true })
   const context = {
     tabs: new Map([[7, entry]]), sessionToTab: new Map([['cb-tab-7', 7]]), childSessionToTab: new Map([['frame-7', 7]]),
-    resolveSessionTab, tabIdFromSession: sid => sid === 'cb-tab-7' ? 7 : null,
+    resolveSessionTab, canUseBrowserNavigationFallback, tabIdFromSession: sid => sid === 'cb-tab-7' ? 7 : null,
     guardTab() {}, activeReloadLoop: () => null,
     attachmentHealth: { recover: async () => false }, tabCommandDependencies: () => ({}),
     rememberReplayable: (e, method, params) => { if (e) rememberReplayable(e.replay, method, params) },
