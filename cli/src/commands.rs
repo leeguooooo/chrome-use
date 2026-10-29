@@ -549,7 +549,43 @@ fn parse_cookie_header(header: &str) -> Result<Vec<Value>, String> {
 }
 
 pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError> {
-    let mut result = parse_command_inner(args, flags)?;
+    const CLIPBOARD_FLAG: &str = "--allow-clipboard-fallback";
+    const CLIPBOARD_USAGE: &str = "fill <selector> <text> [--allow-clipboard-fallback] | get value <selector> [--allow-clipboard-fallback]";
+    if args
+        .iter()
+        .any(|a| a.starts_with("--allow-clipboard-fallback="))
+    {
+        return Err(ParseError::InvalidValue {
+            message: "--allow-clipboard-fallback is a flag and takes no value".into(),
+            usage: CLIPBOARD_USAGE,
+        });
+    }
+    let allow_clipboard = args.iter().any(|a| a == CLIPBOARD_FLAG);
+    if allow_clipboard
+        && !(args.first().is_some_and(|a| a == "fill")
+            || (args.first().is_some_and(|a| a == "get")
+                && args.get(1).is_some_and(|a| a == "value")))
+    {
+        return Err(ParseError::InvalidValue {
+            message: "--allow-clipboard-fallback is supported only by fill and get value".into(),
+            usage: CLIPBOARD_USAGE,
+        });
+    }
+    let stripped: Vec<_> = args
+        .iter()
+        .filter(|a| a.as_str() != CLIPBOARD_FLAG)
+        .cloned()
+        .collect();
+    if allow_clipboard && stripped.first().is_some_and(|a| a == "fill") && stripped.len() < 3 {
+        return Err(ParseError::MissingArguments {
+            context: "fill --allow-clipboard-fallback".into(),
+            usage: CLIPBOARD_USAGE,
+        });
+    }
+    let mut result = parse_command_inner(&stripped, flags)?;
+    if allow_clipboard {
+        result["allowClipboardFallback"] = json!(true);
+    }
     stamp_command_flags(&mut result, flags);
     Ok(result)
 }
@@ -10653,5 +10689,41 @@ mod tests {
         let cmd = parse_command(&args("addinitscript window.__x = 1"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "addinitscript");
         assert_eq!(cmd["script"], "window.__x = 1");
+    }
+    #[test]
+    fn clipboard_permission_is_an_explicit_fill_or_value_flag() {
+        let flags = default_flags();
+        for args in [
+            vec![
+                "fill",
+                "#editor",
+                "replacement",
+                "--allow-clipboard-fallback",
+            ],
+            vec!["get", "value", "#editor", "--allow-clipboard-fallback"],
+        ] {
+            let args: Vec<String> = args.into_iter().map(str::to_string).collect();
+            let cleaned = crate::flags::clean_args(&args);
+            assert!(cleaned.iter().any(|a| a == "--allow-clipboard-fallback"));
+            let cmd = parse_command(&cleaned, &flags).unwrap();
+            assert_eq!(cmd["allowClipboardFallback"], true);
+            if cmd["action"] == "fill" {
+                assert_eq!(cmd["value"], "replacement");
+            }
+        }
+        for args in [
+            vec!["click", "#button", "--allow-clipboard-fallback"],
+            vec!["get", "text", "#editor", "--allow-clipboard-fallback"],
+            vec!["fill", "#editor", "--allow-clipboard-fallback"],
+            vec![
+                "fill",
+                "#editor",
+                "replacement",
+                "--allow-clipboard-fallback=true",
+            ],
+        ] {
+            let args: Vec<String> = args.into_iter().map(str::to_string).collect();
+            assert!(parse_command(&args, &flags).is_err(), "{args:?}");
+        }
     }
 }

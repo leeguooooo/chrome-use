@@ -3067,7 +3067,7 @@ Examples:
             r##"
 chrome-use fill - Clear and fill an input field
 
-Usage: chrome-use fill <selector> <text>
+Usage: chrome-use fill <selector> <text> [--allow-clipboard-fallback]
        chrome-use fill <selector> --file <path>
        chrome-use fill <selector> --stdin
        chrome-use fill <selector> --from-env <VAR>
@@ -3089,8 +3089,12 @@ when its public globals are removed. Discovery reads a bounded module table;
 it does not invoke loaders, factories or accessors, or make requests.
 Native select-all must cover the full live model before insertion. Model changes,
 focus loss, incomplete selection or mismatched readback fail without a clipboard retry.
-When discovery finds no usable API before input, the existing fallback uses
-one trusted editor paste, reads the selected model back through the editor's
+Without an exact model API, fill/get value refuse before clipboard access.
+--allow-clipboard-fallback opts in for this command only, after the user accepts
+that it temporarily changes the system clipboard. Only fill and get value accept
+this flag; it never enables a retry after native model/input failure. Actual use
+emits a warning: comparison/restoration is not atomic and can overwrite concurrent
+clipboard writes. The opted-in fallback uses one trusted editor paste, reads the selected model back through the editor's
 copy handler, and attempts clipboard restoration from an independent Blob backup.
 An empty or unreadable backup is refused before staging; restoration is read back
 and verified. Contents are checked before input and restoration; changed or
@@ -4388,6 +4392,10 @@ Subcommands:
   html <selector>            Get inner HTML of element
   value <selector>           Get value of input element (card / password /
                              one-time-code fields masked; --reveal-values)
+                             Hidden Monaco without a usable model refuses before
+                             clipboard access. --allow-clipboard-fallback explicitly
+                             permits temporary system clipboard changes for this
+                             command only; compare/restore is not atomic.
   attr <selector> <name>     Get attribute value
   title                      Get page title
   url                        Get current URL

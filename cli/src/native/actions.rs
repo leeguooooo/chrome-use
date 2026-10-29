@@ -2652,7 +2652,37 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             "canvas_capture" => handle_canvas_capture(cmd, state).await,
             "click" => handle_click(cmd, state).await,
             "dblclick" => handle_dblclick(cmd, state).await,
-            "fill" => handle_fill(cmd, state).await,
+            "fill" | "inputvalue" => {
+                use interaction::ClipboardFallback;
+                let permission = if cmd["allowClipboardFallback"].as_bool() == Some(true) {
+                    ClipboardFallback::Allowed
+                } else {
+                    ClipboardFallback::Denied
+                };
+                interaction::MONACO_CLIPBOARD_FALLBACK
+                    .scope(std::cell::Cell::new(permission), async {
+                        let result = if action == "fill" {
+                            Box::pin(handle_fill(cmd, state)).await
+                        } else {
+                            Box::pin(handle_inputvalue(cmd, state)).await
+                        };
+                        let used = interaction::MONACO_CLIPBOARD_FALLBACK.with(|state| state.get() == ClipboardFallback::Used);
+                        let mut data = result.map_err(|error| if used {
+                            format!("{}; inspect the editor and system clipboard before retrying. Original error: {error}", interaction::MONACO_CLIPBOARD_STOPPED)
+                        } else { error })?;
+                        if used {
+                            let warning = match data["warning"].as_str() {
+                                Some(existing) => {
+                                    format!("{existing}. {}", interaction::MONACO_CLIPBOARD_WARNING)
+                                }
+                                None => interaction::MONACO_CLIPBOARD_WARNING.to_string(),
+                            };
+                            data["warning"] = json!(warning);
+                        }
+                        Ok(data)
+                    })
+                    .await
+            }
             "type" => handle_type(cmd, state).await,
             "press" => handle_press(cmd, state).await,
             "pick" => handle_pick(cmd, state).await,
@@ -2731,7 +2761,6 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             "boundingbox" => handle_boundingbox(cmd, state).await,
             "innertext" => handle_innertext(cmd, state).await,
             "innerhtml" => handle_innerhtml(cmd, state).await,
-            "inputvalue" => handle_inputvalue(cmd, state).await,
             "setvalue" => handle_setvalue(cmd, state).await,
             "count" => handle_count(cmd, state).await,
             "styles" => handle_styles(cmd, state).await,
@@ -17543,7 +17572,7 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
         }
     }
     let first = execute_command(cmd, state).await;
-    if is_kept_ref_refusal(&first) {
+    if is_kept_ref_refusal(&first) || clipboard_fallback_stopped(&first) {
         return first;
     }
     if !is_denied(&first) {
@@ -17646,6 +17675,14 @@ fn no_recovery_note(reason: &str) -> String {
          command again; if it is still blocked, ask the user to press Escape in that tab \
          (or click the page outside the field) to close the menu, then repeat it."
     )
+}
+
+/// A clipboard transaction can have changed the editor or clipboard before a
+/// debugger failure. Closing a menu does not make that transaction replay-safe.
+fn clipboard_fallback_stopped(resp: &Value) -> bool {
+    resp["error"]
+        .as_str()
+        .is_some_and(|e| e.starts_with(interaction::MONACO_CLIPBOARD_STOPPED))
 }
 
 fn is_denied(resp: &Value) -> bool {
@@ -26402,6 +26439,16 @@ fn error_response(id: &str, error: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn clipboard_failure_is_not_replayed_as_a_debugger_access_recovery() {
+        let response = serde_json::json!({"success":false,"error":format!("{}: debugger_access_denied: protected extension frame", super::interaction::MONACO_CLIPBOARD_STOPPED)});
+        assert!(super::clipboard_fallback_stopped(&response));
+        assert!(super::is_denied(&response));
+        assert!(!super::clipboard_fallback_stopped(
+            &serde_json::json!({"success":false,"error":"debugger_access_denied: protected extension frame"})
+        ));
+    }
+
     #[test]
     fn done_connects_only_to_keep_a_tab() {
         assert!(!done_keeps(&json!({ "action": "done", "keep": [] })));

@@ -10,6 +10,41 @@ use super::element::{
 };
 use super::humanize;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClipboardFallback {
+    Denied,
+    Allowed,
+    Used,
+}
+
+tokio::task_local! {
+    /// Permission is scoped to one fill/get-value command, not the daemon or
+    /// process environment. Used records actual entry into the legacy path.
+    pub(crate) static MONACO_CLIPBOARD_FALLBACK: std::cell::Cell<ClipboardFallback>;
+}
+
+pub(crate) const MONACO_CLIPBOARD_STOPPED: &str =
+    "action_outcome_unknown: Monaco clipboard fallback stopped";
+
+pub(crate) const MONACO_CLIPBOARD_WARNING: &str = "Monaco's legacy fallback used the system clipboard temporarily. Clipboard comparison/restoration is not atomic; a concurrent write can be overwritten. Native formats may not be preserved, and context loss can prevent restoration.";
+
+fn require_monaco_clipboard_permission() -> Result<(), String> {
+    let allowed = MONACO_CLIPBOARD_FALLBACK
+        .try_with(|state| {
+            if state.get() == ClipboardFallback::Denied {
+                return false;
+            }
+            state.set(ClipboardFallback::Used);
+            true
+        })
+        .unwrap_or(false);
+    if allowed {
+        Ok(())
+    } else {
+        Err("Monaco's exact model is unavailable; clipboard fallback was refused before clipboard access. Use --allow-clipboard-fallback with fill or get value only after accepting temporary system clipboard changes. Comparison/restoration is not atomic and can overwrite a concurrent write.".into())
+    }
+}
+
 /// How long the cursor is shown travelling to the target before the click fires.
 /// Without a lead the overlay and the click land in the same frame and the click
 /// reads as instantaneous — you see the aftermath, never the movement.
@@ -2454,7 +2489,7 @@ const ACE_UNSUPPORTED: &str = "fill: this is an Ace code editor, and its editor 
     container: without an existing instance it builds a second editor.";
 
 /// Everything `fill` does after the page script ran: clipboard-free Monaco
-/// model access when discoverable, the verified clipboard fallback, the trusted
+/// model access when discoverable, an explicitly permitted clipboard fallback, the trusted
 /// contenteditable insert, and the read-back. Successful
 /// native contenteditable insertion preserves focus and does not fabricate
 /// change/focusout events or overwrite a value rejected by the editor.
@@ -2700,6 +2735,7 @@ async fn begin_monaco_clipboard(
     object_id: &str,
     value: Option<&str>,
 ) -> Result<String, String> {
+    require_monaco_clipboard_permission()?;
     // Obtain the handle before backup, staging or focus can fail. A setup
     // exception therefore still has a reachable finish method.
     let created: EvaluateResult = client
@@ -2917,7 +2953,8 @@ async fn fill_monaco_via_clipboard(
 }
 
 /// Prefer a public API recovered from module scopes before using the shared
-/// clipboard. A discovered model's errors never fall through to another edit.
+/// clipboard. Without an exact API, clipboard access requires this command's
+/// explicit permission. A discovered model's errors never fall through to another edit.
 pub(crate) async fn read_hidden_monaco(
     client: &CdpClient,
     session_id: &str,

@@ -2479,27 +2479,43 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
     .await;
     assert_success(&resp);
 
-    // DSM-like Monaco can hide its model API while still handling trusted
-    // clipboard commands through textarea.inputarea. That fallback must remain
-    // atomic and must verify the copied model value before succeeding.
+    // Missing model APIs refuse before staging the disposable fixture's known
+    // clipboard. Legacy copy/paste needs a new explicit permission per command.
+    for action in ["fill", "inputvalue"] {
+        let response = execute_command(&json!({"id":"default-refusal", "action":action, "selector":clipboard_ref, "value":yaml}), &mut state).await;
+        assert_eq!(response["success"], false, "{response}");
+        assert!(response["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("--allow-clipboard-fallback"));
+    }
+    let untouched = execute_command(&json!({"id":"unchanged-clipboard", "action":"evaluate", "script":"navigator.clipboard.readText()"}), &mut state).await;
+    assert_success(&untouched);
+    assert_eq!(get_data(&untouched)["result"], "clipboard sentinel");
     let resp = execute_command(
         &json!({
             "id": "6",
             "action": "fill",
             "selector": clipboard_ref,
-            "value": yaml
+            "value": yaml,
+            "allowClipboardFallback": true
         }),
         &mut state,
     )
     .await;
     assert_success(&resp);
     assert_eq!(get_data(&resp)["engine"], "monaco-clipboard");
+    assert!(get_data(&resp)["warning"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("not atomic"));
 
     let resp = execute_command(
         &json!({
             "id": "6b",
             "action": "inputvalue",
-            "selector": clipboard_ref
+            "selector": clipboard_ref,
+            "allowClipboardFallback": true
         }),
         &mut state,
     )
@@ -2569,8 +2585,8 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
         resp["error"]
             .as_str()
             .unwrap_or("")
-            .contains("not handled as a trusted editor operation"),
-        "failure should explain why Monaco cannot be filled safely: {resp}"
+            .contains("refused before clipboard access"),
+        "unsupported Monaco must refuse before accessing the clipboard: {resp}"
     );
 
     // Plain inputs still use the native setter path and are verified too.
