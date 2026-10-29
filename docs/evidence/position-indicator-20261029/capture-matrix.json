@@ -3,7 +3,7 @@
   "mode": "independent capability and hinge-capture research; no product fallback; no Overlay.enable; no input sent",
   "platform": "darwin",
   "arch": "arm64",
-  "probeSha256": "7c1327b91b7d91fd4c7b7e1bcb16306f787542d80aaa48b0bbd8ee4355a94452",
+  "probeSha256": "026f4852655e6b47459d10f12f73c1a704e0cca872a808decd2cfd1c98318285",
   "browser": {
     "product": "Chrome/156.0.8078.48",
     "protocol": "1.3",
@@ -28,154 +28,154 @@
     {
       "label": "baseline-surface",
       "fromSurface": true,
-      "elapsedMs": 20.927124999999933
+      "elapsedMs": 29.245542
     },
     {
       "label": "baseline-view",
       "fromSurface": false,
-      "elapsedMs": 257.31025
+      "elapsedMs": 265.842709
     },
     {
       "label": "visible-surface",
       "fromSurface": true,
-      "elapsedMs": 34.111000000000104
+      "elapsedMs": 38.20041600000013
     },
     {
       "label": "visible-view",
       "fromSurface": false,
-      "elapsedMs": 243.27791700000012
+      "elapsedMs": 267.0028749999999
     },
     {
       "label": "surface-after-view",
       "fromSurface": true,
-      "elapsedMs": 25.657875000000104
+      "elapsedMs": 22.698167000000012
     },
     {
       "label": "pre-hide-0",
       "fromSurface": true,
-      "elapsedMs": 24.992707999999993
+      "elapsedMs": 25.765959000000066
     },
     {
       "label": "hidden-ack-0",
       "fromSurface": true,
-      "elapsedMs": 32.08862500000009
+      "elapsedMs": 41.105999999999995
     },
     {
       "label": "pre-hide-1",
       "fromSurface": true,
-      "elapsedMs": 26.351750000000038
+      "elapsedMs": 25.746999999999844
     },
     {
       "label": "hidden-ack-1",
       "fromSurface": true,
-      "elapsedMs": 37.90625
+      "elapsedMs": 23.656791999999996
     },
     {
       "label": "pre-hide-2",
       "fromSurface": true,
-      "elapsedMs": 25.848500000000058
+      "elapsedMs": 25.60050000000001
     },
     {
       "label": "hidden-ack-2",
       "fromSurface": true,
-      "elapsedMs": 32.24220800000012
+      "elapsedMs": 32.83716699999991
     },
     {
       "label": "pre-hide-3",
       "fromSurface": true,
-      "elapsedMs": 25.35754199999974
+      "elapsedMs": 24.93637499999977
     },
     {
       "label": "hidden-ack-3",
       "fromSurface": true,
-      "elapsedMs": 41.18391699999984
+      "elapsedMs": 32.47062499999993
     },
     {
       "label": "pre-hide-4",
       "fromSurface": true,
-      "elapsedMs": 25.5068339999998
+      "elapsedMs": 25.150915999999597
     },
     {
       "label": "hidden-ack-4",
       "fromSurface": true,
-      "elapsedMs": 41.0619999999999
+      "elapsedMs": 41.055083000000195
     },
     {
       "label": "pre-parallel-0",
       "fromSurface": true,
-      "elapsedMs": 24.348875000000135
+      "elapsedMs": 24.60050000000001
     },
     {
       "label": "hidden-parallel-0",
       "fromSurface": true,
-      "elapsedMs": 31.91445900000008
+      "elapsedMs": 22.942999999999756
     },
     {
       "label": "pre-parallel-1",
       "fromSurface": true,
-      "elapsedMs": 35.84608299999991
+      "elapsedMs": 25.51937500000031
     },
     {
       "label": "hidden-parallel-1",
       "fromSurface": true,
-      "elapsedMs": 31.930249999999887
+      "elapsedMs": 32.42404099999976
     },
     {
       "label": "pre-parallel-2",
       "fromSurface": true,
-      "elapsedMs": 24.66104200000018
+      "elapsedMs": 25.132834000000003
     },
     {
       "label": "hidden-parallel-2",
       "fromSurface": true,
-      "elapsedMs": 23.38000000000011
+      "elapsedMs": 23.74208299999964
     },
     {
       "label": "pre-parallel-3",
       "fromSurface": true,
-      "elapsedMs": 24.810958000000028
+      "elapsedMs": 32.11562499999991
     },
     {
       "label": "hidden-parallel-3",
       "fromSurface": true,
-      "elapsedMs": 33.06583300000011
+      "elapsedMs": 26.63754199999994
     },
     {
       "label": "pre-parallel-4",
       "fromSurface": true,
-      "elapsedMs": 25.75820900000008
+      "elapsedMs": 26.09229200000027
     },
     {
       "label": "hidden-parallel-4",
       "fromSurface": true,
-      "elapsedMs": 24.736167000000023
+      "elapsedMs": 32.805041000000074
     }
   ],
   "hideAcks": [
     {
       "i": 0,
-      "ackMs": 0.5042080000000624,
-      "totalMs": 32.60958299999993
+      "ackMs": 0.651834000000008,
+      "totalMs": 41.825166999999965
     },
     {
       "i": 1,
-      "ackMs": 0.39066700000012133,
-      "totalMs": 38.31837500000006
+      "ackMs": 0.34833400000002257,
+      "totalMs": 24.01733400000012
     },
     {
       "i": 2,
-      "ackMs": 0.36587500000041473,
-      "totalMs": 32.61858400000028
+      "ackMs": 0.3304169999998976,
+      "totalMs": 33.17712499999993
     },
     {
       "i": 3,
-      "ackMs": 0.30999999999994543,
-      "totalMs": 41.5056669999999
+      "ackMs": 0.36124999999992724,
+      "totalMs": 32.84516699999995
     },
     {
       "i": 4,
-      "ackMs": 0.3147910000002412,
-      "totalMs": 41.390957999999955
+      "ackMs": 0.3184160000000702,
+      "totalMs": 41.38941599999998
     }
   ],
   "closed": true

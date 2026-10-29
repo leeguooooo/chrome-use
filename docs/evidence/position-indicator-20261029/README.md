@@ -21,8 +21,7 @@ was closed afterwards. No input was sent and no personal profile was opened.
 
 Both capture flags included the hinge marker. Neither is an exclusion option in
 this configuration. Acknowledged hiding needed no explicit sleep before the
-next capture; the measured hide acknowledgement took 0.31–0.51 ms in these five
-samples. The concurrent trial does not establish safe ordering under a stalled
+next capture; acknowledgement and capture timings are recorded in the raw report. The concurrent trial does not establish safe ordering under a stalled
 renderer, different transport or other capture mode. These are capture-path
 observations, not an input-latency benchmark or proof of zero overhead.
 

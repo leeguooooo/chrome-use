@@ -6,11 +6,12 @@ import { join } from 'node:path';
 if (process.env.CHROME_USE_ISOLATED_GUI_HOST !== '1') throw new Error('Isolated GUI host required');
 const out = process.argv[2];
 if (!out) throw new Error('Provide a fresh output directory');
+const probeSha256=createHash('sha256').update(await readFile(new URL(import.meta.url))).digest('hex');
 await mkdir(out);
 const profile = await mkdtemp(join(tmpdir(), 'cu721-cap-'));
 const chrome = spawn(process.env.CHROME_BINARY || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [`--user-data-dir=${profile}`, '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check', '--window-size=900,700', 'about:blank'], {stdio:'ignore'});
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
-let ws;let seq=0;const pending=new Map();const report={isolatedProfile:true,mode:'independent capability and hinge-capture research; no product fallback; no Overlay.enable; no input sent',platform:process.platform,arch:process.arch,probeSha256:createHash('sha256').update(await readFile(new URL(import.meta.url))).digest('hex')};
+let ws;let seq=0;const pending=new Map();const report={isolatedProfile:true,mode:'independent capability and hinge-capture research; no product fallback; no Overlay.enable; no input sent',platform:process.platform,arch:process.arch,probeSha256};
 try {
  let port;
  for(let i=0;i<100;i++){try{port=Number((await readFile(join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0]);break;}catch{}await sleep(50);}
@@ -24,6 +25,7 @@ try {
  const call=(method,params={},sessionId)=>new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})}));setTimeout(()=>{if(pending.delete(id))reject({message:'timeout: '+method});},10000).unref();});
  const targets=await call('Target.getTargets');const target=targets.targetInfos.find(t=>t.type==='page');const sid=(await call('Target.attachToTarget',{targetId:target.targetId,flatten:true})).sessionId;
  try{report.reply=await call('Page.setInputVisualization',{clicks:true},sid);report.supported=true;}catch(error){report.supported=error.code===-32601?false:null;report.error=error;}
+ if(report.supported===null)process.exitCode=2;
  if(report.supported===true){try{await call('Page.setInputVisualization',{clicks:false},sid);report.disabled=true;}catch(error){report.disabled=false;report.disableError=error;process.exitCode=2;}}
  await call('Page.enable',{},sid);
  await call('Page.bringToFront',{},sid);report.activatedBeforeBaseline=true;await sleep(150);
