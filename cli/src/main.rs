@@ -4768,7 +4768,9 @@ fn main() {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             // Handle interactive confirmation
-            if flags.confirm_interactive {
+            if flags.confirm_interactive
+                && resp.data.as_ref().and_then(|d| d["approval"].as_str()) != Some("user")
+            {
                 if let Some(data) = &resp.data {
                     if data
                         .get("confirmation_required")
@@ -4826,6 +4828,15 @@ fn main() {
                                     exit(1);
                                 }
                                 print_response_with_opts(&r, None, &output_opts);
+                                if !r.success {
+                                    exit(1);
+                                }
+                                if r.data
+                                    .as_ref()
+                                    .is_some_and(|d| d["confirmation_required"] == true)
+                                {
+                                    exit(3);
+                                }
                                 // The navigation only happened here, after the
                                 // approval — so this is where the rule offer
                                 // belongs. Reaching the generic tail instead

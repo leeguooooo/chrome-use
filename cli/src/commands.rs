@@ -1052,6 +1052,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             Ok(json!({ "id": id, "action": "dblclick", "selector": sel }))
         }
         "fill" => {
+            let literal_value = rest.get(1) == Some(&"--");
             let required = if matches!(rest.get(1), Some(&"--file" | &"--from-env")) {
                 3
             } else {
@@ -1073,52 +1074,56 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // `fill <sel> --file <path>` reads the value from a UTF-8 file, and
             // `fill <sel> --stdin` reads it from stdin — sent verbatim, so backticks,
             // quotes, newlines and non-ASCII pass through untouched.
-            let value = match rest.get(1).copied() {
-                Some("--file") => {
-                    let path = rest.get(2).ok_or(ParseError::InvalidValue {
-                        message: "fill --file requires a path".to_string(),
-                        usage: "fill <selector> --file <path>",
-                    })?;
-                    std::fs::read_to_string(path).map_err(|e| ParseError::InvalidValue {
-                        message: format!("fill --file: cannot read {path}: {e}"),
-                        usage: "fill <selector> --file <path>",
-                    })?
-                }
-                Some("--stdin") => {
-                    use std::io::Read;
-                    let mut buf = String::new();
-                    io::stdin()
-                        .read_to_string(&mut buf)
-                        .map_err(|e| ParseError::InvalidValue {
-                            message: format!("fill --stdin: {e}"),
-                            usage: "fill <selector> --stdin",
+            let value = if literal_value {
+                rest[1..].join(" ")
+            } else {
+                match rest.get(1).copied() {
+                    Some("--file") => {
+                        let path = rest.get(2).ok_or(ParseError::InvalidValue {
+                            message: "fill --file requires a path".to_string(),
+                            usage: "fill <selector> --file <path>",
                         })?;
-                    buf
-                }
-                // A secret from a password manager's `run` (e.g. `bwu run --env
-                // PW='item#password' -- chrome-use fill @e3 --from-env PW`): the
-                // value goes from the vault to the field without ever being an
-                // argument, a shell variable expansion, or output.
-                Some("--from-env") => {
-                    let var = rest.get(2).ok_or(ParseError::InvalidValue {
-                        message: "fill --from-env requires a variable name".to_string(),
-                        usage: "fill <selector> --from-env <VAR>",
-                    })?;
-                    let value = std::env::var(var).map_err(|_| ParseError::InvalidValue {
-                        message: format!(
-                            "fill --from-env: {var} is not set. Run this under a password \
+                        std::fs::read_to_string(path).map_err(|e| ParseError::InvalidValue {
+                            message: format!("fill --file: cannot read {path}: {e}"),
+                            usage: "fill <selector> --file <path>",
+                        })?
+                    }
+                    Some("--stdin") => {
+                        use std::io::Read;
+                        let mut buf = String::new();
+                        io::stdin().read_to_string(&mut buf).map_err(|e| {
+                            ParseError::InvalidValue {
+                                message: format!("fill --stdin: {e}"),
+                                usage: "fill <selector> --stdin",
+                            }
+                        })?;
+                        buf
+                    }
+                    // A secret from a password manager's `run` (e.g. `bwu run --env
+                    // PW='item#password' -- chrome-use fill @e3 --from-env PW`): the
+                    // value goes from the vault to the field without ever being an
+                    // argument, a shell variable expansion, or output.
+                    Some("--from-env") => {
+                        let var = rest.get(2).ok_or(ParseError::InvalidValue {
+                            message: "fill --from-env requires a variable name".to_string(),
+                            usage: "fill <selector> --from-env <VAR>",
+                        })?;
+                        let value = std::env::var(var).map_err(|_| ParseError::InvalidValue {
+                            message: format!(
+                                "fill --from-env: {var} is not set. Run this under a password \
                              manager that sets it, e.g. `bwu run --env {var}='<item>#password' \
                              -- chrome-use fill {sel} --from-env {var}`"
-                        ),
-                        usage: "fill <selector> --from-env <VAR>",
-                    })?;
-                    // A daemon this command starts inherits the environment;
-                    // drop the secret before that can happen.
-                    std::env::remove_var(var);
-                    return Ok(stamp(json!({ "id": id, "action": "fill", "selector": sel,
+                            ),
+                            usage: "fill <selector> --from-env <VAR>",
+                        })?;
+                        // A daemon this command starts inherits the environment;
+                        // drop the secret before that can happen.
+                        std::env::remove_var(var);
+                        return Ok(stamp(json!({ "id": id, "action": "fill", "selector": sel,
                                        "value": value, "secret": true })));
+                    }
+                    _ => rest[1..].join(" "),
                 }
-                _ => rest[1..].join(" "),
             };
             Ok(stamp(
                 json!({ "id": id, "action": "fill", "selector": sel, "value": value }),
@@ -10831,6 +10836,20 @@ mod tests {
                 );
                 assert_ne!(cmd["allowClipboardFallback"], true, "{cmd}");
             }
+        }
+    }
+    #[test]
+    fn editor_end_of_options_keeps_mode_names_as_text() {
+        let args: Vec<String> = ["fill", "#editor", "--", "--file"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        for cmd in [
+            parse_command(&crate::flags::clean_args(&args), &default_flags()).unwrap(),
+            parse_batch_step(&args, &default_flags()).unwrap(),
+        ] {
+            assert_eq!(cmd["value"], "--file");
+            assert_ne!(cmd["allowClipboardFallback"], true);
         }
     }
 }

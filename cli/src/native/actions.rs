@@ -114,9 +114,26 @@ pub struct SitePending {
     pub user_approval: bool,
 }
 
-/// The extension's answer to `ABExt.sitePolicy`, kept briefly so a run of
-/// clicks costs one relay round trip, not one each. `None` inside: the
-/// extension predates per-site permissions.
+/// Authority established internally for one validated confirmation rerun.
+#[derive(Clone, PartialEq, Eq)]
+enum ConfirmedApproval {
+    Command,
+    Site(String),
+}
+
+tokio::task_local! {
+    /// Internal approval authority cannot survive a canceled command future.
+    static CONFIRMED_APPROVAL: ConfirmedApproval;
+}
+
+fn command_approved() -> bool {
+    CONFIRMED_APPROVAL.try_with(|_| true).unwrap_or(false)
+}
+fn site_approved(host: &str) -> bool {
+    CONFIRMED_APPROVAL.try_with(|a| matches!(a, ConfirmedApproval::Site(approved) if approved.eq_ignore_ascii_case(host))).unwrap_or(false)
+}
+
+/// Extension policy layers cached briefly between ordinary commands.
 pub struct SitePolicyCache {
     pub at: std::time::Instant,
     pub on_relay: bool,
@@ -567,9 +584,6 @@ pub struct DaemonState {
     /// Sites a terminal prompt allowed "always" when no extension could keep
     /// the decision; they last as long as this daemon.
     pub site_session_allow: Vec<String>,
-    /// Set while `confirm` runs the approved command, so its gates do not
-    /// ask again.
-    pub gates_bypassed: bool,
     pub har_recording: bool,
     pub har_entries: Vec<HarEntry>,
     /// `teach start` .. `teach stop`: the user's actions being recorded.
@@ -742,7 +756,6 @@ impl DaemonState {
             pending_confirmation: None,
             site_policy_cache: None,
             site_session_allow: Vec::new(),
-            gates_bypassed: false,
             har_recording: false,
             har_entries: Vec::new(),
             teach: None,
@@ -2036,19 +2049,6 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         && cmd["allowClipboardFallback"].as_bool() == Some(true);
     if clipboard_requested {
         gated_actions.push("clipboard");
-        // A prior file/category confirmation must not bypass an organization's
-        // hard deny on either part of the requested compound operation.
-        let (_, extension) = site_policy_layers(state).await;
-        if let Some(managed) = extension
-            .and_then(|e| e.managed.action_policy)
-            .and_then(|p| ActionPolicy::from_value(&p).ok())
-        {
-            for capability in &gated_actions {
-                if let PolicyResult::Deny(reason) = managed.check(capability) {
-                    return error_response(&id, &format!("Action '{capability}' denied by your organization's chrome-use policy: {reason}"));
-                }
-            }
-        }
     }
     if action == "a11y" && cmd.get("url").and_then(|v| v.as_str()).is_some() {
         gated_actions.push("navigate");
@@ -2076,6 +2076,9 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                     );
                 }
                 PolicyResult::RequiresConfirmation => {
+                    if command_approved() {
+                        continue;
+                    }
                     state.pending_confirmation = Some(PendingConfirmation {
                         action: (*gated_action).to_string(),
                         cmd: cmd.clone(),
@@ -2084,7 +2087,8 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                     return json!({
                         "id": id,
                         "success": true,
-                        "data": { "confirmation_required": true, "confirmation_id": id, "action": gated_action },
+                        "data": { "confirmation_required": true, "confirmation_id": id, "action": gated_action, "category":gated_action,
+                            "requestedActions":gated_actions, "description":if clipboard_requested {"This command requests system clipboard fallback"} else {"Run the requested command"} },
                     });
                 }
             }
@@ -2092,7 +2096,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     }
 
     // Check AGENT_BROWSER_CONFIRM_ACTIONS (category-based, independent of policy file)
-    if action != "confirm" && action != "deny" {
+    if action != "confirm" && action != "deny" && !command_approved() {
         if let Some(ref ca) = state.confirm_actions {
             for gated_action in &gated_actions {
                 if ca.requires_confirmation(gated_action) {
@@ -2108,6 +2112,9 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                             "confirmation_required": true,
                             "confirmation_id": id,
                             "action": gated_action,
+                            "category": gated_action,
+                            "requestedActions":gated_actions,
+                            "description":if clipboard_requested {"This command requests system clipboard fallback"} else {"Run the requested command"},
                         },
                     });
                 }
@@ -2116,7 +2123,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     }
 
     // Per-site permissions and the managed action policy (#781).
-    if action != "confirm" && action != "deny" && !state.gates_bypassed {
+    if action != "confirm" && action != "deny" {
         if let Some(response) = site_gate(cmd, action, &id, state).await {
             return response;
         }
@@ -25568,7 +25575,10 @@ async fn handle_confirm(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
     if let Some(site) = pending.site.as_ref() {
         // A decision typed at the terminal prompt (`--confirm-interactive`):
         // only the CLI's own TTY branch sets `userDecision`.
-        let typed = cmd.get("userDecision").and_then(|v| v.as_str());
+        let typed = cmd
+            .get("userDecision")
+            .and_then(|v| v.as_str())
+            .filter(|_| !site.user_approval);
         let decision = match typed {
             Some(d) => d.to_string(),
             None if site.user_approval => match wait_for_site_decision(state, &site.id).await {
@@ -25604,30 +25614,48 @@ async fn handle_confirm(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
         }
     }
 
-    // Temporarily remove policy and confirm_actions to avoid re-triggering confirmation
-    let policy = state.policy.take();
-    let confirm_actions = state.confirm_actions.take();
-    state.gates_bypassed = true;
-    // A held `fill --from-env` keeps its secret handling when it finally
-    // runs: every field masked while it runs, the value scrubbed from the
-    // reply, as `execute_command_recovering_scrubbed` does for a direct one.
+    let approval = pending
+        .site
+        .as_ref()
+        .map(|site| ConfirmedApproval::Site(site.host.clone()))
+        .unwrap_or(ConfirmedApproval::Command);
+    // Refresh policies even after approval. Only repeated prompts are scoped
+    // away; policy denials and site constraints remain enforced.
+    state.site_policy_cache = None;
     let secrets = command_secrets(&pending.cmd);
-    let mut result = if secrets.is_empty() {
-        Box::pin(execute_command(&pending.cmd, state)).await
-    } else {
-        super::sensitive::SECRET_COMMAND
-            .scope(true, Box::pin(execute_command(&pending.cmd, state)))
-            .await
-    };
+    let mut result = CONFIRMED_APPROVAL
+        .scope(approval, async {
+            if secrets.is_empty() {
+                Box::pin(execute_command(&pending.cmd, state)).await
+            } else {
+                super::sensitive::SECRET_COMMAND
+                    .scope(true, Box::pin(execute_command(&pending.cmd, state)))
+                    .await
+            }
+        })
+        .await;
     for secret in &secrets {
         super::sensitive::scrub_value(&mut result, secret);
     }
-    state.gates_bypassed = false;
-    state.policy = policy;
-    state.confirm_actions = confirm_actions;
     state.site_policy_cache = None;
-
+    if result["success"] != true {
+        return Err(result["error"]
+            .as_str()
+            .unwrap_or("The approved operation failed")
+            .to_string());
+    }
+    if result
+        .pointer("/data/confirmation_required")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Ok(result["data"].clone());
+    }
+    let warning = result.pointer("/data/warning").cloned();
     let mut out = json!({ "confirmed": true, "action": pending.action, "result": result });
+    if let Some(warning) = warning {
+        out["warning"] = warning;
+    }
     if let Some(site) = pending.site {
         out["site"] = json!(site.host);
     }
@@ -25908,6 +25936,9 @@ async fn site_gate(cmd: &Value, action: &str, id: &str, state: &mut DaemonState)
                             .and_then(|u| sp::host_of(&u))
                             .or_else(current_host)
                             .unwrap_or_default();
+                        if site_approved(&host) {
+                            continue;
+                        }
                         ask = Some((
                             host,
                             "managed_action",
@@ -25942,11 +25973,21 @@ async fn site_gate(cmd: &Value, action: &str, id: &str, state: &mut DaemonState)
                 ));
             }
             SiteGate::Ask { reason, detail } => {
+                if site_approved(&host) {
+                    return None;
+                }
                 ask = Some((host, reason, detail, category.to_string()));
             }
         }
     }
     let (host, reason, detail, category) = ask?;
+    let detail = if matches!(action, "fill" | "inputvalue")
+        && cmd["allowClipboardFallback"].as_bool() == Some(true)
+    {
+        format!("{detail}. This command requests system clipboard fallback")
+    } else {
+        detail
+    };
 
     let confirmation_id = format!("s_{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
     let mut user_approval = false;
@@ -28674,6 +28715,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn canceled_approval_does_not_authorize_the_next_command() {
+        let entered = std::sync::atomic::AtomicBool::new(false);
+        let expired = tokio::time::timeout(
+            Duration::from_millis(1),
+            CONFIRMED_APPROVAL.scope(ConfirmedApproval::Site("fixture.test".into()), async {
+                assert!(command_approved() && site_approved("fixture.test"));
+                entered.store(true, std::sync::atomic::Ordering::Relaxed);
+                std::future::pending::<()>().await;
+            }),
+        )
+        .await;
+        assert!(expired.is_err());
+        assert!(entered.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(!command_approved() && !site_approved("fixture.test"));
+        let mut state = DaemonState::new();
+        state.confirm_actions = Some(super::super::policy::ConfirmActions {
+            categories: ["clipboard".to_string()].into_iter().collect(),
+        });
+        let response = execute_command(&json!({"id":"next", "action":"fill", "selector":"#editor", "value":"fixture", "allowClipboardFallback":true}), &mut state).await;
+        assert_eq!(
+            response["data"]["confirmation_required"], true,
+            "{response}"
+        );
+        assert!(state.browser.is_none());
+    }
+
+    #[tokio::test]
+    async fn approved_command_reloads_policy_and_preserves_hard_denials() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("policy.json");
+        fs::write(&path, r#"{"confirm":["fill"]}"#).unwrap();
+        let mut state = DaemonState::new();
+        state.policy = Some(ActionPolicy::load(path.to_str().unwrap()).unwrap());
+        let cmd = json!({"id":"approved", "action":"fill", "selector":"#editor", "value":"fixture", "allowClipboardFallback":true});
+        let first = execute_command(&cmd, &mut state).await;
+        assert_eq!(first["data"]["confirmation_required"], true, "{first}");
+        fs::write(&path, r#"{"deny":["clipboard"]}"#).unwrap();
+        // Force the next check to observe the edited file, independent of
+        // filesystem timestamp resolution used by the policy hot-reloader.
+        state.policy = Some(ActionPolicy::load(path.to_str().unwrap()).unwrap());
+        let result = handle_confirm(&json!({"confirmationId":"approved"}), &mut state).await;
+        assert!(result.unwrap_err().contains("clipboard"));
+        assert!(state.policy.is_some() && state.browser.is_none());
+        assert!(!command_approved() && !site_approved("fixture.test"));
+    }
+
+    #[tokio::test]
     async fn clipboard_opt_in_respects_denial_and_confirmation_before_any_browser() {
         for action in ["fill", "inputvalue"] {
             let cmd = json!({"id":"clipboard-capability", "action":action, "selector":"#editor", "value":"fixture", "allowClipboardFallback":true});
@@ -28705,29 +28793,6 @@ mod tests {
             );
             assert_eq!(response["data"]["action"], "clipboard");
             assert!(confirm.browser.is_none());
-
-            let mut managed = DaemonState::new();
-            managed.confirm_actions = Some(super::super::policy::ConfirmActions {
-                categories: [action.to_string()].into_iter().collect(),
-            });
-            managed.site_policy_cache = Some(SitePolicyCache {
-                at: std::time::Instant::now(),
-                on_relay: true,
-                extension: Some(super::super::site_policy::ExtensionSitePolicy {
-                    managed: super::super::site_policy::ManagedLayer {
-                        action_policy: Some(json!({"deny":["clipboard"]})),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }),
-            });
-            let response = execute_command(&cmd, &mut managed).await;
-            assert_eq!(response["success"], false, "{response}");
-            assert!(response["error"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("organization"));
-            assert!(managed.browser.is_none());
         }
     }
 
@@ -29741,3 +29806,7 @@ mod site_ui_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "clipboard_policy_tests.rs"]
+mod clipboard_policy_tests;

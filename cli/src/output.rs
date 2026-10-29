@@ -3149,7 +3149,10 @@ focus loss, incomplete selection or mismatched readback fail without a clipboard
 Without an exact model API, fill/get value refuse before clipboard access.
 --allow-clipboard-fallback opts in for this command only, after the user accepts
 that it temporarily changes the system clipboard. Only fill and get value accept
-this flag; it never enables a retry after native model/input failure. Actual use
+this flag; place it last, after the required text/selector. A mandatory text value
+that equals the flag stays literal, and -- ends editor option parsing.
+Clipboard policies still apply; approval cannot override a hard deny.
+It never enables clipboard fallback after native model/input failure. Actual use
 emits a warning: comparison/restoration is not atomic and can overwrite concurrent
 clipboard writes. The opted-in fallback uses one trusted editor paste, reads the selected model back through the editor's
 copy handler, and attempts clipboard restoration from an independent Blob backup.
@@ -5130,8 +5133,12 @@ When the response says `approval: user`, the request is waiting in the
 chrome-use extension (side panel, notification, options page). Only the
 user can approve it there: `confirm` then waits up to 40 seconds for their
 choice (Allow once, Always allow on this site, Decline) and runs the action
-if they allowed it. With --confirm-interactive the prompt also offers
-"always" for the site.
+if they allowed it. --confirm-interactive cannot approve an extension-held
+request; choose in the extension. Terminal-only gates still offer interactive
+confirmation when no extension holds the decision.
+Approved operations recheck hard denials and site restrictions. A changed policy
+can reject the operation, and another required site gate stays pending instead
+of being reported as completed.
 
 A new gated action replaces the pending one.
 
