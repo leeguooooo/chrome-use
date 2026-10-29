@@ -51,60 +51,26 @@ def instrument(extension, target, base_url, case_id, pending_dom_control=True):
     original = path.read_text(encoding="utf-8")
     if original.count(START_ANCHOR) != 1 or original.count(RETURN_ANCHOR) != 1:
         raise RuntimeError("background capture boundary changed; review the instrumentation")
-    observer = r'''
-// CI fixture diagnostic only. This file is a generated, unshipped copy.
-async function observeFixtureCapture(tabId, params, operation) {
-  const started = performance.now();
-  const captureId = crypto.randomUUID();
-  const initial = await chrome.tabs.get(tabId).catch(() => null);
-  if (!ownedTabs.has(tabId) || !String(initial?.url || '').startsWith(__BASE__ + '/')) return;
-  let pending = true;
-  const emit = (event) => void fetch(__SINK__, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ caseId: __CASE__, captureId, tabId, atMs: performance.now(), ...event }),
-  }).catch(() => {});
-  emit({ type: 'capture-start', startedMs: started, fixturePath: new URL(initial.url).pathname,
-    request: { format: params?.format, clip: params?.clip,
-      captureBeyondViewport: params?.captureBeyondViewport, fromSurface: params?.fromSurface } });
-  const timer = __DOM_CONTROL__ ? setTimeout(async () => {
-    if (!pending) return;
-    const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (!pending || !ownedTabs.has(tabId) || !String(tab?.url || '').startsWith(__BASE__ + '/')) return;
-    const sentMs = performance.now();
-    emit({ type: 'dom-sent', sentMs, captureStillPending: pending });
-    let timeout;
-    try {
-      const result = await Promise.race([
-        chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
-          expression: "({ready:document.readyState,rows:document.querySelectorAll('#rows > .row').length,visibility:document.visibilityState})",
-          returnByValue: true,
-        }),
-        new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('fixture DOM probe exceeded 3000ms')), 3000); }),
-      ]);
-      emit({ type: 'dom-answer', sentMs, captureStillPending: pending, result: result?.result?.value });
-    } catch (error) {
-      emit({ type: 'dom-error', sentMs, captureStillPending: pending, error: String(error?.message || error) });
-    } finally { clearTimeout(timeout); }
-  }, Math.max(0, 2000 - (performance.now() - started))) : null;
-  operation.then(result => {
-    pending = false; clearTimeout(timer);
-    emit({ type: 'capture-answer', elapsedMs: performance.now() - started,
-      encodedBytes: typeof result?.data === 'string' ? result.data.length : null });
-  }, error => {
-    pending = false; clearTimeout(timer);
-    emit({ type: 'capture-error', elapsedMs: performance.now() - started, error: String(error?.message || error) });
-  });
-}
-'''.replace("__SINK__", json.dumps(base_url + "/trace")).replace("__BASE__", json.dumps(base_url)).replace("__CASE__", json.dumps(case_id)).replace("__DOM_CONTROL__", "true" if pending_dom_control else "false")
-    replacement = """  const operation = observeDebuggerCommand(
+    observer = Path(__file__).with_name("relay-observer.js").read_text(encoding="utf-8")
+    observer = observer.replace("__SINK__", json.dumps(base_url + "/trace")).replace("__DISPATCH__", json.dumps(base_url + "/dispatch"))
+    observer = observer.replace("__BASE__", json.dumps(base_url)).replace("__CASE__", json.dumps(case_id))
+    observer = observer.replace("__DOM_CONTROL__", "true" if pending_dom_control else "false")
+    replacement = """  const captureContext = method === 'Page.captureScreenshot'
+    ? await fixtureCaptureContext(tabId, childSessionId) : null;
+  const operation = observeDebuggerCommand(
     method,
-    sendTabCommand(tabId, method, params, childSessionId, tabCommandDependencies()),
+    sendTabCommand(tabId, method, params, childSessionId, tabCommandDependencies(captureContext)),
   );
-  if (method === 'Page.captureScreenshot' && !childSessionId) {
-    void observeFixtureCapture(tabId, params, operation).catch(() => {});
-  }
+  if (captureContext) fixtureObserveWrapper(captureContext, operation);
   return await operation;"""
-    generated = original.replace(START_ANCHOR, observer + "\n" + START_ANCHOR).replace(RETURN_ANCHOR, replacement)
+    dependency = "sendCommand: (target, command, args) => chrome.debugger.sendCommand(target, command, args),"
+    if original.count(dependency) != 1 or original.count("function tabCommandDependencies() {") != 1:
+        raise RuntimeError("native command dependency boundary changed; review the instrumentation")
+    generated = original.replace("chrome.debugger.attach(", "fixtureDebuggerAttach(").replace("chrome.debugger.detach(", "fixtureDebuggerDetach(")
+    generated = generated.replace("function tabCommandDependencies() {", "function tabCommandDependencies(captureContext = null) {")
+    generated = generated.replace(dependency, "sendCommand: (target, command, args) => fixtureSendCommand(captureContext, target, command, args),")
+    generated = generated.replace(RETURN_ANCHOR, replacement)
+    generated = generated.replace("const HOST_NAME =", observer + "\nconst HOST_NAME =", 1)
     path.write_text(generated, encoding="utf-8")
     diff = "".join(difflib.unified_diff(manifest_source.splitlines(True),
         manifest_path.read_text(encoding="utf-8").splitlines(True),
@@ -119,6 +85,7 @@ class Fixture:
         self.rows = rows
         self.traces = []
         self.lock = threading.Lock()
+        self.controls = {}
         owner = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -134,7 +101,7 @@ class Fixture:
                 self.end_headers()
 
             def do_POST(self):
-                if self.path != "/trace":
+                if self.path not in ("/trace", "/dispatch"):
                     self.send_error(404)
                     return
                 size = int(self.headers.get("Content-Length", "0"))
@@ -142,6 +109,22 @@ class Fixture:
                     self.send_error(413)
                     return
                 event = json.loads(self.rfile.read(size))
+                if self.path == "/dispatch":
+                    with owner.lock:
+                        control = owner.controls.get(event.get("caseId"))
+                    try:
+                        result = control() if control else {"valid": False, "error": "no registered window control"}
+                    except Exception as exc:
+                        result = {"valid": False, "error": str(exc)}
+                    result["sampledMonotonic"] = time.perf_counter()
+                    body = json.dumps(result).encode()
+                    self.send_response(200)
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 event["receivedMonotonic"] = time.perf_counter()
                 with owner.lock:
                     owner.traces.append(event)
@@ -169,6 +152,10 @@ class Fixture:
         self.base = "http://127.0.0.1:" + str(self.server.server_port)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
+
+    def set_control(self, case_id, control):
+        with self.lock:
+            self.controls[case_id] = control
 
     def events(self, case_id):
         with self.lock:
@@ -290,7 +277,9 @@ class Windows:
             raise ctypes.WinError(ctypes.get_last_error())
         center = wintypes.POINT((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
         point = self.u.WindowFromPoint(center)
-        return {"hwnd": int(hwnd), "minimized": bool(self.u.IsIconic(hwnd)),
+        owner = wintypes.DWORD()
+        self.u.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        return {"hwnd": int(hwnd), "pid": owner.value, "title": self.title(hwnd), "minimized": bool(self.u.IsIconic(hwnd)),
                 "visible": bool(self.u.IsWindowVisible(hwnd)), "foreground": int(self.u.GetForegroundWindow() or 0),
                 "rect": [rect.left, rect.top, rect.right, rect.bottom], "centerWindow": int(point or 0),
                 "centerOwned": bool(point == hwnd or self.u.IsChild(hwnd, point))}
@@ -343,7 +332,7 @@ class Windows:
             thread.join(5)
             if thread.is_alive():
                 raise RuntimeError("cover window did not stop")
-        return close
+        return close, result["hwnd"]
 
 
 def system_status():
@@ -440,26 +429,116 @@ def inspect_image(path, kind, geometry):
                 "pixels": samples, "pixelValid": valid, "dimensionsValid": dimensions}
 
 
+def window_valid(snapshot, state, case_id, pid, expected_hwnd, probe_pid):
+    window = snapshot.get("window") or {}
+    if (window.get("pid") != pid or window.get("hwnd") != expected_hwnd
+        or "CaptureProbe " + case_id not in window.get("title", "")):
+        return False
+    if state == "minimized":
+        return window.get("minimized") is True
+    if window.get("minimized") or not window.get("visible"):
+        return False
+    if state == "normal":
+        return window.get("centerOwned") is True
+    cover = snapshot.get("cover") or {}
+    rect, bounds = window.get("rect", []), cover.get("rect", [])
+    return (len(rect) == len(bounds) == 4 and cover.get("visible") is True
+        and cover.get("pid") == probe_pid and cover.get("title") == "Fixture cover " + case_id
+        and window.get("centerWindow") == cover.get("hwnd")
+        and bounds[0] <= rect[0] and bounds[1] <= rect[1]
+        and bounds[2] >= rect[2] and bounds[3] >= rect[3])
+
+
+def report_operations(events):
+    return [e for e in events if e.get("type") == "capture-operation-start" and e.get("fixturePath") == "/report"]
+
+
 def capture_trace_complete(events):
-    started = {e.get("captureId") for e in events
-               if e.get("type") == "capture-start" and e.get("fixturePath") == "/report"}
-    settled = {e.get("captureId") for e in events
-               if e.get("type") in ("capture-answer", "capture-error")}
-    return bool(started) and started.issubset(settled)
+    started = {e.get("operationId") for e in report_operations(events)}
+    settled = {e.get("operationId") for e in events
+               if e.get("type") in ("capture-wrapper-answer", "capture-wrapper-error")}
+    return bool(started) and None not in started and started.issubset(settled)
 
 
-def report_signature_matches(events, rows):
-    answered = {e.get("captureId") for e in events
-        if e.get("type") == "dom-answer" and e.get("captureStillPending")
-        and (e.get("result") or {}).get("rows") == rows
-        and (e.get("result") or {}).get("ready") == "complete"}
-    timed_out = {e.get("captureId") for e in events
-        if e.get("type") == "capture-error"
-        and "timeout" in e.get("error", "").lower()
-        and "page.capturescreenshot" in e.get("error", "").lower()
-        and "25000ms" in e.get("error", "")
-        and 24000 <= e.get("elapsedMs", 0) <= 35000}
-    return bool(answered.intersection(timed_out))
+def capture_context(events, record):
+    starts = report_operations(events)
+    if len(starts) != 1:
+        return None
+    start = starts[0]
+    own = [e for e in events if e.get("operationId") == start.get("operationId")]
+    native = [e for e in own if e.get("type") == "capture-native-send"]
+    ends = [e for e in own if e.get("type") in ("capture-wrapper-answer", "capture-wrapper-error")]
+    if len(native) != 1 or len(ends) != 1:
+        return None
+    sent, end = native[0], ends[0]
+    attempts = end.get("attempts") or []
+    if len(attempts) != 1 or end.get("invalidations") or any(e.get("type") == "attachment-change" for e in own):
+        return None
+    attempt = attempts[0]
+    if not isinstance(sent.get("captureId"), str) or sent["captureId"] != attempt.get("captureId"):
+        return None
+    epoch = sent.get("epoch", 0)
+    if not isinstance(epoch, int) or epoch <= 0 or epoch != start.get("epoch") or epoch != end.get("epoch") or epoch != attempt.get("epoch"):
+        return None
+    if sent.get("target") != start.get("requested") or sent.get("target") != attempt.get("target"):
+        return None
+    control = sent.get("windowControl") or {}
+    if not control.get("valid") or not 0 <= sent.get("controlElapsedMs", -1) <= 250:
+        return None
+    if not window_valid(control.get("snapshot") or {}, record["state"], record["caseId"], record["chromePid"], record["expectedHwnd"], record["probePid"]):
+        return None
+    warm_starts = [e for e in events if e.get("type") == "capture-operation-start" and e.get("fixturePath") == "/warmup"]
+    if len(warm_starts) != 1 or sent.get("historyLost") is not False:
+        return None
+    warm = [e for e in events if e.get("operationId") == warm_starts[0].get("operationId")]
+    warm_native = [e for e in warm if e.get("type") == "capture-native-send"]
+    warm_end = [e for e in warm if e.get("type") == "capture-wrapper-answer"]
+    if len(warm_native) != 1 or len(warm_end) != 1 or warm_end[0].get("invalidations") or len(warm_end[0].get("attempts") or []) != 1:
+        return None
+    if warm_native[0].get("target") != sent["target"] or warm_native[0].get("epoch") != epoch or warm_end[0].get("epoch") != epoch:
+        return None
+    if any(h.get("atMs", 0) > warm_end[0].get("atMs", -1) for h in sent.get("attachmentHistory") or []):
+        return None
+    return sent, end, own
+
+
+def report_signature_matches(events, rows, record):
+    context = capture_context(events, record)
+    if context is None:
+        return False
+    sent, end, own = context
+    if end["type"] != "capture-wrapper-error":
+        return False
+    error = end.get("error", "")
+    attempt = end["attempts"][0]
+    if ("timeout" not in error.lower() or "page.capturescreenshot" not in error.lower()
+        or "25000ms" not in error or not 24000 <= attempt.get("elapsedMs", 0) <= 35000
+        or attempt.get("nativePending") is not True):
+        return False
+    return any(e.get("type") == "dom-native-answer" and e.get("captureId") == sent["captureId"]
+        and e.get("target") == sent["target"] and e.get("epoch") == sent["epoch"]
+        and e.get("nativeStillPending") is True and e.get("wrapperStillPending") is True
+        and (e.get("result") or {}).get("rows") == rows and (e.get("result") or {}).get("ready") == "complete"
+        for e in own)
+
+
+def case_verdict(record):
+    if record.get("setupVerified") is not True or record.get("traceVerified") is not True or "error" in record:
+        return "INCONCLUSIVE"
+    if any(key.endswith("CleanupError") for key in record):
+        return "INCONCLUSIVE"
+    if not all(window_valid(record.get(key) or {}, record["state"], record["caseId"], record["chromePid"], record["expectedHwnd"], record["probePid"])
+               for key in ("windowBefore", "windowAfter")):
+        return "INCONCLUSIVE"
+    if capture_context(record.get("trace") or [], record) is None:
+        return "INCONCLUSIVE"
+    capture = record.get("capture") or {}
+    image = record.get("image") or {}
+    if (capture.get("exit") != 0 or capture.get("killedAtDeadline") is not False
+        or (capture.get("response") or {}).get("success") is not True
+        or not image.get("pixelValid") or not image.get("dimensionsValid")):
+        return "ISSUES"
+    return "PASS"
 
 
 def run_case(args, fixture, windows, root, output, state, kind, repeat):
@@ -484,8 +563,9 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat):
                   "protocol": "extension-relay-instrumented", "pendingDomControl": args.pending_dom_control, "instrumentedBackgroundSha256": instrumented_hash,
                   "instrumentedExtensionSha256": tree_digest(work / "extension"),
                   "instrumentationDiff": str(artifact / "instrumentation.diff"), "setupVerified": False,
-                  "stage": "relay-start", "traceVerified": False}
+                  "stage": "relay-start", "traceVerified": False, "chromePid": chrome.pid, "probePid": os.getpid()}
         close_cover = None
+        cover_hwnd = None
         common = []
         try:
             files = wait_for(lambda: list(relay.glob("relay-cdp-url-*")), lambda x: len(x) == 1, 30)
@@ -496,6 +576,7 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat):
             checked(invoke("warm-open", "open", fixture.base + "/warmup?" + case_id))
             warm_hwnd = wait_for(lambda: windows.find(chrome.pid, "CaptureProbe " + case_id), lambda x: x is not None, 5)
             record["warmWindow"] = windows.restore(warm_hwnd)
+            fixture.set_control(case_id, lambda: {"valid": True, "snapshot": {"window": windows.state(warm_hwnd)}})
             checked(invoke("warm-capture", "screenshot", str(artifact / "warm.png"), "--full-res"))
             from PIL import Image
             with Image.open(artifact / "warm.png") as warm:
@@ -510,18 +591,27 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat):
                 raise RuntimeError("long fixture did not finish rendering")
             record["stage"] = "window-state"
             hwnd = wait_for(lambda: windows.find(chrome.pid, "CaptureProbe " + case_id), lambda x: x is not None, 5)
+            record["expectedHwnd"] = int(hwnd)
             if state == "normal":
                 placement = windows.restore(hwnd)
             elif state == "covered":
-                close_cover = windows.cover(hwnd, "Fixture cover " + case_id)
+                close_cover, cover_hwnd = windows.cover(hwnd, "Fixture cover " + case_id)
                 placement = windows.state(hwnd)
-                record["coverWindow"] = windows.state(placement["centerWindow"])
             else:
                 placement = windows.minimize(hwnd)
             before = invoke("dom-before", "eval", "({rows:document.querySelectorAll('#rows > .row').length,ready:document.readyState,visibility:document.visibilityState})")
             dom = checked(before)["result"]
             if dom["rows"] != args.rows or dom["ready"] != "complete":
                 raise RuntimeError("DOM control did not answer before capture")
+            def snapshot():
+                return {"window": windows.state(hwnd), "cover": windows.state(cover_hwnd) if cover_hwnd else None}
+            def control():
+                current = snapshot()
+                return {"valid": window_valid(current, state, case_id, chrome.pid, int(hwnd), os.getpid()), "snapshot": current}
+            fixture.set_control(case_id, control)
+            placement = snapshot()
+            if not window_valid(placement, state, case_id, chrome.pid, int(hwnd), os.getpid()):
+                raise RuntimeError("window state changed before capture")
             record.update(setupVerified=True, geometry=geometry, windowBefore=placement, domBefore=before, stage="capture")
             image = artifact / "capture.png"
             command = ["screenshot", str(image), "--full-res"]
@@ -535,10 +625,13 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat):
             record["systemAfterCapture"] = system_status()
             record["cpuBusyPercentDuringCapture"] = cpu_busy(record["systemBeforeCapture"], record["systemAfterCapture"])
             record["capture"] = capture
-            record["windowAfter"] = windows.state(hwnd)
+            record["windowAfter"] = snapshot()
             if image.exists():
                 record["image"] = inspect_image(image, kind, geometry)
-            record["domAfter"] = invoke("dom-after", "eval", "({rows:document.querySelectorAll('#rows > .row').length,ready:document.readyState,visibility:document.visibilityState})")
+            if capture["exit"] == 0 and (capture.get("response") or {}).get("success"):
+                record["domAfter"] = invoke("dom-after", "eval", "({rows:document.querySelectorAll('#rows > .row').length,ready:document.readyState,visibility:document.visibilityState})")
+            else:
+                record["domAfter"] = {"skipped": "avoid resetting an attachment while the timed-out native capture may still be pending"}
         except Exception as exc:
             record["error"] = str(exc)
         finally:
@@ -553,14 +646,8 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat):
                     close_cover()
                 except Exception as exc:
                     record["coverCleanupError"] = str(exc)
-            # Each case gets a fresh browser. A timed-out capture is never overlapped
-            # with another capture or a fallback in the same profile.
-            try:
-                if chrome.poll() is None:
-                    subprocess.run(["taskkill", "/PID", str(chrome.pid), "/T", "/F"], capture_output=True, timeout=20)
-                chrome.wait(timeout=20)
-            except Exception as exc:
-                record["browserCleanupError"] = str(exc)
+            # Session teardown is explicit cleanup, not another capture/fallback.
+            # Keep the relay alive until that closure has answered.
             if common:
                 try:
                     record["sessionCleanup"] = execute(common + ["close"], env, artifact / "close", timeout=20)
@@ -569,10 +656,19 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat):
                         record["sessionCleanupError"] = "CLI session closure was not confirmed"
                 except Exception as exc:
                     record["sessionCleanupError"] = str(exc)
+            try:
+                if chrome.poll() is None:
+                    subprocess.run(["taskkill", "/PID", str(chrome.pid), "/T", "/F"], capture_output=True, timeout=20)
+                chrome.wait(timeout=20)
+            except Exception as exc:
+                record["browserCleanupError"] = str(exc)
             events = fixture.events(case_id)
             record["trace"] = events
-            record["matchesReportSignature"] = bool(record["setupVerified"] and report_signature_matches(events, args.rows))
+            record["matchesReportSignature"] = False
             (artifact / "result.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
+    record["verdict"] = case_verdict(record)
+    record["matchesReportSignature"] = record["verdict"] == "ISSUES" and report_signature_matches(record["trace"], args.rows, record)
+    (artifact / "result.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
     return record
 
 
@@ -639,8 +735,8 @@ def main():
                     records.append(record)
                     (args.output / "progress.json").write_text(json.dumps({"expectedCases": args.samples * 9, "records": records}, indent=2), encoding="utf-8")
                     print(json.dumps({"case": record["caseId"], "setup": record["setupVerified"],
-                                      "signature": record["matchesReportSignature"], "error": record.get("error")}), flush=True)
-                    if not record["setupVerified"] or not record["traceVerified"]:
+                                      "signature": record["matchesReportSignature"], "verdict": record["verdict"], "error": record.get("error")}), flush=True)
+                    if record.get("verdict") == "INCONCLUSIVE":
                         raise ProbeSetupFailure("matrix stopped after unverified setup or capture dispatch")
                     if any(key.endswith("CleanupError") for key in record):
                         raise ProbeSetupFailure("matrix stopped after unconfirmed cleanup")
@@ -650,15 +746,15 @@ def main():
         setup_error = type(exc).__name__ + ": " + str(exc)
     finally:
         fixture.close()
-    invalid = [r for r in records if not r["setupVerified"] or not r["traceVerified"]]
+    invalid = [r for r in records if r.get("verdict") == "INCONCLUSIVE"]
     reproduced = [r for r in records if r["matchesReportSignature"]]
-    failed = [r for r in records if r["setupVerified"] and (not (r.get("capture", {}).get("response") or {}).get("success") or not r.get("image", {}).get("pixelValid") or not r.get("image", {}).get("dimensionsValid"))]
+    failed = [r for r in records if r.get("verdict") == "ISSUES"]
     incomplete = len(records) != args.samples * 9
     verdict = "ISSUES" if failed else "INCONCLUSIVE" if invalid or incomplete or setup_error else "PASS"
     cleanup_failed = any(any(key.endswith("CleanupError") for key in r) for r in records)
     if cleanup_failed:
         verdict = "INCONCLUSIVE"
-    summary = {"verdict": verdict, "expectedCases": args.samples * 9, "cases": len(records), "setupFailures": len(invalid),
+    summary = {"verdict": verdict, "expectedCases": args.samples * 9, "cases": len(records), "inconclusiveCases": len(invalid),
         "captureFailures": len(failed), "matchingReportSignature": len(reproduced), "records": records,
         "setupError": setup_error, "matrixComplete": not invalid and not incomplete,
         "interpretation": "PASS means this matrix did not reproduce the report; it does not prove customer Windows acceptance."}
