@@ -72,7 +72,7 @@ jobs:
           & $env:PROBE_BINARY install 2>&1 | Tee-Object probe-artifacts/chrome-install.log
           if ($LASTEXITCODE -ne 0) { throw 'Chrome for Testing install failed' }
           $chrome = Get-ChildItem -Path (Join-Path $env:USERPROFILE '.chrome-use/browsers') -Filter chrome.exe -Recurse |
-            Where-Object { $_.FullName -match 'chrome-win64' } | Sort-Object FullName -Descending | Select-Object -First 1
+            Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $chrome) { throw 'Installed Chrome for Testing executable not found' }
           "PROBE_CHROME=$($chrome.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           python -m pip install --disable-pip-version-check Pillow
