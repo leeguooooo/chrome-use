@@ -8127,17 +8127,32 @@ async fn e2e_auth_login_bwu_reports_missing_code_on_challenge_page() {
 #[tokio::test]
 #[ignore]
 async fn e2e_auth_login_bwu_keeps_hint_only_challenges_pending() {
-    for (code_only, has_seed, split) in [
-        (false, true, false),
-        (true, true, false),
-        (true, false, false),
-        (false, true, true),
+    for (code_only, has_seed, max_length, named_2fa) in [
+        (false, true, None, false),
+        (true, true, None, false),
+        (true, false, None, false),
+        (false, true, Some(0), false),
+        (false, true, Some(1), false),
+        (false, true, Some(2), false),
+        (false, true, Some(4), false),
+        (false, true, Some(5), false),
+        (false, true, Some(6), false),
+        (false, true, Some(6), true),
     ] {
         let (mut state, server, origin) = otp_fixture(code_only, false).await;
-        if split {
-            assert_evaluate(&mut state, "single-digit", "otp.maxLength = 1", json!(1)).await;
+        if let Some(limit) = max_length {
+            assert_evaluate(
+                &mut state,
+                "code-length",
+                &format!("otp.maxLength = {limit}"),
+                json!(limit),
+            )
+            .await;
         } else {
             assert_evaluate(&mut state, "hint-only", "(() => { const el = otp; el.removeAttribute('autocomplete'); el.removeAttribute('name'); el.id = 'verification'; el.setAttribute('aria-label', 'verification code'); return true; })()", json!(true)).await;
+        }
+        if named_2fa {
+            assert_evaluate(&mut state, "named-2fa", "(() => { const el = otp; el.removeAttribute('autocomplete'); el.name = '2fa'; el.id = 'authenticator'; return true; })()", json!(true)).await;
         }
         if code_only {
             assert_evaluate(&mut state, "hide", "credentials.hidden = true", json!(true)).await;
@@ -8147,7 +8162,14 @@ async fn e2e_auth_login_bwu_keeps_hint_only_challenges_pending() {
         let data = get_data(&response);
         assert_eq!(data["needs"], "a verification code", "{data}");
         assert_ne!(data["signedIn"], true, "{data}");
-        assert_eq!(data["otp"], if has_seed { "unsupported" } else { "none" });
+        let expected = if !has_seed {
+            "none"
+        } else if max_length.is_some_and(|limit| limit >= 6) {
+            "deferred"
+        } else {
+            "unsupported"
+        };
+        assert_eq!(data["otp"], expected, "maxlength={max_length:?}: {data}");
         assert_evaluate(
             &mut state,
             "untouched-code",

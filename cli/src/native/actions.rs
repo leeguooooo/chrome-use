@@ -23902,7 +23902,7 @@ const AUTH_OTP_SELECTORS: &[&str] = &[
     "input[name*=totp i]",
     "input[id*=totp i]",
     "input[name*=mfa i]",
-    "input[name*=2fa i]",
+    "input[name*=\"2fa\" i]",
     "input[name*=code i]",
     "input[id*=code i]",
     "input[inputmode=numeric]",
@@ -23918,7 +23918,7 @@ const AUTH_CODE_HINT_SELECTORS: &[&str] = &[
     "input[id*=otp i]",
     "input[name*=totp i]",
     "input[name*=mfa i]",
-    "input[name*=2fa i]",
+    "input[name*=\"2fa\" i]",
     "input[name*=verification i]",
     "input[id*=verification i]",
     "input[class*=security-code i]",
@@ -24489,9 +24489,9 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             if found.is_ok() {
                 needs = Some("a verification code");
                 if defer_otp {
-                    let probe = format!("(() => {{ const el = cuAuth({tag}); return !!el && el.maxLength !== 1 && el.matches({selectors}); }})()",
+                    let probe = format!("(() => {{ const el = cuAuth({tag}); return !!el && (el.maxLength < 0 || el.maxLength >= 6) && {selectors}.some(s => {{ try {{ return el.matches(s); }} catch {{ return false; }} }}); }})()",
                         tag = serde_json::to_string(&tag).unwrap_or_default(),
-                        selectors = serde_json::to_string(&AUTH_OTP_SELECTORS.join(",")).unwrap_or_default());
+                        selectors = serde_json::to_string(AUTH_OTP_SELECTORS).unwrap_or_default());
                     if scope_eval(&mgr.client, &scope, &probe, true).await
                         .ok().and_then(|r| r.result.value).and_then(|v| v.as_bool()) != Some(true) {
                         otp_state = "unsupported";

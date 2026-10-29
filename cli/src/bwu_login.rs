@@ -1112,6 +1112,8 @@ if n == 0:
     elif scenario == 'password-failed':
         print(json.dumps({'success': False, 'data': None, 'error': 'wrong password'}))
         sys.exit(1)
+    elif scenario == 'unsupported':
+        print(json.dumps({'success': True, 'data': {'otp': 'unsupported', 'needs': 'a verification code', 'filled': ['password'], 'submitted': True}, 'error': None}))
     else:
         print(json.dumps({'success': True, 'data': {'otp': 'deferred', 'needs': 'a verification code', 'filled': ['password'], 'submitted': True}, 'error': None}))
 else:
@@ -1144,6 +1146,7 @@ else:
             ("accepted", "2", true),
             ("already-done", "1", true),
             ("password-failed", "1", false),
+            ("unsupported", "1", true),
         ] {
             let _ = std::fs::remove_file(&calls);
             std::fs::write(dir.path().join("scenario"), scenario).unwrap();

@@ -1181,5 +1181,5 @@ It cannot be combined with `--no-submit` or `--passkey`. The selected login
 must contain the authenticator setup key. Codes stay inside `bwu run` and the
 secret command; do not retrieve them into the conversation. Pending verification
 returns `needs` and `next`; only an observed completed sign-in gets `signedIn`.
-Fields that only indicate verification, including single-digit inputs, stay pending (`otp: unsupported`); no TOTP is fetched or submitted automatically.
+Fields that only indicate verification, including inputs limited to fewer than six characters, stay pending (`otp: unsupported`); no TOTP is fetched or submitted automatically. This includes five-character Steam fields; inspect those before explicit `--totp`.
 See `core/authentication` for setup, authorization and custom-sequence limits.
