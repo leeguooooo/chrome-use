@@ -1,0 +1,87 @@
+name: Input behavior probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  input-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: '2'
+      AGENT_BROWSER_ALLOW_HEADLESS: '1'
+      AGENT_BROWSER_EXECUTABLE_PATH: /usr/bin/google-chrome
+      CHROME_USE_NO_UPDATE_CHECK: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: cli
+          shared-key: input-probe-release
+      - name: Record machine and toolchain
+        shell: bash
+        run: |
+          mkdir -p input-probe
+          {
+            echo 'Scope: Linux, isolated headless Chrome, direct CDP; no relay or hardware equivalence claim.'
+            git rev-parse HEAD
+            date -u
+            uname -a
+            uptime
+            nproc
+            free -h
+            rustc --version
+            cargo --version
+            google-chrome --version
+          } | tee input-probe/provenance.txt
+      - name: Build the exact release test binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! cargo test --locked --release --features e2e-tests --manifest-path cli/Cargo.toml --bin chrome-use --no-run --message-format=json >input-probe/build.jsonl 2>input-probe/build.stderr; then
+            cat input-probe/build.stderr
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          artifacts = [json.loads(line) for line in Path('input-probe/build.jsonl').read_text().splitlines() if line.startswith('{')]
+          binaries = [a['executable'] for a in artifacts if a.get('reason') == 'compiler-artifact' and a.get('target', {}).get('name') == 'chrome-use' and a.get('profile', {}).get('test') and a.get('executable')]
+          if len(binaries) != 1:
+              raise SystemExit(f'Expected exactly one test binary, got {len(binaries)}')
+          Path('input-probe/test-binary.path').write_text(binaries[0] + '\n')
+          PY
+          IFS= read -r probe_test_binary <input-probe/test-binary.path
+          test -x "$probe_test_binary"
+          sha256sum "$probe_test_binary" | tee input-probe/binary.sha256
+      - name: Record native input samples
+        shell: bash
+        run: |
+          set -euo pipefail
+          IFS= read -r probe_test_binary <input-probe/test-binary.path
+          "$probe_test_binary" e2e_humanize_input_probe --ignored --test-threads=1 --nocapture 2>&1 | tee input-probe/events.log
+      - name: Record final machine state
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p input-probe
+          {
+            date -u
+            uptime
+            free -h
+          } >>input-probe/provenance.txt
+      - name: Upload complete probe evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: input-probe-${{ github.sha }}
+          path: input-probe/
+          if-no-files-found: error

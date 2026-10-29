@@ -96,7 +96,8 @@ personal data needs the user's authorization. Never print secrets or put
 passwords in shell arguments (`core/authentication`). An ordinary CAPTCHA in
 an authorized task is a step to try (`core/captcha`). On a login wall
 (`loginWall`), relay its `ask` question if present, else try
-`auth login --bwu`. For a step only the human can do: `session handoff`,
+`auth login --bwu`. Already on a TOTP challenge: use `auth login --bwu --totp --item <id>`
+(`core/authentication`); the vault must hold its setup key. Unrecognized/short code fields stay pending. For a step only the human can do: `session handoff`,
 explain it, wait, then `session resume`. Full text, including QR
 `loginVerification`: `core/trust-boundaries`.
 `Confirmation required:` with a `Site:` line (exit 3) is a per-site
@@ -112,8 +113,8 @@ waits for that choice, and your own `confirm` never approves it.
 | Full loop rules, observation fields, adapter hints, misc notes | `core/loop` |
 | `tab list --all`, other sessions' tabs, `close`, reconnect, cleanup | `core/tabs` |
 | Toolbar side panel, conversations, schedules, `mobile serve` | `core/agent-panel` |
-| Verbs, uploads, widgets, date pickers, `eval` alternatives | `core/interacting` |
-| Scoped reads, frames, shadow roots, screenshots | `core/reading` |
+| Verbs, bounded scrolling, uploads, widgets, date pickers, `eval` alternatives | `core/interacting` |
+| Scoped reads, frames, shadow roots, screenshots and region cropping | `core/reading` |
 | `wait`, mid-transition reads, scroll-driven animations, observation limits | `core/waiting` |
 | Ref identity, snapshot detail | `core/snapshot-refs` |
 | `status`/`doctor`, extension, profiles, launch, stealth | `core/connection` |

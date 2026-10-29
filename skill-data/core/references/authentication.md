@@ -107,6 +107,7 @@ chrome-use auth login --bwu                 # the only vault login for this site
 chrome-use auth login --bwu --item <id>     # one of several; the error lists them
 chrome-use auth login --bwu --no-submit     # fill only, press nothing
 chrome-use auth login --bwu --passkey       # sign in with the vault passkey
+chrome-use auth login --bwu --totp --item <id> # only the current authenticator challenge
 ```
 
 - **Picking the account.** It asks `bwu login --domain <page> --list`, which
@@ -124,7 +125,7 @@ chrome-use auth login --bwu --passkey       # sign in with the vault passkey
   cannot tell apart is never picked.
 - **Values never pass through you.** chrome-use runs itself again under
   `bwu run`, which logs the read and hands the values to that child process
-  only. By default it asks the user once with Touch ID (not for items in a
+  only. Each phase may ask the user for Touch ID (not for items in a
   `reveal_folders` folder); a user who set `bwu config set require_touch_id
   false` has chosen unattended runs, and it does not ask at all. The response
   names which steps were filled, never the values.
@@ -135,6 +136,27 @@ chrome-use auth login --bwu --passkey       # sign in with the vault passkey
   that appears after submitting gets the item's TOTP, and so does a page that
   asks only for the code (run it again there, e.g. after choosing "use your
   authenticator app"). A site that submits the code by itself is fine.
+Default password login fetches TOTP only after a code field appears, then continues
+once with the same vault item and origin. Each phase uses an audited `bwu run`;
+authorization may be requested again for the code. On an existing authenticator
+challenge, use `chrome-use auth login --bwu --totp --item <id|name>` to read only
+TOTP, without replaying username/password or the item's `_autotype` sequence.
+`--totp` cannot be combined with `--passkey` or `--no-submit` because code fields
+may submit automatically. Rejected codes are not retried automatically.
+
+The login's authenticator field in Bitwarden must contain the TOTP setup key or
+`otpauth://` URI. A saved password or a screenshot of a current code cannot
+generate future codes. Migrate the setup key through the vault UI; never paste
+it into chat or shell arguments. SMS, email and push approval require their own
+source. Pending verification is shown as `needs` + `next`, never `signedIn`;
+auto-login leaves that page in place.
+Fields that only indicate verification, including inputs limited to fewer than six characters, stay pending
+(`otp: unsupported`); no TOTP is fetched or submitted automatically. This also
+applies to five-character Steam fields; inspect those before using explicit `--totp`.
+Custom `_autotype` sequences retain their
+original timing and fetch all fields before the sequence starts. If their code
+expires, inspect the page and use `--totp` on its authenticator challenge.
+
 - **Unusual logins.** Give the vault item a custom field `_autotype` with steps
   separated by `:`. Use `username`, `password`, `totp`, `tab`, `enter`,
   `delay` (1 s), or another custom field's name, which is typed into the
@@ -163,7 +185,7 @@ chrome-use auth login --bwu --passkey       # sign in with the vault passkey
   that refuses the passkey is reported with its message.
 - `--no-submit` fills only: no passkey and no one-time code (sites submit a
   code on its last digit).
-- Result: `{"item", "filled": [...], "submitted", "submittedWith", "signedIn", "evidence", "otp": "filled" | "not asked" | "none", "passkey": "used" | "not asked" | "unsupported" | "unavailable" | "none", "url"}`.
+- Result: `{"item", "filled": [...], "submitted", "submittedWith", "signedIn", "evidence", "otp": "deferred" | "filled" | "not asked" | "unsupported" | "none", "passkey": "used" | "not asked" | "unsupported" | "unavailable" | "none", "url"}`.
 - **Success means the site took it.** After submitting, it watches the page
   until the sign-in form is gone from a loaded page (read twice in a row) and
   reports `signedIn: true` with that `evidence` (e.g. "the sign-in form is gone

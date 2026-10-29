@@ -226,6 +226,7 @@
 <span class="du-prompt">$</span> chrome-use download-url https://example.com/file.pdf ./file.pdf
 <span class="du-prompt">$</span> chrome-use downloads <span class="du-flag">--limit</span> 10 <span class="du-flag">--json</span> <span class="du-cmt"># 机器可读的 Chrome 下载记录</span></code></pre>
       </div>
+      <p><code>scrollintoview</code> 的整个类人滚轮阶段有 10 秒上限，包含目标查找和等待 CDP 回应。该阶段卡住或报错时直接停止，不再接着发直接滚动。若已尝试输入，则返回 <code>action_outcome_unknown</code>，因为 Chrome 可能仍在处理原操作，重试前应先查看页面。只有滚轮阶段正常结束但没能到达目标时，才可使用原有的直接滚动回退；它另有 15 秒上限。</p>
       <p><code>fill</code> 会在返回成功前回读控件或富编辑器 model，并精确比较结果。如果能从 Monaco 模块中找到与目标编辑器对应的 API，则使用原生输入并直接回读同一个 model（<code>engine: monaco-native</code>），不使用剪贴板。Monaco 0.52 压缩 AMD 加载器在全局 API 被移除后保留的已完成模块导出，也可使用这条路径。发现过程只在限定范围内读取模块表，不调用加载器、模块工厂或访问器，不加载模块，也不发起请求。如果输入前找不到可用 API，仍使用现有的已验证剪贴板回退；无法原子保护并发剪贴板操作。插入前必须验证原生全选已覆盖整个实时 model。已找到的 model 验证失败时，不会通过剪贴板重试。paste 无法校验或回读不一致时会报错，不会静默成功。报错会同时引用两边的值（如 <code>read back "" after writing "千代田区"</code>）；若非 ASCII 字符全部消失而 ASCII 仍在，会明确指出页面过滤了非拉丁输入（仅限拉丁 / 带掩码的字段），重打一遍没有用。<code>type</code> 也会回读：字段里没有刚输入的文本时打印 ⚠ 警告（退出码仍为 0，JSON 多出 <code>readBack</code>）。文本输入框用可信输入事件写入；保存 / 提交按钮在填写前后都禁用时 <code>fill</code> 会警告，<code>click</code> 会拒绝点击禁用的控件（#358）。</p>
       <p><code>press</code> 对只靠页面 JavaScript 才有效果的键（文本框上的 Arrow/Home/End/PageUp/PageDown、Escape、表单外裸输入框上的 Enter）会探测从焦点元素到 window 有没有 keydown/keyup/keypress 监听器；一个都没有时仍退出 0，但打印 ⚠ 警告说明页面无法响应该键，建议直接 <code>click</code> 目标选项（JSON 多出 <code>keyListeners</code>）。组合键、Tab、Backspace、可打印字符不探测。</p>
       <div class="du-callout warn">
@@ -271,6 +272,7 @@
       <!-- ============================================================ -->
       <h2>截图与 PDF</h2>
       <p><code>screenshot --annotate</code> 在 CLI 中把编号绘制到截图上，不会向页面插入节点或样式。JSON 标注框仍使用相对截图区域的 CSS 像素，图中的编号按图片分辨率缩放。显式裁剪区域优先于全页和元素截图。 框架引用使用所属渲染进程和顶层视口坐标。嵌套跨进程 iframe 通过协议四边形和隔离世界中的视口尺寸测量支持旋转、倾斜、镜像和透视变换，视口尺寸包含滚动条占用的空间，标注框包围投影后的四个角点。变换退化、数值不稳定、跨越透视无穷远线或框架几何信息缺失时会明确报错，不会猜测标注位置。 裁剪也在 CLI 中完成，视口外区域从全页截图中裁出。超出页面范围的区域会被拒绝。</p>
+      <p>普通元素截图和 <code>--clip</code> 区域截图也在 CLI 中裁剪像素，页面滚动后仍按文档坐标取图。视口内区域从现有表面裁出，视口外区域先截全页再裁出；不会滚动或激活标签页。</p>
 
       <p>扩展中继为每次截图捕获保留最多 25 秒，低于 CLI 的 30 秒 CDP 期限。视口或 DPR 改变后，Chrome 原生截图可能比普通命令更慢。这里等待的是同一次捕获，不会重放命令或激活标签。超时仍会报错，也不会取消 Chrome 中尚未完成的捕获，因此应避免重叠重试截图。</p>
       <div class="du-code">

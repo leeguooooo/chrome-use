@@ -8011,6 +8011,177 @@ async fn bwu_login_on(state: &mut DaemonState, base_url: &str, path: &str) -> Va
     .await
 }
 
+/// The fixture owns all page globals; auth must leave no additional ones.
+async fn otp_fixture(
+    code_only: bool,
+    reject: bool,
+) -> (DaemonState, tokio::task::JoinHandle<()>, String) {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>Login</title>
+<form id="credentials"><input id="user" type="email"><input id="pw" type="password"><button>Sign in</button></form>
+<form id="challenge" hidden><input id="otp" name="totp" autocomplete="one-time-code"><button>Verify</button><p role="alert"></p></form>
+<script>
+window.passwordSubmits = 0; window.codeSubmits = 0; window.trustedCode = false;
+const params = new URLSearchParams(location.search);
+if (params.has('codeOnly')) challenge.hidden = false;
+credentials.onsubmit = e => { e.preventDefault(); passwordSubmits++; credentials.hidden = true; setTimeout(() => challenge.hidden = false, 300); };
+challenge.onsubmit = e => {
+  e.preventDefault(); codeSubmits++;
+  if (params.has('reject')) { challenge.querySelector('[role=alert]').textContent = 'Invalid authenticator code'; }
+  else { challenge.hidden = true; credentials.hidden = true; document.title = 'Dashboard'; }
+};
+otp.oninput = e => { trustedCode = e.isTrusted; };
+window.baseNames = Object.getOwnPropertyNames(window);
+window.mutations = [];
+new MutationObserver(rs => rs.forEach(r => { if (r.type === 'attributes' && r.attributeName !== 'hidden') mutations.push(r.attributeName); })).observe(document.documentElement, {subtree:true, attributes:true});
+baseNames.push('baseNames', 'mutations');
+</script>"##.to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let origin = format!("http://127.0.0.1:{port}");
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let page = format!(
+        "{origin}/login?{}{}",
+        if code_only { "codeOnly&" } else { "" },
+        if reject { "reject" } else { "" }
+    );
+    assert_success(
+        &execute_command(
+            &json!({"id":"n", "action":"navigate", "url":page}),
+            &mut state,
+        )
+        .await,
+    );
+    (state, server, origin)
+}
+
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_defers_code_until_challenge() {
+    let (mut state, server, origin) = otp_fixture(false, false).await;
+    let first = Box::pin(execute_command(&json!({"id":"p", "action":"auth_login_bwu", "origin":origin, "username":"fixture@example.com", "password":"fixture-password", "deferOtp":true}), &mut state)).await;
+    assert_success(&first);
+    let d = get_data(&first);
+    assert_eq!(d["needs"], "a verification code", "{d}");
+    assert_eq!(d["otp"], "deferred");
+    assert_ne!(d["signedIn"], true);
+    assert_evaluate(
+        &mut state,
+        "untouched",
+        "[passwordSubmits, codeSubmits, otp.value]",
+        json!([1, 0, ""]),
+    )
+    .await;
+    let second = Box::pin(execute_command(&json!({"id":"c", "action":"auth_login_bwu", "origin":origin, "otp":"123456", "totpOnly":true}), &mut state)).await;
+    assert_success(&second);
+    assert_eq!(get_data(&second)["signedIn"], true, "{second}");
+    assert_evaluate(&mut state, "once", "[passwordSubmits, codeSubmits, trustedCode, mutations, Object.getOwnPropertyNames(window).filter(n => !baseNames.includes(n))]", json!([1,1,true,[],[]])).await;
+    let _ = execute_command(&json!({"id":"close", "action":"close"}), &mut state).await;
+    server.abort();
+}
+
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_totp_only_never_types_credentials_or_retries_rejection() {
+    let (mut state, server, origin) = otp_fixture(true, true).await;
+    let code = Box::pin(execute_command(&json!({"id":"c", "action":"auth_login_bwu", "origin":origin, "username":"must-not-type", "password":"must-not-type", "otp":"123456", "totpOnly":true}), &mut state)).await;
+    assert_eq!(code["success"], false, "{code}");
+    assert!(
+        code["error"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid authenticator code"),
+        "{code}"
+    );
+    assert_evaluate(
+        &mut state,
+        "once",
+        "[user.value, pw.value, passwordSubmits, codeSubmits, trustedCode]",
+        json!(["", "", 0, 1, true]),
+    )
+    .await;
+    let _ = execute_command(&json!({"id":"close", "action":"close"}), &mut state).await;
+    server.abort();
+}
+
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_reports_missing_code_on_challenge_page() {
+    let (mut state, server, origin) = otp_fixture(true, false).await;
+    assert_evaluate(&mut state, "hide", "credentials.hidden = true", json!(true)).await;
+    let first = Box::pin(execute_command(&json!({"id":"p", "action":"auth_login_bwu", "origin":origin, "username":"fixture@example.com"}), &mut state)).await;
+    assert_success(&first);
+    let d = get_data(&first);
+    assert_eq!(d["needs"], "a verification code", "{d}");
+    assert_ne!(d["signedIn"], true);
+    assert_evaluate(
+        &mut state,
+        "untouched",
+        "[passwordSubmits, codeSubmits, otp.value]",
+        json!([0, 0, ""]),
+    )
+    .await;
+    let _ = execute_command(&json!({"id":"close", "action":"close"}), &mut state).await;
+    server.abort();
+}
+
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_keeps_hint_only_challenges_pending() {
+    for (code_only, has_seed, max_length, named_2fa) in [
+        (false, true, None, false),
+        (true, true, None, false),
+        (true, false, None, false),
+        (false, true, Some(0), false),
+        (false, true, Some(1), false),
+        (false, true, Some(2), false),
+        (false, true, Some(4), false),
+        (false, true, Some(5), false),
+        (false, true, Some(6), false),
+        (false, true, Some(6), true),
+    ] {
+        let (mut state, server, origin) = otp_fixture(code_only, false).await;
+        if let Some(limit) = max_length {
+            assert_evaluate(
+                &mut state,
+                "code-length",
+                &format!("otp.maxLength = {limit}"),
+                json!(limit),
+            )
+            .await;
+        } else {
+            assert_evaluate(&mut state, "hint-only", "(() => { const el = otp; el.removeAttribute('autocomplete'); el.removeAttribute('name'); el.id = 'verification'; el.setAttribute('aria-label', 'verification code'); return true; })()", json!(true)).await;
+        }
+        if named_2fa {
+            assert_evaluate(&mut state, "named-2fa", "(() => { const el = otp; el.removeAttribute('autocomplete'); el.name = '2fa'; el.id = 'authenticator'; return true; })()", json!(true)).await;
+        }
+        if code_only {
+            assert_evaluate(&mut state, "hide", "credentials.hidden = true", json!(true)).await;
+        }
+        let response = Box::pin(execute_command(&json!({"id":"pending", "action":"auth_login_bwu", "origin":origin, "username":"fixture@example.com", "password":"fixture-password", "deferOtp":has_seed}), &mut state)).await;
+        assert_success(&response);
+        let data = get_data(&response);
+        assert_eq!(data["needs"], "a verification code", "{data}");
+        assert_ne!(data["signedIn"], true, "{data}");
+        let expected = if !has_seed {
+            "none"
+        } else if max_length.is_some_and(|limit| limit >= 6) {
+            "deferred"
+        } else {
+            "unsupported"
+        };
+        assert_eq!(data["otp"], expected, "maxlength={max_length:?}: {data}");
+        assert_evaluate(
+            &mut state,
+            "untouched-code",
+            "[codeSubmits, challenge.querySelector('input').value]",
+            json!([0, ""]),
+        )
+        .await;
+        let _ = execute_command(&json!({"id":"close", "action":"close"}), &mut state).await;
+        server.abort();
+    }
+}
+
 /// #482: a submit the site did not take is a failure that says what the page
 /// shows, never `submitted: true` on its own.
 #[tokio::test]
@@ -16623,4 +16794,133 @@ async fn e2e_reads_leave_out_text_a_person_cannot_see() {
     assert_eq!(get_data(&after)["result"], before, "{after}");
     let closed = execute_command(&json!({"id":"11","action":"close"}), &mut state).await;
     assert_success(&closed);
+}
+
+/// Exploratory event probe for #771, not a detector verdict or speed benchmark.
+/// The fixture owns the listeners; chrome-use's input path adds none.
+#[tokio::test]
+#[ignore]
+async fn e2e_humanize_input_probe() {
+    use super::{humanize, interaction};
+    struct RestoreInputState(humanize::HumanizeLevel, (f64, f64));
+    impl Drop for RestoreInputState {
+        fn drop(&mut self) {
+            humanize::set_detected_level(self.0);
+            humanize::set_last_cursor(self.1);
+        }
+    }
+    let _restore = RestoreInputState(humanize::active_level(), humanize::last_cursor());
+    assert!(
+        std::env::var_os("AGENT_BROWSER_HUMANIZE").is_none(),
+        "probe requires no env override"
+    );
+    let pointer = r##"<!doctype html><style>body{margin:0;width:1000px;height:700px}button{position:absolute;left:700px;top:300px;width:120px;height:50px}</style><button id="target">Probe target</button><script>
+window.probeRecording=false;window.lastPointerMove=null;window.probe={};
+const point=e=>({type:e.type,t:e.timeStamp,x:e.clientX,y:e.clientY,trusted:e.isTrusted,pressure:e.pressure,width:e.width,height:e.height,pointerType:e.pointerType,buttons:e.buttons,movementX:e.movementX,movementY:e.movementY});
+for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.addEventListener(type,e=>{
+ if(type==='pointermove')window.lastPointerMove=point(e);
+ if(!probeRecording)return;
+ const p=window.probe;p.trusted=p.trusted&&e.isTrusted;
+ let coalesced=null;try{if(typeof e.getCoalescedEvents==='function')coalesced=e.getCoalescedEvents().map(point)}catch(_){}
+ p.events.push({...point(e),coalesced});
+ if(type==='pointerrawupdate')p.raw++;
+ if(type==='pointermove'){p.moves++;const jump=Math.hypot(e.clientX-p.x,e.clientY-p.y);if(p.moves===1)p.firstJump=jump;else p.moveIntervals.push(e.timeStamp-p.last);p.maxJump=Math.max(p.maxJump,jump);p.x=e.clientX;p.y=e.clientY;p.last=e.timeStamp;p.coalesced.push(coalesced===null?null:coalesced.length)}
+ if(type==='pointerdown'){p.downs++;p.gap=e.timeStamp-p.last;}
+},{capture:true});target.onclick=e=>{if(probeRecording){probe.clicks++;probe.trusted=probe.trusted&&e.isTrusted;probe.events.push({...point(e),coalesced:null})}};
+</script>"##;
+    let (port, server) = spawn_html_server(pointer.to_string()).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let browser = state
+        .browser
+        .as_ref()
+        .unwrap()
+        .client
+        .send_command("Browser.getVersion", None, None)
+        .await
+        .unwrap();
+    let mut results = Vec::new();
+    for level in [
+        humanize::HumanizeLevel::Off,
+        humanize::HumanizeLevel::Fast,
+        humanize::HumanizeLevel::Human,
+    ] {
+        let mut samples = Vec::new();
+        for run in 0..6 {
+            eval_in(&mut state, "probeRecording=false;lastPointerMove=null").await;
+            humanize::set_detected_level(humanize::HumanizeLevel::Off);
+            {
+                let mgr = state.browser.as_ref().unwrap();
+                let session = mgr.active_session_id().unwrap().to_string();
+                interaction::move_pointer(&mgr.client, &session, 20.0, 20.0)
+                    .await
+                    .unwrap();
+            }
+            let rest = eval_in(&mut state, r#"(async()=>{
+                await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+                const rest=lastPointerMove;
+                if(!rest||!rest.trusted||rest.x!==20||rest.y!==20)throw new Error('trusted resting pointer was not established');
+                probe={rest,moves:0,downs:0,raw:0,events:[],coalesced:[],firstJump:null,moveIntervals:[],gap:null,trusted:true,clicks:0,last:0,x:rest.x,y:rest.y,maxJump:0};
+                probeRecording=true;return rest;
+            })()"#).await;
+            assert_eq!(rest["trusted"], true, "{rest}");
+            assert_eq!(rest["x"].as_f64(), Some(20.0), "{rest}");
+            assert_eq!(rest["y"].as_f64(), Some(20.0), "{rest}");
+            humanize::set_detected_level(level);
+            let started = std::time::Instant::now();
+            {
+                let mgr = state.browser.as_ref().unwrap();
+                let session = mgr.active_session_id().unwrap().to_string();
+                interaction::click_at_point(&mgr.client, &session, 760.0, 325.0, "left", 1)
+                    .await
+                    .unwrap();
+            }
+            let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+            let mut sample = eval_in(&mut state, "probe").await;
+            assert_eq!(sample["clicks"], 1, "{sample}");
+            assert_eq!(sample["downs"], 1, "{sample}");
+            assert!(sample["moves"].as_u64().is_some_and(|n| n > 0), "{sample}");
+            assert!(
+                sample["gap"].as_f64().is_some_and(f64::is_finite),
+                "{sample}"
+            );
+            assert_eq!(sample["trusted"], true, "{sample}");
+            sample["clickMs"] = json!(elapsed);
+            if run > 0 {
+                samples.push(sample);
+            }
+        }
+        results.push(json!({"level":format!("{level:?}"),"samples":samples}));
+    }
+    let sticky = r##"<!doctype html><style>body{margin:0;height:2200px}header{position:fixed;left:0;top:0;height:120px;width:100%;z-index:9;background:#ccc}button{position:absolute;top:600px;left:80px;width:140px;height:50px}</style><header>Sticky header</header><button>Sticky target</button><script>window.targetClicks=0;window.headerClicks=0;document.querySelector('button').onclick=()=>targetClicks++;document.querySelector('header').onclick=()=>headerClicks++;</script>"##;
+    let (sticky_port, sticky_server) = spawn_html_server(sticky.to_string()).await;
+    assert_success(&run_cmd(&mut state,json!({"id":"sticky-open","action":"navigate","url":format!("http://127.0.0.1:{sticky_port}/")})).await);
+    assert_success(
+        &run_cmd(
+            &mut state,
+            json!({"id":"sticky-snapshot","action":"snapshot","interactive":true,"settleMs":0}),
+        )
+        .await,
+    );
+    let reference = state
+        .ref_map
+        .entries_sorted()
+        .into_iter()
+        .find(|(_, e)| e.name == "Sticky target")
+        .map(|(r, _)| r)
+        .expect("sticky fixture target ref");
+    eval_in(&mut state, "scrollTo(0,600)").await;
+    let sticky_result = run_cmd(
+        &mut state,
+        json!({"id":"sticky-click","action":"click","selector":format!("@{reference}")}),
+    )
+    .await;
+    let sticky_state = eval_in(&mut state, "({targetClicks,headerClicks,scrollY})").await;
+    println!(
+        "HUMANIZE_PROBE {}",
+        json!({"browser":browser,"executable":std::env::current_exe().unwrap().to_string_lossy(),"mode":"isolated headless direct CDP","warmupPerLevel":1,"samplesPerLevel":5,"pointer":results,"stickyResult":sticky_result,"stickyState":sticky_state})
+    );
+    run_cmd(&mut state, json!({"id":"close","action":"close"})).await;
+    server.abort();
+    sticky_server.abort();
 }

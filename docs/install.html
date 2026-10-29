@@ -191,6 +191,7 @@ programs.chrome-use = {
       </p>
 
       <p>在 macOS/Linux 上，<code>chrome-use extension install</code> 还会为正在运行、以 <code>--user-data-dir=&lt;path&gt;</code> 单独启动的 Chromium 系浏览器注册本地 host，扫描到的自定义目录必须已经存在。如果浏览器尚未运行或无法被扫描到，可执行 <code>chrome-use extension install --user-data-dir &quot;/path/Chrome Data&quot;</code>；也接受 <code>--user-data-dir=&lt;path&gt;</code>，可重复指定多个目录。显式指定的目录不存在时会报错。命令会列出写入的清单，并回读校验 host 名称和启动器路径。这只确认注册完成；之后请在该 Chrome 里重新打开侧栏，或等扩展自动重连。Windows 使用 HKCU 注册表注册，不支持此选项。 自动扫描仅限当前用户的进程；发现目录写入或校验失败时警告并跳过，可用 <code>--user-data-dir</code> 重试，默认或显式目录失败仍报错。成功写入的自定义数据目录记录在 <code>~/.chrome-use/custom-host-dirs.json</code>，供状态查询和浏览器停止后的卸载清理使用；记录失败会警告卸载可能残留清单。</p>
+      <p>在 macOS/Linux 上，生成的 native-host 启动器会固定安装时的 <code>HOME</code> 和可选的绝对路径 <code>CHROME_USE_RELAY_DIR</code>，避免 Chrome 启动它时切换到别的环境。安装时未指定中继目录， 启动器会清除从 Chrome 继承的目录覆盖。已有启动器需要在目标环境下重跑 <code>extension install</code> 才会更新；隔离测试安装还应加 <code>--no-open --no-profile</code>，并设置 <code>CHROME_USE_NO_BROWSER_SCAN=1</code>。</p>
 
       <ol>
         <li>
