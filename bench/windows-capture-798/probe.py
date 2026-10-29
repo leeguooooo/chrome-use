@@ -129,6 +129,8 @@ class Fixture:
                 self.send_response(204)
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Access-Control-Allow-Headers", "Content-Type")
+                self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Private-Network", "true")
                 self.end_headers()
 
             def do_POST(self):
@@ -438,6 +440,14 @@ def inspect_image(path, kind, geometry):
                 "pixels": samples, "pixelValid": valid, "dimensionsValid": dimensions}
 
 
+def capture_trace_complete(events):
+    started = {e.get("captureId") for e in events
+               if e.get("type") == "capture-start" and e.get("fixturePath") == "/report"}
+    settled = {e.get("captureId") for e in events
+               if e.get("type") in ("capture-answer", "capture-error")}
+    return bool(started) and started.issubset(settled)
+
+
 def run_case(args, fixture, windows, root, output, state, kind, repeat):
     case_id = state + "-" + kind + "-" + str(repeat) + "-" + uuid.uuid4().hex[:8]
     work = root / case_id
@@ -460,7 +470,7 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat):
                   "protocol": "extension-relay-instrumented", "pendingDomControl": args.pending_dom_control, "instrumentedBackgroundSha256": instrumented_hash,
                   "instrumentedExtensionSha256": tree_digest(work / "extension"),
                   "instrumentationDiff": str(artifact / "instrumentation.diff"), "setupVerified": False,
-                  "stage": "relay-start"}
+                  "stage": "relay-start", "traceVerified": False}
         close_cover = None
         common = []
         try:
@@ -506,6 +516,7 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat):
             elif kind == "selector":
                 command.extend(["--selector", "#target"])
             record["systemBeforeCapture"] = system_status()
+            record["captureAttempted"] = True
             capture = invoke("capture", *command)
             record["systemAfterCapture"] = system_status()
             record["cpuBusyPercentDuringCapture"] = cpu_busy(record["systemBeforeCapture"], record["systemAfterCapture"])
@@ -517,6 +528,12 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat):
         except Exception as exc:
             record["error"] = str(exc)
         finally:
+            if record.get("captureAttempted"):
+                try:
+                    wait_for(lambda: fixture.events(case_id), capture_trace_complete, 5)
+                    record["traceVerified"] = True
+                except Exception as exc:
+                    record["traceError"] = str(exc)
             if close_cover:
                 try:
                     close_cover()
@@ -611,8 +628,8 @@ def main():
                     (args.output / "progress.json").write_text(json.dumps({"expectedCases": args.samples * 9, "records": records}, indent=2), encoding="utf-8")
                     print(json.dumps({"case": record["caseId"], "setup": record["setupVerified"],
                                       "signature": record["matchesReportSignature"], "error": record.get("error")}), flush=True)
-                    if not record["setupVerified"]:
-                        raise ProbeSetupFailure("matrix stopped after an unverified setup")
+                    if not record["setupVerified"] or not record["traceVerified"]:
+                        raise ProbeSetupFailure("matrix stopped after unverified setup or capture dispatch")
                     if any(key.endswith("CleanupError") for key in record):
                         raise ProbeSetupFailure("matrix stopped after unconfirmed cleanup")
     except ProbeSetupFailure as exc:
@@ -621,7 +638,7 @@ def main():
         setup_error = type(exc).__name__ + ": " + str(exc)
     finally:
         fixture.close()
-    invalid = [r for r in records if not r["setupVerified"]]
+    invalid = [r for r in records if not r["setupVerified"] or not r["traceVerified"]]
     reproduced = [r for r in records if r["matchesReportSignature"]]
     failed = [r for r in records if r["setupVerified"] and (not (r.get("capture", {}).get("response") or {}).get("success") or not r.get("image", {}).get("pixelValid") or not r.get("image", {}).get("dimensionsValid"))]
     incomplete = len(records) != args.samples * 9

@@ -95,6 +95,14 @@ async function run(owned, url, resolveEarly) {
             env.update(PROBE_OBSERVER=source[source.index("async function observeFixtureCapture"):source.index(probe.START_ANCHOR)], PROBE_EXPECT_DOM="false")
             subprocess.run(["node", "-e", driver], env=env, check=True)
 
+    def test_main_capture_trace_must_be_present_and_correlated(self):
+        start = {"type": "capture-start", "captureId": "main", "fixturePath": "/report"}
+        warm = {"type": "capture-start", "captureId": "warm", "fixturePath": "/warmup"}
+        self.assertFalse(probe.capture_trace_complete([]))
+        self.assertFalse(probe.capture_trace_complete([warm, {"type": "capture-answer", "captureId": "warm"}]))
+        self.assertFalse(probe.capture_trace_complete([start, {"type": "capture-answer", "captureId": "other"}]))
+        self.assertTrue(probe.capture_trace_complete([start, {"type": "capture-error", "captureId": "main"}]))
+
     def test_chrome_version_uses_file_metadata_without_starting_chrome(self):
         binary = Path("C:/fixture/tool $(not-code).exe")
         with mock.patch.dict(os.environ, {"SystemRoot": "C:/Windows"}), mock.patch.object(

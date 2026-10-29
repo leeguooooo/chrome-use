@@ -38,7 +38,10 @@ They are not a proposed activation/minimization recovery on a user's machine.
 If the CI desktop cannot provide the requested state, the probe stops and reports
 `INCONCLUSIVE`, retaining the setup failure instead of counting it as a pass.
 
-The long document's row count and readyState must be verified. Successful images
+The long document's row count and readyState must be verified. Main-report
+capture start and completion/error events must also arrive with matching capture
+IDs. Missing diagnostic transport or absent capture work is inconclusive, even
+if a CLI process exits successfully. Successful images
 are decoded and checked for dimensions plus colored sentinel pixels, not merely
 file existence. A long-report viewport pixel differs from the warmup page, so a
 stale warmup frame cannot pass by having the same green header. Full-page images
