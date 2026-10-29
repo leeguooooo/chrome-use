@@ -37,10 +37,11 @@ not evidence of availability in the tested Chrome. The
 has rectangle and color configuration, without an expiry parameter. Neither
 observation proves that a compatible indicator is technically impossible.
 
-## Product disposition draft
+## Product decision: defer production delivery
 
-Do not add a production indicator toggle in this change. Keep strict-stealth
-behavior and the existing non-stealth cursor unchanged. The purpose-built native
+Production delivery is deferred for the currently measured Chrome 156 baseline.
+No production indicator toggle is added; strict-stealth behavior and the existing
+non-stealth cursor remain unchanged. The purpose-built native
 click API is unsupported on the measured baseline; the hinge prototype still
 lacks the acceptance evidence needed to advertise a compatible feature.
 
@@ -49,10 +50,10 @@ actually supports it. Do not silently use DOM injection or enable the general
 Overlay inspection mode as a fallback. This is a decision to defer delivery,
 not a claim that native visualization cannot work.
 
-If maintainers close the current RFC, record it as research completed with
-production work not planned for the present baseline. Reopen only with a
-supported candidate and the remaining acceptance matrix below. Do not close it
-as a shipped feature or a demonstrated impossibility.
+Keep #721 open to track the remaining relay, geometry, capture, lifecycle,
+input-timing and resource gates. Revisit production delivery only with a supported
+candidate and evidence for that acceptance matrix. This research update neither
+delivers the feature nor establishes a technical impossibility.
 
 ## Minimum production scope and remaining gates
 
