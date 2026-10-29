@@ -1,0 +1,217 @@
+{
+  "baseline-surface": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  },
+  "baseline-view": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  },
+  "visible-surface": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 2704,
+    "bounds": [
+      198,
+      198,
+      249,
+      249
+    ]
+  },
+  "visible-view": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 2704,
+    "bounds": [
+      198,
+      198,
+      249,
+      249
+    ]
+  },
+  "surface-after-view": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 2704,
+    "bounds": [
+      198,
+      198,
+      249,
+      249
+    ]
+  },
+  "pre-hide-0": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 2704,
+    "bounds": [
+      198,
+      198,
+      249,
+      249
+    ]
+  },
+  "hidden-ack-0": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  },
+  "pre-hide-1": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 2704,
+    "bounds": [
+      198,
+      198,
+      249,
+      249
+    ]
+  },
+  "hidden-ack-1": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  },
+  "pre-hide-2": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 2704,
+    "bounds": [
+      198,
+      198,
+      249,
+      249
+    ]
+  },
+  "hidden-ack-2": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  },
+  "pre-hide-3": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 2704,
+    "bounds": [
+      198,
+      198,
+      249,
+      249
+    ]
+  },
+  "hidden-ack-3": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  },
+  "pre-hide-4": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 2704,
+    "bounds": [
+      198,
+      198,
+      249,
+      249
+    ]
+  },
+  "hidden-ack-4": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  },
+  "pre-parallel-0": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 2704,
+    "bounds": [
+      198,
+      198,
+      249,
+      249
+    ]
+  },
+  "hidden-parallel-0": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  },
+  "pre-parallel-1": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 2704,
+    "bounds": [
+      198,
+      198,
+      249,
+      249
+    ]
+  },
+  "hidden-parallel-1": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  },
+  "pre-parallel-2": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 2704,
+    "bounds": [
+      198,
+      198,
+      249,
+      249
+    ]
+  },
+  "hidden-parallel-2": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  },
+  "pre-parallel-3": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 2704,
+    "bounds": [
+      198,
+      198,
+      249,
+      249
+    ]
+  },
+  "hidden-parallel-3": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  },
+  "pre-parallel-4": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 2704,
+    "bounds": [
+      198,
+      198,
+      249,
+      249
+    ]
+  },
+  "hidden-parallel-4": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  }
+}
