@@ -54,8 +54,48 @@ and binary hash. Intermediate success is not final wheel-version evidence.
 
 ## Final trusted-wheel candidate
 
-Pending the same manual workflow on the wheel candidate. Verify trusted wheel
-records, original-handle/document-epoch checks, positive header click counts,
-modal and unmarked-overlay refusal, same-name replacement and movement safety.
-Check exact SHA/browser metadata and real event counts before treating any gap
-as changed. There is no speedup or hardware-equivalence claim.
+- Workflow: https://github.com/leeguooooo/chrome-use/actions/runs/40905516867
+- Source: `6f4290d8eeaaabd790710384814dcc0e3a84c195`
+- Fresh Release test binary SHA-256: `dd3035aa7386925f2d33be5351185435f0eb295c044b4d021a8020490f929717`
+- Chrome `156.0.8078.47`, Linux x86_64, Rust `1.99.1`, four logical cores.
+- The Cargo artifact records optimization level 3, test mode and `e2e-tests`.
+  The executed test path matches the Cargo executable and binary hash record.
+- The same one warmup and five measured clicks per level passed: all 15
+  measured clicks had trusted movement, one down and one trusted click.
+  First jumps, maximum jumps, intervals and down gaps were recomputed from raw
+  events. Each raw update matched its pointermove timestamp and coordinates.
+
+| Level | First jump, px (range) | Last move to down, ms (range) | Median gap, ms |
+|---|---:|---:|---:|
+| Off | 800.39 | 15.6–15.8 | 15.6 |
+| Fast | 28.13–28.20 | 5.6–6.6 | 5.7 |
+| Human | 1.25–1.28 | 64.6–124.8 | 87.9 |
+
+All 125 moves still had a coalesced list of size one in this environment.
+This is diagnostic behavior evidence, with no speedup, hardware-equivalence,
+relay, Windows or detector-pass claim. Initial/final load averages were 2.43
+and 2.45 on four logical cores; no cross-machine latency conclusion follows.
+
+The original sticky-ref reproduction now clicked its target once and its
+header zero times. The separate targeting fixture recorded these outcomes:
+
+| Case | Trusted wheels | Pointer downs | Target/header/danger clicks | Outcome |
+|---|---:|---:|---|---|
+| Normal fixed header | 4 | 1 | 1/0/0 | Target clicked |
+| Modal overlay | 0 | 0 | 0/0/0 | Refused; scrollY stayed 600 |
+| Unmarked overlay | 0 | 0 | 0/0/0 | Refused; scrollY stayed 600 |
+| Same-name target replacement | 1 | 0 | 0/0/0 | Refused original detached handle |
+| Target moves during settling | 4 | 0 | 0/0/0 | Refused stale landing point |
+
+Every recorded wheel was trusted. The normal/modal/unknown cases observed no
+DOM mutation or added page-global names; the replacement/movement cases each
+observed exactly the fixture's own intentional mutation. The guarded path
+keeps the original handle and document epoch, performs only read-only checks
+between wheel segments and refuses instead of falling back to another scroll
+or click. Separate fake-CDP tests fault a pending wheel acknowledgement and a
+changed document epoch, verifying the wall-clock budget and no subsequent
+wheel/press replay.
+
+The original large Fast first-jump observation and the occasional
+`scroll --until` false negative remain unconfirmed here. Coalescing and Off
+mode input limitations are not changed by these two fixes.
