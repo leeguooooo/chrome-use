@@ -223,7 +223,8 @@ SHA-256, toolchain, Chrome and machine/load metadata, then runs
 
 Each input level has one warmup and five recorded native clicks from a known
 rest point. The fixture records trustedness, pointer/raw-update counts,
-`getCoalescedEvents()` sizes, coordinate jumps, move-to-press gaps, click wall
+`getCoalescedEvents()` sizes, first and maximum coordinate jumps, actual move
+intervals, move-to-press gaps, click wall
 time and actual click counts. It also records the result of clicking a
 verified ref below a fixed header. The fixture owns its event listeners;
 the input implementation adds none.

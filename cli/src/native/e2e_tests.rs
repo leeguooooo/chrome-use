@@ -16588,11 +16588,11 @@ async fn e2e_humanize_input_probe() {
         "probe requires no env override"
     );
     let pointer = r##"<!doctype html><style>body{margin:0;width:1000px;height:700px}button{position:absolute;left:700px;top:300px;width:120px;height:50px}</style><button id="target">Probe target</button><script>
-window.probe={moves:0,downs:0,raw:0,coalesced:[],gap:null,trusted:true,clicks:0,last:0,x:20,y:20,maxJump:0};
+window.probe={moves:0,downs:0,raw:0,coalesced:[],firstJump:null,moveIntervals:[],gap:null,trusted:true,clicks:0,last:0,x:20,y:20,maxJump:0};
 for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.addEventListener(type,e=>{
  const p=window.probe;p.trusted=p.trusted&&e.isTrusted;
  if(type==='pointerrawupdate')p.raw++;
- if(type==='pointermove'){p.moves++;p.maxJump=Math.max(p.maxJump,Math.hypot(e.clientX-p.x,e.clientY-p.y));p.x=e.clientX;p.y=e.clientY;p.last=e.timeStamp;try{p.coalesced.push(typeof e.getCoalescedEvents==='function'?e.getCoalescedEvents().length:null)}catch(_){p.coalesced.push(null)}}
+ if(type==='pointermove'){p.moves++;const jump=Math.hypot(e.clientX-p.x,e.clientY-p.y);if(p.moves===1)p.firstJump=jump;else p.moveIntervals.push(e.timeStamp-p.last);p.maxJump=Math.max(p.maxJump,jump);p.x=e.clientX;p.y=e.clientY;p.last=e.timeStamp;try{p.coalesced.push(typeof e.getCoalescedEvents==='function'?e.getCoalescedEvents().length:null)}catch(_){p.coalesced.push(null)}}
  if(type==='pointerdown'){p.downs++;p.gap=e.timeStamp-p.last;}
 },{capture:true});target.onclick=e=>{probe.clicks++;probe.trusted=probe.trusted&&e.isTrusted;};
 </script>"##;
@@ -16623,7 +16623,7 @@ for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.add
                     .await
                     .unwrap();
             }
-            eval_in(&mut state,"probe={moves:0,downs:0,raw:0,coalesced:[],gap:null,trusted:true,clicks:0,last:0,x:20,y:20,maxJump:0}").await;
+            eval_in(&mut state,"probe={moves:0,downs:0,raw:0,coalesced:[],firstJump:null,moveIntervals:[],gap:null,trusted:true,clicks:0,last:0,x:20,y:20,maxJump:0}").await;
             humanize::set_detected_level(level);
             let started = std::time::Instant::now();
             {
