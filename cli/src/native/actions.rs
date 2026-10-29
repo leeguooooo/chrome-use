@@ -2627,7 +2627,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             "launch" => handle_launch(cmd, state).await,
             "navigate" => handle_navigate(cmd, state).await,
             "read" => handle_read(cmd, state).await,
-            "url" => handle_url(state).await,
+            "url" => handle_address_url(state).await,
             "cdp_url" => handle_cdp_url(state),
             "inspect" => handle_inspect(state).await,
             "title" => handle_title(state).await,
@@ -5821,6 +5821,16 @@ mod vendor_probe_tests {
             humanize::HumanizeLevel::Fast
         );
     }
+}
+
+/// Public URL diagnostics remain available even when a protected frame blocks
+/// the renderer. Internal DOM readers keep `handle_url` for origin attribution.
+async fn handle_address_url(state: &DaemonState) -> Result<Value, String> {
+    if let Some(mgr) = state.browser.as_ref() {
+        let url = mgr.get_address_bar_url().await?;
+        return Ok(json!({ "url": url }));
+    }
+    handle_url(state).await
 }
 
 async fn handle_url(state: &DaemonState) -> Result<Value, String> {
@@ -24048,7 +24058,9 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                 .to_string(),
         );
     }
-    let current = mgr.get_url().await.unwrap_or_default();
+    let current = mgr.get_url().await.map_err(|error| format!(
+        "auth login --bwu: could not verify the current document's origin before filling ({error}). Nothing was filled."
+    ))?;
     let have = url::Url::parse(&current)
         .ok()
         .map(|u| u.origin())
@@ -24056,8 +24068,8 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
         .map(|o| o.ascii_serialization());
     if have.as_deref() != Some(origin.as_str()) {
         return Err(format!(
-            "auth login --bwu: the tab moved to {} after the account was chosen for {origin}. \
-             Nothing was filled; run it again on the login page.",
+            "auth login --bwu: the current document reports origin {}, while the account was chosen for {origin}. \
+             Nothing was filled; inspect the page before trying again.",
             have.unwrap_or_else(|| "a page without an origin".to_string())
         ));
     }

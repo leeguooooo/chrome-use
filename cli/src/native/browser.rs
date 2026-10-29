@@ -6139,7 +6139,7 @@ impl BrowserManager {
     /// Read the relay tab's live browser URL without requiring access to its
     /// renderer. A protected extension frame can block even context creation.
     /// Direct-CDP sessions keep their renderer URL read.
-    pub async fn get_url(&self) -> Result<String, String> {
+    pub async fn get_address_bar_url(&self) -> Result<String, String> {
         if self.on_relay() {
             let live = self.pinned_tab_browser_record().await?;
             let url = if let Some(url) = live.get("committedUrl").and_then(Value::as_str) {
@@ -6157,6 +6157,12 @@ impl BrowserManager {
             return (!url.is_empty()).then_some(url).ok_or_else(||
                 "could not read the committed URL of the pinned Chrome tab; use `tab inspect` to check its browser-level state".to_string());
         }
+        self.get_url().await
+    }
+
+    /// Internal origin and renderer checks must observe the document actually
+    /// answering CDP, not substitute a browser metadata record for it.
+    pub async fn get_url(&self) -> Result<String, String> {
         let result = self.evaluate_simple("location.href").await?;
         Ok(result.as_str().unwrap_or("").to_string())
     }
@@ -15346,6 +15352,8 @@ mod protected_url_tests {
     #[derive(Clone, Copy)]
     enum Query {
         Url,
+        RendererUrl,
+        Auth,
         Accessible,
         Blocked,
     }
@@ -15380,6 +15388,9 @@ mod protected_url_tests {
                 let result = match method {
                     "Page.getFrameTree" => json!({"frameTree":{"frame":{"id":"frame"}}}),
                     "Page.createIsolatedWorld" => json!({"executionContextId":42}),
+                    "Runtime.evaluate" => {
+                        json!({"result":{"type":"string","value":"https://renderer.invalid/current"}})
+                    }
                     "ABExt.inspectTab" => {
                         assert_eq!(r["params"]["targetId"], "target-7");
                         records.0.clone()
@@ -15392,7 +15403,7 @@ mod protected_url_tests {
                     }
                     _ => json!({}),
                 };
-                let failed = method == "Runtime.evaluate"
+                let failed = (method == "Runtime.evaluate" && !error.is_empty())
                     || (!matches!(query, Query::Url)
                         && !error.is_empty()
                         && method == "Page.getFrameTree");
@@ -15424,7 +15435,16 @@ mod protected_url_tests {
         .await;
         browser.reown_target("target-7").unwrap();
         let result = match query {
-            Query::Url => browser.get_url().await,
+            Query::Url => browser.get_address_bar_url().await,
+            Query::RendererUrl => browser.get_url().await,
+            Query::Auth => {
+                let mut state = crate::native::state::DaemonState::new();
+                state.browser = Some(browser);
+                let cmd = json!({"id":"origin-check", "action":"auth_login_bwu", "origin":"https://fixture.invalid", "username":"fixture-user", "password":"fixture-password"});
+                let response =
+                    Box::pin(crate::native::actions::execute_command(&cmd, &mut state)).await;
+                Ok(response.to_string())
+            }
             Query::Accessible => Ok(browser.pinned_tab_accessible().await.to_string()),
             Query::Blocked => Ok(browser.pinned_tab_blocked().await.to_string()),
         };
@@ -15492,6 +15512,59 @@ mod protected_url_tests {
         .await;
         assert!(url.unwrap_err().contains("ordinary renderer error"));
         assert!(!requests.iter().any(|r| r["method"] == "ABExt.inspectTab"));
+    }
+
+    #[tokio::test]
+    async fn internal_renderer_origin_checks_cannot_be_satisfied_by_browser_metadata() {
+        let (result, requests) = query(
+            true,
+            "renderer origin unavailable",
+            committed(Some("https://fixture.invalid/current")),
+            Query::RendererUrl,
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "an address-bar record is not a renderer-origin observation"
+        );
+        assert!(!requests.iter().any(|r| r["method"] == "ABExt.inspectTab"));
+        let (result, requests) = query(
+            true,
+            "",
+            committed(Some("https://fixture.invalid/current")),
+            Query::RendererUrl,
+        )
+        .await;
+        assert_eq!(result.unwrap(), "https://renderer.invalid/current");
+        assert!(!requests.iter().any(|r| r["method"] == "ABExt.inspectTab"));
+    }
+
+    #[tokio::test]
+    async fn protected_auth_never_fills_or_claims_a_tab_move_without_renderer_origin() {
+        for error in ["renderer origin unavailable", ""] {
+            let (result, requests) = query(
+                true,
+                error,
+                committed(Some("https://fixture.invalid/current")),
+                Query::Auth,
+            )
+            .await;
+            let response: Value = serde_json::from_str(&result.unwrap()).unwrap();
+            assert_eq!(response["success"], false, "{response}");
+            let message = response["error"].as_str().unwrap();
+            assert!(
+                message.contains(if error.is_empty() {
+                    "current document reports origin"
+                } else {
+                    "could not verify the current document's origin"
+                }),
+                "{message}"
+            );
+            assert!(!message.contains("the tab moved"), "{message}");
+            assert!(!requests.iter().any(|r| r["method"]
+                .as_str()
+                .is_some_and(|m| m.starts_with("Input."))));
+        }
     }
 
     #[tokio::test]
