@@ -16879,6 +16879,13 @@ for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.add
 #[ignore]
 async fn e2e_humanize_targeting_safety() {
     use super::humanize;
+    struct RestoreCursor((f64, f64));
+    impl Drop for RestoreCursor {
+        fn drop(&mut self) {
+            humanize::set_last_cursor(self.0);
+        }
+    }
+    let _cursor = RestoreCursor(humanize::last_cursor());
     assert!(std::env::var_os("AGENT_BROWSER_HUMANIZE").is_none());
     let _floor = humanize::floor_level(humanize::HumanizeLevel::Human);
     let html = r##"<!doctype html><style>
