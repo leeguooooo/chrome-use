@@ -850,6 +850,8 @@ mod surface_capture_tests {
             while let Some(Ok(Message::Text(raw))) = ws.next().await {
                 let request: Value = serde_json::from_str(&raw).unwrap();
                 let result = match request["method"].as_str().unwrap() {
+                    "Page.getFrameTree" => json!({"frameTree":{"frame":{"id":"main"}}}),
+                    "Page.createIsolatedWorld" => json!({"executionContextId":42}),
                     "Page.getLayoutMetrics" => json!({
                         "cssLayoutViewport":{"pageX":0,"pageY":100,"clientWidth":100,"clientHeight":100},
                         "cssContentSize":{"x":0,"y":0,"width":200,"height":400}
