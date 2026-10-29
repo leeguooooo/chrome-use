@@ -352,6 +352,16 @@ pub fn scroll_segments(
     out
 }
 
+/// Pause after the pointer arrives and before a regular click presses the
+/// button. Only Human adds this settling gap; other levels keep their timing.
+pub fn settle_before_press(level: HumanizeLevel, seed: u64) -> Duration {
+    if level != HumanizeLevel::Human {
+        return Duration::ZERO;
+    }
+    let mut rng = Rng::new(seed ^ 0xD1B5_4A32_D192_ED03);
+    Duration::from_millis(60 + rng.next_u64() % 141)
+}
+
 /// Dwell between `mousePressed` and `mouseReleased` (a real click isn't
 /// instantaneous). Zero for `Off`.
 pub fn press_dwell(level: HumanizeLevel, seed: u64) -> Duration {
@@ -700,5 +710,30 @@ mod tests {
             flight_after_dwell(Duration::ZERO, Duration::ZERO, HumanizeLevel::Off, 1),
             Duration::ZERO
         );
+    }
+}
+
+#[cfg(test)]
+mod click_settle_tests {
+    use super::*;
+
+    #[test]
+    fn human_settle_is_seeded_and_bounded_while_other_levels_keep_timing() {
+        let mut gaps = std::collections::HashSet::new();
+        for seed in 0..100 {
+            let gap = settle_before_press(HumanizeLevel::Human, seed);
+            assert!((60..=200).contains(&gap.as_millis()));
+            assert_eq!(gap, settle_before_press(HumanizeLevel::Human, seed));
+            gaps.insert(gap);
+            assert_eq!(
+                settle_before_press(HumanizeLevel::Off, seed),
+                Duration::ZERO
+            );
+            assert_eq!(
+                settle_before_press(HumanizeLevel::Fast, seed),
+                Duration::ZERO
+            );
+        }
+        assert!(gaps.len() > 1);
     }
 }

@@ -67,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           IFS= read -r probe_test_binary <input-probe/test-binary.path
-          "$probe_test_binary" e2e_humanize_input_probe --ignored --test-threads=1 --nocapture 2>&1 | tee input-probe/events.log
+          "$probe_test_binary" e2e_humanize_ --ignored --test-threads=1 --nocapture 2>&1 | tee input-probe/events.log
       - name: Record final machine state
         if: always()
         shell: bash

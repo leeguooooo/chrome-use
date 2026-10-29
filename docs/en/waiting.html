@@ -134,7 +134,7 @@
       </p>
       <ul>
         <li>the DOM has gone 100ms without a mutation,</li>
-        <li>no finite CSS transition or animation is still running (a spinner that loops forever is ignored — it never ends),</li>
+        <li>no finite time-based CSS transition or animation is still running (infinite loops and scroll-driven percentage timelines are ignored),</li>
         <li>and no request fired by the action you just ran is still in flight.</li>
       </ul>
       <p>

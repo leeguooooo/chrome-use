@@ -35,7 +35,7 @@ flaky. Timeouts default to 25 seconds.
 
 **Do not sleep before reading the page.** `snapshot` and `--observe` wait by
 themselves: before capturing they wait for the DOM to stop mutating, for finite
-transitions to finish, and for requests fired by the action to come back —
+time-based transitions to finish, and for requests fired by the action to come back —
 whichever takes longest, up to a 1 second ceiling, and they return the moment
 the page goes quiet (a static page costs about 100ms, not the ceiling). A
 `wait 2000` in front of a snapshot buys nothing and costs two seconds. If the
@@ -299,3 +299,8 @@ don't need a separate `wait`. Conditions: element `visible|hidden|gone|present`;
 `request <substr> [--status 2xx]`; `no-errors`. `--not` inverts, `--no-wait`
 checks once. (`expect request` only sees requests captured after tracking is on —
 `network requests --clear` first; `no-errors` needs console capture — run `console` once.)
+
+Scroll-driven timelines report percentage durations (CSSNumericValue), not finite
+milliseconds. They do not keep settle busy; ordinary finite time-based animations
+still do. This leaves the DOM quiet window, request checks, reaction window and
+ceiling unchanged. Continuous unrelated DOM mutations can still reach that ceiling.

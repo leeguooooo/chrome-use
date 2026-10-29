@@ -2845,6 +2845,11 @@ chrome-use open - Launch the browser, optionally navigate
 
 Usage: chrome-use open [url] [--new-tab]
 
+On relay 0.5.98+, explicit top-level navigation uses Chrome's tab API before
+recovering debugger access. A protected autofill frame cannot permanently veto
+this exit path; no form/input is replayed. Tab grants still apply. `get url`
+can read the pinned tab's live Chrome metadata while its renderer is blocked.
+
 Without a URL, launches the browser but stays on about:blank. This lets
 you stage state (network routes, cookies, init scripts) before the first
 real navigation — useful for SSR debug, auth setup, and capturing fresh
@@ -3018,6 +3023,15 @@ then says `dispatch: dom` with a ⚠ warning naming why, because a page that
 only honours real input ignores such a click. A DOM-dispatched click still
 moves keyboard focus like a real one, so `click <input>` followed by
 `press Meta+a` lands on that input.
+
+Human pointer clicks settle for a seeded 60-200ms before press, then recheck
+that the same live element owns the landing point. Fast/Off timing is unchanged.
+A top-level @ref under a small fixed/sticky semantic edge header/navigation bar
+may get one trusted wheel gesture (10s cap, humanize pacing). The same handle
+and document epoch are rechecked; unknown wheel points, context changes or
+transport errors stop without DOM-scroll fallback or input replay. Modal/dialog
+and popover blockers remain refusals. "click stopped before press" means no
+mouse button was sent; pointer/viewport may have moved, so observe before retrying.
 
 A disabled control (`:disabled`) is refused with an error: the browser
 delivers no click to it, and a Save that is still disabled usually means the
@@ -5786,6 +5800,9 @@ cookie NAMES in the profile's on-disk cookie store (never values; no tab is
 opened). "signed in" = a cookie the site only sets for a signed-in user (known
 sites); "session cookies present" = session-like names, not proof. Where a site
 adapter <site>/me exists, the row shows the command that reports the account.
+On macOS, reads prefer PATH sqlite3 and use /usr/bin/sqlite3 only after a missing
+or unsupported-format executable cannot start. Execution permission denials and
+started-query failures stay errors; locked/corrupt databases are not retried.
 
 Pick a profile:
   --browser <name|prefix|dir|email|id>   e.g. --browser Davian, --browser d,
@@ -7124,6 +7141,9 @@ Options:
   --screenshot-dir <path>    Default screenshot output directory (or AGENT_BROWSER_SCREENSHOT_DIR)
   --screenshot-quality <n>   JPEG quality 0-100; ignored for PNG (or AGENT_BROWSER_SCREENSHOT_QUALITY)
   --screenshot-format <fmt>  Screenshot format: png, jpeg (or AGENT_BROWSER_SCREENSHOT_FORMAT)
+  --humanize <level>         off|fast|human; default fast with adaptive escalation
+                             Human regular pointer clicks settle 60-200ms before press
+                             (also AGENT_BROWSER_HUMANIZE)
   --headed                   Always on (default). Headless is forbidden (bot-detection tell);
                              display-less servers can opt back in with AGENT_BROWSER_ALLOW_HEADLESS=1
   --cdp <port>               Connect via CDP (Chrome DevTools Protocol)
@@ -7199,6 +7219,8 @@ Options:
                              settle.pendingRequests). A mutation the
                              action made while being dispatched counts as its
                              reaction, so the wait then only owes the quiet window.
+                             Only finite time-based animations block; scroll-driven
+                             percentage timelines are ignored.
   --no-settle                Capture immediately, without waiting for the page
                              to stop changing
   --with-screenshot <path>   Save the pixels alongside a structural observation

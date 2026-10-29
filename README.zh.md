@@ -262,6 +262,11 @@ chrome-use status                 # 中继、profile、扩展与会话健康总�
 启动器会清除从 Chrome 继承的目录覆盖。已有启动器需要在目标环境下重跑 `extension install`
 才会更新；隔离测试安装还应加 `--no-open --no-profile`，并设置 `CHROME_USE_NO_BROWSER_SCAN=1`。
 
+`browsers --who <域名>` 只检查磁盘上的 Cookie 名称，不读取值；存在 Cookie 不代表会话仍有效。
+macOS 先使用 PATH 中的 `sqlite3`，只有工具缺失或可执行格式不支持、无法启动时，才回退到
+`/usr/bin/sqlite3`。执行权限拒绝，以及 SQLite 已启动后返回的查询错误，仍会明确报错；
+数据库锁定或损坏不会通过换一个工具重试。
+
 `extension install` 是一次性的安装步骤。`chrome-use extension connect`（别名 `chrome-use reconnect`）在扩展已装好的前提下重新连上它的中继，不重装任何东西。被 attach 的 agent 标签页上 Chrome 仍会显示「chrome-use started debugging this browser」提示条；`chrome-use extension connect --silent` 会带 `--silent-debugger-extension-api` 把 Chrome 重启一次来去掉它（标签和登录自动恢复；同时开着多个 Chrome 实例时不会重启）。`--keep-banner` 完全不碰浏览器；两个 flag 都不带时，交互终端里会先问一句。详见[静音提示条](https://chrome-use.leeguoo.com/debugger-banner-silence.html)。
 
 AI 标签默认开在你正在用的窗口里，以后台标签打开、不抢焦点；每个会话有自己的标签组，组名前面带 ✦，一眼能和你自己的标签分开。加 `--window dedicated` 则改为同一 Chrome profile 的所有 AI 会话共用一个后台专用窗口：已有窗口只要标签归属都能确认是 AI，就会复用，全屏也不另开窗口。归属不明或空白占位页清理失败时会报错，避免继续增加窗口。不会为回收窗口而搬走或删除用户页。你在 AI 窗口里开了或拖进了自己的页面，这个窗口就归你：里面已有的 AI 标签照常工作，新的 AI 标签开到一个新的 AI 窗口，之后的会话共用它。
@@ -330,6 +335,8 @@ chrome-use snapshot -i --diff          # 只回传相对上一张快照变化的
 
 交互快照只给角色和名称重复、且父级命名行无法区分的控件添加 `context`。上下文去掉控件自身名称和纯标点，最多约 100 个字符（无名称控件约 60 个），且不同控件的上下文必须不同。名称唯一的控件不带上下文；缺少商品价格等信息时，读取对应区域或完整快照。
 
+滚动进度驱动的动画不会占用计时等待。普通有限时长动画仍会等待，DOM 变更和请求检查照旧。
+
 用 `snapshot -i -c` 精简控件视图，已知区域用 scoped read；只有上一次观察还留下问题时才用 `--diff`。已知动作序列用 `batch`（每一步可以带自己的 `--observe`：`batch "fill @e1 Ada" "click @e2 --observe"`；`pick`、`hover` 和 `click` 一样可以观察），有条件分支的 observe/decide/act/verify 流程用 `script`，多个字段用 `form fill --map`，最后核验任务要求的结果：`observed.status: complete` 只表示这次捕获完整，不表示任务完成，要等页面自己的最终信号（`wait --text`）。小页面（树不超过 4 KB 且不超过 60 行）的观察直接带整棵当前树 `observed.snapshot` 和只含 `+`/`-` 行的 `observed.changes`；更大的页面照旧给 `delta`。`observed.text` 列出任意帧里变化的可见文字行（回执、日志、页码），不含输入框、文本域、下拉框和可编辑区域的内容，任一密码框带值时一行都不返回（`textStatus: redacted`）；读不到的帧列在 `textFrames` 里，观察随之变成 `partial`。每个 JSON 回复都带 `observed.target`，写明标签页和 target。`observed.announced` 收录动作执行和页面稳定期间出现的 toast 以及 alert/status/aria-live 区域的文字，回复前已经消失的也在（例如“视频审核中，修改未保存”）。元素截图写成 `screenshot <selector> <path>` 或 `screenshot <path> --selector <selector>`。只有树无法回答视觉问题时才加 `--with-screenshot <path>`。
 
 可编辑区域（contenteditable）的 `fill` 在真实输入成功后保留编辑器焦点，不再派发合成的 `change` 或 `focusout` 事件。读回核验失败时会明确报错，不会覆盖编辑器 DOM。需要保存或确认时，请使用页面提供的操作。
@@ -377,12 +384,15 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 
 任务已获授权时，内置 skill 要求 agent 先识别并尝试普通验证码：易盾普通和旋转拼图用 `solve-slider`，能看清的图标点选用截图识别顺序并点击，核验页面结果后继续。用 `chrome-use skills get core/captcha` 加载流程。重试有次数限制；识别不清或缺少操作能力时才交接。这不代表所有厂商和题型都能解开。先激活目标标签再截图取坐标；验证码厂商返回成功或重发倒计时不走，都不能证明网站已接受验证。
 
+常规 Human 指针点击会在移动结束后、按下前加入按种子变化的 60–200ms 停顿，Fast 和 Off 保持原有时序。Human 的元素/ref 点击会在停顿后回查同一个存活元素是否仍位于落点。顶层 `@ref` 若被视口边缘较小的 fixed/sticky header 或导航栏遮住，可使用一段可信 wheel 手势滚到可点击位置。整个手势有 10 秒上限，节奏来自 humanize，并保留原元素句柄与文档 epoch。滚轮落点不明、传输失败或上下文改变时停止，不回退到 DOM 滚动，也不重放输入；按下前必须再次精确命中同一个元素。默认可信路径仍会拒绝对话框、模态/弹出层和无法核验的目标。`click stopped before press` 表示尚未发送鼠标按下，指针或视口可能已移动，重试前应先查看页面。
+
 | 命令 | 用途 |
 |---|---|
+| `--humanize off\|fast\|human` | 默认 Fast；Human 常规指针点击增加按种子变化的 60–200ms 停顿，并在按下前回查存活目标 |
 | `chrome-use extension install --user-data-dir <path>` | macOS/Linux：为已有的自定义 Chrome 数据目录注册 host，可重复指定，也接受等号形式；还会自动扫描正在运行的自定义目录。Windows 使用 HKCU，不支持此选项。 |
 | `--window user`（默认）/ `--window dedicated` | 扩展连接：AI 标签开在你当前的窗口里，每个会话一个标签组，组名前面带 ✦；`dedicated` 改为同一 profile 的所有 AI 会话共用一个后台窗口 |
 | `chrome-use open <url>` | 连接你的 Chrome 并导航。25 秒后 `load` 仍没到、但标签页里的页面明显可用时算成功，附 ⚠ 警告；如果无法确认这个页面来自这次请求（走扩展中继时总是如此），返回里带 `commit: "unverified"` 和标签页的真实 URL。页面不可用时报 `navigation_incomplete:`，写明已知的信息（是否提交、readyState、候选资源） |
-| `chrome-use snapshot -i` | 读页面；每次交互的起点（`-u` 给每个链接带上绝对 URL） |
+| `chrome-use snapshot -i` | 等页面稳定后读取，不等待滚动联动动画（`-u` 给链接带上绝对 URL） |
 | `chrome-use read --links` | 页面正文，外加一段有上限的 `## Links`：`[文字](绝对 URL)`（默认前 100 个，`--max-links <n>` 最多 1000） |
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | 按文本、按快照 ref、或按视口坐标点击 |
 | `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` 整体替换，`type` 追加，都用可信输入事件；页面没反应时（比如保存按钮一直禁用）给出 ⚠ 警告 |
@@ -440,6 +450,12 @@ chrome-use 会保留该标签并报告目标 ID。保持相同 session 和连接
 选定一个标签页，因此不会在它没选过的标签页里执行任何操作。
 
 ### 用 Bitwarden 登录
+
+自动填充扩展的框架阻止调试器访问时，`get url` 仍可读取 Chrome 中当前固定标签页的实时记录。地址栏诊断不证明页面可操作或已登录；内部来源检查仍读取实际文档。
+显式 `open <url>` 会先走浏览器标签 API，再处理调试器恢复，旧页面的受保护框架或恢复失败
+不会永久拦住这次导航。标签页授权检查仍然生效；子框架导航和带 referrer 的导航仍需要 CDP。
+不会重放输入、表单提交或登录。这提供的是显式离开阻塞页的路径，不保证隐身模式下能自动关闭
+第三方扩展的弹层。导航恢复需要 relay 扩展 0.5.98+。
 
 打开网站登录页后运行 `chrome-use auth login --bwu`。多个账号匹配时，先用上次在这个主机上登录成功的那个，
 其次用名字正好是站点主机名、或是它登录 iframe 主机名的那个（App Store Connect 的登录框是 `idmsa.apple.com`

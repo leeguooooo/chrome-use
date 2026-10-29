@@ -2066,9 +2066,11 @@ fn foreign_frame_hint_with(error: &str, name_of: impl Fn(&str) -> Option<String>
     };
     format!(
         "\nCause: {culprit}. While that frame is in the tab Chrome refuses every debugger command \
-         on it; the tab works again once it closes. It closes when the tab is hidden: for a tab \
-         this session created, chrome-use does that itself (a tab switch of well under a second, \
-         after which the tab that was in front is in front again). Fill such fields with \
+         on it. chrome-use attempts to close inline menus on its own tabs, and reports recovery \
+         only after a protocol read succeeds. Some menus or save-login bars remain blocked, \
+         including under stealth mode; close that UI manually if needed. `press Escape` uses \
+         the same blocked debugger and may also fail. `get url` and `tab inspect` still read \
+         browser metadata; an explicit `open <url>` can leave the blocked page. Fill fields with \
          `fill` (one write) rather than `type --key-events`. To stop it happening, the user can \
          turn off that extension's inline menu for this site."
     )
@@ -2568,6 +2570,8 @@ pub(crate) fn load_unverified_warning(
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct NavigationContinued {
     pub warning: String,
+    /// The usable document actually observed, retained if a later URL read fails.
+    pub observed_url: String,
     /// `false` when the page is usable but nothing ties it to this
     /// navigation; reported as `commit: "unverified"`.
     pub commit_verified: bool,
@@ -2697,11 +2701,13 @@ where
         (CommitEvidence::Committed { .. }, Some(p)) if p.is_ready() => Ok(NavigationContinued {
             warning: load_incomplete_warning(wait_until, elapsed_ms, budget_ms, p),
             commit_verified: true,
+            observed_url: p.url.clone(),
         }),
         (CommitEvidence::Unknown { .. }, Some(p)) if p.unusable_reason().is_none() => {
             Ok(NavigationContinued {
                 warning: load_unverified_warning(target, wait_until, elapsed_ms, budget_ms, p),
                 commit_verified: false,
+                observed_url: p.url.clone(),
             })
         }
         _ => Err(navigation_incomplete_error(
@@ -5760,6 +5766,7 @@ impl BrowserManager {
         // cleanly but the page is usable anyway (issues #10, #126). Surfaced to the
         // CLI in the response so the agent knows to expect a still-rendering page.
         let mut nav_warning: Option<String> = None;
+        let mut observed_url: Option<String> = None;
         // `false` when that page is usable but nothing ties it to this
         // navigation; reported as `commit: "unverified"` (#502, option C).
         let mut commit_verified = true;
@@ -5895,6 +5902,7 @@ impl BrowserManager {
                 )
                 .await?;
                 commit_verified = continued.commit_verified;
+                observed_url = Some(continued.observed_url);
                 nav_warning = Some(continued.warning);
                 PageNavigateResult {
                     frame_id: String::new(),
@@ -5970,6 +5978,7 @@ impl BrowserManager {
                 )
                 .await?;
                 commit_verified = continued.commit_verified;
+                observed_url = Some(continued.observed_url);
                 nav_warning = Some(continued.warning);
             }
         }
@@ -6001,7 +6010,12 @@ impl BrowserManager {
                     }
                 }
                 (
-                    current_url.unwrap_or_else(|_| url.to_string()),
+                    current_url.unwrap_or_else(|_| {
+                        observed_url
+                            .clone()
+                            .filter(|u| !u.is_empty())
+                            .unwrap_or_else(|| url.to_string())
+                    }),
                     title.unwrap_or_default(),
                 )
             }
@@ -6122,6 +6136,32 @@ impl BrowserManager {
         poll_network_idle(session_id, rx, timeout).await
     }
 
+    /// Read the relay tab's live browser URL without requiring access to its
+    /// renderer. A protected extension frame can block even context creation.
+    /// Direct-CDP sessions keep their renderer URL read.
+    pub async fn get_address_bar_url(&self) -> Result<String, String> {
+        if self.on_relay() {
+            let live = self.pinned_tab_browser_record().await?;
+            let url = if let Some(url) = live.get("committedUrl").and_then(Value::as_str) {
+                url.to_string()
+            } else {
+                // Older relays merge pendingUrl into their display URL. Read
+                // Chrome's raw tab record so a destination still loading is
+                // never treated as the current document's origin.
+                let id = live["chromeTabId"]
+                    .as_i64()
+                    .ok_or("the pinned tab has no Chrome tab id")?;
+                let tab = self.chrome_call("tabs", "get", json!([id])).await?;
+                tab["url"].as_str().unwrap_or_default().to_string()
+            };
+            return (!url.is_empty()).then_some(url).ok_or_else(||
+                "could not read the committed URL of the pinned Chrome tab; use `tab inspect` to check its browser-level state".to_string());
+        }
+        self.get_url().await
+    }
+
+    /// Internal origin and renderer checks must observe the document actually
+    /// answering CDP, not substitute a browser metadata record for it.
     pub async fn get_url(&self) -> Result<String, String> {
         let result = self.evaluate_simple("location.href").await?;
         Ok(result.as_str().unwrap_or("").to_string())
@@ -7191,21 +7231,28 @@ impl BrowserManager {
     /// a browser-level call), for when the page itself cannot be read: a
     /// password manager's frame refuses every page command while it is open.
     /// `None` off the relay or when the extension cannot say.
-    pub async fn pinned_tab_url_from_browser(&self) -> Option<String> {
+    async fn pinned_tab_browser_record(&self) -> Result<Value, String> {
         if !self.on_relay() {
-            return None;
+            return Err("not on the extension relay".to_string());
         }
-        let pinned = self.active_target_id.clone()?;
-        let page = self.pages.iter().find(|p| p.target_id == pinned)?;
-        let live: Value = self
-            .client
+        self.active_session_id()?;
+        let pinned = self.active_target_id.as_ref().ok_or("no pinned tab")?;
+        let page = self
+            .pages
+            .iter()
+            .find(|p| &p.target_id == pinned)
+            .ok_or("pinned tab not tracked")?;
+        self.client
             .send_command_typed(
                 "ABExt.inspectTab",
                 &json!({ "sessionId": page.session_id, "targetId": page.target_id }),
                 None,
             )
             .await
-            .ok()?;
+    }
+
+    pub async fn pinned_tab_url_from_browser(&self) -> Option<String> {
+        let live = self.pinned_tab_browser_record().await.ok()?;
         live.get("url").and_then(Value::as_str).map(str::to_string)
     }
 
@@ -7237,22 +7284,30 @@ impl BrowserManager {
         }
     }
 
-    pub async fn pinned_tab_blocked(&self) -> bool {
-        let Ok(session_id) = self.active_session_id().map(str::to_string) else {
-            return false;
-        };
-        match self
+    async fn pinned_tab_debugger_access(&self) -> Result<(), String> {
+        let session_id = self.active_session_id()?;
+        // This protocol read does not need an isolated world. A cached world
+        // setup failure must not masquerade as successful menu cleanup.
+        let tree = self
             .client
-            .send_command(
-                "Runtime.evaluate",
-                Some(json!({ "expression": "0", "returnByValue": true })),
-                Some(&session_id),
-            )
-            .await
+            .send_command("Page.getFrameTree", None, Some(session_id))
+            .await?;
+        if tree
+            .pointer("/frameTree/frame/id")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
         {
-            Err(e) => is_debugger_access_denied(&e),
-            Ok(_) => false,
+            return Err("the pinned tab did not return a readable frame tree".to_string());
         }
+        Ok(())
+    }
+
+    pub async fn pinned_tab_blocked(&self) -> bool {
+        matches!(self.pinned_tab_debugger_access().await, Err(error) if is_debugger_access_denied(&error))
+    }
+
+    async fn pinned_tab_accessible(&self) -> bool {
+        self.pinned_tab_debugger_access().await.is_ok()
     }
 
     /// Close another extension's frame by hiding the pinned tab for a moment
@@ -7586,7 +7641,7 @@ impl BrowserManager {
         // The menu closes asynchronously (a message round trip inside the
         // password manager). Give it a moment before calling it a failure.
         for _ in 0..6 {
-            if !self.pinned_tab_blocked().await {
+            if self.pinned_tab_accessible().await {
                 if refocus {
                     self.refocus_remembered_field(&session_id, &remembered)
                         .await;
@@ -7642,8 +7697,8 @@ impl BrowserManager {
         // on a hidden page (menu-blur.js, 0.5.92); older extensions never do.
         let stealth = out.get("stealth").and_then(Value::as_bool) == Some(true);
         let why_open = if stealth {
-            " (stealth mode is on, so chrome-use did not signal the page; with stealth mode \
-             off in the extension's settings it closes such a menu itself)"
+            " (stealth mode is on, so chrome-use did not send a synthetic visibility event; \
+             close the password manager's UI manually if its menu remains open)"
         } else {
             ""
         };
@@ -7652,7 +7707,7 @@ impl BrowserManager {
         }
         // The menu closes after a message round trip inside the password manager.
         for _ in 0..6 {
-            if !self.pinned_tab_blocked().await {
+            if self.pinned_tab_accessible().await {
                 return Ok(());
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -7751,7 +7806,7 @@ impl BrowserManager {
         }
         // The password manager closes its menu after a message round trip.
         for _ in 0..8 {
-            if !self.pinned_tab_blocked().await {
+            if self.pinned_tab_accessible().await {
                 return Ok(None);
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -11875,7 +11930,7 @@ mod tests {
     fn foreign_frame_hint_does_not_suggest_relaunching() {
         let hint = foreign_frame_hint("");
         assert!(!hint.contains("--launch"), "{hint}");
-        assert!(hint.contains("chrome-use does that itself"), "{hint}");
+        assert!(hint.contains("chrome-use attempts"), "{hint}");
     }
 
     #[test]
@@ -15323,3 +15378,258 @@ mod foreign_popup_tests {
 /// How long a shown tab gets for a password manager's menu that waited for
 /// it (see `BrowserManager::wake_pinned_tab`): measured 10-80 ms.
 const PENDING_MENU_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+
+#[cfg(test)]
+mod protected_url_tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    struct RelayGuard;
+    impl Drop for RelayGuard {
+        fn drop(&mut self) {
+            relay_for_test(false);
+        }
+    }
+    #[derive(Clone, Copy)]
+    enum Query {
+        Url,
+        RendererUrl,
+        Auth,
+        Accessible,
+        MalformedAccessible,
+        Blocked,
+    }
+
+    fn committed(url: Option<&str>) -> (Value, Value) {
+        (
+            json!({"url":"https://pending.invalid/next", "committedUrl":url.unwrap_or_default(), "pendingUrl":"https://pending.invalid/next"}),
+            json!({}),
+        )
+    }
+
+    async fn query(
+        relay: bool,
+        error: &str,
+        records: (Value, Value),
+        query: Query,
+    ) -> (Result<String, String>, Vec<Value>) {
+        relay_for_test(relay);
+        let _guard = RelayGuard;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = log.clone();
+        let error = error.to_string();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(Message::Text(text))) = ws.next().await {
+                let r: Value = serde_json::from_str(&text).unwrap();
+                seen.lock().unwrap().push(r.clone());
+                let method = r["method"].as_str().unwrap();
+                let result = match method {
+                    "Page.getFrameTree" if matches!(query, Query::MalformedAccessible) => json!({}),
+                    "Page.getFrameTree" => json!({"frameTree":{"frame":{"id":"frame"}}}),
+                    "Page.createIsolatedWorld" => json!({"executionContextId":42}),
+                    "Runtime.evaluate" => {
+                        json!({"result":{"type":"string","value":"https://renderer.invalid/current"}})
+                    }
+                    "ABExt.inspectTab" => {
+                        assert_eq!(r["params"]["targetId"], "target-7");
+                        records.0.clone()
+                    }
+                    "ABExt.call" => {
+                        assert_eq!(r["params"]["namespace"], "tabs");
+                        assert_eq!(r["params"]["method"], "get");
+                        assert_eq!(r["params"]["args"], json!([7]));
+                        json!({"result":records.1})
+                    }
+                    _ => json!({}),
+                };
+                let failed = (method == "Runtime.evaluate" && !error.is_empty())
+                    || (!matches!(query, Query::Url)
+                        && !error.is_empty()
+                        && method == "Page.getFrameTree");
+                let mut reply = if failed {
+                    json!({"id":r["id"],"error":{"code":-32000,"message":error}})
+                } else {
+                    json!({"id":r["id"],"result":result})
+                };
+                if let Some(sid) = r.get("sessionId") {
+                    reply["sessionId"] = sid.clone();
+                }
+                if ws.send(Message::Text(reply.to_string())).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let mut browser = BrowserManager::for_test(
+            &endpoint,
+            vec![PageInfo {
+                tab_id: 7,
+                label: None,
+                target_id: "target-7".into(),
+                session_id: "cb-tab-7".into(),
+                url: "https://stale.invalid/".into(),
+                title: "Fixture".into(),
+                target_type: "page".into(),
+            }],
+        )
+        .await;
+        browser.reown_target("target-7").unwrap();
+        let result = match query {
+            Query::Url => browser.get_address_bar_url().await,
+            Query::RendererUrl => browser.get_url().await,
+            Query::Auth => {
+                let mut state = crate::native::actions::DaemonState::new();
+                state.browser = Some(browser);
+                let cmd = json!({"id":"origin-check", "action":"auth_login_bwu", "origin":"https://fixture.invalid", "username":"fixture-user", "password":"fixture-password"});
+                let response =
+                    Box::pin(crate::native::actions::execute_command(&cmd, &mut state)).await;
+                Ok(response.to_string())
+            }
+            Query::Accessible | Query::MalformedAccessible => {
+                Ok(browser.pinned_tab_accessible().await.to_string())
+            }
+            Query::Blocked => Ok(browser.pinned_tab_blocked().await.to_string()),
+        };
+        server.abort();
+        let requests = log.lock().unwrap().clone();
+        (result, requests)
+    }
+
+    #[tokio::test]
+    async fn protected_url_uses_only_the_committed_pinned_tab_record() {
+        let (url, requests) = query(
+            true,
+            "no isolated world on this target",
+            committed(Some("https://fixture.invalid/current")),
+            Query::Url,
+        )
+        .await;
+        assert_eq!(url.unwrap(), "https://fixture.invalid/current");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["method"], "ABExt.inspectTab");
+        let (url, requests) = query(
+            true,
+            "debugger_access_denied: protected frame",
+            committed(None),
+            Query::Url,
+        )
+        .await;
+        assert!(url
+            .unwrap_err()
+            .contains("could not read the committed URL"));
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn protected_url_legacy_metadata_never_uses_pending_or_cached_url() {
+        for raw in [
+            json!({"url":"https://fixture.invalid/current", "pendingUrl":"https://pending.invalid/next"}),
+            json!({"pendingUrl":"https://pending.invalid/next"}),
+        ] {
+            let expected = raw.get("url").and_then(Value::as_str).map(str::to_owned);
+            let records = (
+                json!({"chromeTabId":7, "url":"https://pending.invalid/next"}),
+                raw,
+            );
+            let (result, requests) = query(
+                true,
+                "debugger_access_denied: protected frame",
+                records,
+                Query::Url,
+            )
+            .await;
+            match expected {
+                Some(url) => assert_eq!(result.unwrap(), url),
+                None => assert!(result.is_err()),
+            }
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[1]["method"], "ABExt.call");
+        }
+        let (url, requests) = query(
+            false,
+            "ordinary renderer error",
+            committed(Some("https://fixture.invalid/current")),
+            Query::Url,
+        )
+        .await;
+        assert!(url.unwrap_err().contains("ordinary renderer error"));
+        assert!(!requests.iter().any(|r| r["method"] == "ABExt.inspectTab"));
+    }
+
+    #[tokio::test]
+    async fn internal_renderer_origin_checks_cannot_be_satisfied_by_browser_metadata() {
+        let (result, requests) = query(
+            true,
+            "renderer origin unavailable",
+            committed(Some("https://fixture.invalid/current")),
+            Query::RendererUrl,
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "an address-bar record is not a renderer-origin observation"
+        );
+        assert!(!requests.iter().any(|r| r["method"] == "ABExt.inspectTab"));
+        let (result, requests) = query(
+            true,
+            "",
+            committed(Some("https://fixture.invalid/current")),
+            Query::RendererUrl,
+        )
+        .await;
+        assert_eq!(result.unwrap(), "https://renderer.invalid/current");
+        assert!(!requests.iter().any(|r| r["method"] == "ABExt.inspectTab"));
+    }
+
+    #[tokio::test]
+    async fn protected_auth_never_fills_or_claims_a_tab_move_without_renderer_origin() {
+        for error in ["renderer origin unavailable", ""] {
+            let (result, requests) = query(
+                true,
+                error,
+                committed(Some("https://fixture.invalid/current")),
+                Query::Auth,
+            )
+            .await;
+            let response: Value = serde_json::from_str(&result.unwrap()).unwrap();
+            assert_eq!(response["success"], false, "{response}");
+            let message = response["error"].as_str().unwrap();
+            assert!(
+                message.contains(if error.is_empty() {
+                    "current document reports origin"
+                } else {
+                    "could not verify the current document's origin"
+                }),
+                "{message}"
+            );
+            assert!(!message.contains("the tab moved"), "{message}");
+            assert!(!requests.iter().any(|r| r["method"]
+                .as_str()
+                .is_some_and(|m| m.starts_with("Input."))));
+        }
+    }
+
+    #[tokio::test]
+    async fn protected_menu_cleanup_requires_a_positive_protocol_reply() {
+        let (result, requests) = query(true, "", committed(None), Query::MalformedAccessible).await;
+        assert_eq!(result.unwrap(), "false");
+        assert_eq!(requests[0]["method"], "Page.getFrameTree");
+        for (error, accessible, blocked) in [
+            ("", "true", "false"),
+            ("debugger_access_denied: protected frame", "false", "true"),
+            ("no isolated world on this target", "false", "false"),
+            ("ordinary renderer error", "false", "false"),
+        ] {
+            for (kind, expected) in [(Query::Accessible, accessible), (Query::Blocked, blocked)] {
+                let (result, requests) = query(true, error, committed(None), kind).await;
+                assert_eq!(result.unwrap(), expected);
+                assert_eq!(requests.len(), 1);
+                assert_eq!(requests[0]["method"], "Page.getFrameTree");
+            }
+        }
+    }
+}

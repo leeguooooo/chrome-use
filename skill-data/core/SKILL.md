@@ -113,9 +113,9 @@ waits for that choice, and your own `confirm` never approves it.
 | Loop, observe | `core/loop` |
 | Tab ownership, reconnect, cleanup | `core/tabs` |
 | Side panel, schedules, `mobile serve` | `core/agent-panel` |
-| Actions, bounded scroll, widgets, uploads, no `eval` | `core/interacting` |
+| Human clicks, headers, scroll, widgets, uploads, dates | `core/interacting` |
 | Reads, frames, shadow roots, screenshot crops | `core/reading` |
-| Waiting and observation limits | `core/waiting` |
+| Waiting, scroll animations, observation limits | `core/waiting` |
 | Ref identity, snapshot detail | `core/snapshot-refs` |
 | Diagnostics, profiles, launch, stealth | `core/connection` |
 | Repeats, output and verification | `core/behaviour` |
@@ -125,8 +125,8 @@ waits for that choice, and your own `confirm` never approves it.
 | CAPTCHA, slider, icon clicks | `core/captcha` |
 | Sensitive actions, untrusted text | `core/trust-boundaries` |
 | `[chrome-use Inspect & Ask]` message | `core/inspect-and-ask` |
-| Persistence, recovery, parallel sessions | `core/session-management` |
-| Failures | `core/known-traps`, `core/troubleshooting` |
+| Persistence, idle recovery, parallel sessions | `core/session-management` |
+| Blocked autofill frames, failures | `core/known-traps`, `core/troubleshooting` |
 | Commands, flags, env | `core/commands` |
 | Page leaks (`diag pages`) | `core/diag-pages` |
 | Install, runners, `--full`, Git hooks | `core/installation` |

@@ -2872,7 +2872,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             "launch" => handle_launch(cmd, state).await,
             "navigate" => handle_navigate(cmd, state).await,
             "read" => handle_read(cmd, state).await,
-            "url" => handle_url(state).await,
+            "url" => handle_address_url(state).await,
             "cdp_url" => handle_cdp_url(state),
             "inspect" => handle_inspect(state).await,
             "title" => handle_title(state).await,
@@ -6096,6 +6096,16 @@ mod vendor_probe_tests {
             humanize::HumanizeLevel::Fast
         );
     }
+}
+
+/// Public URL diagnostics remain available even when a protected frame blocks
+/// the renderer. Internal DOM readers keep `handle_url` for origin attribution.
+async fn handle_address_url(state: &DaemonState) -> Result<Value, String> {
+    if let Some(mgr) = state.browser.as_ref() {
+        let url = mgr.get_address_bar_url().await?;
+        return Ok(json!({ "url": url }));
+    }
+    handle_url(state).await
 }
 
 async fn handle_url(state: &DaemonState) -> Result<Value, String> {
@@ -17880,8 +17890,8 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
         let mut out = first;
         if let Some(Value::String(e)) = out.get_mut("error") {
             e.push_str(
-                "\nchrome-use closed the menu (it hid the tab for a moment or took focus out of the field), so the tab works \
-                 again, but did not repeat this command: it may already have run in part. \
+                "\nChrome accepted a direct frame-tree read after menu recovery was attempted. This does not prove \
+                 that the renderer or login is ready. This command was not repeated: it may already have run in part. \
                  Check the page (`snapshot -i`), then run it again if it did not take effect. \
                  Do not close the tab or the session over this.",
             );
@@ -17918,11 +17928,11 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
     second
 }
 
-/// The warning on a command that succeeded after the menu was closed.
+/// The warning on a command that succeeded after attempted menu recovery.
 fn with_menu_warning(mut out: Value, what: &str, note: Option<String>) -> Value {
     let mut warning = format!(
-        "a password manager's inline menu (another extension's frame) blocked this tab; \
-         chrome-use closed it (it hid the tab for a moment or took focus out of the field), {what}"
+        "another extension's frame blocked debugger access to this tab; chrome-use attempted menu recovery \
+         and Chrome then accepted a direct frame-tree read, {what}"
     );
     if let Some(note) = note {
         warning.push_str(&format!(". {note}"));
@@ -17981,10 +17991,10 @@ async fn read_back_fill(
     if actual != wanted {
         return None;
     }
-    let mut warning = "a password manager's inline menu opened on this field and blocked \
-                       the fill's follow-up; chrome-use closed it (it hid the tab for a moment \
-                       or took focus out of the field) and confirmed the field holds the value. Focus has left the field, so \
-                       `press Enter` needs `--selector` to reach it."
+    let mut warning = "another extension's frame blocked the fill's follow-up. Menu recovery was \
+                       attempted and the field was read back with the requested value. This does not prove \
+                       the menu closed or login completed. Focus may have moved; use `press Enter --selector` \
+                       to address this field explicitly."
         .to_string();
     if let Some(note) = note {
         warning.push_str(&format!(" {note}."));
@@ -24353,7 +24363,9 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                 .to_string(),
         );
     }
-    let current = mgr.get_url().await.unwrap_or_default();
+    let current = mgr.get_url().await.map_err(|error| format!(
+        "auth login --bwu: could not verify the current document's origin before filling ({error}). Nothing was filled."
+    ))?;
     let have = url::Url::parse(&current)
         .ok()
         .map(|u| u.origin())
@@ -24361,8 +24373,8 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
         .map(|o| o.ascii_serialization());
     if have.as_deref() != Some(origin.as_str()) {
         return Err(format!(
-            "auth login --bwu: the tab moved to {} after the account was chosen for {origin}. \
-             Nothing was filled; run it again on the login page.",
+            "auth login --bwu: the current document reports origin {}, while the account was chosen for {origin}. \
+             Nothing was filled; inspect the page before trying again.",
             have.unwrap_or_else(|| "a page without an origin".to_string())
         ));
     }
@@ -25206,13 +25218,12 @@ fn auth_warning(closed: u32, left_open: Option<String>) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(". "))
 }
 
-/// The warning on a login that had to close a password manager's inline menu.
+/// The warning on a login that required password-manager menu recovery.
 fn auth_menu_warning(times: u32) -> String {
     format!(
-        "a password manager's inline menu (another extension's frame, which blocks every debugger \
-         command on the tab) opened on a login field {times} time(s); chrome-use hid the tab for a \
-         moment each time to close it, and took focus out of the field. To stop it, the user can \
-         turn off that extension's inline menu for this site."
+        "another extension's frame blocked debugger access during this login. Menu recovery was attempted \
+         {times} time(s), with a direct frame-tree read accepted afterward. The recovery may have \
+         moved focus out of the input; if its UI reopens, close it in the browser before continuing."
     )
 }
 
@@ -27287,7 +27298,11 @@ mod tests {
         );
         let w = out["warning"].as_str().unwrap();
         assert!(
-            w.contains("hid the tab for a moment") && w.contains("different tab"),
+            w.contains("accepted a direct frame-tree read") && w.contains("different tab"),
+            "{w}"
+        );
+        assert!(
+            !w.contains("closed it") && !w.contains("tab works again"),
             "{w}"
         );
         let kept = with_menu_warning(json!({ "success": true, "warning": "x" }), "y", None);

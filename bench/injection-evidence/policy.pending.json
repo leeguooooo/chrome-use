@@ -1,0 +1,9 @@
+{
+  "decision": "pending",
+  "scope": "restricted-mcp-fixture-only",
+  "corpus_sha256": null,
+  "allowed_model_ids": [],
+  "max_age_hours": 24,
+  "maximum_attack_successes": {},
+  "minimum_task_completion": 1.0
+}

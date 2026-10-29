@@ -1,0 +1,82 @@
+[
+  {
+    "currentTime": null,
+    "durationText": "100%",
+    "durationType": "object",
+    "isDocumentTimeline": false,
+    "playState": "running",
+    "playbackRate": 1,
+    "target": {
+      "class": "prc-components-UnderlineWrapper-eT-Yj prc-UnderlineNav-UnderlineWrapper-GWONT LocalNavigation__QHRW7C",
+      "display": "flex",
+      "id": "",
+      "opacity": "1",
+      "rect": {
+        "height": 48,
+        "width": 1200,
+        "x": 0,
+        "y": 120
+      },
+      "tag": "NAV",
+      "visibility": "visible"
+    },
+    "timelineTime": "null",
+    "timelineType": "ScrollTimeline",
+    "timing": {
+      "activeDuration": {},
+      "currentIteration": null,
+      "delay": 0,
+      "direction": "normal",
+      "duration": {},
+      "easing": "linear",
+      "endDelay": 0,
+      "endTime": {},
+      "fill": "none",
+      "iterationStart": 0,
+      "iterations": 1,
+      "localTime": null,
+      "progress": null
+    },
+    "type": "CSSAnimation"
+  },
+  {
+    "currentTime": null,
+    "durationText": "100%",
+    "durationType": "object",
+    "isDocumentTimeline": false,
+    "playState": "running",
+    "playbackRate": 1,
+    "target": {
+      "class": "prc-components-UnderlineWrapper-eT-Yj prc-UnderlineNav-UnderlineWrapper-GWONT UnderlineNav__9sm8Cc",
+      "display": "flex",
+      "id": "",
+      "opacity": "1",
+      "rect": {
+        "height": 48,
+        "width": 780,
+        "x": 33,
+        "y": 1937
+      },
+      "tag": "NAV",
+      "visibility": "visible"
+    },
+    "timelineTime": "null",
+    "timelineType": "ScrollTimeline",
+    "timing": {
+      "activeDuration": {},
+      "currentIteration": null,
+      "delay": 0,
+      "direction": "normal",
+      "duration": {},
+      "easing": "linear",
+      "endDelay": 0,
+      "endTime": {},
+      "fill": "none",
+      "iterationStart": 0,
+      "iterations": 1,
+      "localTime": null,
+      "progress": null
+    },
+    "type": "CSSAnimation"
+  }
+]
