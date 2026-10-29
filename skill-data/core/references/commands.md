@@ -1191,3 +1191,11 @@ secret command; do not retrieve them into the conversation. Pending verification
 returns `needs` and `next`; only an observed completed sign-in gets `signedIn`.
 Fields that only indicate verification, including inputs limited to fewer than six characters, stay pending (`otp: unsupported`); no TOTP is fetched or submitted automatically. This includes five-character Steam fields; inspect those before explicit `--totp`.
 See `core/authentication` for setup, authorization and custom-sequence limits.
+
+### Script approval barriers
+
+Scripts pause at approval with `ok:false`, `confirmation_required:true`, the approval ID and prior operation trace; the CLI exits 3. JSON `optional`/`or` and JavaScript catches cannot advance past a held gate. Later bridge calls are blocked for that execution, including raw bridge calls. Existing `autoConfirm` may answer a command prompt, but a second native gate or refusal stops the program. Approve outside the paused execution, then continue only the remaining operations. A named JavaScript context starts a fresh execution next time; this does not approve or consume the held request.
+
+Ordinary operation errors keep their existing catch, optional and fallback behavior. Pending trace entries contain operation names/status, never the held command arguments. Named contexts retain local declarations, so inspect their state after a paused program before continuing.
+
+JSON refusals after `autoConfirm` carry `approval_refused:true` through nested programs; outer optional steps and catches also stop further browser calls. Ordinary errors and initial direct denials retain explicit optional/catch handling.

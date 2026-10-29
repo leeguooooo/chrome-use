@@ -365,6 +365,10 @@ Ant Design / rc-picker 日期范围请先填开始时间，再填结束时间。
 
 脚本在 `advisories`（CLI `script --json` 顶层；daemon envelope 中为 `data.advisories`） 中保留提示，最多 20 条，嵌套脚本和后续失败的运行也会保留。JSON op-list 的对应 `steps` 条目另带 `noProgress`；文字输出只打印汇总提示一次。JS 脚本失败时保留 `ok:false`、`return:null`、`error`、`logs` 和 `advisories`。daemon envelope 中嵌套脚本的 `data.ok:false` 会使父脚本失败，即使传输层 `success` 为 true；调度成功不能证明程序成功。
 
+脚本遇到审批时返回 `ok:false`、`confirmation_required:true`、审批 ID 和此前的操作记录，CLI 退出码为 3。JSON 的 `optional` / `or` 和 JavaScript 的 `catch` 都不能越过待审批步骤，本次执行后续的 bridge 调用也不会发给浏览器。现有 `autoConfirm` 可以回答命令级确认，但后续的原生审批或安全拒绝仍会停止程序。请在脚本外完成审批，再继续剩余操作，不要重跑已经完成的步骤。命名 JavaScript 上下文的下一次执行会重新开始检查，但不会自动批准或消费原来的请求。
+
+JSON 在 `autoConfirm` 后遇到的安全拒绝会以 `approval_refused:true` 向外层传播，外层 `optional` 或 `catch` 也会停止后续浏览器调用。普通错误和最初的直接拒绝仍按显式 `optional` / `catch` 处理。
+
 普通 CLI `--json` 返回 `success`/`data`/`timing` envelope；加 `--no-timing`（或 `AGENT_BROWSER_TIMING=0`）时回复不带 `timing`，`timing.jsonl` 照常记录。`batch --json` 打印 `{command,success,result,error}` 条目的数组；`script --json` 打印程序结果本身（`ok`、`return`、`logs`、`error`、`advisories` 等）。batch 和 script 的 CLI 输出没有顶层 `timing`。
 
 MCP `chrome_use_snapshot` 可用 `diff: true` 增量重读同一页面；快照选项（包括 filter）必须与基线一致，对应 CLI `snapshot --diff`。无有效基线时返回完整树及 `diffNote`；需要当前完整树时省略 diff 或设为 false。增量是片段，须保留基线，删除行不能当作当前可操作控件。

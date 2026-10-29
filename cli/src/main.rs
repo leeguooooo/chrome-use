@@ -5000,13 +5000,30 @@ fn run_script(flags: &Flags, mut cmd: serde_json::Value) {
     dispatch_script(flags, cmd);
 }
 
-/// Send a prepared `script` command and map its 3-way exit code.
+/// Send a prepared script: 0 completed, 1 failed, 2 invalid, 3 pending approval.
 /// Split out of `run_script` so context management (#289), which has no program
 /// to load, can reach it without going through the stdin read.
 fn dispatch_script(flags: &Flags, cmd: serde_json::Value) {
     match send_command(cmd, &flags.session) {
         Ok(resp) => {
             let data = resp.data.clone().unwrap_or(serde_json::Value::Null);
+            if resp.success && data["confirmation_required"] == true {
+                if flags.json {
+                    println!("{}", serde_json::to_string(&data).unwrap_or_default());
+                } else {
+                    let gate = connection::Response {
+                        success: true,
+                        data: Some(native::script::approval_payload(&data)),
+                        ..Default::default()
+                    };
+                    print_response_with_opts(
+                        &gate,
+                        Some("script"),
+                        &OutputOptions::from_flags(flags),
+                    );
+                }
+                exit(3);
+            }
             if flags.json {
                 println!("{}", serde_json::to_string(&data).unwrap_or_default());
             } else if let Some(e) = &resp.error {
@@ -5780,3 +5797,7 @@ mod tests {
         assert!(m.contains("--session"), "{m}");
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "script_confirmation_cli_tests.rs"]
+mod script_confirmation_cli_tests;

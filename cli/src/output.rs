@@ -6842,6 +6842,9 @@ Batch:
                               --arg k=v / --arg-env k=ENV_VAR seed variables;
                               a do step's "or": [...] lists fallbacks.
                               Script ok:false fails even if transport succeeded.
+                              Pending approval exits 3 with its ID and prior trace;
+                              optional/fallback/catch cannot advance that execution.
+                              Approve outside it, then continue remaining operations.
                               CLI JSON prints bare program data; advisories retains
                               up to 20 hints (daemon: data.advisories), including
                               nested/failed scripts; text prints them once.
