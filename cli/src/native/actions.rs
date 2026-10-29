@@ -26868,7 +26868,10 @@ mod tests {
             w.contains("accepted a direct frame-tree read") && w.contains("different tab"),
             "{w}"
         );
-        assert!(!w.contains("closed it") && !w.contains("tab works again"), "{w}");
+        assert!(
+            !w.contains("closed it") && !w.contains("tab works again"),
+            "{w}"
+        );
         let kept = with_menu_warning(json!({ "success": true, "warning": "x" }), "y", None);
         assert_eq!(kept["warning"], "x");
     }
