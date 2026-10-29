@@ -625,7 +625,10 @@ async fn scroll_into_view_if_needed(
             &CallFunctionOnParams {
                 function_declaration: SCROLL_AND_PROBE_DISABLED_JS.to_string(),
                 object_id: Some(object_id.clone()),
-                arguments: Some(vec![serde_json::json!({"value":allow_recenter})]),
+                arguments: Some(vec![CallArgument {
+                    value: Some(serde_json::json!(allow_recenter)),
+                    object_id: None,
+                }]),
                 return_by_value: Some(true),
                 await_promise: Some(false),
             },
