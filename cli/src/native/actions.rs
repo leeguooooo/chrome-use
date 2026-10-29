@@ -17631,7 +17631,7 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
     second
 }
 
-/// The warning on a command that succeeded after the menu was closed.
+/// The warning on a command that succeeded after attempted menu recovery.
 fn with_menu_warning(mut out: Value, what: &str, note: Option<String>) -> Value {
     let mut warning = format!(
         "another extension's frame blocked debugger access to this tab; chrome-use attempted menu recovery \
@@ -17686,10 +17686,10 @@ async fn read_back_fill(
     if actual != wanted {
         return None;
     }
-    let mut warning = "a password manager's inline menu opened on this field and blocked \
-                       the fill's follow-up; chrome-use closed it (it hid the tab for a moment \
-                       or took focus out of the field) and confirmed the field holds the value. Focus has left the field, so \
-                       `press Enter` needs `--selector` to reach it."
+    let mut warning = "another extension's frame blocked the fill's follow-up. Menu recovery was \
+                       attempted and the field was read back with the requested value. This does not prove \
+                       the menu closed or login completed. Focus may have moved; use `press Enter --selector` \
+                       to address this field explicitly."
         .to_string();
     if let Some(note) = note {
         warning.push_str(&format!(" {note}."));
@@ -24913,7 +24913,7 @@ fn auth_warning(closed: u32, left_open: Option<String>) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(". "))
 }
 
-/// The warning on a login that had to close a password manager's inline menu.
+/// The warning on a login that required password-manager menu recovery.
 fn auth_menu_warning(times: u32) -> String {
     format!(
         "another extension's frame blocked debugger access during this login. Menu recovery was attempted \
