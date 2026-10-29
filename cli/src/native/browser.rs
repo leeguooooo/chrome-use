@@ -15438,7 +15438,7 @@ mod protected_url_tests {
             Query::Url => browser.get_address_bar_url().await,
             Query::RendererUrl => browser.get_url().await,
             Query::Auth => {
-                let mut state = crate::native::state::DaemonState::new();
+                let mut state = crate::native::actions::DaemonState::new();
                 state.browser = Some(browser);
                 let cmd = json!({"id":"origin-check", "action":"auth_login_bwu", "origin":"https://fixture.invalid", "username":"fixture-user", "password":"fixture-password"});
                 let response =
