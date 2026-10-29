@@ -40,6 +40,7 @@ mod silence;
 mod site;
 mod site_cover;
 mod skills;
+mod sqlite;
 mod system_load;
 mod teach;
 mod test_runner;

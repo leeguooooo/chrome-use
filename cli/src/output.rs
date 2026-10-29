@@ -3755,8 +3755,13 @@ Examples:
             r##"
 chrome-use scrollintoview - Scroll element into view
 
-Uses instant scrolling even with CSS smooth scrolling; errors if the target
-stays outside the viewport.
+Uses humanized wheel input first, with a 10-second phase deadline including
+CDP reads and input replies. A timed-out or errored phase stops without sending
+a direct-scroll fallback. Once input was attempted, action_outcome_unknown
+means Chrome may still be handling it: inspect the page before retrying.
+A completed wheel phase that could not reach the target can fall back to one
+instant scroll (15-second deadline), even with CSS smooth scrolling.
+Errors if the target stays outside the viewport.
 
 Usage: chrome-use scrollintoview <selector>
 
@@ -5764,6 +5769,9 @@ cookie NAMES in the profile's on-disk cookie store (never values; no tab is
 opened). "signed in" = a cookie the site only sets for a signed-in user (known
 sites); "session cookies present" = session-like names, not proof. Where a site
 adapter <site>/me exists, the row shows the command that reports the account.
+On macOS, reads prefer PATH sqlite3 and use /usr/bin/sqlite3 only after a missing
+or unsupported-format executable cannot start. Execution permission denials and
+started-query failures stay errors; locked/corrupt databases are not retried.
 
 Pick a profile:
   --browser <name|prefix|dir|email|id>   e.g. --browser Davian, --browser d,

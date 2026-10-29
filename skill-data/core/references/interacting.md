@@ -632,3 +632,5 @@ chrome-use eval "document.querySelector('#stubborn').click()"   # direct DOM cli
 >
 > Drop to `eval` when the verb genuinely doesn't fit (custom widget, closed
 > shadow, a page global) — not as the default for things a verb already does.
+
+`scrollintoview` bounds the entire humanized wheel phase to 10 seconds, including target lookup and CDP replies. A stalled or errored phase stops without a direct-scroll fallback. If input was attempted, the error is `action_outcome_unknown`: Chrome may still be processing it, so inspect before retrying. A completed wheel phase that cannot reach the target may still use the existing direct-scroll fallback, which has its own 15-second limit.
