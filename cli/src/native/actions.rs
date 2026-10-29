@@ -24204,7 +24204,8 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             } else {
                 AUTH_USER_SELECTORS.iter()
                     .chain(&["input[type=password]"])
-                    .chain(if otp.is_some() || defer_otp { AUTH_OTP_SELECTORS } else { AUTH_CODE_HINT_SELECTORS })
+                    .chain(if otp.is_some() || defer_otp { AUTH_OTP_SELECTORS } else { &[] })
+                    .chain(AUTH_CODE_HINT_SELECTORS)
                     .copied().collect()
             };
             let probe = format!("bwuprobe-{marker}");
@@ -24473,16 +24474,29 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             // The login went through either way: a menu this cannot close is
             // reported with the result, not as a failed login.
             let tag = format!("bwuneed-{marker}");
-            let selectors = if defer_otp { AUTH_OTP_SELECTORS } else { AUTH_CODE_HINT_SELECTORS };
+            let selectors: Vec<&str> = if defer_otp {
+                AUTH_OTP_SELECTORS.iter().chain(AUTH_CODE_HINT_SELECTORS).copied().collect()
+            } else {
+                AUTH_CODE_HINT_SELECTORS.to_vec()
+            };
             let wait = if defer_otp && submitted { AUTH_BWU_OTP_WAIT_MS } else { AUTH_BWU_PROBE_MS };
-            let mut found = mark_usable_auth_element(&mgr.client, &scope, selectors, &tag, wait, true, pin).await;
+            let mut found = mark_usable_auth_element(&mgr.client, &scope, &selectors, &tag, wait, true, pin).await;
             if matches!(&found, Err(e) if super::browser::is_debugger_access_denied(e))
                 && auth_close_menu(&mut *mgr, &mut menu_closed, "").await.is_ok()
             {
-                found = mark_usable_auth_element(&mgr.client, &scope, selectors, &tag, 0, true, pin).await;
+                found = mark_usable_auth_element(&mgr.client, &scope, &selectors, &tag, 0, true, pin).await;
             }
             if found.is_ok() {
                 needs = Some("a verification code");
+                if defer_otp {
+                    let probe = format!("(() => {{ const el = cuAuth({tag}); return !!el && el.maxLength !== 1 && el.matches({selectors}); }})()",
+                        tag = serde_json::to_string(&tag).unwrap_or_default(),
+                        selectors = serde_json::to_string(&AUTH_OTP_SELECTORS.join(",")).unwrap_or_default());
+                    if scope_eval(&mgr.client, &scope, &probe, true).await
+                        .ok().and_then(|r| r.result.value).and_then(|v| v.as_bool()) != Some(true) {
+                        otp_state = "unsupported";
+                    }
+                }
             }
         }
         // Submitted and nothing more to type: the login is reported only with
@@ -24571,7 +24585,9 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     }
     if let Some(what) = needs {
         out["needs"] = json!(what);
-        out["next"] = json!(if defer_otp {
+        out["next"] = json!(if otp_state == "unsupported" {
+            "The page still asks for a verification code, but chrome-use could not identify a field that can safely receive a whole TOTP. No code was read or submitted. Inspect the challenge or hand it to the user; the login is not complete.".to_string()
+        } else if defer_otp {
             "The code field is ready; fetch a fresh TOTP from the selected vault item and continue with --totp.".to_string()
         } else {
             auth_needs_code_hint(scope.frame_origin.as_deref())

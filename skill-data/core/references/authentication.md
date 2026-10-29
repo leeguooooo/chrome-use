@@ -149,7 +149,10 @@ The login's authenticator field in Bitwarden must contain the TOTP setup key or
 generate future codes. Migrate the setup key through the vault UI; never paste
 it into chat or shell arguments. SMS, email and push approval require their own
 source. Pending verification is shown as `needs` + `next`, never `signedIn`;
-auto-login leaves that page in place. Custom `_autotype` sequences retain their
+auto-login leaves that page in place.
+Fields that only indicate verification, including single-digit inputs, stay pending
+(`otp: unsupported`); no TOTP is fetched or submitted automatically.
+Custom `_autotype` sequences retain their
 original timing and fetch all fields before the sequence starts. If their code
 expires, inspect the page and use `--totp` on its authenticator challenge.
 

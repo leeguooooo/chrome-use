@@ -97,7 +97,7 @@ passwords in shell arguments (`core/authentication`). An ordinary CAPTCHA in
 an authorized task is a step to try (`core/captcha`). On a login wall
 (`loginWall`), relay its `ask` question if present, else try
 `auth login --bwu`. Already on a TOTP challenge: use `auth login --bwu --totp --item <id>`
-(`core/authentication`); the vault must hold its setup key. For a step only the human can do: `session handoff`,
+(`core/authentication`); the vault must hold its setup key. Unrecognized/split code fields stay pending. For a step only the human can do: `session handoff`,
 explain it, wait, then `session resume`. Full text, including QR
 `loginVerification`: `core/trust-boundaries`.
 `Confirmation required:` with a `Site:` line (exit 3) is a per-site

@@ -5044,6 +5044,7 @@ Bitwarden Login Options:
   possibly a second authorization). Rejected codes are never retried automatically.
   Store the authenticator setup key in the Bitwarden login, not just its password.
   Pending verification returns needs + next and leaves the page in place.
+  Unrecognized/single-digit fields remain pending (otp: unsupported); no code is read.
   Custom _autotype sequences still fetch all fields before starting.
   On the extension relay, passkeys are unsupported; password/TOTP still work.
   In --launch mode, password login can also answer a passkey second factor.

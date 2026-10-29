@@ -8124,6 +8124,42 @@ async fn e2e_auth_login_bwu_reports_missing_code_on_challenge_page() {
     server.abort();
 }
 
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_keeps_hint_only_challenges_pending() {
+    for (code_only, has_seed, split) in [
+        (false, true, false),
+        (true, true, false),
+        (true, false, false),
+        (false, true, true),
+    ] {
+        let (mut state, server, origin) = otp_fixture(code_only, false).await;
+        if split {
+            assert_evaluate(&mut state, "single-digit", "otp.maxLength = 1", json!(1)).await;
+        } else {
+            assert_evaluate(&mut state, "hint-only", "(() => { const el = otp; el.removeAttribute('autocomplete'); el.removeAttribute('name'); el.id = 'verification'; el.setAttribute('aria-label', 'verification code'); return true; })()", json!(true)).await;
+        }
+        if code_only {
+            assert_evaluate(&mut state, "hide", "credentials.hidden = true", json!(true)).await;
+        }
+        let response = Box::pin(execute_command(&json!({"id":"pending", "action":"auth_login_bwu", "origin":origin, "username":"fixture@example.com", "password":"fixture-password", "deferOtp":has_seed}), &mut state)).await;
+        assert_success(&response);
+        let data = get_data(&response);
+        assert_eq!(data["needs"], "a verification code", "{data}");
+        assert_ne!(data["signedIn"], true, "{data}");
+        assert_eq!(data["otp"], if has_seed { "unsupported" } else { "none" });
+        assert_evaluate(
+            &mut state,
+            "untouched-code",
+            "[codeSubmits, challenge.querySelector('input').value]",
+            json!([0, ""]),
+        )
+        .await;
+        let _ = execute_command(&json!({"id":"close", "action":"close"}), &mut state).await;
+        server.abort();
+    }
+}
+
 /// #482: a submit the site did not take is a failure that says what the page
 /// shows, never `submitted: true` on its own.
 #[tokio::test]
