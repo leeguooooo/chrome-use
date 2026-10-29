@@ -16907,7 +16907,7 @@ new MutationObserver(rs=>targetMutations.push(...rs)).observe(document.documentE
         .enumerate()
     {
         let header = if mode == "modal" {
-            "<div id=\"modal\" role=\"dialog\" aria-modal=\"true\"><header>Modal header</header></div>"
+            "<div id=\"modal\" role=\"dialog\" aria-modal=\"true\" hidden><header>Modal header</header></div>"
         } else {
             "<header>Sticky header</header>"
         };
@@ -16933,6 +16933,9 @@ new MutationObserver(rs=>targetMutations.push(...rs)).observe(document.documentE
             .map(|(r, _)| r)
             .unwrap();
         eval_in(&mut state, "scrollTo(0,600)").await;
+        if mode == "modal" {
+            eval_in(&mut state, "document.getElementById('modal').hidden=false").await;
+        }
         eval_in(
             &mut state,
             "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
