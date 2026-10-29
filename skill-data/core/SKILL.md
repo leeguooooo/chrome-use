@@ -114,7 +114,7 @@ waits for that choice, and your own `confirm` never approves it.
 | Toolbar side panel, conversations, schedules, `mobile serve` | `core/agent-panel` |
 | Verbs, uploads, widgets, date pickers, `eval` alternatives | `core/interacting` |
 | Scoped reads, frames, shadow roots, screenshots | `core/reading` |
-| `wait`, mid-transition reads, observation limits | `core/waiting` |
+| `wait`, mid-transition reads, scroll-driven animations, observation limits | `core/waiting` |
 | Ref identity, snapshot detail | `core/snapshot-refs` |
 | `status`/`doctor`, extension, profiles, launch, stealth | `core/connection` |
 | Repeated steps, output reading, verification | `core/behaviour` |

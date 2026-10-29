@@ -12488,6 +12488,62 @@ document.getElementById('go').addEventListener('click', async () => {
 /// quiet window passes.
 #[tokio::test]
 #[ignore]
+async fn e2e_settle_ignores_scroll_timelines_and_waits_for_clock_animations() {
+    let page = r##"<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body {height:3000px} #scrollTarget {position:sticky;top:0}</style>
+<div id="scrollTarget">Scroll decoration</div><button id="finiteTarget">Finite action</button>
+<script>
+window.scrollAnimation = scrollTarget.animate([{opacity:.5},{opacity:1}], {duration:'auto',timeline:new ScrollTimeline({source:document.scrollingElement})});
+window.finiteDone = false;
+window.startFinite = () => {
+ const a = finiteTarget.animate([{opacity:.5},{opacity:1}], {duration:350});
+ a.finished.then(() => finiteDone = true);
+ return {running:a.playState, durationType:typeof a.effect.getComputedTiming().duration};
+};
+</script>"##.to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    assert_evaluate(&mut state, "scroll-kind", "({kind:scrollAnimation.timeline.constructor.name,durationType:typeof scrollAnimation.effect.getComputedTiming().duration,duration:String(scrollAnimation.effect.getComputedTiming().duration)})", json!({"kind":"ScrollTimeline","durationType":"object","duration":"100%"})).await;
+    let snapshot = Box::pin(execute_command(
+        &json!({"id":"scroll-snapshot","action":"snapshot","interactive":true}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&snapshot);
+    assert_eq!(get_data(&snapshot)["settle"]["quiet"], true, "{snapshot}");
+    assert_eq!(get_data(&snapshot)["settle"]["pending"], json!([]));
+    assert!(get_data(&snapshot)["snapshot"]
+        .as_str()
+        .unwrap()
+        .contains("Finite action"));
+    assert_evaluate(
+        &mut state,
+        "start-finite",
+        "startFinite()",
+        json!({"running":"running","durationType":"number"}),
+    )
+    .await;
+    let finite = Box::pin(execute_command(
+        &json!({"id":"finite-snapshot","action":"snapshot","interactive":true}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&finite);
+    assert_eq!(get_data(&finite)["settle"]["quiet"], true, "{finite}");
+    assert_evaluate(&mut state, "finished", "finiteDone", json!(true)).await;
+    assert_success(
+        &Box::pin(execute_command(
+            &json!({"id":"close","action":"close"}),
+            &mut state,
+        ))
+        .await,
+    );
+    server.abort();
+}
+
+#[tokio::test]
+#[ignore]
 async fn e2e_settle_is_cheap_on_a_static_page() {
     let page = r##"<!doctype html><meta charset="utf-8"><title>static</title>
 <button>Only button</button>"##

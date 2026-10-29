@@ -212,3 +212,10 @@ Every invocation has a timeout. Failures exit nonzero; cleanup closes only the
 owned session. This is correctness acceptance,
 not a speed measurement or a model round-trip benchmark. Matching a binary hash
 does not independently establish its source provenance.
+
+## Snapshot settle regression
+
+[The scroll-timeline report](reports/settle-769/README.md) includes the release
+A/B samples for issue #769. `settle-snapshot-check.py` repeats those checks on
+the configured SSH build host using separate empty headed profiles, artifact
+receipts, alternating sides, output hashes and fixture activity assertions.

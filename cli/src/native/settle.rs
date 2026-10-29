@@ -560,7 +560,8 @@ fn page_quiet_promise(quiet_ms: u64, budget_ms: u64, reaction_ms: u64, seeded: b
         if (a.playState !== 'running') return false;
         const t = a.effect && a.effect.getComputedTiming ? a.effect.getComputedTiming() : null;
         if (!t) return false;
-        if (t.iterations === Infinity || t.duration === Infinity) return false;
+        // Scroll-linked timelines use percentage CSSNumericValues, not a finite wall-clock duration.
+        if (t.iterations === Infinity || typeof t.duration !== 'number' || !Number.isFinite(t.duration)) return false;
         return true;
       }});
     }} catch (e) {{ return false; }}
@@ -1104,6 +1105,54 @@ mod tests {
         // A ceiling shorter than the quiet window cannot promise more than itself.
         assert_eq!(reaction_window_ms(50, 100), 50);
         assert_eq!(reaction_window_ms(150, 100), 100);
+    }
+
+    #[test]
+    fn only_finite_clock_animations_keep_the_page_busy() {
+        let Some(node) = std::env::var_os("PATH").and_then(|p| {
+            std::env::split_paths(&p)
+                .map(|d| d.join("node"))
+                .find(|n| n.is_file())
+        }) else {
+            return;
+        };
+        for (duration, iterations, expected_ms) in [
+            ("({toString: () => '100%'})", "1", 16),
+            ("Infinity", "1", 16),
+            ("NaN", "1", 16),
+            ("80", "Infinity", 16),
+            ("80", "1", 80),
+        ] {
+            let wait = page_quiet_script(16, 200, 0);
+            let script = format!(
+                r#"
+let clock = 0;
+globalThis.performance = {{ now: () => clock }};
+globalThis.setTimeout = (fn, ms) => {{ clock += ms; queueMicrotask(fn); }};
+globalThis.MutationObserver = class {{ observe() {{}} disconnect() {{}} }};
+globalThis.document = {{ getAnimations: () => [{{
+  get playState() {{ return clock < 80 ? 'running' : 'finished'; }},
+  effect: {{ getComputedTiming: () => ({{duration: {duration}, iterations: {iterations}}}) }}
+}}] }};
+Promise.resolve({wait}).then(r => console.log(JSON.stringify(r)));
+"#
+            );
+            let out = std::process::Command::new(&node)
+                .args(["-e", &script])
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let result: Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(
+                result["waitedMs"], expected_ms,
+                "{duration} {iterations}: {result}"
+            );
+            assert_eq!(result["pending"], json!([]));
+        }
     }
 
     #[test]

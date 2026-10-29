@@ -7091,6 +7091,8 @@ Options:
                              settle.pendingRequests). A mutation the
                              action made while being dispatched counts as its
                              reaction, so the wait then only owes the quiet window.
+                             Only finite time-based animations block; scroll-driven
+                             percentage timelines are ignored.
   --no-settle                Capture immediately, without waiting for the page
                              to stop changing
   --with-screenshot <path>   Save the pixels alongside a structural observation
