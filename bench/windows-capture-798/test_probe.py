@@ -78,11 +78,21 @@ async function run(owned, url, resolveEarly) {
   assert.equal((await run(true,'http://127.0.0.1:12345.evil.test/report',false)).reads.length,0);
   assert.equal((await run(true,'http://127.0.0.1:12345/report',true)).reads.length,0);
   const live = await run(true,'http://127.0.0.1:12345/report',false);
-  assert.equal(live.reads.length,1); assert.equal(live.reads[0].method,'Runtime.evaluate');
-  assert.equal(live.emitted.find(x=>x.type==='dom-answer').captureStillPending,true);
+  const enabled = process.env.PROBE_EXPECT_DOM !== 'false';
+  assert.equal(live.reads.length, enabled ? 1 : 0);
+  if (enabled) {
+    assert.equal(live.reads[0].method,'Runtime.evaluate');
+    assert.equal(live.emitted.find(x=>x.type==='dom-answer').captureStillPending,true);
+  }
 })().catch(e=>{console.error(e);process.exitCode=1});
 '''
             env = dict(__import__('os').environ, PROBE_OBSERVER=observer)
+            subprocess.run(["node", "-e", driver], env=env, check=True)
+            disabled = Path(tmp) / "without-dom-control"
+            probe.instrument(root / "extensions/ab-connect", disabled,
+                "http://127.0.0.1:12345", "case", pending_dom_control=False)
+            source = (disabled / "background.js").read_text()
+            env.update(PROBE_OBSERVER=source[source.index("async function observeFixtureCapture"):source.index(probe.START_ANCHOR)], PROBE_EXPECT_DOM="false")
             subprocess.run(["node", "-e", driver], env=env, check=True)
 
     def test_chrome_version_uses_file_metadata_without_starting_chrome(self):

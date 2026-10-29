@@ -15,6 +15,11 @@ on:
         description: Emulated device pixel ratio (1 or 2)
         required: true
         default: '1'
+      pending_dom_control:
+        description: Read the same attachment while capture is pending (disable for an observer-effect control)
+        type: boolean
+        required: true
+        default: true
 
 permissions:
   contents: read
@@ -32,6 +37,7 @@ jobs:
       PROBE_SAMPLES: ${{ inputs.samples }}
       PROBE_ROWS: ${{ inputs.rows }}
       PROBE_DPR: ${{ inputs.dpr }}
+      PROBE_PENDING_DOM: ${{ inputs.pending_dom_control }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -58,6 +64,7 @@ jobs:
           if ($env:PROBE_SAMPLES -notmatch '^[1-5]$') { throw 'samples must be 1-5' }
           if ($env:PROBE_ROWS -notmatch '^[0-9]+$' -or [int]$env:PROBE_ROWS -lt 100 -or [int]$env:PROBE_ROWS -gt 3000) { throw 'rows must be 100-3000' }
           if ($env:PROBE_DPR -notmatch '^[12]$') { throw 'dpr must be 1 or 2' }
+          if ($env:PROBE_PENDING_DOM -notmatch '^(true|false)$') { throw 'pending_dom_control must be true or false' }
           New-Item -ItemType Directory -Path probe-artifacts -Force | Out-Null
           cargo build --release --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc 2>&1 | Tee-Object probe-artifacts/build.log
           if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
@@ -81,7 +88,8 @@ jobs:
       - name: Run the Windows relay capture matrix
         shell: pwsh
         run: |
-          python bench/windows-capture-798/probe.py --binary "$env:PROBE_BINARY" --chrome "$env:PROBE_CHROME" --extension extensions/ab-connect --output probe-artifacts/results --samples $env:PROBE_SAMPLES --rows $env:PROBE_ROWS --dpr $env:PROBE_DPR
+          $control = if ($env:PROBE_PENDING_DOM -eq 'true') { '--pending-dom-control' } else { '--no-pending-dom-control' }
+          python bench/windows-capture-798/probe.py $control --binary "$env:PROBE_BINARY" --chrome "$env:PROBE_CHROME" --extension extensions/ab-connect --output probe-artifacts/results --samples $env:PROBE_SAMPLES --rows $env:PROBE_ROWS --dpr $env:PROBE_DPR
           if ($LASTEXITCODE -ne 0) { throw "Probe verdict is not PASS (exit $LASTEXITCODE); inspect summary and raw evidence" }
       - name: Retain diagnostic evidence even on failure
         if: always()

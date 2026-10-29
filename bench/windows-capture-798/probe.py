@@ -37,7 +37,7 @@ def tree_digest(root):
     return hashlib.sha256(json.dumps(files, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def instrument(extension, target, base_url, case_id):
+def instrument(extension, target, base_url, case_id, pending_dom_control=True):
     """Copy only public extension code and add a fixture-bound observer."""
     shutil.copytree(extension, target, ignore=shutil.ignore_patterns("*.test.js", ".DS_Store"))
     manifest_path = target / "manifest.json"
@@ -66,7 +66,7 @@ async function observeFixtureCapture(tabId, params, operation) {
   emit({ type: 'capture-start', startedMs: started, fixturePath: new URL(initial.url).pathname,
     request: { format: params?.format, clip: params?.clip,
       captureBeyondViewport: params?.captureBeyondViewport, fromSurface: params?.fromSurface } });
-  const timer = setTimeout(async () => {
+  const timer = __DOM_CONTROL__ ? setTimeout(async () => {
     if (!pending) return;
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (!pending || !ownedTabs.has(tabId) || !String(tab?.url || '').startsWith(__BASE__ + '/')) return;
@@ -85,7 +85,7 @@ async function observeFixtureCapture(tabId, params, operation) {
     } catch (error) {
       emit({ type: 'dom-error', sentMs, captureStillPending: pending, error: String(error?.message || error) });
     } finally { clearTimeout(timeout); }
-  }, Math.max(0, 2000 - (performance.now() - started)));
+  }, Math.max(0, 2000 - (performance.now() - started))) : null;
   operation.then(result => {
     pending = false; clearTimeout(timer);
     emit({ type: 'capture-answer', elapsedMs: performance.now() - started,
@@ -95,7 +95,7 @@ async function observeFixtureCapture(tabId, params, operation) {
     emit({ type: 'capture-error', elapsedMs: performance.now() - started, error: String(error?.message || error) });
   });
 }
-'''.replace("__SINK__", json.dumps(base_url + "/trace")).replace("__BASE__", json.dumps(base_url)).replace("__CASE__", json.dumps(case_id))
+'''.replace("__SINK__", json.dumps(base_url + "/trace")).replace("__BASE__", json.dumps(base_url)).replace("__CASE__", json.dumps(case_id)).replace("__DOM_CONTROL__", "true" if pending_dom_control else "false")
     replacement = """  const operation = observeDebuggerCommand(
     method,
     sendTabCommand(tabId, method, params, childSessionId, tabCommandDependencies()),
@@ -444,7 +444,7 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat):
     work.mkdir()
     artifact = output / case_id
     artifact.mkdir()
-    extension_id, diff, instrumented_hash = instrument(args.extension, work / "extension", fixture.base, case_id)
+    extension_id, diff, instrumented_hash = instrument(args.extension, work / "extension", fixture.base, case_id, args.pending_dom_control)
     (artifact / "instrumentation.diff").write_text(diff, encoding="utf-8")
     (artifact / "instrumented-manifest.json").write_text((work / "extension/manifest.json").read_text(encoding="utf-8"), encoding="utf-8")
     with Registry(args.binary, work, extension_id), (artifact / "chrome.log").open("w", encoding="utf-8") as chrome_log:
@@ -457,7 +457,7 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat):
             "--disable-extensions-except=" + str(work / "extension"), "--window-size=1280,800", "about:blank"],
             env=env, stdout=chrome_log, stderr=chrome_log)
         record = {"caseId": case_id, "state": state, "kind": kind, "repeat": repeat,
-                  "protocol": "extension-relay-instrumented", "instrumentedBackgroundSha256": instrumented_hash,
+                  "protocol": "extension-relay-instrumented", "pendingDomControl": args.pending_dom_control, "instrumentedBackgroundSha256": instrumented_hash,
                   "instrumentedExtensionSha256": tree_digest(work / "extension"),
                   "instrumentationDiff": str(artifact / "instrumentation.diff"), "setupVerified": False,
                   "stage": "relay-start"}
@@ -568,6 +568,7 @@ def main():
     parser.add_argument("--samples", type=int, default=5, choices=range(1, 6))
     parser.add_argument("--rows", type=int, default=1000, choices=range(100, 3001))
     parser.add_argument("--dpr", type=int, default=1, choices=(1, 2))
+    parser.add_argument("--pending-dom-control", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()
     if sys.platform != "win32" or os.environ.get("GITHUB_ACTIONS") != "true":
         parser.error("this probe only runs in an ephemeral Windows GitHub Actions job")
@@ -585,7 +586,7 @@ def main():
         "cliVersion": subprocess.check_output([str(args.binary), "--version"], text=True).strip(),
         "chromeFileVersion": file_version(args.chrome),
         "sourceBackgroundSha256": digest(args.extension / "background.js"), "rows": args.rows,
-        "samples": args.samples, "dpr": args.dpr, "instrumented": True,
+        "samples": args.samples, "dpr": args.dpr, "instrumented": True, "pendingDomControl": args.pending_dom_control,
         "scope": "Windows CI desktop + fresh source relay; no existing user session or other extensions"}
     (args.output / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     root = Path(tempfile.mkdtemp(prefix="cu-capture-"))

@@ -66,6 +66,13 @@ The fixture diagnostic therefore differs from the shipped extension; it is
 not evidence for a general stealth claim. No screenshot bytes, user reports,
 credentials or environment token dumps are sent to the sink.
 
+A raw DOM read could itself wake a renderer. The manual workflow's
+`pending_dom_control: false` option disables that read while retaining capture
+event logging and the same setup, for an observer-effect control. Compare that
+control if captures complete around the injected read or an instrumented run
+does not reproduce the report; do not call that difference a cause without
+repeatable evidence. The mode is recorded in metadata and every case.
+
 The ordinary post-capture CLI DOM read is retained separately. It may run the
 product's attachment-health recovery and is never presented as proof that the
 original attachment answered during the pending capture.
