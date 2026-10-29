@@ -386,6 +386,9 @@ pub async fn click_reporting(
             Ok(ClickOutcome::trusted("pointer", warning))
         }
         Err(e) => {
+            if scroll.header_recovered {
+                return Err(format!("click stopped before press: coordinate resolution failed after header wheel recovery ({e}); no mouse button was sent"));
+            }
             // (B) The coordinate path failed — typically a persistent overlay
             // failing the occlusion guard, or coordinates that won't resolve.
             // Fall back to a DOM-dispatched `.click()` on the intended element,
