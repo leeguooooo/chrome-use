@@ -96,7 +96,8 @@ personal data needs the user's authorization. Never print secrets or put
 passwords in shell arguments (`core/authentication`). Monaco clipboard fallback is opt-in (`core/commands`). An ordinary CAPTCHA in
 an authorized task is a step to try (`core/captcha`). On a login wall
 (`loginWall`), relay its `ask` question if present, else try
-`auth login --bwu`. For a step only the human can do: `session handoff`,
+`auth login --bwu`. Already on a TOTP challenge: use `auth login --bwu --totp --item <id>`
+(`core/authentication`); the vault must hold its setup key. Unrecognized/short code fields stay pending. For a step only the human can do: `session handoff`,
 explain it, wait, then `session resume`. Full text, including QR
 `loginVerification`: `core/trust-boundaries`.
 `Confirmation required:` with a `Site:` line (exit 3) is a per-site
@@ -113,7 +114,7 @@ waits for that choice, and your own `confirm` never approves it.
 | `tab list --all`, other sessions' tabs, `close`, reconnect, cleanup | `core/tabs` |
 | Side panel, schedules, `mobile serve` | `core/agent-panel` |
 | Actions, uploads, widgets, `eval` alternatives | `core/interacting` |
-| Reads, frames, shadow roots, screenshots | `core/reading` |
+| Reads, frames, shadow roots, screenshots and region crops | `core/reading` |
 | `wait`, mid-transition reads, observation limits | `core/waiting` |
 | Ref identity, snapshot detail | `core/snapshot-refs` |
 | `status`/`doctor`, extension, profiles, launch, stealth | `core/connection` |

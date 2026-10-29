@@ -2775,7 +2775,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                         .find(|a| !a.starts_with("--"))
                         .ok_or_else(|| ParseError::MissingArguments {
                             context: "auth login".to_string(),
-                            usage: "chrome-use auth login <name> [--no-navigate] | auth login --bwu [--item <id>] [--no-submit]",
+                            usage: "chrome-use auth login <name> [--no-navigate] | auth login --bwu [--item <id>] [--passkey | --totp] [--no-submit]",
                         })?;
                     let no_navigate = rest.contains(&"--no-navigate");
                     Ok(

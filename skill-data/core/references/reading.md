@@ -217,3 +217,5 @@ The updated extension relay gives a native screenshot capture up to 25 seconds,
 below the CLI's 30-second CDP deadline. It waits for the same capture without
 replay or tab activation. A timeout still fails and does not cancel Chrome's
 pending capture; avoid overlapping capture retries.
+
+Ordinary selector and `--clip` screenshots use the same CLI pixel-cropping path, including after page scroll. Viewport regions capture the existing surface; off-screen regions capture the full page before cropping. Neither path scrolls or activates the tab.
