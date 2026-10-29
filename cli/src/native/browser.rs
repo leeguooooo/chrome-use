@@ -2066,9 +2066,11 @@ fn foreign_frame_hint_with(error: &str, name_of: impl Fn(&str) -> Option<String>
     };
     format!(
         "\nCause: {culprit}. While that frame is in the tab Chrome refuses every debugger command \
-         on it; the tab works again once it closes. It closes when the tab is hidden: for a tab \
-         this session created, chrome-use does that itself (a tab switch of well under a second, \
-         after which the tab that was in front is in front again). Fill such fields with \
+         on it. chrome-use attempts to close inline menus on its own tabs, and reports recovery \
+         only after a protocol read succeeds. Some menus or save-login bars remain blocked, \
+         including under stealth mode; close that UI manually if needed. `press Escape` uses \
+         the same blocked debugger and may also fail. `get url` and `tab inspect` still read \
+         browser metadata; an explicit `open <url>` can leave the blocked page. Fill fields with \
          `fill` (one write) rather than `type --key-events`. To stop it happening, the user can \
          turn off that extension's inline menu for this site."
     )
@@ -6122,20 +6124,29 @@ impl BrowserManager {
         poll_network_idle(session_id, rx, timeout).await
     }
 
-    /// Read the live document URL. On a protected extension frame, Chrome's
-    /// exact pinned-tab metadata can still answer without debugger access.
+    /// Read the relay tab's live browser URL without requiring access to its
+    /// renderer. A protected extension frame can block even context creation.
+    /// Direct-CDP sessions keep their renderer URL read.
     pub async fn get_url(&self) -> Result<String, String> {
-        match self.evaluate_simple("location.href").await {
-            Ok(result) => Ok(result.as_str().unwrap_or("").to_string()),
-            Err(error) if self.on_relay() && is_debugger_access_denied(&error) => {
-                self.active_session_id()?;
-                self.pinned_tab_url_from_browser()
-                    .await
-                    .filter(|url| !url.is_empty())
-                    .ok_or(error)
-            }
-            Err(error) => Err(error),
+        if self.on_relay() {
+            let live = self.pinned_tab_browser_record().await?;
+            let url = if let Some(url) = live.get("committedUrl").and_then(Value::as_str) {
+                url.to_string()
+            } else {
+                // Older relays merge pendingUrl into their display URL. Read
+                // Chrome's raw tab record so a destination still loading is
+                // never treated as the current document's origin.
+                let id = live["chromeTabId"]
+                    .as_i64()
+                    .ok_or("the pinned tab has no Chrome tab id")?;
+                let tab = self.chrome_call("tabs", "get", json!([id])).await?;
+                tab["url"].as_str().unwrap_or_default().to_string()
+            };
+            return (!url.is_empty()).then_some(url).ok_or_else(||
+                "could not read the committed URL of the pinned Chrome tab; use `tab inspect` to check its browser-level state".to_string());
         }
+        let result = self.evaluate_simple("location.href").await?;
+        Ok(result.as_str().unwrap_or("").to_string())
     }
 
     pub async fn get_title(&self) -> Result<String, String> {
@@ -7168,21 +7179,28 @@ impl BrowserManager {
     /// a browser-level call), for when the page itself cannot be read: a
     /// password manager's frame refuses every page command while it is open.
     /// `None` off the relay or when the extension cannot say.
-    pub async fn pinned_tab_url_from_browser(&self) -> Option<String> {
+    async fn pinned_tab_browser_record(&self) -> Result<Value, String> {
         if !self.on_relay() {
-            return None;
+            return Err("not on the extension relay".to_string());
         }
-        let pinned = self.active_target_id.clone()?;
-        let page = self.pages.iter().find(|p| p.target_id == pinned)?;
-        let live: Value = self
-            .client
+        self.active_session_id()?;
+        let pinned = self.active_target_id.as_ref().ok_or("no pinned tab")?;
+        let page = self
+            .pages
+            .iter()
+            .find(|p| &p.target_id == pinned)
+            .ok_or("pinned tab not tracked")?;
+        self.client
             .send_command_typed(
                 "ABExt.inspectTab",
                 &json!({ "sessionId": page.session_id, "targetId": page.target_id }),
                 None,
             )
             .await
-            .ok()?;
+    }
+
+    pub async fn pinned_tab_url_from_browser(&self) -> Option<String> {
+        let live = self.pinned_tab_browser_record().await.ok()?;
         live.get("url").and_then(Value::as_str).map(str::to_string)
     }
 
@@ -7214,22 +7232,22 @@ impl BrowserManager {
         }
     }
 
+    async fn pinned_tab_debugger_access(&self) -> Result<(), String> {
+        let session_id = self.active_session_id()?;
+        // This protocol read does not need an isolated world. A cached world
+        // setup failure must not masquerade as successful menu cleanup.
+        self.client
+            .send_command("Page.getFrameTree", None, Some(session_id))
+            .await?;
+        Ok(())
+    }
+
     pub async fn pinned_tab_blocked(&self) -> bool {
-        let Ok(session_id) = self.active_session_id().map(str::to_string) else {
-            return false;
-        };
-        match self
-            .client
-            .send_command(
-                "Runtime.evaluate",
-                Some(json!({ "expression": "0", "returnByValue": true })),
-                Some(&session_id),
-            )
-            .await
-        {
-            Err(e) => is_debugger_access_denied(&e),
-            Ok(_) => false,
-        }
+        matches!(self.pinned_tab_debugger_access().await, Err(error) if is_debugger_access_denied(&error))
+    }
+
+    async fn pinned_tab_accessible(&self) -> bool {
+        self.pinned_tab_debugger_access().await.is_ok()
     }
 
     /// Close another extension's frame by hiding the pinned tab for a moment
@@ -7563,7 +7581,7 @@ impl BrowserManager {
         // The menu closes asynchronously (a message round trip inside the
         // password manager). Give it a moment before calling it a failure.
         for _ in 0..6 {
-            if !self.pinned_tab_blocked().await {
+            if self.pinned_tab_accessible().await {
                 if refocus {
                     self.refocus_remembered_field(&session_id, &remembered)
                         .await;
@@ -7629,7 +7647,7 @@ impl BrowserManager {
         }
         // The menu closes after a message round trip inside the password manager.
         for _ in 0..6 {
-            if !self.pinned_tab_blocked().await {
+            if self.pinned_tab_accessible().await {
                 return Ok(());
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -7728,7 +7746,7 @@ impl BrowserManager {
         }
         // The password manager closes its menu after a message round trip.
         for _ in 0..8 {
-            if !self.pinned_tab_blocked().await {
+            if self.pinned_tab_accessible().await {
                 return Ok(None);
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -11852,7 +11870,7 @@ mod tests {
     fn foreign_frame_hint_does_not_suggest_relaunching() {
         let hint = foreign_frame_hint("");
         assert!(!hint.contains("--launch"), "{hint}");
-        assert!(hint.contains("chrome-use does that itself"), "{hint}");
+        assert!(hint.contains("chrome-use attempts"), "{hint}");
     }
 
     #[test]
@@ -15313,11 +15331,25 @@ mod protected_url_tests {
             relay_for_test(false);
         }
     }
+    #[derive(Clone, Copy)]
+    enum Query {
+        Url,
+        Accessible,
+        Blocked,
+    }
 
-    async fn read_url(
+    fn committed(url: Option<&str>) -> (Value, Value) {
+        (
+            json!({"url":"https://pending.invalid/next", "committedUrl":url.unwrap_or_default(), "pendingUrl":"https://pending.invalid/next"}),
+            json!({}),
+        )
+    }
+
+    async fn query(
         relay: bool,
         error: &str,
-        live_url: Option<&str>,
+        records: (Value, Value),
+        query: Query,
     ) -> (Result<String, String>, Vec<Value>) {
         relay_for_test(relay);
         let _guard = RelayGuard;
@@ -15326,23 +15358,33 @@ mod protected_url_tests {
         let log = Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = log.clone();
         let error = error.to_string();
-        let live_url = live_url.map(str::to_string);
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
             while let Some(Ok(Message::Text(text))) = ws.next().await {
                 let r: Value = serde_json::from_str(&text).unwrap();
                 seen.lock().unwrap().push(r.clone());
-                let result = match r["method"].as_str().unwrap() {
+                let method = r["method"].as_str().unwrap();
+                let result = match method {
                     "Page.getFrameTree" => json!({"frameTree":{"frame":{"id":"frame"}}}),
                     "Page.createIsolatedWorld" => json!({"executionContextId":42}),
                     "ABExt.inspectTab" => {
                         assert_eq!(r["params"]["targetId"], "target-7");
-                        json!({"url":live_url})
+                        records.0.clone()
+                    }
+                    "ABExt.call" => {
+                        assert_eq!(r["params"]["namespace"], "tabs");
+                        assert_eq!(r["params"]["method"], "get");
+                        assert_eq!(r["params"]["args"], json!([7]));
+                        json!({"result":records.1})
                     }
                     _ => json!({}),
                 };
-                let mut reply = if r["method"] == "Runtime.evaluate" {
+                let failed = method == "Runtime.evaluate"
+                    || (!matches!(query, Query::Url)
+                        && !error.is_empty()
+                        && method == "Page.getFrameTree");
+                let mut reply = if failed {
                     json!({"id":r["id"],"error":{"code":-32000,"message":error}})
                 } else {
                     json!({"id":r["id"],"result":result})
@@ -15369,47 +15411,90 @@ mod protected_url_tests {
         )
         .await;
         browser.reown_target("target-7").unwrap();
-        let result = browser.get_url().await;
+        let result = match query {
+            Query::Url => browser.get_url().await,
+            Query::Accessible => Ok(browser.pinned_tab_accessible().await.to_string()),
+            Query::Blocked => Ok(browser.pinned_tab_blocked().await.to_string()),
+        };
         server.abort();
         let requests = log.lock().unwrap().clone();
         (result, requests)
     }
 
     #[tokio::test]
-    async fn protected_url_uses_only_the_live_pinned_tab_record() {
-        let (url, requests) = read_url(
+    async fn protected_url_uses_only_the_committed_pinned_tab_record() {
+        let (url, requests) = query(
             true,
-            "debugger_access_denied: protected frame",
-            Some("https://fixture.invalid/current"),
+            "no isolated world on this target",
+            committed(Some("https://fixture.invalid/current")),
+            Query::Url,
         )
         .await;
         assert_eq!(url.unwrap(), "https://fixture.invalid/current");
-        assert!(requests.iter().any(|r| r["method"] == "ABExt.inspectTab"));
-        assert!(!requests.iter().any(|r| matches!(
-            r["method"].as_str(),
-            Some("Page.navigate" | "Input.dispatchKeyEvent")
-        )));
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["method"], "ABExt.inspectTab");
+        let (url, requests) = query(
+            true,
+            "debugger_access_denied: protected frame",
+            committed(None),
+            Query::Url,
+        )
+        .await;
+        assert!(url
+            .unwrap_err()
+            .contains("could not read the committed URL"));
+        assert_eq!(requests.len(), 1);
     }
 
     #[tokio::test]
-    async fn protected_url_never_uses_cached_metadata_or_masks_other_failures() {
-        for (relay, error, live) in [
-            (true, "debugger_access_denied: protected frame", None),
-            (
-                false,
-                "debugger_access_denied: protected frame",
-                Some("https://fixture.invalid/current"),
-            ),
-            (
-                true,
-                "ordinary renderer error",
-                Some("https://fixture.invalid/current"),
-            ),
+    async fn protected_url_legacy_metadata_never_uses_pending_or_cached_url() {
+        for raw in [
+            json!({"url":"https://fixture.invalid/current", "pendingUrl":"https://pending.invalid/next"}),
+            json!({"pendingUrl":"https://pending.invalid/next"}),
         ] {
-            let (url, requests) = read_url(relay, error, live).await;
-            assert!(url.unwrap_err().contains(error));
-            if !relay || !error.starts_with("debugger_access_denied") {
-                assert!(!requests.iter().any(|r| r["method"] == "ABExt.inspectTab"));
+            let expected = raw.get("url").and_then(Value::as_str).map(str::to_owned);
+            let records = (
+                json!({"chromeTabId":7, "url":"https://pending.invalid/next"}),
+                raw,
+            );
+            let (result, requests) = query(
+                true,
+                "debugger_access_denied: protected frame",
+                records,
+                Query::Url,
+            )
+            .await;
+            match expected {
+                Some(url) => assert_eq!(result.unwrap(), url),
+                None => assert!(result.is_err()),
+            }
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[1]["method"], "ABExt.call");
+        }
+        let (url, requests) = query(
+            false,
+            "ordinary renderer error",
+            committed(Some("https://fixture.invalid/current")),
+            Query::Url,
+        )
+        .await;
+        assert!(url.unwrap_err().contains("ordinary renderer error"));
+        assert!(!requests.iter().any(|r| r["method"] == "ABExt.inspectTab"));
+    }
+
+    #[tokio::test]
+    async fn protected_menu_cleanup_requires_a_positive_protocol_reply() {
+        for (error, accessible, blocked) in [
+            ("", "true", "false"),
+            ("debugger_access_denied: protected frame", "false", "true"),
+            ("no isolated world on this target", "false", "false"),
+            ("ordinary renderer error", "false", "false"),
+        ] {
+            for (kind, expected) in [(Query::Accessible, accessible), (Query::Blocked, blocked)] {
+                let (result, requests) = query(true, error, committed(None), kind).await;
+                assert_eq!(result.unwrap(), expected);
+                assert_eq!(requests.len(), 1);
+                assert_eq!(requests[0]["method"], "Page.getFrameTree");
             }
         }
     }

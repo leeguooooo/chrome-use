@@ -1763,6 +1763,8 @@ async function handleForwardCdpCommand(msg) {
       sessionId: requestedSession || entry?.sessionId || null,
       targetId: entry?.targetId || requestedTarget || null,
       url: tab.url || tab.pendingUrl || '',
+      committedUrl: tab.url || '',
+      pendingUrl: tab.pendingUrl || '',
       title: tab.title || '',
       status: tab.status || null,
       active: Boolean(tab.active),
