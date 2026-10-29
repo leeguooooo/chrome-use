@@ -99,8 +99,76 @@ const TAB_INSPECT_MIN_EXTENSION_VERSION: &str = "0.5.16";
 pub struct PendingConfirmation {
     pub action: String,
     pub cmd: Value,
+    target: Option<ConfirmationTarget>,
     /// Set when the per-site gate (#781) raised it, not the action policy.
     pub site: Option<SitePending>,
+}
+
+/// Daemon-captured identity, never accepted from the confirmation client.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConfirmationTarget {
+    target_id: String,
+    origin: String,
+}
+
+fn confirmation_origin(url: &str) -> Result<String, String> {
+    let parsed = url::Url::parse(url).map_err(|_| "Could not verify confirmation target origin")?;
+    let origin = parsed.origin().ascii_serialization();
+    // Opaque origins cannot authorize a different file or about: document.
+    Ok(if origin == "null" {
+        format!("opaque:{url}")
+    } else {
+        origin
+    })
+}
+
+fn confirmation_tab_spec<'a>(cmd: &'a Value, action: &str) -> Option<&'a str> {
+    if TAB_ROUTING_SKIPS.contains(&action) {
+        None
+    } else {
+        cmd.get("tab")
+            .or_else(|| cmd.get("tabId"))
+            .and_then(Value::as_str)
+    }
+}
+
+fn confirmation_target(
+    cmd: &Value,
+    state: &DaemonState,
+) -> Result<Option<ConfirmationTarget>, String> {
+    let Some(browser) = state.browser.as_ref() else {
+        return Ok(None);
+    };
+    let action = cmd["action"].as_str().unwrap_or("");
+    let (target_id, _, url) = browser.confirmation_page(confirmation_tab_spec(cmd, action))?;
+    Ok(Some(ConfirmationTarget {
+        target_id,
+        origin: confirmation_origin(&url)?,
+    }))
+}
+
+async fn validate_confirmation_target(
+    pending: &PendingConfirmation,
+    state: &DaemonState,
+) -> Result<(), String> {
+    let stale = || {
+        "Confirmation target or origin changed; run the original command again for fresh approval"
+            .to_string()
+    };
+    let current = confirmation_target(&pending.cmd, state).map_err(|_| stale())?;
+    if current != pending.target {
+        return Err(stale());
+    }
+    if let (Some(expected), Some(browser)) = (&pending.target, &state.browser) {
+        let live = browser
+            .confirmation_page_url(&expected.target_id)
+            .await
+            .map_err(|_| stale())?;
+        if confirmation_origin(&live).map_err(|_| stale())? != expected.origin {
+            return Err(stale());
+        }
+    }
+    Ok(())
 }
 
 /// A site-gated action waiting for a person (#781).
@@ -124,6 +192,8 @@ enum ConfirmedApproval {
 tokio::task_local! {
     /// Internal approval authority cannot survive a canceled command future.
     static CONFIRMED_APPROVAL: ConfirmedApproval;
+    /// Exact page binding for the same request scope, including after routing.
+    static CONFIRMED_TARGET: Option<ConfirmationTarget>;
 }
 
 fn command_approved() -> bool {
@@ -2054,6 +2124,8 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         gated_actions.push("navigate");
     }
 
+    let pending_target = confirmation_target(cmd, state);
+
     // Hot-reload and check action policy
     if let Some(ref mut policy) = state.policy {
         let _ = policy.reload();
@@ -2082,6 +2154,10 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                     state.pending_confirmation = Some(PendingConfirmation {
                         action: (*gated_action).to_string(),
                         cmd: cmd.clone(),
+                        target: match pending_target.clone() {
+                            Ok(target) => target,
+                            Err(error) => return error_response(&id, &error),
+                        },
                         site: None,
                     });
                     return json!({
@@ -2103,6 +2179,10 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                     state.pending_confirmation = Some(PendingConfirmation {
                         action: (*gated_action).to_string(),
                         cmd: cmd.clone(),
+                        target: match pending_target.clone() {
+                            Ok(target) => target,
+                            Err(error) => return error_response(&id, &error),
+                        },
                         site: None,
                     });
                     return json!({
@@ -2539,6 +2619,20 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             if state.browser.is_some() {
                 state.lost_driving_tab = None;
             }
+        }
+    }
+
+    // Routing may resync targets or a queued page event may have moved the
+    // renderer since approval. Recheck before selectors, observation or input.
+    if let Ok(expected) = CONFIRMED_TARGET.try_with(Clone::clone) {
+        let binding = PendingConfirmation {
+            action: action.to_string(),
+            cmd: cmd.clone(),
+            target: expected,
+            site: None,
+        };
+        if let Err(error) = validate_confirmation_target(&binding, state).await {
+            return error_response(&id, &error);
         }
     }
 
@@ -25614,6 +25708,8 @@ async fn handle_confirm(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
         }
     }
 
+    validate_confirmation_target(&pending, state).await?;
+
     let approval = pending
         .site
         .as_ref()
@@ -25622,17 +25718,33 @@ async fn handle_confirm(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
     // Refresh policies even after approval. Only repeated prompts are scoped
     // away; policy denials and site constraints remain enforced.
     state.site_policy_cache = None;
+    // Labels and t<N> refs can be rebound during a later target resync. Once
+    // approved, route an explicitly named page by its captured exact target.
+    let mut rerun = pending.cmd.clone();
+    if confirmation_tab_spec(&rerun, rerun["action"].as_str().unwrap_or("")).is_some() {
+        if let Some(target) = &pending.target {
+            let key = if rerun.get("tab").is_some() {
+                "tab"
+            } else {
+                "tabId"
+            };
+            rerun[key] = json!(target.target_id);
+        }
+    }
     let secrets = command_secrets(&pending.cmd);
     let mut result = CONFIRMED_APPROVAL
-        .scope(approval, async {
-            if secrets.is_empty() {
-                Box::pin(execute_command(&pending.cmd, state)).await
-            } else {
-                super::sensitive::SECRET_COMMAND
-                    .scope(true, Box::pin(execute_command(&pending.cmd, state)))
-                    .await
-            }
-        })
+        .scope(
+            approval,
+            CONFIRMED_TARGET.scope(pending.target.clone(), async {
+                if secrets.is_empty() {
+                    Box::pin(execute_command(&rerun, state)).await
+                } else {
+                    super::sensitive::SECRET_COMMAND
+                        .scope(true, Box::pin(execute_command(&rerun, state)))
+                        .await
+                }
+            }),
+        )
         .await;
     for secret in &secrets {
         super::sensitive::scrub_value(&mut result, secret);
@@ -25908,7 +26020,8 @@ async fn site_gate(cmd: &Value, action: &str, id: &str, state: &mut DaemonState)
         state
             .browser
             .as_ref()
-            .and_then(|m| sp::host_of(&m.cached_active_url()))
+            .and_then(|m| m.confirmation_page(confirmation_tab_spec(cmd, action)).ok())
+            .and_then(|(_, _, url)| sp::host_of(&url))
     };
 
     let mut ask: Option<(String, &'static str, String, String)> = None;
@@ -25989,6 +26102,25 @@ async fn site_gate(cmd: &Value, action: &str, id: &str, state: &mut DaemonState)
         detail
     };
 
+    let target = match confirmation_target(cmd, state) {
+        Ok(target) => target,
+        Err(error) => return Some(error_response(id, &error)),
+    };
+    if let (Some(expected), Some(browser)) = (&target, &state.browser) {
+        let live = browser.confirmation_page_url(&expected.target_id).await;
+        if live
+            .ok()
+            .and_then(|url| confirmation_origin(&url).ok())
+            .as_deref()
+            != Some(&expected.origin)
+        {
+            return Some(error_response(
+                id,
+                "Confirmation target origin could not be verified; run the command again",
+            ));
+        }
+    }
+
     let confirmation_id = format!("s_{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
     let mut user_approval = false;
     if extension_holds_requests {
@@ -26013,6 +26145,7 @@ async fn site_gate(cmd: &Value, action: &str, id: &str, state: &mut DaemonState)
     state.pending_confirmation = Some(PendingConfirmation {
         action: action.to_string(),
         cmd: cmd.clone(),
+        target,
         site: Some(SitePending {
             id: confirmation_id.clone(),
             host: host.clone(),
@@ -28719,15 +28852,26 @@ mod tests {
         let entered = std::sync::atomic::AtomicBool::new(false);
         let expired = tokio::time::timeout(
             Duration::from_millis(1),
-            CONFIRMED_APPROVAL.scope(ConfirmedApproval::Site("fixture.test".into()), async {
-                assert!(command_approved() && site_approved("fixture.test"));
-                entered.store(true, std::sync::atomic::Ordering::Relaxed);
-                std::future::pending::<()>().await;
-            }),
+            CONFIRMED_APPROVAL.scope(
+                ConfirmedApproval::Site("fixture.test".into()),
+                CONFIRMED_TARGET.scope(
+                    Some(ConfirmationTarget {
+                        target_id: "fixture".into(),
+                        origin: "https://fixture.test".into(),
+                    }),
+                    async {
+                        assert!(command_approved() && site_approved("fixture.test"));
+                        assert!(CONFIRMED_TARGET.with(|target| target.is_some()));
+                        entered.store(true, std::sync::atomic::Ordering::Relaxed);
+                        std::future::pending::<()>().await;
+                    },
+                ),
+            ),
         )
         .await;
         assert!(expired.is_err());
         assert!(entered.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(CONFIRMED_TARGET.try_with(Clone::clone).is_err());
         assert!(!command_approved() && !site_approved("fixture.test"));
         let mut state = DaemonState::new();
         state.confirm_actions = Some(super::super::policy::ConfirmActions {
@@ -28822,6 +28966,7 @@ mod tests {
         let mut state = DaemonState::new();
         state.pending_confirmation = Some(PendingConfirmation {
             action: "click".into(),
+            target: None,
             cmd: json!({"id": "c1", "action": "click"}),
             site: Some(SitePending {
                 id: "s_abc".into(),
@@ -28849,6 +28994,7 @@ mod tests {
         let mut state = DaemonState::new();
         state.pending_confirmation = Some(PendingConfirmation {
             action: "navigate".into(),
+            target: None,
             cmd: json!({"id": "n1", "action": "navigate", "url": "https://www.chase.com"}),
             site: Some(SitePending {
                 id: "s_n1".into(),

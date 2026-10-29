@@ -3152,6 +3152,8 @@ that it temporarily changes the system clipboard. Only fill and get value accept
 this flag; place it last, after the required text/selector. A mandatory text value
 that equals the flag stays literal, and -- ends editor option parsing.
 Clipboard policies still apply; approval cannot override a hard deny.
+Approval is bound to the original owned tab and origin. If they change or cannot
+be verified, rerun the original command for fresh approval.
 It never enables clipboard fallback after native model/input failure. Actual use
 emits a warning: comparison/restoration is not atomic and can overwrite concurrent
 clipboard writes. The opted-in fallback uses one trusted editor paste, reads the selected model back through the editor's
