@@ -737,3 +737,37 @@ async fn managed_domain_denial_precedes_intended_field_reads() {
         .all(|r| r["method"].as_str().unwrap().starts_with("AB")));
     server.abort();
 }
+
+#[tokio::test]
+async fn field_policy_read_failure_preserves_kept_ref_no_recovery_contract() {
+    for fields in [
+        HashMap::new(),
+        [("cb-tab-1".into(), Value::Null)].into_iter().collect(),
+    ] {
+        let (mut state, server, commands, _mode) =
+            fixture_with_fields(field_policy(), "fixture.test", "once", fields).await;
+        state
+            .ref_map
+            .add("e1".into(), Some(41), "textbox", "ordinary", None);
+        state.ref_map.keep_after_failed_capture(
+            super::super::element::DocumentIdentity::default(),
+            "post-action capture denied (debugger_access_denied)",
+        );
+        let cmd = json!({"id":"kept-field","action":"fill","selector":"@e1","value":"synthetic"});
+        let gate = site_gate(&cmd, "fill", "kept-field", &mut state)
+            .await
+            .unwrap();
+        assert_eq!(gate["success"], false, "{gate}");
+        assert_eq!(gate["code"], "kept_ref_unverified", "{gate}");
+        assert_eq!(gate["retryable"], false);
+        let error = gate["error"].as_str().unwrap();
+        assert!(error.contains("debugger_access_denied"), "{error}");
+        assert!(error.contains("Nothing was acted on"), "{error}");
+        assert!(commands.lock().unwrap().iter().all(|r| r["method"]
+            .as_str()
+            .unwrap()
+            .starts_with("AB")
+            || r["method"] == "DOM.describeNode"));
+        server.abort();
+    }
+}

@@ -6106,9 +6106,12 @@ Usage: chrome-use batch [options] "<cmd1>" "<cmd2>" ...
 Runs multiple commands in sequence. Commands can be passed as quoted
 arguments or piped as JSON via stdin. Results are printed in order,
 separated by blank lines (or as a JSON array with --json).
+A pending confirmation always stops the batch, even without --bail, and exits 3.
+The last result retains the approval instructions and confirmation ID. No later
+step is sent. After approval, inspect the result and start a new batch for the rest.
 
 Options:
-  --bail               Stop on first error (default: continue all commands)
+  --bail               Stop on first error (pending confirmation always stops)
   --json               Output results as a JSON array
 
 Per-step flags:

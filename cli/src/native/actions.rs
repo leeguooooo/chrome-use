@@ -25945,9 +25945,18 @@ async fn site_gate_kind(
     let (refs, frames) = context
         .map(|tab| (&tab.ref_map, &tab.iframe_sessions))
         .unwrap_or((&state.ref_map, &state.iframe_sessions));
-    let entry = match ref_id {
-        Some(id) => Some(refs.get(&id).ok_or_else(unavailable)?),
+    let entry = match ref_id.as_deref() {
+        Some(id) => Some(refs.get(id).ok_or_else(unavailable)?),
         None => None,
+    };
+    // A kept ref remains a non-retryable precondition refusal even when
+    // policy's earlier attribute read discovers that it cannot be inspected.
+    // Preserve the established no-recovery envelope and its original cause.
+    let unreadable = |cause: &str| match (ref_id.as_deref(), entry) {
+        (Some(id), Some(entry)) if refs.kept().is_some() => {
+            super::element::kept_ref_refusal(refs, id, entry, cause)
+        }
+        _ => unavailable(),
     };
     match category {
         "typing" => {
@@ -25966,7 +25975,9 @@ async fn site_gate_kind(
                 frames,
             );
             let node = match entry {
-                Some(e) => json!({"backendNodeId":e.backend_node_id.ok_or_else(unavailable)?}),
+                Some(e) => {
+                    json!({"backendNodeId":e.backend_node_id.ok_or_else(|| unreadable("ref has no backend node"))?})
+                }
                 None => {
                     let doc = mgr
                         .client
@@ -26001,14 +26012,18 @@ async fn site_gate_kind(
                 .client
                 .send_command("DOM.describeNode", Some(node), Some(effective_session))
                 .await
-                .map_err(|_| unavailable())?;
+                .map_err(|error| unreadable(&error))?;
             let attrs = described
                 .pointer("/node/attributes")
                 .and_then(Value::as_array)
-                .ok_or_else(unavailable)?;
+                .ok_or_else(|| unreadable("field descriptor has no readable attributes"))?;
             let attrs: Vec<String> = attrs
                 .iter()
-                .map(|v| v.as_str().map(str::to_string).ok_or_else(unavailable))
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| unreadable("field attributes are malformed"))
+                })
                 .collect::<Result<_, _>>()?;
             let by_dom = field_kind_from_attributes(&attrs);
             // Payment wins across the exact field's DOM, name and selector.

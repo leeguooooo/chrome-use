@@ -5166,6 +5166,7 @@ fn run_batch(flags: &Flags, bail: bool, commands: Vec<Vec<String>>) {
 
     let mut results: Vec<serde_json::Value> = Vec::new();
     let mut had_error = false;
+    let mut awaiting_approval = false;
 
     for (i, cmd_args) in commands.iter().enumerate() {
         if cmd_args.is_empty() {
@@ -5207,6 +5208,11 @@ fn run_batch(flags: &Flags, bail: bool, commands: Vec<Vec<String>>) {
 
         match send_command(parsed, &flags.session) {
             Ok(resp) => {
+                let pending = resp.success
+                    && resp
+                        .data
+                        .as_ref()
+                        .is_some_and(|data| data["confirmation_required"] == true);
                 if flags.json {
                     results.push(json!({
                         "command": cmd_args,
@@ -5219,6 +5225,10 @@ fn run_batch(flags: &Flags, bail: bool, commands: Vec<Vec<String>>) {
                         println!();
                     }
                     print_response_with_opts(&resp, action.as_deref(), &output_opts);
+                }
+                if pending {
+                    awaiting_approval = true;
+                    break;
                 }
                 if !resp.success {
                     had_error = true;
@@ -5258,6 +5268,9 @@ fn run_batch(flags: &Flags, bail: bool, commands: Vec<Vec<String>>) {
         );
     }
 
+    if awaiting_approval {
+        exit(3);
+    }
     if had_error {
         exit(1);
     }
@@ -5780,3 +5793,7 @@ mod tests {
         assert!(m.contains("--session"), "{m}");
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "batch_confirmation_tests.rs"]
+mod batch_confirmation_tests;

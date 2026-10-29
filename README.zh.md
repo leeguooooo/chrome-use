@@ -365,7 +365,7 @@ Ant Design / rc-picker 日期范围请先填开始时间，再填结束时间。
 
 脚本在 `advisories`（CLI `script --json` 顶层；daemon envelope 中为 `data.advisories`） 中保留提示，最多 20 条，嵌套脚本和后续失败的运行也会保留。JSON op-list 的对应 `steps` 条目另带 `noProgress`；文字输出只打印汇总提示一次。JS 脚本失败时保留 `ok:false`、`return:null`、`error`、`logs` 和 `advisories`。daemon envelope 中嵌套脚本的 `data.ok:false` 会使父脚本失败，即使传输层 `success` 为 true；调度成功不能证明程序成功。
 
-普通 CLI `--json` 返回 `success`/`data`/`timing` envelope；加 `--no-timing`（或 `AGENT_BROWSER_TIMING=0`）时回复不带 `timing`，`timing.jsonl` 照常记录。`batch --json` 打印 `{command,success,result,error}` 条目的数组；`script --json` 打印程序结果本身（`ok`、`return`、`logs`、`error`、`advisories` 等）。batch 和 script 的 CLI 输出没有顶层 `timing`。
+普通 CLI `--json` 返回 `success`/`data`/`timing` envelope；加 `--no-timing`（或 `AGENT_BROWSER_TIMING=0`）时回复不带 `timing`，`timing.jsonl` 照常记录。`batch --json` 打印 `{command,success,result,error}` 条目的数组；`script --json` 打印程序结果本身（`ok`、`return`、`logs`、`error`、`advisories` 等）。batch 和 script 的 CLI 输出没有顶层 `timing`。 遇到待确认的操作时，batch 会立即停止并以状态码 3 退出，无论是否加了 `--bail`。最后一项保留批准说明和确认 ID，后续步骤不会发送。批准后先检查结果，再为剩余操作新建 batch。
 
 MCP `chrome_use_snapshot` 可用 `diff: true` 增量重读同一页面；快照选项（包括 filter）必须与基线一致，对应 CLI `snapshot --diff`。无有效基线时返回完整树及 `diffNote`；需要当前完整树时省略 diff 或设为 false。增量是片段，须保留基线，删除行不能当作当前可操作控件。
 

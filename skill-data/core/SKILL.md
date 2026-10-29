@@ -110,7 +110,7 @@ waits for that choice, and your own `confirm` never approves it.
 
 | Need or symptom | Name |
 |---|---|
-| Loop, observation | `core/loop` |
+| Loop, observe | `core/loop` |
 | Tab ownership, reconnect, cleanup | `core/tabs` |
 | Side panel, schedules, `mobile serve` | `core/agent-panel` |
 | Actions, bounded scroll, widgets, uploads, no `eval` | `core/interacting` |
