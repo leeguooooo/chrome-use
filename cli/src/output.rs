@@ -3170,6 +3170,8 @@ Document/input/clipboard approvals require the original owned target and fresh
 HTTP(S) renderer securityOrigin; opaque or missing origins refuse. Explicit HTTP(S)
 navigation binds its original target and destination, works from blank/cold start,
 and creates a new own target for --new-tab or when no original target existed.
+Literal tab new accepts HTTP(S) or default about:blank; window new only creates
+about:blank and refuses nonblank URLs. Both bind the actual creation action.
 Select a named navigation target with `chrome-use tab <target>` first; approval
 refuses a mismatch with the active owned target.
 JavaScript/SPA actions still require document-origin verification. HTTP read URL
@@ -4994,7 +4996,9 @@ Usage: chrome-use window <operation>
 Manage browser windows.
 
 Operations:
-  new                  Open new browser window
+  new                  Open a new about:blank browser window (no URL argument)
+
+For a URL, use `chrome-use tab new <https-url>`. Explicit window URLs are refused.
 
 Global Options:
   --json               Output as JSON

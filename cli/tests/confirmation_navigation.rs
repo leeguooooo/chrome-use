@@ -35,6 +35,7 @@ impl Browser {
             "Target.getTargets" => {
                 json!({"targetInfos":self.pages.iter().map(|(id,url)|json!({"targetId":id,"type":"page","url":url,"title":"Synthetic","attached":true})).collect::<Vec<_>>()})
             }
+            "Target.createBrowserContext" => json!({"browserContextId":"synthetic-context"}),
             "Target.createTarget" => {
                 self.next += 1;
                 let target = format!("N{}", self.next);
@@ -141,6 +142,9 @@ struct Daemon {
 }
 impl Daemon {
     fn start(endpoint: &str) -> Self {
+        Self::start_confirming(endpoint, "navigate")
+    }
+    fn start_confirming(endpoint: &str, categories: &str) -> Self {
         let home = tempfile::tempdir().unwrap();
         let socket = tempfile::tempdir_in("/tmp").unwrap();
         let child = Command::new(env!("CARGO_BIN_EXE_chrome-use"))
@@ -150,7 +154,7 @@ impl Daemon {
             .env("AGENT_BROWSER_SOCKET_DIR", socket.path())
             .env("CHROME_USE_RELAY_DIR", home.path().join("relay"))
             .env("AGENT_BROWSER_CDP", endpoint)
-            .env("AGENT_BROWSER_CONFIRM_ACTIONS", "navigate")
+            .env("AGENT_BROWSER_CONFIRM_ACTIONS", categories)
             .env("AGENT_BROWSER_NO_AUTO_RECONNECT", "1")
             .env_remove("AGENT_BROWSER_AUTO_CONNECT")
             .env_remove("AGENT_BROWSER_PROVIDER")
@@ -270,4 +274,108 @@ fn a_blank_owned_target_can_be_approved_for_https_without_a_source_dom_origin() 
         .iter()
         .any(|r| r["method"] == "Page.navigate"
             && r["params"]["url"] == "https://destination.test/blank"));
+}
+
+#[test]
+fn tab_and_window_creation_approvals_work_from_cold_blank_and_intervening_pages() {
+    for action in ["tab_new", "window_new"] {
+        for scenario in ["cold", "blank", "intervening"] {
+            let (browser, endpoint) = fake_browser();
+            let daemon = Daemon::start_confirming(&endpoint, action);
+            if scenario == "blank" {
+                let result = daemon.send(json!({"id":"seed-blank","action":"tab_list"}));
+                assert_eq!(result["success"], true, "{result}");
+            }
+            let mut command = json!({"id":"create-target","action":action});
+            if action == "tab_new" {
+                command["url"] = json!("https://destination.test/new-tab");
+            }
+            let first = daemon.send(command);
+            assert_eq!(
+                first["data"]["confirmation_required"], true,
+                "{action}/{scenario}: {first}"
+            );
+            if scenario == "cold" {
+                assert!(browser.lock().unwrap().calls.is_empty());
+            }
+            let protected = if scenario == "intervening" {
+                let result=daemon.send(json!({"id":"create-c","action":"navigate","url":"https://untouched.test/form","waitUntil":"none"}));
+                assert_eq!(result["success"], true, "{result}");
+                let tabs = daemon.send(json!({"id":"tabs-c","action":"tab_list"}));
+                Some(
+                    tabs["data"]["tabs"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|tab| tab["active"] == true)
+                        .unwrap()["targetId"]
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                )
+            } else {
+                None
+            };
+            let before = browser.lock().unwrap().calls.len();
+            let result = daemon.send(
+                json!({"id":"approve-target","action":"confirm","confirmationId":"create-target"}),
+            );
+            assert_eq!(result["success"], true, "{action}/{scenario}: {result}");
+            assert_eq!(result["data"]["confirmed"], true, "{result}");
+            let url = daemon.send(json!({"id":"owned-target-read","action":"url"}));
+            assert_eq!(
+                url["success"], true,
+                "new target must actually be owned: {url}"
+            );
+            assert_eq!(
+                url["data"]["url"],
+                if action == "tab_new" {
+                    "https://destination.test/new-tab"
+                } else {
+                    "about:blank"
+                },
+                "{url}"
+            );
+            let state = browser.lock().unwrap();
+            let calls = &state.calls[before..];
+            assert!(
+                calls
+                    .iter()
+                    .any(|request| request["method"] == "Target.createTarget"),
+                "{action}/{scenario}: no actual creation"
+            );
+            if let Some(c) = protected {
+                assert_eq!(state.pages[&c], "https://untouched.test/form");
+                assert!(!calls
+                    .iter()
+                    .any(|request| request["sessionId"] == format!("S-{c}")
+                        && matches!(
+                            request["method"].as_str(),
+                            Some("Page.navigate" | "Fetch.enable")
+                        )));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_window_url_outside_the_declared_blank_api_refuses_before_any_creation() {
+    let (browser, endpoint) = fake_browser();
+    let daemon = Daemon::start_confirming(&endpoint, "window_new");
+    for url in ["https://destination.test/", "javascript:void(0)"] {
+        let result =
+            daemon.send(json!({"id":"invalid-window-url","action":"window_new","url":url}));
+        assert_eq!(result["success"], false, "{result}");
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("only creates about:blank"),
+            "{result}"
+        );
+        assert!(
+            browser.lock().unwrap().calls.is_empty(),
+            "unsupported URL must neither prompt nor create a browser/target"
+        );
+    }
 }

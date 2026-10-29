@@ -1112,3 +1112,42 @@ async fn cold_http_resource_keeps_file_domain_deny_confirm_and_allow_without_fet
         assert!(state.browser.is_none());
     }
 }
+
+#[tokio::test]
+async fn new_target_bindings_keep_the_action_and_declared_blank_destination() {
+    let state = DaemonState::new();
+    for action in ["tab_new", "window_new"] {
+        let command = json!({"id":"new-blank","action":action});
+        let target = confirmation_target(&command, &state).unwrap();
+        assert!(
+            matches!(&target,Some(ConfirmationTarget::Navigation {action:bound,destination,new_target:true,target_id:None}) if bound==action && destination=="about:blank")
+        );
+        let mut pending = PendingConfirmation {
+            action: action.into(),
+            cmd: command,
+            target,
+            site: None,
+        };
+        validate_confirmation_target(&pending, &state)
+            .await
+            .unwrap();
+        pending.cmd["action"] = json!(if action == "tab_new" {
+            "window_new"
+        } else {
+            "tab_new"
+        });
+        assert!(
+            validate_confirmation_target(&pending, &state)
+                .await
+                .is_err(),
+            "approval must not transfer to another creation handler"
+        );
+    }
+    for url in ["javascript:void(0)", "data:text/html,synthetic"] {
+        assert!(confirmation_target(&json!({"action":"tab_new","url":url}), &state).is_err());
+    }
+    assert!(window_creation_destination(
+        &json!({"action":"window_new","url":"https://destination.test/"})
+    )
+    .is_err());
+}

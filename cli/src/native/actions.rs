@@ -114,6 +114,7 @@ enum ConfirmationTarget {
         origin: String,
     },
     Navigation {
+        action: String,
         target_id: Option<String>,
         destination: String,
         new_target: bool,
@@ -151,13 +152,34 @@ fn http_resource_command(cmd: &Value) -> bool {
             .is_some_and(|url| crate::read::normalize_url(url).is_ok())
 }
 
-fn replacing_navigation(cmd: &Value) -> Option<&str> {
-    if cmd["action"] != "navigate" || cmd["preferSpa"].as_bool() == Some(true) {
-        return None;
+fn window_creation_destination(cmd: &Value) -> Result<&'static str, String> {
+    match cmd.get("url") {
+        None => Ok("about:blank"),
+        Some(url) if url.as_str() == Some("about:blank") => Ok("about:blank"),
+        _ => Err("window new only creates about:blank; use `chrome-use tab new <https-url>` for a new target with a URL".into()),
     }
-    let destination = cmd["url"].as_str()?;
+}
+
+fn replacing_navigation(cmd: &Value) -> Option<&str> {
+    let action = cmd["action"].as_str()?;
+    let destination = match action {
+        "navigate" if cmd["preferSpa"].as_bool() != Some(true) => cmd["url"].as_str()?,
+        "tab_new" => match cmd.get("url") {
+            None => "about:blank",
+            Some(url) => url.as_str()?,
+        },
+        "window_new" => return window_creation_destination(cmd).ok(),
+        _ => return None,
+    };
+    if action == "tab_new" && destination == "about:blank" {
+        return Some("about:blank");
+    }
     let parsed = url::Url::parse(destination).ok()?;
     matches!(parsed.scheme(), "http" | "https").then_some(destination)
+}
+
+fn creates_target(action: &str) -> bool {
+    matches!(action, "tab_new" | "window_new")
 }
 
 fn confirmation_tab_spec<'a>(cmd: &'a Value, action: &str) -> Option<&'a str> {
@@ -179,7 +201,7 @@ fn navigation_confirmation_target(
         .as_ref()
         .and_then(|mgr| mgr.confirmation_page(None).ok())
         .map(|(id, _, _)| id);
-    if let Some(spec) = confirmation_tab_spec(cmd, "navigate") {
+    if let Some(spec) = confirmation_tab_spec(cmd, cmd["action"].as_str().unwrap_or("")) {
         let named = state.browser.as_ref().ok_or("Navigation confirmation needs an owned target; select it with `chrome-use tab <target>` first")?
             .confirmation_page(Some(spec))?.0;
         // navigate does not use generic --tab routing. Do not quietly approve
@@ -200,12 +222,18 @@ fn confirmation_target(
     }
     if let Some(destination) = replacing_navigation(cmd) {
         let target_id = navigation_confirmation_target(cmd, state)?;
-        let new_target = target_id.is_none() || cmd["newTab"].as_bool() == Some(true);
+        let action = cmd["action"].as_str().unwrap_or("");
+        let new_target =
+            creates_target(action) || target_id.is_none() || cmd["newTab"].as_bool() == Some(true);
         return Ok(Some(ConfirmationTarget::Navigation {
+            action: action.to_string(),
             target_id,
             destination: destination.to_string(),
             new_target,
         }));
+    }
+    if creates_target(cmd["action"].as_str().unwrap_or("")) {
+        return Err("New-target approval supports HTTP(S) or the declared about:blank default; JavaScript and other destination schemes are refused".into());
     }
     let browser = state
         .browser
@@ -236,11 +264,14 @@ async fn validate_confirmation_target(
             }
         }
         ConfirmationTarget::Navigation {
+            action,
             target_id,
             destination,
             ..
         } => {
-            if replacing_navigation(&pending.cmd) != Some(destination.as_str()) {
+            if pending.cmd["action"].as_str() != Some(action.as_str())
+                || replacing_navigation(&pending.cmd) != Some(destination.as_str())
+            {
                 return Err(stale());
             }
             if let Some(expected) = target_id {
@@ -2204,6 +2235,12 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         .unwrap_or("")
         .to_string();
 
+    if action == "window_new" {
+        if let Err(error) = window_creation_destination(cmd) {
+            return error_response(&id, &error);
+        }
+    }
+
     let cmd_start = std::time::Instant::now();
 
     if let Some(ref server) = state.stream_server {
@@ -2738,7 +2775,8 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                 new_target: true,
                 ..
             })
-        ) && cmd["newTab"].as_bool() != Some(true)
+        ) && !creates_target(action)
+            && cmd["newTab"].as_bool() != Some(true)
         {
             return error_response(&id,"Approved navigation requires a new owned target; repeat the original command for fresh approval");
         }
@@ -21227,6 +21265,12 @@ async fn handle_waitfordownload(cmd: &Value, state: &DaemonState) -> Result<Valu
 }
 
 async fn handle_window_new(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    window_creation_destination(cmd)?;
+    let old_target = state
+        .browser
+        .as_ref()
+        .and_then(|mgr| mgr.active_target_id().ok())
+        .map(str::to_string);
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
 
     // Create a new browser context
@@ -21261,6 +21305,10 @@ async fn handle_window_new(cmd: &Value, state: &mut DaemonState) -> Result<Value
         )
         .await?;
 
+    // Chrome returned and attached this exact newly created target. Register
+    // ownership only now, never infer it from the old/current window.
+    let new_target = create_result.target_id.clone();
+    mgr.reown_target(&new_target)?;
     let tab_id = mgr.assign_tab_id();
     mgr.add_page(super::browser::PageInfo {
         tab_id,
@@ -21290,7 +21338,7 @@ async fn handle_window_new(cmd: &Value, state: &mut DaemonState) -> Result<Value
     }
 
     let total = mgr.page_count();
-    state.ref_map.clear();
+    state.switch_tab_context(old_target.as_deref(), &new_target);
 
     Ok(json!({
         "tabId": super::browser::format_tab_id(tab_id),
@@ -25890,7 +25938,8 @@ async fn handle_confirm(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
             new_target: true,
             ..
         })
-    ) {
+    ) && rerun["action"] == "navigate"
+    {
         rerun["newTab"] = json!(true);
     }
     let secrets = command_secrets(&pending.cmd);
