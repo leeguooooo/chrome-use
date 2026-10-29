@@ -16588,13 +16588,18 @@ async fn e2e_humanize_input_probe() {
         "probe requires no env override"
     );
     let pointer = r##"<!doctype html><style>body{margin:0;width:1000px;height:700px}button{position:absolute;left:700px;top:300px;width:120px;height:50px}</style><button id="target">Probe target</button><script>
-window.probe={moves:0,downs:0,raw:0,coalesced:[],firstJump:null,moveIntervals:[],gap:null,trusted:true,clicks:0,last:0,x:20,y:20,maxJump:0};
+window.probeRecording=false;window.lastPointerMove=null;window.probe={};
+const point=e=>({type:e.type,t:e.timeStamp,x:e.clientX,y:e.clientY,trusted:e.isTrusted,pressure:e.pressure,width:e.width,height:e.height,pointerType:e.pointerType,buttons:e.buttons,movementX:e.movementX,movementY:e.movementY});
 for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.addEventListener(type,e=>{
+ if(type==='pointermove')window.lastPointerMove=point(e);
+ if(!probeRecording)return;
  const p=window.probe;p.trusted=p.trusted&&e.isTrusted;
+ let coalesced=null;try{if(typeof e.getCoalescedEvents==='function')coalesced=e.getCoalescedEvents().map(point)}catch(_){}
+ p.events.push({...point(e),coalesced});
  if(type==='pointerrawupdate')p.raw++;
- if(type==='pointermove'){p.moves++;const jump=Math.hypot(e.clientX-p.x,e.clientY-p.y);if(p.moves===1)p.firstJump=jump;else p.moveIntervals.push(e.timeStamp-p.last);p.maxJump=Math.max(p.maxJump,jump);p.x=e.clientX;p.y=e.clientY;p.last=e.timeStamp;try{p.coalesced.push(typeof e.getCoalescedEvents==='function'?e.getCoalescedEvents().length:null)}catch(_){p.coalesced.push(null)}}
+ if(type==='pointermove'){p.moves++;const jump=Math.hypot(e.clientX-p.x,e.clientY-p.y);if(p.moves===1)p.firstJump=jump;else p.moveIntervals.push(e.timeStamp-p.last);p.maxJump=Math.max(p.maxJump,jump);p.x=e.clientX;p.y=e.clientY;p.last=e.timeStamp;p.coalesced.push(coalesced===null?null:coalesced.length)}
  if(type==='pointerdown'){p.downs++;p.gap=e.timeStamp-p.last;}
-},{capture:true});target.onclick=e=>{probe.clicks++;probe.trusted=probe.trusted&&e.isTrusted;};
+},{capture:true});target.onclick=e=>{if(probeRecording){probe.clicks++;probe.trusted=probe.trusted&&e.isTrusted;probe.events.push({...point(e),coalesced:null})}};
 </script>"##;
     let (port, server) = spawn_html_server(pointer.to_string()).await;
     let mut state = DaemonState::new();
@@ -16615,6 +16620,7 @@ for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.add
     ] {
         let mut samples = Vec::new();
         for run in 0..6 {
+            eval_in(&mut state, "probeRecording=false;lastPointerMove=null").await;
             humanize::set_detected_level(humanize::HumanizeLevel::Off);
             {
                 let mgr = state.browser.as_ref().unwrap();
@@ -16623,7 +16629,16 @@ for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.add
                     .await
                     .unwrap();
             }
-            eval_in(&mut state,"probe={moves:0,downs:0,raw:0,coalesced:[],firstJump:null,moveIntervals:[],gap:null,trusted:true,clicks:0,last:0,x:20,y:20,maxJump:0}").await;
+            let rest = eval_in(&mut state, r#"(async()=>{
+                await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+                const rest=lastPointerMove;
+                if(!rest||!rest.trusted||rest.x!==20||rest.y!==20)throw new Error('trusted resting pointer was not established');
+                probe={rest,moves:0,downs:0,raw:0,events:[],coalesced:[],firstJump:null,moveIntervals:[],gap:null,trusted:true,clicks:0,last:0,x:rest.x,y:rest.y,maxJump:0};
+                probeRecording=true;return rest;
+            })()"#).await;
+            assert_eq!(rest["trusted"], true, "{rest}");
+            assert_eq!(rest["x"].as_f64(), Some(20.0), "{rest}");
+            assert_eq!(rest["y"].as_f64(), Some(20.0), "{rest}");
             humanize::set_detected_level(level);
             let started = std::time::Instant::now();
             {

@@ -221,11 +221,16 @@ on the default branch. It builds one fresh Release test binary, records its
 SHA-256, toolchain, Chrome and machine/load metadata, then runs
 `e2e_humanize_input_probe` in an isolated headless Chrome on Linux.
 
-Each input level has one warmup and five recorded native clicks from a known
-rest point. The fixture records trustedness, pointer/raw-update counts,
+Each input level has one warmup and five recorded native clicks. Before each
+sample, recording is disabled, trusted native movement establishes (20,20),
+and two animation frames pass before the fixture verifies that actual event
+and enables recording. First jumps are relative to that observed resting point. The fixture records trustedness, pointer/raw-update counts,
 `getCoalescedEvents()` sizes, first and maximum coordinate jumps, actual move
 intervals, move-to-press gaps, click wall
-time and actual click counts. It also records the result of clicking a
+time and actual click counts. Complete raw pointer/click records and coalesced
+point arrays are retained, not only their counts. Click wall time covers the
+native input helper and paint wait, excluding CLI/daemon/model overhead.
+It also records the result of clicking a
 verified ref below a fixed header. The fixture owns its event listeners;
 the input implementation adds none.
 
