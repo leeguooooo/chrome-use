@@ -818,12 +818,12 @@ async fn scroll_into_view_if_needed(
         verify_live_click_target(client, &target, None).await?;
         true
     } else {
-        let status = value.as_str().ok_or(
-            "click stopped before pointer input: target scroll state could not be confirmed",
-        )?;
-        if !status.is_empty() {
-            disabled = Some(status.to_string());
-        }
+        // Keep the existing optional disabled probe for ordinary clicks.
+        // Only an explicit header plan enters the stricter recovery protocol.
+        disabled = value
+            .as_str()
+            .filter(|status| !status.is_empty())
+            .map(String::from);
         false
     };
     Ok(ScrollBeforeClick {
