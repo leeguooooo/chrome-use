@@ -18991,6 +18991,67 @@ async fn handle_device(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         .and_then(|v| v.as_str())
         .ok_or("Missing 'name' parameter")?;
 
+    // A device reset is broader than `viewport reset`: keep no mobile UA
+    // queued for future tabs, and disable any touch-emulation override.
+    // Update each remembered setting only after Chrome accepted that clear,
+    // so a partially failed reset never reports success or replays stale state.
+    if matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "off" | "reset" | "none"
+    ) {
+        mgr.clear_viewport()
+            .await
+            .map_err(|e| format!("device reset incomplete: could not clear device metrics: {e}"))?;
+        state.viewport = None;
+        mgr.set_user_agent("").await.map_err(|e| format!("device reset incomplete: metrics were cleared, but the user-agent override could not be cleared: {e}"))?;
+        state.session_setup.user_agent = None;
+        let session_id = mgr.active_session_id()?;
+        mgr.client.send_command(
+            "Emulation.setTouchEmulationEnabled",
+            Some(json!({ "enabled": false })),
+            Some(session_id),
+        ).await.map_err(|e| format!("device reset incomplete: metrics and user-agent overrides were cleared, but touch emulation could not be disabled: {e}"))?;
+        // Headless opt-in launches retain their existing compatibility UA;
+        // derive it from browser metadata, never the page's own getter.
+        if stealth_enabled() && mgr.launched_headless() == Some(true) {
+            let version = mgr.client.send_command("Browser.getVersion", None, None).await
+                .map_err(|e| format!("device overrides were cleared, but the native browser user agent could not be read: {e}"))?;
+            let native_ua = version["userAgent"]
+                .as_str()
+                .filter(|ua| !ua.is_empty())
+                .ok_or(
+                "device overrides were cleared, but Chrome did not report its native user agent",
+            )?;
+            let locale = env::var("AGENT_BROWSER_LOCALE").ok();
+            let expected = stealth::apply_headless_user_agent(&mgr.client, session_id, native_ua, locale.as_deref()).await
+                .map_err(|e| format!("device overrides were cleared, but headless user-agent compatibility could not be restored: {e}"))?;
+            let actual = mgr.evaluate("navigator.userAgent", None).await
+                .map_err(|e| format!("device overrides were cleared, but the restored user agent could not be verified: {e}"))?;
+            if actual.as_str() != Some(expected.as_str()) {
+                return Err("device overrides were cleared, but the restored user agent did not match the browser default".into());
+            }
+        }
+        let metrics = mgr.client.send_command("Page.getLayoutMetrics", None, Some(session_id)).await
+            .map_err(|e| format!("device overrides were cleared, but the resulting viewport could not be read: {e}"))?;
+        let viewport = metrics
+            .get("cssLayoutViewport")
+            .or_else(|| metrics.get("layoutViewport"));
+        let width = viewport
+            .and_then(|v| v["clientWidth"].as_u64())
+            .and_then(|v| u32::try_from(v).ok())
+            .ok_or("device overrides were cleared, but Chrome did not report the viewport width")?;
+        let height = viewport
+            .and_then(|v| v["clientHeight"].as_u64())
+            .and_then(|v| u32::try_from(v).ok())
+            .ok_or(
+                "device overrides were cleared, but Chrome did not report the viewport height",
+            )?;
+        if let Some(ref server) = state.stream_server {
+            server.set_viewport(width, height).await;
+        }
+        return Ok(json!({ "device": "off", "reset": true, "width": width, "height": height }));
+    }
+
     let (width, height, scale, mobile, ua) = match name.to_lowercase().as_str() {
         "iphone 15" | "iphone15" => (393, 852, 3.0, true, "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"),
         "iphone 16" | "iphone16" => (393, 852, 3.0, true, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"),
@@ -19002,11 +19063,12 @@ async fn handle_device(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         "galaxy s25" | "galaxys25" => (360, 800, 3.0, true, "Mozilla/5.0 (Linux; Android 15; SM-S931B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36"),
         // Legacy aliases
         "iphone 12" | "iphone12" => (390, 844, 3.0, true, "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1"),
+        "iphone 13" | "iphone13" => (390, 844, 3.0, true, "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1"),
         "iphone 14" | "iphone14" => (390, 844, 3.0, true, "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"),
         "pixel 5" | "pixel5" => (393, 851, 2.75, true, "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36"),
         "pixel 7" | "pixel7" => (412, 915, 2.625, true, "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"),
         "galaxy s21" | "galaxys21" => (360, 800, 3.0, true, "Mozilla/5.0 (Linux; Android 11; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36"),
-        _ => return Err(format!("Unknown device: {}. Supported: iPhone 15, iPhone 16, iPhone 16 Pro, iPhone 17, iPad, iPad Pro, Pixel 9, Galaxy S25", name)),
+        _ => return Err(format!("Unknown device: {}. Supported: iPhone 12, iPhone 13, iPhone 14, iPhone 15, iPhone 16, iPhone 16 Pro, iPhone 17, iPad, iPad Pro, Pixel 5, Pixel 7, Pixel 9, Galaxy S21, Galaxy S25. Use off/reset/none to restore browser defaults", name)),
     };
 
     mgr.set_viewport(width, height, scale, mobile).await?;
@@ -30230,6 +30292,10 @@ mod site_ui_tests {
 #[cfg(test)]
 #[path = "clipboard_policy_tests.rs"]
 mod clipboard_policy_tests;
+
+#[cfg(test)]
+#[path = "device_tests.rs"]
+mod device_emulation_tests;
 
 #[cfg(test)]
 #[path = "scroll_deadline_tests.rs"]

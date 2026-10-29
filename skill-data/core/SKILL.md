@@ -126,8 +126,8 @@ waits for that choice, and your own `confirm` never approves it.
 | Sensitive actions, untrusted text | `core/trust-boundaries` |
 | `[chrome-use Inspect & Ask]` message | `core/inspect-and-ask` |
 | Persistence, idle recovery, parallel sessions | `core/session-management` |
-| Blocked autofill frames, failures | `core/known-traps`, `core/troubleshooting` |
-| Commands, flags, env | `core/commands` |
+| Blocked autofill frames, failures, friction log | `core/known-traps`, `core/troubleshooting` |
+| Commands, flags, env, device resets | `core/commands` |
 | Page leaks (`diag pages`) | `core/diag-pages` |
 | Install, runners, `--full`, Git hooks | `core/installation` |
 | Changing this repository | `core/development` |

@@ -426,6 +426,7 @@ Regular Human pointer clicks now use a seeded 60–200ms settling pause after mo
 | `chrome-use tab new [url] --activate` · `tab select t2 --activate` · `tab adopt <targetId> --activate` | Raise the target before initialization or the liveness probe; `--front` is an alias |
 | `chrome-use tab list --all [--limit <n>]` | Every tab in the connected Chrome profile, across windows, the user's own and other sessions' included: handle, window, active, title, url, owner (this session / `session <name>` / the user). Read-only even on the first call: no daemon, window, tab or page attachment is created. Urls are as Chrome reports them and may carry tokens |
 | `chrome-use --tab <handle> --force <command>` · `tab close <handle> --force` | Act on (or close) a tab the session does not own, such as the user's own, in place and in the background; only when the user asked. Results carry `forced: true` with the tab's title and url; `close` never closes a forced tab |
+| `chrome-use set device "iPhone 13"` · `set device off` | Emulate a device, or clear metrics, user-agent and touch overrides; `device off` is an alias |
 | `chrome-use dialog status` · `dialog accept\|dismiss` | Handle a native `confirm()` / `prompt()` opened by a click |
 | `chrome-use download @e2 ./video.mp4` | Download with the same cookies as the logged-in browser, without navigating the current tab |
 | `chrome-use network route "*/api/me" --body '{"vip":true}'` | Mock a response, rewrite an outgoing request, or block one |
@@ -437,6 +438,18 @@ Regular Human pointer clicks now use a seeded 60–200ms settling pause after mo
 | `chrome-use auth login --bwu --passkey` | Sign in with a vault passkey in `--launch` mode (bwu 0.9.0+) |
 | `chrome-use status` | Relay transport, recent debugger timeouts, duplicate installs, extension version skew, and session health. With ab-connect 0.5.50+, host disconnect schedules a first retry after 1s, with repeated failures backing off to 30s. Dead-socket command/event waits fail; old replies are not replayed. Failed sends/lost replies report action_outcome_unknown with retryable: false. Check the page before repeating an interrupted write |
 | `chrome-use close --forget-untracked` | Explicit recovery for stale ownership records with no tab identity. Requires two valid registry absence reads; reports ownershipDropped and does not claim those Chrome tabs were closed. Cannot be combined with a tab or --all |
+
+`set device "iPhone 13"` uses a 390 × 844 CSS viewport at 3× scale and an iOS 15 user agent.
+Use `set device off` (aliases: `reset`, `none`, or `device off`) to clear device metrics,
+user-agent and touch overrides on the current tab. Future tabs stop inheriting the emulated UA.
+The reset returns to the browser default UA, not a previous `--user-agent` or `set useragent` value.
+Explicit headless launches retain their existing UA compatibility normalization.
+The reset reads the resulting native viewport and does not resize the Chrome window.
+On the relay, extension 0.5.98+ also forgets cleared metrics after successful reset,
+so an idle reattachment cannot replay the old mobile viewport.
+A partial failure reports which overrides were cleared. `viewport reset` only clears metrics;
+it deliberately keeps any user-agent override.
+
 
 Upgrading installed files does not replace an already-running native host. With Chrome open during an upgrade, reload the chrome-use extension at chrome://extensions when agent sessions are idle. Reconnecting a session daemon does not replace the host. Status reports health.nativeHostVersion from the live handshake (null when unavailable), separately from the installed CLI and hostLauncherHealthy; unavailable or mismatched runtime versions produce warnings.
 

@@ -3977,9 +3977,12 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     // List available iOS simulators
                     Ok(json!({ "id": id, "action": "device_list" }))
                 }
+                Some("off" | "reset" | "none") => {
+                    Ok(json!({ "id": id, "action": "device", "device": "off" }))
+                }
                 Some(sub) => Err(ParseError::UnknownSubcommand {
                     subcommand: sub.to_string(),
-                    valid_options: &["list"],
+                    valid_options: &["list", "off", "reset", "none"],
                 }),
             }
         }
@@ -6452,6 +6455,23 @@ mod tests {
         assert!(parse(&["jev", "run", "--goal", "--url", "https://x.test"]).is_err());
         assert!(parse(&["jev", "run"]).is_err());
         assert!(parse(&["jev"]).is_err());
+    }
+
+    #[test]
+    fn desktop_reset_aliases_are_available_with_and_without_set() {
+        for alias in ["off", "reset", "none"] {
+            for input in [vec!["device", alias], vec!["set", "device", alias]] {
+                let args: Vec<String> = input.iter().map(|s| s.to_string()).collect();
+                let cmd = parse_command(&args, &default_flags()).unwrap();
+                assert_eq!(cmd["action"], "device");
+                assert_eq!(cmd["device"], if input[0] == "set" { alias } else { "off" });
+            }
+        }
+        let args = vec!["device".into(), "list".into()];
+        assert_eq!(
+            parse_command(&args, &default_flags()).unwrap()["action"],
+            "device_list"
+        );
     }
 
     fn default_flags() -> Flags {

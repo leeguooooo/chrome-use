@@ -19,10 +19,15 @@ export const REPLAYABLE_METHOD =
  * Record a state-setting command on a tab entry's replay map (insertion
  * order = replay order; a repeat of the same method moves to the end with its
  * latest params). `X.disable` forgets `X.enable`; `Runtime.removeBinding`
- * forgets the bindings of that name.
+ * forgets the bindings of that name. A successful device-metrics clear
+ * forgets its previous override; the dispatcher records clears after success.
  */
 export function rememberReplayable(replay, method, params) {
   if (!replay) return
+  if (method === 'Emulation.clearDeviceMetricsOverride') {
+    replay.delete('Emulation.setDeviceMetricsOverride')
+    return
+  }
   const m = /^([A-Za-z]+)\.disable$/.exec(method)
   if (m) {
     replay.delete(`${m[1]}.enable`)
