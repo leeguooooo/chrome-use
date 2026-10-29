@@ -2032,6 +2032,24 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     // audit and the compound navigation so an audit cannot bypass navigation
     // policy or confirmation rules.
     let mut gated_actions = vec![action];
+    let clipboard_requested = matches!(action, "fill" | "inputvalue")
+        && cmd["allowClipboardFallback"].as_bool() == Some(true);
+    if clipboard_requested {
+        gated_actions.push("clipboard");
+        // A prior file/category confirmation must not bypass an organization's
+        // hard deny on either part of the requested compound operation.
+        let (_, extension) = site_policy_layers(state).await;
+        if let Some(managed) = extension
+            .and_then(|e| e.managed.action_policy)
+            .and_then(|p| ActionPolicy::from_value(&p).ok())
+        {
+            for capability in &gated_actions {
+                if let PolicyResult::Deny(reason) = managed.check(capability) {
+                    return error_response(&id, &format!("Action '{capability}' denied by your organization's chrome-use policy: {reason}"));
+                }
+            }
+        }
+    }
     if action == "a11y" && cmd.get("url").and_then(|v| v.as_str()).is_some() {
         gated_actions.push("navigate");
     }
@@ -2039,6 +2057,15 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     // Hot-reload and check action policy
     if let Some(ref mut policy) = state.policy {
         let _ = policy.reload();
+        // Check all hard denials before offering one approval for the command.
+        for gated_action in &gated_actions {
+            if let PolicyResult::Deny(reason) = policy.check(gated_action) {
+                return error_response(
+                    &id,
+                    &format!("Action '{gated_action}' denied by policy: {reason}"),
+                );
+            }
+        }
         for gated_action in &gated_actions {
             match policy.check(gated_action) {
                 PolicyResult::Allow => {}
@@ -25802,27 +25829,35 @@ async fn site_gate(cmd: &Value, action: &str, id: &str, state: &mut DaemonState)
     let mut ask: Option<(String, &'static str, String, String)> = None;
     if let Some(value) = policy.managed.action_policy.as_ref() {
         if let Ok(managed) = ActionPolicy::from_value(value) {
-            match managed.check(action) {
-                PolicyResult::Allow => {}
-                PolicyResult::Deny(reason) => {
-                    return Some(error_response(
+            let mut capabilities = vec![action];
+            if matches!(action, "fill" | "inputvalue")
+                && cmd["allowClipboardFallback"].as_bool() == Some(true)
+            {
+                capabilities.push("clipboard");
+            }
+            for capability in capabilities {
+                match managed.check(capability) {
+                    PolicyResult::Allow => {}
+                    PolicyResult::Deny(reason) => {
+                        return Some(error_response(
                         id,
                         &format!(
-                            "Action '{action}' denied by your organization's chrome-use policy: {reason}"
+                            "Action '{capability}' denied by your organization's chrome-use policy: {reason}"
                         ),
                     ));
-                }
-                PolicyResult::RequiresConfirmation => {
-                    let host = sp::target_url(action, cmd)
-                        .and_then(|u| sp::host_of(&u))
-                        .or_else(current_host)
-                        .unwrap_or_default();
-                    ask = Some((
-                        host,
-                        "managed_action",
-                        format!("your organization asks for approval before '{action}'"),
-                        category.unwrap_or(action).to_string(),
-                    ));
+                    }
+                    PolicyResult::RequiresConfirmation => {
+                        let host = sp::target_url(action, cmd)
+                            .and_then(|u| sp::host_of(&u))
+                            .or_else(current_host)
+                            .unwrap_or_default();
+                        ask = Some((
+                            host,
+                            "managed_action",
+                            format!("your organization asks for approval before '{capability}'"),
+                            capability.to_string(),
+                        ));
+                    }
                 }
             }
         }
@@ -28579,6 +28614,64 @@ mod tests {
             super::super::browser::ALL_TABS_NO_BOUND_BROWSER
         );
         assert!(state.browser.is_none());
+    }
+
+    #[tokio::test]
+    async fn clipboard_opt_in_respects_denial_and_confirmation_before_any_browser() {
+        for action in ["fill", "inputvalue"] {
+            let cmd = json!({"id":"clipboard-capability", "action":action, "selector":"#editor", "value":"fixture", "allowClipboardFallback":true});
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("policy.json");
+            fs::write(
+                &path,
+                serde_json::to_vec(&json!({"deny":["clipboard"],"confirm":[action]})).unwrap(),
+            )
+            .unwrap();
+            let mut denied = DaemonState::new();
+            denied.policy = Some(ActionPolicy::load(path.to_str().unwrap()).unwrap());
+            let response = execute_command(&cmd, &mut denied).await;
+            assert_eq!(response["success"], false, "{response}");
+            assert!(response["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("clipboard"));
+            assert!(denied.browser.is_none());
+
+            let mut confirm = DaemonState::new();
+            confirm.confirm_actions = Some(super::super::policy::ConfirmActions {
+                categories: ["clipboard".to_string()].into_iter().collect(),
+            });
+            let response = execute_command(&cmd, &mut confirm).await;
+            assert_eq!(
+                response["data"]["confirmation_required"], true,
+                "{response}"
+            );
+            assert_eq!(response["data"]["action"], "clipboard");
+            assert!(confirm.browser.is_none());
+
+            let mut managed = DaemonState::new();
+            managed.confirm_actions = Some(super::super::policy::ConfirmActions {
+                categories: [action.to_string()].into_iter().collect(),
+            });
+            managed.site_policy_cache = Some(SitePolicyCache {
+                at: std::time::Instant::now(),
+                on_relay: true,
+                extension: Some(super::super::site_policy::ExtensionSitePolicy {
+                    managed: super::super::site_policy::ManagedLayer {
+                        action_policy: Some(json!({"deny":["clipboard"]})),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            });
+            let response = execute_command(&cmd, &mut managed).await;
+            assert_eq!(response["success"], false, "{response}");
+            assert!(response["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("organization"));
+            assert!(managed.browser.is_none());
+        }
     }
 
     #[tokio::test]

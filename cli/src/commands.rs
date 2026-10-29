@@ -548,44 +548,52 @@ fn parse_cookie_header(header: &str) -> Result<Vec<Value>, String> {
     Ok(out)
 }
 
-pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError> {
-    const CLIPBOARD_FLAG: &str = "--allow-clipboard-fallback";
-    const CLIPBOARD_USAGE: &str = "fill <selector> <text> [--allow-clipboard-fallback] | get value <selector> [--allow-clipboard-fallback]";
-    if args
-        .iter()
-        .any(|a| a.starts_with("--allow-clipboard-fallback="))
-    {
-        return Err(ParseError::InvalidValue {
-            message: "--allow-clipboard-fallback is a flag and takes no value".into(),
-            usage: CLIPBOARD_USAGE,
-        });
+const CLIPBOARD_FLAG: &str = "--allow-clipboard-fallback";
+const CLIPBOARD_USAGE: &str = "fill <selector> <text> [--allow-clipboard-fallback] | get value <selector> [--allow-clipboard-fallback]";
+
+/// Mandatory editor arguments are data, including a text value that happens
+/// to equal a flag. Only a final optional token before `--` grants permission.
+fn editor_clipboard_args<'a>(
+    args: &[&'a str],
+    required: usize,
+) -> Result<(Vec<&'a str>, bool), ParseError> {
+    let boundary = args.iter().position(|a| *a == "--").unwrap_or(args.len());
+    let mut allow = false;
+    for (index, arg) in args.iter().enumerate().take(boundary).skip(required) {
+        if arg.starts_with("--allow-clipboard-fallback=") {
+            return Err(ParseError::InvalidValue {
+                message: "--allow-clipboard-fallback takes no value".into(),
+                usage: CLIPBOARD_USAGE,
+            });
+        }
+        if *arg == CLIPBOARD_FLAG {
+            if index + 1 != boundary || allow {
+                return Err(ParseError::InvalidValue {
+                    message:
+                        "--allow-clipboard-fallback takes no value and must be the last option"
+                            .into(),
+                    usage: CLIPBOARD_USAGE,
+                });
+            }
+            allow = true;
+        }
     }
-    let allow_clipboard = args.iter().any(|a| a == CLIPBOARD_FLAG);
-    if allow_clipboard
-        && !(args.first().is_some_and(|a| a == "fill")
-            || (args.first().is_some_and(|a| a == "get")
-                && args.get(1).is_some_and(|a| a == "value")))
-    {
-        return Err(ParseError::InvalidValue {
-            message: "--allow-clipboard-fallback is supported only by fill and get value".into(),
-            usage: CLIPBOARD_USAGE,
-        });
-    }
-    let stripped: Vec<_> = args
+    let rest = args
         .iter()
-        .filter(|a| a.as_str() != CLIPBOARD_FLAG)
-        .cloned()
+        .enumerate()
+        .filter_map(|(i, a)| {
+            if i == boundary || (allow && i + 1 == boundary) {
+                None
+            } else {
+                Some(*a)
+            }
+        })
         .collect();
-    if allow_clipboard && stripped.first().is_some_and(|a| a == "fill") && stripped.len() < 3 {
-        return Err(ParseError::MissingArguments {
-            context: "fill --allow-clipboard-fallback".into(),
-            usage: CLIPBOARD_USAGE,
-        });
-    }
-    let mut result = parse_command_inner(&stripped, flags)?;
-    if allow_clipboard {
-        result["allowClipboardFallback"] = json!(true);
-    }
+    Ok((rest, allow))
+}
+
+pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError> {
+    let mut result = parse_command_inner(args, flags)?;
     stamp_command_flags(&mut result, flags);
     Ok(result)
 }
@@ -816,6 +824,19 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
 
     let cmd = args[0].as_str();
     let rest: Vec<&str> = args[1..].iter().map(|s| s.as_str()).collect();
+    let editor_command = cmd == "fill" || (cmd == "get" && rest.first() == Some(&"value"));
+    if !editor_command
+        && rest
+            .iter()
+            .take_while(|a| **a != "--")
+            .any(|a| *a == CLIPBOARD_FLAG || a.starts_with("--allow-clipboard-fallback="))
+    {
+        return Err(ParseError::InvalidValue {
+            message: "--allow-clipboard-fallback is supported only by fill and get value".into(),
+            usage: CLIPBOARD_USAGE,
+        });
+    }
+
     let id = gen_id();
 
     if flags.cli_annotate && cmd != "screenshot" {
@@ -1031,6 +1052,19 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             Ok(json!({ "id": id, "action": "dblclick", "selector": sel }))
         }
         "fill" => {
+            let required = if matches!(rest.get(1), Some(&"--file" | &"--from-env")) {
+                3
+            } else {
+                2
+            };
+            let (editor_args, allow_clipboard) = editor_clipboard_args(&rest, required)?;
+            let rest = editor_args.as_slice();
+            let stamp = |mut cmd: Value| {
+                if allow_clipboard {
+                    cmd["allowClipboardFallback"] = json!(true);
+                }
+                cmd
+            };
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
                 context: "fill".to_string(),
                 usage: "fill <selector> <text> | fill <selector> --file <path> | fill <selector> --stdin | fill <selector> --from-env <VAR>",
@@ -1081,12 +1115,14 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     // A daemon this command starts inherits the environment;
                     // drop the secret before that can happen.
                     std::env::remove_var(var);
-                    return Ok(json!({ "id": id, "action": "fill", "selector": sel,
-                                       "value": value, "secret": true }));
+                    return Ok(stamp(json!({ "id": id, "action": "fill", "selector": sel,
+                                       "value": value, "secret": true })));
                 }
                 _ => rest[1..].join(" "),
             };
-            Ok(json!({ "id": id, "action": "fill", "selector": sel, "value": value }))
+            Ok(stamp(
+                json!({ "id": id, "action": "fill", "selector": sel, "value": value }),
+            ))
         }
         "type" => {
             // `--key-events` (alias `--keys`): send real per-character keystrokes
@@ -4547,12 +4583,19 @@ fn parse_get(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             Ok(json!({ "id": id, "action": "innerhtml", "selector": sel }))
         }
         Some("value") => {
-            let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
-                context: "get value".to_string(),
-                usage: "get value <selector>",
-            })?;
-            let reveal = rest.contains(&"--reveal-values");
-            Ok(json!({ "id": id, "action": "inputvalue", "selector": sel, "revealValues": reveal }))
+            let (editor_args, allow_clipboard) = editor_clipboard_args(&rest[1..], 1)?;
+            let sel = editor_args
+                .first()
+                .ok_or_else(|| ParseError::MissingArguments {
+                    context: "get value".to_string(),
+                    usage: "get value <selector>",
+                })?;
+            let reveal = editor_args.contains(&"--reveal-values");
+            let mut cmd = json!({ "id": id, "action": "inputvalue", "selector": sel, "revealValues": reveal });
+            if allow_clipboard {
+                cmd["allowClipboardFallback"] = json!(true);
+            }
+            Ok(cmd)
         }
         Some("attr") => {
             let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
@@ -10714,7 +10757,6 @@ mod tests {
         for args in [
             vec!["click", "#button", "--allow-clipboard-fallback"],
             vec!["get", "text", "#editor", "--allow-clipboard-fallback"],
-            vec!["fill", "#editor", "--allow-clipboard-fallback"],
             vec![
                 "fill",
                 "#editor",
@@ -10724,6 +10766,71 @@ mod tests {
         ] {
             let args: Vec<String> = args.into_iter().map(str::to_string).collect();
             assert!(parse_command(&args, &flags).is_err(), "{args:?}");
+        }
+    }
+    #[test]
+    fn clipboard_permission_survives_batch_step_parsing() {
+        let flags = default_flags();
+        for words in [
+            vec![
+                "fill",
+                "#editor",
+                "replacement",
+                "--allow-clipboard-fallback",
+            ],
+            vec!["get", "value", "#editor", "--allow-clipboard-fallback"],
+        ] {
+            let args = words.into_iter().map(str::to_string).collect::<Vec<_>>();
+            let command = parse_batch_step(&args, &flags).unwrap();
+            assert_eq!(command["allowClipboardFallback"], true, "{command}");
+        }
+    }
+
+    #[test]
+    fn clipboard_permission_flag_rejects_a_trailing_false_value() {
+        let args = [
+            "fill",
+            "#editor",
+            "replacement",
+            "--allow-clipboard-fallback",
+            "false",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        assert!(
+            parse_command(&args, &default_flags()).is_err(),
+            "explicit false must not enable clipboard access"
+        );
+    }
+    #[test]
+    fn clipboard_flag_text_and_end_of_options_remain_literal_data() {
+        for args in [
+            vec!["fill", "#editor", "--allow-clipboard-fallback"],
+            vec!["fill", "#editor", "--", "--allow-clipboard-fallback"],
+            vec![
+                "fill",
+                "#editor",
+                "prefix",
+                "--",
+                "--allow-clipboard-fallback",
+            ],
+        ] {
+            let args: Vec<String> = args.into_iter().map(str::to_string).collect();
+            let cleaned = crate::flags::clean_args(&args);
+            for cmd in [
+                parse_command(&cleaned, &default_flags()).unwrap(),
+                parse_batch_step(&args, &default_flags()).unwrap(),
+            ] {
+                assert!(
+                    cmd["value"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with("--allow-clipboard-fallback"),
+                    "{cmd}"
+                );
+                assert_ne!(cmd["allowClipboardFallback"], true, "{cmd}");
+            }
         }
     }
 }
