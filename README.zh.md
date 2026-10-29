@@ -467,6 +467,8 @@ chrome-use --session passkey-demo --launch snapshot -i
 登录后检查是否到达已认证的目标页面。passkey assertion 只说明 Chrome 签了请求，
 不能证明网站接受了它。详见[登录与凭证](https://chrome-use.leeguoo.com/login-auth.html)。
 
+`scrollintoview` 的整个类人滚轮阶段有 10 秒上限，包含目标查找和等待 CDP 回应。该阶段卡住或报错时直接停止，不再接着发直接滚动。若已尝试输入，则返回 `action_outcome_unknown`，因为 Chrome 可能仍在处理原操作，重试前应先查看页面。只有滚轮阶段正常结束但没能到达目标时，才可使用原有的直接滚动回退；它另有 15 秒上限。
+
 ## Agent 循环（实验性）
 
 `jev run` 端到端地推进一个目标：由 TypeSafe 的 Jev 在带编号的元素表里选每一步的

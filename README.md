@@ -507,6 +507,8 @@ which still says to confirm on the phone) is reported on every command as
 `qrSrc`): give that code to the user and do not reload or navigate until they
 have scanned it. Auto-login and `site` login walls wait for it too.
 See [Login & Credentials](https://chrome-use.leeguoo.com/en/login-auth.html).
+`scrollintoview` bounds the entire humanized wheel phase to 10 seconds, including target lookup and CDP replies. A stalled or errored phase stops without a direct-scroll fallback. If input was attempted, the error is `action_outcome_unknown`: Chrome may still be processing it, so inspect before retrying. A completed wheel phase that cannot reach the target may still use the existing direct-scroll fallback, which has its own 15-second limit.
+
 
 ## Agent loop (experimental)
 

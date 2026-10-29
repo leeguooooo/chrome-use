@@ -3694,8 +3694,13 @@ Examples:
             r##"
 chrome-use scrollintoview - Scroll element into view
 
-Uses instant scrolling even with CSS smooth scrolling; errors if the target
-stays outside the viewport.
+Uses humanized wheel input first, with a 10-second phase deadline including
+CDP reads and input replies. A timed-out or errored phase stops without sending
+a direct-scroll fallback. Once input was attempted, action_outcome_unknown
+means Chrome may still be handling it: inspect the page before retrying.
+A completed wheel phase that could not reach the target can fall back to one
+instant scroll (15-second deadline), even with CSS smooth scrolling.
+Errors if the target stays outside the viewport.
 
 Usage: chrome-use scrollintoview <selector>
 
