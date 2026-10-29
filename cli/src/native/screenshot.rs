@@ -102,8 +102,9 @@ impl Serialize for ScreenshotAnnotation {
     }
 }
 
-/// Captures via CDP, then draws optional labels into the image in the CLI.
-/// Annotation rendering never inserts DOM nodes or styles into the page.
+/// Captures a viewport/full-page surface, then crops requested regions and
+/// draws optional labels in the CLI. Region capture never scrolls the page or
+/// asks Chrome to resize its compositor to a small/off-screen clip.
 pub async fn take_screenshot(
     client: &CdpClient,
     session_id: &str,
@@ -112,7 +113,8 @@ pub async fn take_screenshot(
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<ScreenshotResult, String> {
     let mut capture_options = options.clone();
-    let (annotations, region, raster_region) = if options.annotate {
+    let crops_region = options.clip.is_some() || (!options.full_page && options.selector.is_some());
+    let (annotations, region, raster_region) = if options.annotate || crops_region {
         let metrics = client
             .send_command_no_params("Page.getLayoutMetrics", Some(session_id))
             .await?;
@@ -123,9 +125,7 @@ pub async fn take_screenshot(
                 Some(
                     get_rect_for_selector(client, session_id, ref_map, selector, iframe_sessions)
                         .await?
-                        .ok_or(
-                            "Annotated screenshot: selected element has no readable rectangle",
-                        )?,
+                        .ok_or("Screenshot: selected element has no readable rectangle")?,
                 )
             } else {
                 None
@@ -134,9 +134,13 @@ pub async fn take_screenshot(
             None
         };
         let (region, projection) = annotation_region(options, &metrics, target.as_ref())?;
-        let raw = collect_annotations(client, session_id, ref_map, iframe_sessions).await?;
-        let raw = filter_annotations(raw, Some(&projection));
-        let annotations = project_annotations(&raw, Some(&projection), None);
+        let annotations = if options.annotate {
+            let raw = collect_annotations(client, session_id, ref_map, iframe_sessions).await?;
+            let raw = filter_annotations(raw, Some(&projection));
+            project_annotations(&raw, Some(&projection), None)
+        } else {
+            Vec::new()
+        };
         let viewport = annotation_region(&ScreenshotOptions::default(), &metrics, None)?.0;
         let raster_region = if contains(&viewport, &region) {
             // Keep the normal viewport surface. Passing a tiny selector clip
@@ -157,16 +161,16 @@ pub async fn take_screenshot(
             ).await?;
             let width = surface["result"]["value"]["width"]
                 .as_f64()
-                .ok_or("Annotated screenshot: raw viewport width unavailable")?;
+                .ok_or("Screenshot: raw viewport width unavailable")?;
             let height = surface["result"]["value"]["height"]
                 .as_f64()
-                .ok_or("Annotated screenshot: raw viewport height unavailable")?;
+                .ok_or("Screenshot: raw viewport height unavailable")?;
             if !width.is_finite()
                 || !height.is_finite()
                 || width < viewport.width
                 || height < viewport.height
             {
-                return Err("Annotated screenshot: invalid raw viewport geometry".into());
+                return Err("Screenshot: invalid raw viewport geometry".into());
             }
             Rect {
                 width,
@@ -184,9 +188,7 @@ pub async fn take_screenshot(
             )?
             .0;
             if !contains(&full, &region) {
-                return Err(
-                    "Annotated screenshot: requested region extends outside the page".into(),
-                );
+                return Err("Screenshot: requested region extends outside the page".into());
             }
             capture_options.full_page = true;
             capture_options.clip = Some((full.x, full.y, full.width, full.height));
@@ -497,15 +499,15 @@ fn annotation_region(
     let layout = metrics
         .get("cssLayoutViewport")
         .or_else(|| metrics.get("layoutViewport"))
-        .ok_or("Annotated screenshot: layout viewport metrics unavailable")?;
+        .ok_or("Screenshot: layout viewport metrics unavailable")?;
     let scroll_x = layout
         .get("pageX")
         .and_then(Value::as_f64)
-        .ok_or("Annotated screenshot: horizontal scroll unavailable")?;
+        .ok_or("Screenshot: horizontal scroll unavailable")?;
     let scroll_y = layout
         .get("pageY")
         .and_then(Value::as_f64)
-        .ok_or("Annotated screenshot: vertical scroll unavailable")?;
+        .ok_or("Screenshot: vertical scroll unavailable")?;
     let region = if let Some((x, y, width, height)) = options.clip {
         Rect {
             x,
@@ -518,7 +520,7 @@ fn annotation_region(
             .get("cssContentSize")
             .or_else(|| metrics.get("contentSize"))
             .and_then(parse_rect)
-            .ok_or("Annotated screenshot: content size unavailable")?
+            .ok_or("Screenshot: content size unavailable")?
     } else if let Some(target) = target {
         Rect {
             x: target.x + scroll_x,
@@ -542,11 +544,11 @@ fn annotation_region(
             width: viewport
                 .get("clientWidth")
                 .and_then(Value::as_f64)
-                .ok_or("Annotated screenshot: viewport width unavailable")?,
+                .ok_or("Screenshot: viewport width unavailable")?,
             height: viewport
                 .get("clientHeight")
                 .and_then(Value::as_f64)
-                .ok_or("Annotated screenshot: viewport height unavailable")?,
+                .ok_or("Screenshot: viewport height unavailable")?,
         }
     };
     if ![
@@ -562,7 +564,7 @@ fn annotation_region(
         || region.width <= 0.0
         || region.height <= 0.0
     {
-        return Err("Annotated screenshot: invalid capture geometry".to_string());
+        return Err("Screenshot: invalid capture geometry".to_string());
     }
     let projection = Rect {
         x: region.x - scroll_x,
@@ -826,5 +828,108 @@ mod tests {
         let projected = project_annotations(&annotations, None, Some((10.0, 1000.0)));
         assert_eq!(projected[0].box_.x, 15);
         assert_eq!(projected[0].box_.y, 1012);
+    }
+}
+
+#[cfg(test)]
+mod surface_capture_tests {
+    use super::*;
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::json;
+    use std::io::Cursor;
+    use tokio_tungstenite::tungstenite::Message;
+
+    #[tokio::test]
+    async fn unannotated_clips_crop_surface_pixels_without_small_compositor_clips() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(Message::Text(raw))) = ws.next().await {
+                let request: Value = serde_json::from_str(&raw).unwrap();
+                let result = match request["method"].as_str().unwrap() {
+                    "Page.getFrameTree" => json!({"frameTree":{"frame":{"id":"main"}}}),
+                    "Page.createIsolatedWorld" => json!({"executionContextId":42}),
+                    "Page.getLayoutMetrics" => json!({
+                        "cssLayoutViewport":{"pageX":0,"pageY":100,"clientWidth":100,"clientHeight":100},
+                        "cssContentSize":{"x":0,"y":0,"width":200,"height":400}
+                    }),
+                    "Runtime.evaluate" => json!({"result":{"value":{"width":100,"height":100}}}),
+                    "Page.captureScreenshot" => {
+                        let clip = &request["params"]["clip"];
+                        let (width, height, top) = if clip.is_object() {
+                            assert_eq!(
+                                clip,
+                                &json!({"x":0.0,"y":0.0,"width":200.0,"height":400.0,"scale":1.0})
+                            );
+                            (400, 800, 0)
+                        } else {
+                            (200, 200, 100)
+                        };
+                        let pixels = image::RgbImage::from_fn(width, height, |x, y| {
+                            image::Rgb([(x / 2) as u8, (top + y / 2) as u8, 73])
+                        });
+                        let mut bytes = Cursor::new(Vec::new());
+                        image::DynamicImage::ImageRgb8(pixels)
+                            .write_to(&mut bytes, image::ImageFormat::Png)
+                            .unwrap();
+                        json!({"data":STANDARD.encode(bytes.into_inner())})
+                    }
+                    _ => json!({}),
+                };
+                let reply =
+                    json!({"id":request["id"],"result":result,"sessionId":request["sessionId"]});
+                if ws.send(Message::Text(reply.to_string())).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let client = CdpClient::connect(&format!("ws://{address}"))
+            .await
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        for (index, top) in [120.0, 250.0].into_iter().enumerate() {
+            let options = ScreenshotOptions {
+                clip: Some((20.0, top, 30.0, 20.0)),
+                path: Some(
+                    dir.path()
+                        .join(format!("{index}.png"))
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+                ..Default::default()
+            };
+            let result = take_screenshot(
+                &client,
+                "session",
+                &RefMap::default(),
+                &options,
+                &HashMap::new(),
+            )
+            .await
+            .unwrap();
+            assert!(result.annotations.is_empty());
+            let image = image::open(result.path).unwrap().to_rgb8();
+            assert_eq!(image.dimensions(), (60, 40));
+            assert_eq!(image.get_pixel(0, 0).0, [20, top as u8, 73]);
+            assert_eq!(image.get_pixel(59, 39).0, [49, (top as u32 + 19) as u8, 73]);
+        }
+        let invalid = ScreenshotOptions {
+            clip: Some((-1.0, 120.0, 30.0, 20.0)),
+            ..Default::default()
+        };
+        let error = take_screenshot(
+            &client,
+            "session",
+            &RefMap::default(),
+            &invalid,
+            &HashMap::new(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("outside the page"), "{error}");
+        server.abort();
     }
 }

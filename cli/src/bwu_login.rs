@@ -1,13 +1,15 @@
 //! `auth login --bwu`: log in to the current page with an account from the
 //! user's Bitwarden vault, through bitwarden-use (`bwu`, 0.7.0+).
 //!
-//! Two processes. Outside `bwu run` this CLI picks the account (masked:
+//! Outside `bwu run` this CLI picks the account (masked:
 //! `bwu login --domain <url> --list`, then the item's `_autotype` steps), and
-//! runs the same command line again under `bwu run`, which asks the user once
+//! runs the same command line again under `bwu run`, which authorizes access
 //! for the item and puts the values in the child's environment only. The
 //! child ([`parse`] with `CU_BWU_CHILD` set) reads them, drops them from the
 //! environment before a daemon can inherit them, and sends one secret
 //! command (`auth_login_bwu`) whose response is scrubbed of every value.
+//! Default TOTP login uses a second code-only child after observing the challenge;
+//! each phase has its own vault authorization and audit, with no code retries.
 //! Values are never arguments, output or part of the transcript.
 
 use std::process::Command;
@@ -18,13 +20,16 @@ use crate::color;
 use crate::commands::ParseError;
 use crate::flags::Flags;
 
-const USAGE: &str = "chrome-use auth login --bwu [--item <id|name>] [--passkey] [--no-submit]";
+const USAGE: &str =
+    "chrome-use auth login --bwu [--item <id|name>] [--passkey | --totp] [--no-submit]";
 
 /// Set on the child so it fills instead of running `bwu` again.
 const CHILD: &str = "CU_BWU_CHILD";
 const USER: &str = "CU_BWU_USER";
 const PASS: &str = "CU_BWU_PW";
 const OTP: &str = "CU_BWU_OTP";
+/// Fetch the code in a second child only after the page asks for it.
+const DEFER_OTP: &str = "CU_BWU_DEFER_OTP";
 /// The item's passkeys as JSON (bwu `#passkeys`), private keys included.
 const PASSKEYS: &str = "CU_BWU_PK";
 /// JSON list of custom field names; their values are in `CU_BWU_F<i>`.
@@ -39,6 +44,7 @@ struct Opts {
     item: Option<String>,
     no_submit: bool,
     passkey: bool,
+    totp: bool,
 }
 
 fn opts(args: &[&str]) -> Result<Opts, ParseError> {
@@ -46,6 +52,7 @@ fn opts(args: &[&str]) -> Result<Opts, ParseError> {
         item: None,
         no_submit: false,
         passkey: false,
+        totp: false,
     };
     let mut i = 0;
     while i < args.len() {
@@ -53,6 +60,7 @@ fn opts(args: &[&str]) -> Result<Opts, ParseError> {
             "--bwu" => {}
             "--no-submit" => o.no_submit = true,
             "--passkey" => o.passkey = true,
+            "--totp" => o.totp = true,
             "--item" => {
                 o.item = Some(
                     args.get(i + 1)
@@ -82,6 +90,12 @@ fn opts(args: &[&str]) -> Result<Opts, ParseError> {
             usage: USAGE,
         });
     }
+    if o.totp && (o.passkey || o.no_submit) {
+        return Err(ParseError::InvalidValue {
+            message: "--totp cannot be combined with --passkey or --no-submit: code fields may submit automatically".to_string(),
+            usage: USAGE,
+        });
+    }
     Ok(o)
 }
 
@@ -91,7 +105,7 @@ pub fn parse(args: &[&str], id: &str) -> Result<Value, ParseError> {
     if std::env::var_os(CHILD).is_none() {
         return Ok(json!({
             "id": id, "action": "auth_login_bwu_probe",
-            "item": o.item, "noSubmit": o.no_submit, "passkey": o.passkey,
+            "item": o.item, "noSubmit": o.no_submit, "passkey": o.passkey, "totpOnly": o.totp,
         }));
     }
     // Under `bwu run`: take the values and drop them from the environment
@@ -113,6 +127,7 @@ pub fn parse(args: &[&str], id: &str) -> Result<Value, ParseError> {
     let username = take(USER);
     let password = take(PASS);
     let otp = take(OTP);
+    let defer_otp = take(DEFER_OTP).is_some();
     let passkeys: Vec<Value> = take(PASSKEYS)
         .and_then(|j| serde_json::from_str(&j).ok())
         .unwrap_or_default();
@@ -146,7 +161,7 @@ pub fn parse(args: &[&str], id: &str) -> Result<Value, ParseError> {
         "id": id, "action": "auth_login_bwu", "secret": true, "secrets": secrets,
         "username": username, "password": password, "otp": otp, "fields": fields,
         "steps": steps, "origin": origin, "item": item, "itemId": item_id, "noSubmit": o.no_submit,
-        "passkeys": passkeys, "passkeyFirst": o.passkey,
+        "passkeys": passkeys, "passkeyFirst": o.passkey, "totpOnly": o.totp, "deferOtp": defer_otp,
     }))
 }
 
@@ -487,6 +502,7 @@ struct Prepared {
     steps: Option<Vec<String>>,
     /// Why this item was used without `--item` (see [`choose`]).
     why: Option<String>,
+    defer_otp: bool,
 }
 
 /// Choose the vault item for the tab's current page (masked), and which of
@@ -496,6 +512,7 @@ fn prepare(
     item_arg: Option<&str>,
     passkey_first: bool,
     no_submit: bool,
+    totp_only: bool,
 ) -> Result<Prepared, String> {
     let bwu = find_bwu().ok_or(
         "auth login --bwu needs bitwarden-use (bwu) on PATH. Install it with: curl -fsSL \
@@ -547,11 +564,17 @@ fn prepare(
     let name = chosen["name"].as_str().unwrap_or_default().to_string();
     // Masked: which values the item has, and its `_autotype` steps.
     let item = bwu_json(&bwu, &["login", "--domain", &url, "--name", &id])?;
-    let steps: Option<Vec<String>> = item["autotype"].as_array().map(|a| {
+    let mut steps: Option<Vec<String>> = item["autotype"].as_array().map(|a| {
         a.iter()
             .filter_map(|s| s.as_str().map(str::to_string))
             .collect()
     });
+    if totp_only {
+        if !item["code"].is_string() {
+            return Err(format!("the vault item '{name}' has no TOTP seed. Add the authenticator's setup key or otpauth URI to this login's authenticator field in Bitwarden; storing only the password is not enough. SMS, email and push codes need their own source."));
+        }
+        steps = Some(vec!["totp".into(), "enter".into()]);
+    }
     let has = |k: &str| item[k].is_string();
     let wants = |step: &str| steps.as_ref().is_none_or(|s| s.iter().any(|x| x == step));
 
@@ -562,7 +585,7 @@ fn prepare(
         return Err(format!("the vault item '{name}' has no passkey"));
     }
     let mut envs: Vec<String> = Vec::new();
-    if passkey_count > 0 && !no_submit {
+    if passkey_count > 0 && !no_submit && !totp_only {
         envs.push(format!("{PASSKEYS}=bw:{id}#passkeys"));
     }
     // Signing in with the passkey needs nothing else from the vault.
@@ -573,7 +596,11 @@ fn prepare(
     if has("password") && wants("password") {
         envs.push(format!("{PASS}=bw:{id}#password"));
     }
-    if has("code") && wants("totp") && !no_submit {
+    // Default multi-step login: do not spend a code's lifetime filling the
+    // password. Explicit _autotype retains its caller-defined sequence.
+    let defer_otp =
+        has("code") && wants("totp") && !no_submit && steps.is_none() && !envs.is_empty();
+    if has("code") && wants("totp") && !no_submit && !defer_otp {
         envs.push(format!("{OTP}=bw:{id}#totp"));
     }
     let custom: Vec<String> = steps
@@ -600,6 +627,7 @@ fn prepare(
         custom,
         steps,
         why,
+        defer_otp,
     })
 }
 
@@ -618,6 +646,11 @@ fn child_command(p: &Prepared, child_args: &[std::ffi::OsString]) -> Result<Comm
         .env(ITEM, &p.name)
         .env(ITEM_ID, &p.id)
         .env(FIELDS, serde_json::to_string(&p.custom).unwrap_or_default());
+    if p.defer_otp {
+        run.env(DEFER_OTP, "1");
+    } else {
+        run.env_remove(DEFER_OTP);
+    }
     match &p.steps {
         Some(s) => run.env(STEPS, serde_json::to_string(s).unwrap_or_default()),
         None => run.env_remove(STEPS),
@@ -631,6 +664,7 @@ fn run_inner(flags: &Flags, cmd: &Value) -> Result<i32, String> {
         cmd["item"].as_str(),
         cmd["passkey"].as_bool().unwrap_or(false),
         cmd["noSubmit"].as_bool().unwrap_or(false),
+        cmd["totpOnly"].as_bool().unwrap_or(false),
     )?;
     if !flags.json {
         eprintln!(
@@ -647,10 +681,28 @@ fn run_inner(flags: &Flags, cmd: &Value) -> Result<i32, String> {
         );
     }
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-    let status = child_command(&p, &args)?
-        .status()
-        .map_err(|e| format!("couldn't run {}: {e}", p.bwu.display()))?;
-    Ok(status.code().unwrap_or(1))
+    let response = run_login_phases(&p, &args)?;
+    crate::output::print_response_with_opts(
+        &response,
+        Some("auth_login_bwu"),
+        &crate::output::OutputOptions::from_flags(flags),
+    );
+    Ok(login_exit_code(&response))
+}
+
+/// Keep the CLI's per-site approval exit code through the secret child.
+fn login_exit_code(response: &crate::connection::Response) -> i32 {
+    if !response.success {
+        return 1;
+    }
+    if response
+        .data
+        .as_ref()
+        .is_some_and(|data| data["confirmation_required"] == true && data.get("site").is_some())
+    {
+        return 3;
+    }
+    0
 }
 
 /// Whether login walls are signed in automatically (#434):
@@ -670,30 +722,117 @@ pub fn auto_login_enabled(env: Option<&str>, config: Option<&Value>) -> bool {
     })
 }
 
-/// Run `auth login --bwu` under `bwu run`; the child's error when it fails.
-fn run_login_child(p: &Prepared, args: &[std::ffi::OsString]) -> Result<(), String> {
-    let output = child_command(p, args).and_then(|mut c| {
-        c.stdout(std::process::Stdio::piped())
-            .output()
-            .map_err(|e| format!("couldn't run {}: {e}", p.bwu.display()))
-    })?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let envelope: Option<Value> = stdout
+/// Capture the scrubbed JSON envelope, never raw secret values. Stderr keeps
+/// bwu's authorization prompts and errors attached to the invoking terminal.
+fn login_response(
+    p: &Prepared,
+    args: &[std::ffi::OsString],
+) -> Result<crate::connection::Response, String> {
+    let mut args = args.to_vec();
+    args.insert(0, "--json".into());
+    let output = child_command(p, &args)?
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .map_err(|e| format!("couldn't run {}: {e}", p.bwu.display()))?;
+    let response = String::from_utf8_lossy(&output.stdout)
         .lines()
         .rev()
-        .find_map(|l| serde_json::from_str(l.trim()).ok());
-    let ok = output.status.success()
-        && envelope
-            .as_ref()
-            .is_some_and(|e| e["success"].as_bool() == Some(true));
-    if ok {
-        return Ok(());
+        .find_map(|line| serde_json::from_str::<crate::connection::Response>(line).ok());
+    let mut response = response.ok_or_else(|| {
+        format!(
+            "auth login --bwu exited with {} without a result",
+            output.status
+        )
+    })?;
+    let pending_site_gate = output.status.code() == Some(3) && login_exit_code(&response) == 3;
+    if !output.status.success() && response.success && !pending_site_gate {
+        response.success = false;
+        response.error = Some(format!("auth login --bwu exited with {}", output.status));
     }
-    Err(envelope
-        .as_ref()
-        .and_then(|e| e["error"].as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("auth login --bwu exited with {}", output.status)))
+    Ok(response)
+}
+
+/// Continue only an observed code challenge, once, with the same vault item
+/// and pinned origin. A failed or rejected code is never automatically retried.
+fn run_login_phases(
+    p: &Prepared,
+    args: &[std::ffi::OsString],
+) -> Result<crate::connection::Response, String> {
+    let first = login_response(p, args)?;
+    if !p.defer_otp
+        || !first.success
+        || !first
+            .data
+            .as_ref()
+            .is_some_and(|d| d["otp"] == "deferred" && d["needs"] == "a verification code")
+    {
+        return Ok(first);
+    }
+    let otp = Prepared {
+        bwu: p.bwu.clone(),
+        envs: vec![format!("{OTP}=bw:{}#totp", p.id)],
+        origin: p.origin.clone(),
+        host: p.host.clone(),
+        id: p.id.clone(),
+        name: p.name.clone(),
+        custom: Vec::new(),
+        steps: Some(vec!["totp".into(), "enter".into()]),
+        why: None,
+        defer_otp: false,
+    };
+    let mut args = args.to_vec();
+    args.push("--totp".into());
+    let mut next = login_response(&otp, &args).map_err(|e| {
+        format!("TOTP verification stopped; inspect the current page before trying again: {e}")
+    })?;
+    if !next.success {
+        next.error = Some(format!(
+            "TOTP verification stopped; inspect the current page before trying again: {}",
+            next.error.as_deref().unwrap_or("no result")
+        ));
+    }
+    if let (Some(before), Some(after)) = (first.data.as_ref(), next.data.as_mut()) {
+        if let (Some(a), Some(b)) = (before["filled"].as_array(), after["filled"].as_array()) {
+            let mut filled = a.clone();
+            filled.extend(b.iter().cloned());
+            after["filled"] = json!(filled);
+        }
+        if let Some(warning) = before.get("warning").and_then(Value::as_str) {
+            let combined = match after["warning"].as_str() {
+                Some(w) => format!("{warning}. {w}"),
+                None => warning.to_string(),
+            };
+            after["warning"] = json!(combined);
+        }
+    }
+    Ok(next)
+}
+
+/// Auto-login must not navigate away from a pending human verification step.
+fn run_login_child(p: &Prepared, args: &[std::ffi::OsString]) -> Result<(), String> {
+    let response = run_login_phases(p, args)?;
+    if !response.success {
+        return Err(response
+            .error
+            .unwrap_or_else(|| "auth login --bwu failed".into()));
+    }
+    if let Some(data) = response.data.as_ref() {
+        if data["confirmation_required"] == true {
+            return Err(format!("login awaits confirmation {} for {}. Ask the user to approve in the chrome-use side panel, then run confirm in the same session; do not report a completed login.", data["confirmation_id"].as_str().unwrap_or(""), data["site"].as_str().unwrap_or(&p.host)));
+        }
+        if let Some(needs) = data["needs"].as_str() {
+            return Err(format!(
+                "login needs {needs}. {}",
+                data["next"]
+                    .as_str()
+                    .unwrap_or("Complete verification on the current page.")
+            ));
+        }
+        if data["signedIn"] == true || data["alreadySignedIn"] == true {
+            return Ok(());
+        }
+    }
+    Err("auth login --bwu did not confirm a sign-in".into())
 }
 
 /// Whether an `auth login --bwu` failure is worth one more try from the
@@ -704,8 +843,10 @@ fn run_login_child(p: &Prepared, args: &[std::ffi::OsString]) -> Result<(), Stri
 /// attempt.
 fn retry_after_unknown_outcome(err: &str) -> bool {
     let e = err.to_ascii_lowercase();
-    e.contains("action_outcome_unknown")
-        || (e.contains("the sign-in was not confirmed") && !e.contains("the page says"))
+    !e.contains("totp verification stopped")
+        && !e.contains("one-time code")
+        && (e.contains("action_outcome_unknown")
+            || (e.contains("the sign-in was not confirmed") && !e.contains("the page says")))
 }
 
 /// Sign in to the login wall the tab is on with the only vault login for it
@@ -713,7 +854,7 @@ fn retry_after_unknown_outcome(err: &str) -> bool {
 /// `returnTo`. Returns `{ok, item, error}` plus `returnedTo` / `returnError`.
 pub fn auto_login(flags: &Flags, wall: &Value) -> Value {
     let mut out = json!({ "ok": false, "item": null, "error": null });
-    let p = match prepare(flags, None, false, false) {
+    let p = match prepare(flags, None, false, false, false) {
         Ok(p) => p,
         Err(e) => {
             out["error"] = json!(e);
@@ -965,6 +1106,103 @@ mod tests {
         ));
     }
 
+    /// A mock bwu checks the actual subprocess boundary: passwords only in
+    /// phase one, a freshly requested code only in phase two, and no retry.
+    #[cfg(unix)]
+    #[test]
+    fn deferred_totp_reads_only_after_observed_challenge() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bwu = dir.path().join("bwu");
+        let calls = dir.path().join("calls");
+        std::fs::write(&bwu, r#"#!/usr/bin/env python3
+import json, os, pathlib, sys
+calls = pathlib.Path(__file__).with_name('calls')
+args = sys.argv[1:]
+n = int(calls.read_text()) if calls.exists() else 0
+scenario = pathlib.Path(__file__).with_name('scenario').read_text()
+calls.write_text(str(n + 1))
+specs = [args[i+1] for i, a in enumerate(args) if a == '--env']
+if n == 0:
+    assert specs == ['CU_BWU_PW=bw:uuid#password'], specs
+    assert os.environ.get('CU_BWU_DEFER_OTP') == '1'
+    if scenario == 'already-done':
+        print(json.dumps({'success': True, 'data': {'signedIn': True, 'filled': ['password']}, 'error': None}))
+    elif scenario == 'password-failed':
+        print(json.dumps({'success': False, 'data': None, 'error': 'wrong password'}))
+        sys.exit(1)
+    elif scenario == 'unsupported':
+        print(json.dumps({'success': True, 'data': {'otp': 'unsupported', 'needs': 'a verification code', 'filled': ['password'], 'submitted': True}, 'error': None}))
+    elif scenario == 'gate':
+        print(json.dumps({'success': True, 'data': {'confirmation_required': True, 'confirmation_id': 'gate-fixture', 'site': 'example.test', 'approval': 'user'}, 'error': None}))
+        sys.exit(3)
+    else:
+        print(json.dumps({'success': True, 'data': {'otp': 'deferred', 'needs': 'a verification code', 'filled': ['password'], 'submitted': True}, 'error': None}))
+else:
+    assert n == 1, 'a code was retried'
+    assert specs == ['CU_BWU_OTP=bw:uuid#totp'], specs
+    assert 'CU_BWU_DEFER_OTP' not in os.environ
+    assert json.loads(os.environ['CU_BWU_STEPS']) == ['totp', 'enter']
+    assert '--totp' in args
+    if scenario == 'accepted':
+        print(json.dumps({'success': True, 'data': {'otp': 'filled', 'filled': ['totp'], 'signedIn': True}, 'error': None}))
+    else:
+        print(json.dumps({'success': False, 'data': None, 'error': 'the site rejected the code'}))
+        sys.exit(1)
+"#).unwrap();
+        std::fs::set_permissions(&bwu, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let p = Prepared {
+            bwu,
+            envs: vec!["CU_BWU_PW=bw:uuid#password".into()],
+            origin: "https://example.com".into(),
+            host: "example.com".into(),
+            id: "uuid".into(),
+            name: "example".into(),
+            custom: Vec::new(),
+            steps: None,
+            why: None,
+            defer_otp: true,
+        };
+        for (scenario, count, success) in [
+            ("rejected", "2", false),
+            ("accepted", "2", true),
+            ("already-done", "1", true),
+            ("password-failed", "1", false),
+            ("unsupported", "1", true),
+            ("gate", "1", true),
+        ] {
+            let _ = std::fs::remove_file(&calls);
+            std::fs::write(dir.path().join("scenario"), scenario).unwrap();
+            let r = run_login_phases(&p, &["auth".into(), "login".into(), "--bwu".into()]).unwrap();
+            assert_eq!(r.success, success, "{scenario}");
+            if scenario == "rejected" {
+                assert!(r
+                    .error
+                    .as_deref()
+                    .unwrap()
+                    .contains("the site rejected the code"));
+            }
+            if scenario == "gate" {
+                assert_eq!(login_exit_code(&r), 3);
+                assert_eq!(r.data.as_ref().unwrap()["confirmation_id"], "gate-fixture");
+            }
+            if scenario == "accepted" {
+                assert_eq!(r.data.unwrap()["filled"], json!(["password", "totp"]));
+            }
+            assert_eq!(
+                std::fs::read_to_string(&calls).unwrap(),
+                count,
+                "{scenario}"
+            );
+        }
+        assert!(!retry_after_unknown_outcome(
+            "TOTP verification stopped: action_outcome_unknown"
+        ));
+        assert!(!retry_after_unknown_outcome(
+            "TOTP verification stopped: the sign-in was not confirmed"
+        ));
+    }
+
     // One test: both halves set and clear the same process-wide variables.
     #[test]
     fn parse_probe_then_child() {
@@ -975,11 +1213,15 @@ mod tests {
         assert_eq!(cmd["noSubmit"], true);
         assert!(parse(&["--bwu", "github"], "1").is_err());
         assert!(parse(&["--bwu", "--passkey", "--no-submit"], "1").is_err());
+        assert!(parse(&["--bwu", "--totp", "--no-submit"], "1").is_err());
+        assert!(parse(&["--bwu", "--totp", "--passkey"], "1").is_err());
+        assert_eq!(parse(&["--bwu", "--totp"], "1").unwrap()["totpOnly"], true);
 
         for (k, v) in [
             (CHILD, "1"),
             (USER, "alice"),
             (PASS, "hunter2"),
+            (DEFER_OTP, "1"),
             (FIELDS, r#"["PIN"]"#),
             ("CU_BWU_F0", "1234"),
             (
@@ -1000,6 +1242,7 @@ mod tests {
         assert_eq!(cmd["action"], "auth_login_bwu");
         assert_eq!(cmd["secret"], true);
         assert_eq!(cmd["password"], "hunter2");
+        assert_eq!(cmd["deferOtp"], true);
         assert_eq!(cmd["fields"]["PIN"], "1234");
         assert_eq!(cmd["steps"][3], "custom:PIN");
         assert_eq!(cmd["origin"], "https://example.com");
@@ -1017,6 +1260,7 @@ mod tests {
             CHILD,
             USER,
             PASS,
+            DEFER_OTP,
             FIELDS,
             "CU_BWU_F0",
             STEPS,
