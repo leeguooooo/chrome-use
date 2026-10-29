@@ -16894,20 +16894,22 @@ button{position:absolute;top:600px;left:80px;width:140px;height:50px}#target{z-i
 #modal{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.1)}
 </style>__HEADER__<button id="danger">Danger</button><button id="target">Sticky target</button>
 <script>
-const mode='__MODE__';window.out={target:0,header:0,danger:0,downs:0,moved:false,replaced:false,trusted:true};window.armed=false;window.targetMutations=[];
+const mode='__MODE__';window.out={target:0,header:0,danger:0,downs:0,wheels:[],moved:false,replaced:false,trusted:true};window.armed=false;window.targetMutations=[];
 const target=document.getElementById('target');target.onclick=e=>{out.target++;out.trusted=out.trusted&&e.isTrusted};document.getElementById('danger').onclick=()=>out.danger++;
-document.querySelector('header').onclick=()=>out.header++;document.addEventListener('pointerdown',()=>out.downs++,{capture:true});
+document.querySelector('header').onclick=()=>out.header++;document.addEventListener('pointerdown',()=>out.downs++,{capture:true});document.addEventListener('wheel',e=>out.wheels.push({trusted:e.isTrusted,dy:e.deltaY,mode:e.deltaMode}),{capture:true,passive:true});
 if(mode==='replace')window.addEventListener('scroll',()=>{if(armed&&scrollY!==600&&!out.replaced){const copy=target.cloneNode(true);copy.onclick=()=>out.danger++;target.replaceWith(copy);out.replaced=true}});
 if(mode==='move')target.addEventListener('pointerenter',()=>setTimeout(()=>{target.style.left='450px';out.moved=true},40),{once:true});
 new MutationObserver(rs=>targetMutations.push(...rs)).observe(document.documentElement,{subtree:true,attributes:true,childList:true});
 </script>"##;
     let mut state = DaemonState::new();
-    for (index, mode) in ["normal", "modal", "replace", "move"]
+    for (index, mode) in ["normal", "modal", "unknown", "replace", "move"]
         .into_iter()
         .enumerate()
     {
         let header = if mode == "modal" {
             "<div id=\"modal\" role=\"dialog\" aria-modal=\"true\" hidden><header>Modal header</header></div>"
+        } else if mode == "unknown" {
+            "<div id=\"modal\" hidden><header>Unknown overlay</header></div>"
         } else {
             "<header>Sticky header</header>"
         };
@@ -16933,7 +16935,7 @@ new MutationObserver(rs=>targetMutations.push(...rs)).observe(document.documentE
             .map(|(r, _)| r)
             .unwrap();
         eval_in(&mut state, "scrollTo(0,600)").await;
-        if mode == "modal" {
+        if matches!(mode, "modal" | "unknown") {
             eval_in(&mut state, "document.getElementById('modal').hidden=false").await;
         }
         eval_in(
@@ -16957,6 +16959,21 @@ new MutationObserver(rs=>targetMutations.push(...rs)).observe(document.documentE
         .await;
         assert_eq!(after["out"]["header"], 0, "{mode}: {response} {after}");
         assert_eq!(after["out"]["danger"], 0, "{mode}: {response} {after}");
+        let wheels = after["out"]["wheels"].as_array().unwrap();
+        assert!(
+            wheels.iter().all(|event| event["trusted"] == true),
+            "{mode}: {after}"
+        );
+        assert!(
+            wheels.len() <= 9,
+            "one Human gesture must not be replayed: {mode}: {after}"
+        );
+        if matches!(mode, "normal" | "replace" | "move") {
+            assert!(
+                !wheels.is_empty(),
+                "header recovery must use trusted wheel input: {mode}: {after}"
+            );
+        }
         assert_eq!(
             eval_in(&mut state, "Object.getOwnPropertyNames(window).sort()").await,
             names,
@@ -16971,7 +16988,8 @@ new MutationObserver(rs=>targetMutations.push(...rs)).observe(document.documentE
             assert_eq!(response["success"], false, "{mode}: {response} {after}");
             assert_eq!(after["out"]["target"], 0);
             assert_eq!(after["out"]["downs"], 0, "{mode}: {response} {after}");
-            if mode == "modal" {
+            if matches!(mode, "modal" | "unknown") {
+                assert!(wheels.is_empty(), "{mode}: {after}");
                 assert_eq!(after["scrollY"], 600);
                 assert_eq!(after["mutations"], 0);
             }

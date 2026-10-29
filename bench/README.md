@@ -216,12 +216,12 @@ does not independently establish its source provenance.
 ## Native pointer event probe
 
 The **Input behavior probe** workflow is manual-only. Run it from Actions or
-`gh workflow run input-probe.yml --ref <commit-or-branch>` once the workflow is
+`gh workflow run input-probe.yml --ref <branch-or-tag>` once the workflow is
 on the default branch. It builds one fresh Release test binary, records its
 SHA-256, toolchain, Chrome and machine/load metadata, then runs
 the `e2e_humanize_` group in an isolated headless Chrome on Linux. It includes
-the input probe plus sticky-header, modal, replacement and movement safety
-checks.
+the input probe plus trusted-wheel header recovery, modal/unknown blockers, replacement and
+movement safety checks.
 
 Each input level has one warmup and five recorded native clicks. Before each
 sample, recording is disabled, trusted native movement establishes (20,20),

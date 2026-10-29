@@ -32,7 +32,7 @@ made from this observation.
 
 A top-level ref under the fixed semantic header failed with `element_occluded`
 after its existing retries. Target/header click counts were both zero and
-scrollY remained 600. This is the reproduced header case the new centering
+scrollY remained 600. This is the reproduced header case the new trusted-wheel
 path targets; arbitrary modal overlays must remain refusals.
 
 The original workflow artifact contains full raw/coalesced points, Cargo
@@ -40,9 +40,22 @@ artifact metadata, binary hash, Chrome/toolchain versions and before/after
 machine state. The initial/final runner load averages were 0.23 and 2.34;
 these diagnostic intervals are not a platform-independent performance result.
 
-## Candidate
+## Intermediate candidate (not the final header path)
 
-Pending the same manual workflow on the candidate. Check the exact SHA/browser
-metadata and real event/click counts before treating any gap as changed. The
-candidate must pass modal, same-name replacement and movement-during-settle
-refusal tests as well as the positive header case. There is no speedup claim.
+Run [40892533162](https://github.com/leeguooooo/chrome-use/actions/runs/40892533162)
+used source `7f46efe502f0e483ba64f23a495ada9362485e21` and the same Chrome version.
+All native-click work-count checks and the four targeting safety cases passed;
+Human move-to-down gaps were 115.9–190.2ms. Coalesced sizes remained one.
+
+That implementation still used programmatic centering for the new header
+recovery. It was not accepted as the final stealth boundary. The final path
+must use a bounded trusted wheel gesture and be rerun at its own exact source
+and binary hash. Intermediate success is not final wheel-version evidence.
+
+## Final trusted-wheel candidate
+
+Pending the same manual workflow on the wheel candidate. Verify trusted wheel
+records, original-handle/document-epoch checks, positive header click counts,
+modal and unmarked-overlay refusal, same-name replacement and movement safety.
+Check exact SHA/browser metadata and real event counts before treating any gap
+as changed. There is no speedup or hardware-equivalence claim.

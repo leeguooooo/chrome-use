@@ -349,8 +349,8 @@ pub async fn click_reporting(
                     return Err(occluded_refusal(selector_or_ref, &cover));
                 }
             }
-            let guarded =
-                scroll.recentered || humanize::active_level() == humanize::HumanizeLevel::Human;
+            let guarded = scroll.header_recovered
+                || humanize::active_level() == humanize::HumanizeLevel::Human;
             let target = if guarded {
                 match scroll.target {
                     Some(target) => Some(target),
@@ -366,6 +366,7 @@ pub async fn click_reporting(
                         Some(ClickTargetGuard {
                             object_id,
                             session_id,
+                            epoch: None,
                         })
                     }
                 }
@@ -544,59 +545,189 @@ async fn point_misses_element(
     )
 }
 
+#[derive(PartialEq, Eq)]
+struct ClickEpoch {
+    frame_id: String,
+    loader_id: String,
+}
+
 struct ClickTargetGuard {
     object_id: String,
     session_id: String,
+    epoch: Option<ClickEpoch>,
 }
 
 #[derive(Default)]
 struct ScrollBeforeClick {
     disabled: Option<String>,
     target: Option<ClickTargetGuard>,
-    recentered: bool,
+    header_recovered: bool,
 }
 
-/// Verify the same live node at the exact landing point, never a re-query.
+struct HeaderScrollPlan {
+    x: f64,
+    y: f64,
+    dy: f64,
+}
+
+async fn read_click_epoch(client: &CdpClient, session: &str) -> Result<Option<ClickEpoch>, String> {
+    let tree = tokio::time::timeout(
+        Duration::from_millis(500),
+        client.send_command("Page.getFrameTree", None, Some(session)),
+    )
+    .await
+    .map_err(|_| {
+        "click stopped before press: document identity could not be read; no mouse button was sent"
+            .to_string()
+    })??;
+    let frame = &tree["frameTree"]["frame"];
+    Ok(match (frame["id"].as_str(), frame["loaderId"].as_str()) {
+        (Some(id), Some(loader)) if !id.is_empty() && !loader.is_empty() => Some(ClickEpoch {
+            frame_id: id.to_string(),
+            loader_id: loader.to_string(),
+        }),
+        _ => None,
+    })
+}
+
+async fn verify_click_epoch(client: &CdpClient, target: &ClickTargetGuard) -> Result<(), String> {
+    if let Some(expected) = target.epoch.as_ref() {
+        if read_click_epoch(client, &target.session_id).await?.as_ref() != Some(expected) {
+            return Err("click stopped before press: the original document changed or could not be confirmed; no mouse button was sent".to_string());
+        }
+    }
+    Ok(())
+}
+
+async fn click_guard_value(
+    client: &CdpClient,
+    target: &ClickTargetGuard,
+    function: &str,
+    args: Vec<Value>,
+) -> Result<Value, String> {
+    let reply=tokio::time::timeout(Duration::from_millis(500),client.send_command(
+        "Runtime.callFunctionOn",Some(json!({"objectId":target.object_id,"functionDeclaration":function,"arguments":args,"returnByValue":true})),Some(&target.session_id),
+    )).await.map_err(|_| "click stopped before press: the original target could not be rechecked; no mouse button was sent".to_string())?
+        .map_err(|error|format!("click stopped before press: target check failed ({error}); no mouse button was sent"))?;
+    Ok(reply["result"]["value"].clone())
+}
+
+async fn recheck_header_wheel_point(
+    client: &CdpClient,
+    target: &ClickTargetGuard,
+    plan: &HeaderScrollPlan,
+) -> Result<bool, String> {
+    verify_click_epoch(client, target).await?;
+    let value = click_guard_value(
+        client,
+        target,
+        SCROLL_AND_PROBE_DISABLED_JS,
+        vec![
+            json!({"value":true}),
+            json!({"value":plan.x}),
+            json!({"value":plan.y}),
+        ],
+    )
+    .await?;
+    if value.as_str() == Some("ready") {
+        return Ok(true);
+    }
+    if value["header"] == true {
+        return Ok(false);
+    }
+    Err("click stopped before press: the original header wheel context could not be confirmed; no mouse button was sent".to_string())
+}
+
+/// Verify the same live node and document at the exact landing point.
 async fn verify_live_click_target(
     client: &CdpClient,
     target: &ClickTargetGuard,
     point: Option<(f64, f64)>,
 ) -> Result<(), String> {
-    let args = point.map(|(x, y)| {
-        vec![
-            serde_json::json!({"value":x}),
-            serde_json::json!({"value":y}),
-        ]
-    });
-    let reply = tokio::time::timeout(Duration::from_millis(500), client.send_command(
-        "Runtime.callFunctionOn",
-        Some(serde_json::json!({"objectId":target.object_id,"functionDeclaration":CLICK_TARGET_GUARD_JS,"arguments":args.unwrap_or_default(),"returnByValue":true})),
-        Some(&target.session_id),
-    )).await.map_err(|_| "click stopped before press: the original target could not be rechecked; no mouse button was sent".to_string())?
-        .map_err(|error| format!("click stopped before press: target check failed ({error}); no mouse button was sent"))?;
-    if reply["result"]["value"] == true {
+    verify_click_epoch(client, target).await?;
+    let args = point
+        .map(|(x, y)| vec![json!({"value":x}), json!({"value":y})])
+        .unwrap_or_default();
+    let value = click_guard_value(client, target, CLICK_TARGET_GUARD_JS, args).await?;
+    if value == true {
         return Ok(());
     }
-    let reason = reply["result"]["value"]
-        .as_str()
-        .unwrap_or("target could not be confirmed");
+    let reason = value.as_str().unwrap_or("target could not be confirmed");
     Err(format!("click stopped before press: {reason}; no mouse button was sent. Observe the page before trying again."))
 }
 
 const CLICK_TARGET_GUARD_JS: &str = r#"function(x,y) {
-    if (!this.isConnected) return 'original target is no longer connected';
+    if (!this.isConnected || this.ownerDocument.defaultView?.document!==this.ownerDocument) return 'original target context changed';
     const el=this.nodeType===1?this:this.parentElement;
     if (!el) return 'original target has no element';
     if (el.matches(':disabled')) return 'original target is disabled';
     const r=el.getBoundingClientRect();
     if (!(r.width>0 && r.height>0)) return 'original target is not visible';
-    if (x===undefined || y===undefined) { x=r.left+r.width/2; y=r.top+r.height/2; }
-    const hit=this.ownerDocument.elementFromPoint(x,y);
-    return hit===el || el.contains(hit) ? true : 'original target no longer owns the click point';
+    if (x===undefined || y===undefined) {x=r.left+r.width/2;y=r.top+r.height/2;}
+    let hit=this.ownerDocument.elementFromPoint(x,y);
+    while(hit?.shadowRoot) {
+        const inner=hit.shadowRoot.elementFromPoint(x,y);
+        if(!inner || inner===hit)break;
+        hit=inner;
+    }
+    for(let node=hit;node;node=node.parentNode||node.host)if(node===el)return true;
+    return 'original target no longer owns the click point';
 }"#;
 
-/// Resolve once and scroll before clicking. A small semantic sticky/fixed
-/// edge header gets one centering attempt on that handle; dialogs are untouched.
+/// One bounded, acknowledged gesture. A canceled waiter cannot cancel Chrome,
+/// so an unfinished gesture never falls back to a DOM scroll or another input.
+async fn recover_header_with_wheel(
+    client: &CdpClient,
+    target: &ClickTargetGuard,
+    plan: HeaderScrollPlan,
+    budget: Duration,
+) -> Result<(), String> {
+    let mut input_attempted = false;
+    let outcome = tokio::time::timeout(budget, async {
+        if recheck_header_wheel_point(client, target, &plan).await? {
+            return Ok(());
+        }
+        input_attempted = true;
+        move_pointer(client, &target.session_id, plan.x, plan.y).await?;
+        let level = humanize::active_level();
+        for (dx, dy, pause) in humanize::scroll_segments(0.0, plan.dy, level, humanize::next_seed())
+        {
+            if recheck_header_wheel_point(client, target, &plan).await? {
+                return Ok(());
+            }
+            client
+                .send_command(
+                    "Input.dispatchMouseEvent",
+                    Some(
+                        json!({"type":"mouseWheel","x":plan.x,"y":plan.y,"deltaX":dx,"deltaY":dy}),
+                    ),
+                    Some(&target.session_id),
+                )
+                .await?;
+            if !pause.is_zero() {
+                tokio::time::sleep(pause).await;
+            }
+        }
+        Ok::<(), String>(())
+    })
+    .await;
+    let error = match outcome {
+        Ok(Ok(())) => return Ok(()),
+        Ok(Err(error)) => error,
+        Err(_) => format!(
+            "header wheel gesture did not finish within {}ms",
+            budget.as_millis()
+        ),
+    };
+    Err(if input_attempted {
+        format!("action_outcome_unknown: click header recovery stopped after input was attempted ({error}). Chrome may still be handling it; no mouse button was sent. Inspect before trying again.")
+    } else {
+        format!("click stopped before press: header recovery could not be confirmed ({error}); no mouse button was sent")
+    })
+}
+
+/// Existing nearest-edge preparation is unchanged. New header recovery uses
+/// trusted wheel input only, with the same original handle and document epoch.
 async fn scroll_into_view_if_needed(
     client: &CdpClient,
     session_id: &str,
@@ -616,9 +747,14 @@ async fn scroll_into_view_if_needed(
     else {
         return Ok(ScrollBeforeClick::default());
     };
-    let allow_recenter = coordinate_click
+    let allow_header = coordinate_click
         && parse_ref(selector_or_ref).is_some()
         && !ref_map.ref_is_in_iframe(selector_or_ref);
+    let epoch = if allow_header {
+        read_click_epoch(client, &effective_session_id).await?
+    } else {
+        None
+    };
     let reply = client
         .send_command_typed::<_, Value>(
             "Runtime.callFunctionOn",
@@ -626,7 +762,7 @@ async fn scroll_into_view_if_needed(
                 function_declaration: SCROLL_AND_PROBE_DISABLED_JS.to_string(),
                 object_id: Some(object_id.clone()),
                 arguments: Some(vec![CallArgument {
-                    value: Some(serde_json::json!(allow_recenter)),
+                    value: Some(json!(allow_header)),
                     object_id: None,
                 }]),
                 return_by_value: Some(true),
@@ -636,46 +772,103 @@ async fn scroll_into_view_if_needed(
         )
         .await?;
     wait_for_paint_settled(client, &effective_session_id).await;
-    let status = reply["result"]["value"]
-        .as_str()
-        .ok_or("click stopped before pointer input: target scroll state could not be confirmed")?;
-    let recentered = status == "recentered";
-    let disabled = (!status.is_empty() && !recentered).then(|| status.to_string());
-    let target = ClickTargetGuard {
+    let value = &reply["result"]["value"];
+    let mut target = ClickTargetGuard {
         object_id,
         session_id: effective_session_id,
+        epoch: None,
     };
-    if recentered {
+    let mut disabled = None;
+    let header_recovered = if value["header"] == true {
+        let number = |name: &str| {
+            value[name]
+                .as_f64()
+                .filter(|n| n.is_finite())
+                .ok_or_else(|| {
+                    "click stopped before press: invalid header wheel geometry".to_string()
+                })
+        };
+        let (x, y, dy, vw, vh) = (
+            number("x")?,
+            number("y")?,
+            number("dy")?,
+            number("vw")?,
+            number("vh")?,
+        );
+        if x < 0.0 || y < 0.0 || x >= vw || y >= vh || dy.abs() < 1.0 || dy.abs() > vh + 1.0 {
+            return Err(
+                "click stopped before press: header wheel point could not be confirmed".into(),
+            );
+        }
+        target.epoch = Some(
+            epoch
+                .ok_or("click stopped before press: header recovery requires document identity")?,
+        );
+        recover_header_with_wheel(
+            client,
+            &target,
+            HeaderScrollPlan { x, y, dy },
+            Duration::from_secs(10),
+        )
+        .await?;
+        wait_for_paint_settled(client, &target.session_id).await;
         verify_live_click_target(client, &target, None).await?;
-    }
+        true
+    } else {
+        let status = value.as_str().ok_or(
+            "click stopped before pointer input: target scroll state could not be confirmed",
+        )?;
+        if !status.is_empty() {
+            disabled = Some(status.to_string());
+        }
+        false
+    };
     Ok(ScrollBeforeClick {
         disabled,
         target: Some(target),
-        recentered,
+        header_recovered,
     })
 }
 
-const SCROLL_AND_PROBE_DISABLED_JS: &str = r#"function(allowRecenter) {
+const SCROLL_AND_PROBE_DISABLED_JS: &str = r#"function(allowHeader,wheelX,wheelY) {
     const el=this.nodeType===1?this:this.parentElement;
-    if (!el) return '';
-    try { el.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'}); } catch (_) {}
-    if (el.matches(':disabled')) return 'disabled';
-    if (el.closest('[aria-disabled="true"]')) return 'aria-disabled';
-    if (!allowRecenter || !this.isConnected) return '';
+    if(!el)return '';
+    const recheck=Number.isFinite(wheelX)&&Number.isFinite(wheelY);
+    if(!recheck){try{el.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});}catch(_){}}
+    if(el.matches(':disabled'))return 'disabled';
+    if(el.closest('[aria-disabled="true"]'))return 'aria-disabled';
+    if(!allowHeader)return '';
+    if(!this.isConnected || this.ownerDocument.defaultView?.document!==this.ownerDocument)return {blocked:true};
     const doc=this.ownerDocument,w=doc.defaultView,r=el.getBoundingClientRect();
-    const hit=doc.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
-    if (!hit || hit===el || el.contains(hit)) return '';
+    if(!(r.width>0&&r.height>0))return recheck?{blocked:true}:'';
     const modal='dialog,[role="dialog"],[role="alertdialog"],[aria-modal="true"],[popover]';
-    if (el.closest(modal) || hit.closest(modal)) return '';
-    for(let bar=hit;bar;bar=bar.parentElement) {
-        if (!bar.matches('header,nav,[role="banner"],[role="navigation"]') || bar.contains(el)) continue;
-        const style=w.getComputedStyle(bar),b=bar.getBoundingClientRect();
-        const edge=(b.top<=1 && b.bottom>0) || (b.bottom>=w.innerHeight-1 && b.top<w.innerHeight);
-        if (!['sticky','fixed'].includes(style.position) || !edge || b.width<w.innerWidth*.6 || b.height>w.innerHeight*.35) continue;
-        el.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
-        return 'recentered';
+    if(recheck){
+        const at=doc.elementFromPoint(wheelX,wheelY);
+        if(!at||el.closest(modal)||at.closest(modal)||!at.contains(el))return {blocked:true};
     }
-    return '';
+    const hit=doc.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+    if(hit===el||el.contains(hit))return recheck?'ready':'';
+    if(!hit||el.closest(modal)||hit.closest(modal))return recheck?{blocked:true}:'';
+    for(let bar=hit;bar;bar=bar.parentElement){
+        if(!bar.matches('header,nav,[role="banner"],[role="navigation"]')||bar.contains(el))continue;
+        const style=w.getComputedStyle(bar),b=bar.getBoundingClientRect();
+        const edge=(b.top<=1&&b.bottom>0)||(b.bottom>=w.innerHeight-1&&b.top<w.innerHeight);
+        if(!['sticky','fixed'].includes(style.position)||!edge||b.width<w.innerWidth*.6||b.height>w.innerHeight*.35)continue;
+        let scroller=doc.scrollingElement||doc.documentElement;
+        for(let p=el.parentElement;p&&p!==doc.documentElement;p=p.parentElement){
+            const s=w.getComputedStyle(p);
+            if(/(auto|scroll)/.test(s.overflowY)&&p.scrollHeight>p.clientHeight+1){scroller=p;break;}
+        }
+        const page=scroller===doc.scrollingElement||scroller===doc.documentElement;
+        const q=page?{left:0,top:0,right:w.innerWidth,bottom:w.innerHeight}:scroller.getBoundingClientRect();
+        const left=Math.max(0,q.left),top=Math.max(0,q.top),right=Math.min(w.innerWidth,q.right),bottom=Math.min(w.innerHeight,q.bottom);
+        if(right<=left||bottom<=top)return recheck?{blocked:true}:'';
+        const x=recheck?wheelX:(left+right)/2,y=recheck?wheelY:(top+bottom)/2,at=doc.elementFromPoint(x,y);
+        const controls='input,textarea,select,button,a,iframe,object,embed,video,audio,canvas,svg,[contenteditable],[role="button"],[role="slider"],[role="spinbutton"],[role="combobox"],[role="application"]';
+        if(x<left||x>=right||y<top||y>=bottom||!at||at.closest(modal)||at.closest(controls)||bar.contains(at)||!scroller.contains(at)||!at.contains(el))return recheck?{blocked:true}:'';
+        return {header:true,x,y,dy:r.top+r.height/2-(top+bottom)/2,vw:w.innerWidth,vh:w.innerHeight};
+    }
+    return recheck?{blocked:true}:'';
 }"#;
 
 /// Dispatch a click through the DOM (`element.click()`) instead of via screen
@@ -7832,3 +8025,7 @@ mod contenteditable_fill_tests;
 #[cfg(test)]
 #[path = "monaco_clipboard_tests.rs"]
 mod monaco_clipboard_tests;
+
+#[cfg(test)]
+#[path = "click_header_wheel_tests.rs"]
+mod click_header_wheel_tests;

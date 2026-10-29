@@ -3022,9 +3022,11 @@ moves keyboard focus like a real one, so `click <input>` followed by
 Human pointer clicks settle for a seeded 60-200ms before press, then recheck
 that the same live element owns the landing point. Fast/Off timing is unchanged.
 A top-level @ref under a small fixed/sticky semantic edge header/navigation bar
-may be centered once before input. The same handle is rechecked; modal/dialog
+may get one trusted wheel gesture (10s cap, humanize pacing). The same handle
+and document epoch are rechecked; unknown wheel points, context changes or
+transport errors stop without DOM-scroll fallback or input replay. Modal/dialog
 and popover blockers remain refusals. "click stopped before press" means no
-mouse button was sent; the pointer may have moved, so observe before retrying.
+mouse button was sent; pointer/viewport may have moved, so observe before retrying.
 
 A disabled control (`:disabled`) is refused with an error: the browser
 delivers no click to it, and a Save that is still disabled usually means the
