@@ -257,6 +257,11 @@ chrome-use status                 # 中继、profile、扩展与会话健康总�
 
 之后 `chrome-use open` 就通过**原生消息**驱动你真实、已登录的 Chrome：无调试端口、无 token、**永远不弹 "Allow remote debugging?"**。裸 remote-debugging 端口的备选方案（会弹同意框）见[真实 Chrome 指南](https://chrome-use.leeguoo.com/real-chrome.html)。
 
+在 macOS/Linux 上，生成的 native-host 启动器会固定安装时的 `HOME` 和可选的绝对路径
+`CHROME_USE_RELAY_DIR`，避免 Chrome 启动它时切换到别的环境。安装时未指定中继目录，
+启动器会清除从 Chrome 继承的目录覆盖。已有启动器需要在目标环境下重跑 `extension install`
+才会更新；隔离测试安装还应加 `--no-open --no-profile`，并设置 `CHROME_USE_NO_BROWSER_SCAN=1`。
+
 `extension install` 是一次性的安装步骤。`chrome-use extension connect`（别名 `chrome-use reconnect`）在扩展已装好的前提下重新连上它的中继，不重装任何东西。被 attach 的 agent 标签页上 Chrome 仍会显示「chrome-use started debugging this browser」提示条；`chrome-use extension connect --silent` 会带 `--silent-debugger-extension-api` 把 Chrome 重启一次来去掉它（标签和登录自动恢复；同时开着多个 Chrome 实例时不会重启）。`--keep-banner` 完全不碰浏览器；两个 flag 都不带时，交互终端里会先问一句。详见[静音提示条](https://chrome-use.leeguoo.com/debugger-banner-silence.html)。
 
 AI 标签默认开在你正在用的窗口里，以后台标签打开、不抢焦点；每个会话有自己的标签组，组名前面带 ✦，一眼能和你自己的标签分开。加 `--window dedicated` 则改为同一 Chrome profile 的所有 AI 会话共用一个后台专用窗口：已有窗口只要标签归属都能确认是 AI，就会复用，全屏也不另开窗口。归属不明或空白占位页清理失败时会报错，避免继续增加窗口。不会为回收窗口而搬走或删除用户页。你在 AI 窗口里开了或拖进了自己的页面，这个窗口就归你：里面已有的 AI 标签照常工作，新的 AI 标签开到一个新的 AI 窗口，之后的会话共用它。
@@ -331,6 +336,8 @@ chrome-use snapshot -i --diff          # 只回传相对上一张快照变化的
 
 `screenshot --annotate` 在 CLI 中把编号绘制到截图上，不会向页面插入节点或样式。JSON 标注框仍使用相对截图区域的 CSS 像素，图中的编号按图片分辨率缩放。显式裁剪区域优先于全页和元素截图。 框架引用使用所属渲染进程和顶层视口坐标。嵌套跨进程 iframe 通过协议四边形和隔离世界中的视口尺寸测量支持旋转、倾斜、镜像和透视变换，视口尺寸包含滚动条占用的空间，标注框包围投影后的四个角点。变换退化、数值不稳定、跨越透视无穷远线或框架几何信息缺失时会明确报错，不会猜测标注位置。 裁剪也在 CLI 中完成，视口外区域从全页截图中裁出。超出页面范围的区域会被拒绝。
 
+普通元素截图和 `--clip` 区域截图也在 CLI 中裁剪像素，页面滚动后仍按文档坐标取图。视口内区域从现有表面裁出，视口外区域先截全页再裁出；不会滚动或激活标签页。
+
 扩展中继为每次截图捕获保留最多 25 秒，低于 CLI 的 30 秒 CDP 期限。视口或 DPR 改变后，Chrome 原生截图可能比普通命令更慢。这里等待的是同一次捕获，不会重放命令或激活标签。超时仍会报错，也不会取消 Chrome 中尚未完成的捕获，因此应避免重叠重试截图。
 
 扩展中继递归连接嵌套的跨进程 iframe，使快照能够在现有三层展开限制内解析其内容。Chrome 必须允许调试器访问每个目标。若框架或 ref 缺失，请检查 `frames` 并重新获取快照，不要猜测其他目标。
@@ -393,7 +400,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use dialog status` · `dialog accept\|dismiss` | 处理点击触发的原生 `confirm()` / `prompt()` |
 | `chrome-use download @e2 ./video.mp4` | 用已登录浏览器的同一份 cookie 下载，且不导航当前标签页 |
 | `chrome-use network route "*/api/me" --body '{"vip":true}'` | 伪造响应、改写出站请求或拦截请求 |
-| `chrome-use site github/issues epiral/bb-browser --json` | 运行站点适配器，从网站自己的接口拿干净的 JSON |
+| `chrome-use site github/issues epiral/bb-browser --json` | 运行站点适配器，从网站自己的接口拿干净的 JSON。无法读取当前 URL 时，`site_domain_unverified` 会停止域名导航和回退；重试前先检查 `get url` 和 `snapshot` |
 | `chrome-use site info github/issues` · `site info github` | 查看单个适配器的参数和域名，或整个 pack 的适配器、参数和用法 |
 | `chrome-use tab close t2` · `close` | 关闭一个标签，或结束会话并关闭它创建的全部标签。两者都先读回再报告已关（`tabsClosed`、`verifiedAbsent: true`）；还开着或无法确认已关的标签会返回 `close incomplete`，并保留会话和标签归属以便重试。会话只剩最后一个标签时，`tab close` 直接结束会话（`sessionClosed: true`）。不是本会话创建的标签永远不会被关。走 relay 时确认需要 ab-connect 0.5.33+ |
 | `chrome-use session list` · `session stop [name]` | 管理会话 worker |
@@ -455,12 +462,28 @@ chrome-use 会保留该标签并报告目标 ID。保持相同 session 和连接
 `signedIn: true` 和 `evidence`（看到了什么）；等不到就报 `the sign-in was not confirmed: …`，
 并说明页面现在是什么样。它会确认回车键确实到了页面上，没到就改点表单的登录按钮。
 
+默认密码登录会等验证码框出现后再取 TOTP，使用同一个密码库条目和来源继续一次。
+每一步都通过 `bwu run` 读取并记录审计，因此取动态码时可能再次要求授权。
+已经停在身份验证器验证页时，用 `chrome-use auth login --bwu --totp --item <id|name>`
+只取动态码，不重填账号密码，也不执行条目的 `_autotype`。
+验证码框可能自动提交，所以 `--totp` 不能与 `--passkey` 或 `--no-submit` 同用。
+验证码被拒绝后不会自动重试。
+
+Bitwarden 登录条目的身份验证器字段必须存有 TOTP 设置密钥或 `otpauth://` URI。
+只存密码、或保存当前验证码的截图，都不能生成后续验证码。请通过密码库界面迁移设置密钥，
+不要把它发进聊天或放进命令参数。短信、邮件和推送确认需要各自的来源。
+验证尚未完成时返回 `needs` 和 `next`，不标记 `signedIn`，自动登录也会留在验证页。
+只能识别为验证步骤、或最多接收不足六个字符的输入框会保持待验证（`otp: unsupported`），不会自动取码或提交。五字符 Steam 验证也会停在这里，先查看页面再使用显式 `--totp`。
+自定义 `_autotype` 保留原有时序，仍在执行前读取全部字段；动态码过期时，先查看页面，
+再在身份验证器验证页使用 `--totp`。
+
 | 登录选项 | 作用 |
 |---|---|
 | `--bwu` | 使用当前网站的密码库账号（bwu 0.7.0+） |
 | `--item <id\|name>` | 选择一个匹配的账号 |
+| `--totp` | 只填写并提交当前 TOTP 验证，不读取密码 |
 | `--passkey` | 在 `--launch` 浏览器中用密码库 passkey 登录 |
-| `--no-submit` | 只填不提交，跳过 TOTP 和 passkey 验证器；不能与 `--passkey` 同用 |
+| `--no-submit` | 只填不提交，跳过 TOTP 和 passkey 验证器；不能与 `--passkey` 或 `--totp` 同用 |
 
 ```bash
 chrome-use open https://github.com/login
@@ -515,7 +538,7 @@ chrome-use jev run --goal "查苏黎世到伦敦的航班" --url https://www.goo
 
 ## 反检测
 
-带 session 的内部 DOM 读取要求隔离执行上下文；创建、重建或节点解析无法保持隔离时返回 `isolation_unavailable`，不再静默重试页面主世界。等待导航稳定后重新观察；部分同进程 iframe 操作可能仍不支持。用户主动执行的脚本、站点适配器、明确的编辑器模型访问和显式上下文保留现有语义。已有的 `AGENT_BROWSER_MAIN_WORLD=1` 兼容开关会取消默认隔离要求，不是保持隐身的解决办法。此策略独立于扩展的光标设置。
+带 session 的内部 DOM 读取要求隔离执行上下文；创建、重建或节点解析无法保持隔离时返回 `isolation_unavailable`，不再静默重试页面主世界。隔离上下文创建失败只缓存一秒；之后的读取可重新尝试创建，无需刷新页面，也不会回退到主世界。等待导航稳定后重新观察；部分同进程 iframe 操作可能仍不支持。用户主动执行的脚本、站点适配器、明确的编辑器模型访问和显式上下文保留现有语义。已有的 `AGENT_BROWSER_MAIN_WORLD=1` 兼容开关会取消默认隔离要求，不是保持隐身的解决办法。此策略独立于扩展的光标设置。
 
 在扩展设置中开启**隐身模式**或关闭 **Agent 光标**时，扩展会通过现有调试连接移除已有的光标浮层及其页面全局变量。对于已断开或无法访问的标签页，设置页会提示清理尚未确认；依赖隐身模式前请重新加载相关页面。Agent 正常重新连接该标签页时会重试清理，不会为了清理强制建立连接。
 

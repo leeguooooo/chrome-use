@@ -2500,6 +2500,98 @@ pub fn login_verification_refusal(resp: &crate::connection::Response) -> bool {
         .is_some_and(|error| error.starts_with("login verification:"))
 }
 
+/// Domain preflight failed before dispatch. A fallback must not navigate away
+/// from the tab whose URL could not be read either.
+pub fn domain_verification_refusal(resp: &crate::connection::Response) -> bool {
+    resp.error
+        .as_deref()
+        .is_some_and(|error| error.starts_with("site_domain_unverified:"))
+}
+
+/// Whether a failed site response is eligible for a read-only OpenCLI fallback.
+/// The caller must still check that the fallback adapter itself is read-only.
+pub fn opencli_fallback_allowed(
+    is_site: bool,
+    site_wall: bool,
+    resp: &crate::connection::Response,
+) -> bool {
+    is_site
+        && !site_wall
+        && !login_verification_refusal(resp)
+        && !domain_verification_refusal(resp)
+        && !resp.success
+}
+
+#[cfg(test)]
+mod domain_verification_tests {
+    use super::*;
+
+    #[test]
+    fn domain_read_refusal_blocks_fallback_but_adapter_failures_do_not() {
+        for cause in [
+            "Timeout waiting for Runtime.evaluate",
+            "debugger_access_denied",
+        ] {
+            let error = format!("site_domain_unverified: could not read current URL: {cause}");
+            let response = crate::connection::Response {
+                error: Some(crate::native::browser::to_ai_friendly_error(&error)),
+                ..Default::default()
+            };
+            assert_eq!(response.error.as_deref(), Some(error.as_str()));
+            assert!(domain_verification_refusal(&response));
+        }
+        let mut response = crate::connection::Response::default();
+        response.error = Some("adapter API request failed".into());
+        assert!(!domain_verification_refusal(&response));
+        response.error = None;
+        assert!(!domain_verification_refusal(&response));
+    }
+
+    #[test]
+    fn wrapped_stale_target_keeps_refusal_and_adds_recovery_once() {
+        for cause in ["stale sessionId", "unknown sessionId", "no attached tab"] {
+            let error = format!("site_domain_unverified: could not read current URL: {cause}");
+            let formatted = crate::native::browser::to_ai_friendly_error(&error);
+            assert!(formatted.starts_with(&error));
+            assert!(formatted.contains("`tab list`"));
+            assert!(formatted.contains("`tab select <ref>`"));
+            assert!(formatted.contains("<handle>"));
+            assert_eq!(
+                crate::native::browser::to_ai_friendly_error(&formatted),
+                formatted
+            );
+            let response = crate::connection::Response {
+                error: Some(formatted),
+                ..Default::default()
+            };
+            assert!(!opencli_fallback_allowed(true, false, &response));
+        }
+    }
+
+    #[test]
+    fn opencli_fallback_gate_preserves_all_refusals() {
+        for error in [
+            "site_domain_unverified: could not read current URL: stale sessionId",
+            "login verification: sign-in could not be confirmed",
+        ] {
+            let response = crate::connection::Response {
+                error: Some(error.into()),
+                ..Default::default()
+            };
+            assert!(!opencli_fallback_allowed(true, false, &response));
+        }
+        let mut response = crate::connection::Response {
+            error: Some("adapter API request failed".into()),
+            ..Default::default()
+        };
+        assert!(opencli_fallback_allowed(true, false, &response));
+        assert!(!opencli_fallback_allowed(false, false, &response));
+        assert!(!opencli_fallback_allowed(true, true, &response));
+        response.success = true;
+        assert!(!opencli_fallback_allowed(true, false, &response));
+    }
+}
+
 /// A `site` adapter run that failed because the site is not signed in
 /// (#479) is a login wall like a redirect to a sign-in page (#434): replace
 /// the adapter's error with the wall's hint (which points at `auth login

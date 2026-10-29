@@ -447,6 +447,47 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
     }
 }
 
+/// Describe the observed login outcome, including a pending human step.
+fn bwu_login_message(data: &serde_json::Value) -> (bool, String) {
+    if let Some(needs) = data["needs"].as_str() {
+        return (
+            false,
+            format!(
+                "Login needs {needs}. {}",
+                data["next"]
+                    .as_str()
+                    .unwrap_or("Complete verification on the current page.")
+            ),
+        );
+    }
+    if data["signedIn"] == true {
+        return (
+            true,
+            format!(
+                "Signed in with vault item '{}': {}",
+                data["item"].as_str().unwrap_or(""),
+                data["evidence"].as_str().unwrap_or("sign-in confirmed")
+            ),
+        );
+    }
+    if data["alreadySignedIn"] == true {
+        return (
+            false,
+            data["hint"]
+                .as_str()
+                .unwrap_or("This page looks signed in; nothing was typed. Verify the destination.")
+                .to_string(),
+        );
+    }
+    (
+        false,
+        format!(
+            "Filled {}. Sign-in was not confirmed (submitted: {}).",
+            data["filled"], data["submitted"]
+        ),
+    )
+}
+
 fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptions) {
     if opts.json {
         if opts.content_boundaries {
@@ -489,6 +530,22 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
     if let Some(data) = &resp.data {
         if action == Some("device") && data["reset"] == true {
             println!("{} Device emulation off: metrics, user-agent and touch overrides cleared (native viewport {}x{})", color::success_indicator(), data["width"], data["height"]);
+            return;
+        }
+        if action == Some("auth_login_bwu") && data["confirmation_required"] != true {
+            let (ok, message) = bwu_login_message(data);
+            println!(
+                "{} {}",
+                if ok {
+                    color::success_indicator()
+                } else {
+                    color::warning_indicator()
+                },
+                message
+            );
+            if let Some(w) = data["warning"].as_str() {
+                eprintln!("{} {w}", color::warning_indicator());
+            }
             return;
         }
         // What `snapshot`/`get text`/`read` left out because a person can't
@@ -3984,7 +4041,7 @@ Options:
                        so XPath works as before: `screenshot //main shot`.
                        Unknown options are refused rather than read as a
                        selector or path.
-  --clip <x,y,w,h>     Capture a pixel region, e.g. `screenshot --clip 0,0,200,40 corner.png`
+  --clip <x,y,w,h>     Crop a document-space pixel region in the CLI, e.g. `screenshot --clip 0,0,200,40 corner.png`
   --max-width <px>     Downscale so the image's width ≤ px (preserves aspect)
   --max-height <px>    Downscale so the image's height ≤ px
   --scale <0..1>       Downscale by a factor, e.g. 0.5 (DPR-1, so screenshot px
@@ -4003,7 +4060,9 @@ Options:
                        or unstable transforms, perspective-horizon crossings and
                        unavailable geometry report an error.
                        Crops happen in the CLI; off-viewport crops capture the full
-                       page first. Regions outside the page are refused.
+                       page first. This also applies without --annotate, and
+                       does not scroll or activate the tab. Regions outside
+                       the page are refused.
                        Each label [N] corresponds to ref @eN from snapshot.
                        Prints a legend mapping labels to element roles/names.
                        With --json, annotations are included in the response.
@@ -4988,8 +5047,18 @@ Bitwarden Login Options:
                            or its sign-in frame's host, else the matches are
                            listed)
   --passkey                Sign in with a vault passkey in --launch mode (bwu 0.9.0+)
+  --totp                   Only fill/submit the current authenticator challenge;
+                           read no username/password; ignore _autotype
+                           Cannot be combined with --passkey or --no-submit
   --no-submit              Fill only; skip TOTP and passkey authenticators
-                           Cannot be combined with --passkey
+                           Cannot be combined with --passkey or --totp
+  Default login fetches TOTP after a code field appears (a second bwu run,
+  possibly a second authorization). Rejected codes are never retried automatically.
+  Store the authenticator setup key in the Bitwarden login, not just its password.
+  Pending verification returns needs + next and leaves the page in place.
+  Unrecognized/short fields (maxlength < 6) remain pending (otp: unsupported).
+  No code is read; inspect five-character Steam challenges before explicit --totp.
+  Custom _autotype sequences still fetch all fields before starting.
   On the extension relay, passkeys are unsupported; password/TOTP still work.
   In --launch mode, password login can also answer a passkey second factor.
   Unexpected registration or unconfirmed authenticator cleanup aborts the command.
@@ -5034,6 +5103,7 @@ Examples:
   chrome-use auth login github
   chrome-use auth login github --no-navigate
   chrome-use auth login --bwu
+  chrome-use auth login --bwu --totp --item <id>
   chrome-use --session passkey-demo --launch open https://github.com/login
   chrome-use --session passkey-demo --launch auth login --bwu --item github.com --passkey
   chrome-use auth list
@@ -6292,6 +6362,10 @@ Global Options:
             r##"
 chrome-use site - Run a community site adapter over your logged-in session
 
+If the current tab URL cannot be read, site_domain_unverified stops domain
+navigation and adapter fallback. Check get url and snapshot before trying again;
+a URL-read timeout does not establish that the tab is on the wrong site.
+
 Usage:
   chrome-use site <name>/<command> [positional...] [--key value]
                                        [--until-done] [--timeout <secs|Ns|Nm>]
@@ -6802,7 +6876,7 @@ Site adapters:  turn a website into a structured-data CLI (runs as you, in your 
 Auth Vault:
   auth save <name> [opts]    Save auth profile (--url, --username, --password/--password-stdin)
   auth login <name> [opts]   Login using saved credentials (--no-navigate: fill the open page)
-  auth login --bwu [opts]    Bitwarden login (--item, --passkey, --no-submit)
+  auth login --bwu [opts]    Bitwarden login (--item, --passkey, --totp, --no-submit)
   auth list                  List saved auth profiles
   auth show <name>           Show auth profile metadata
   auth delete <name>         Delete auth profile
@@ -6888,6 +6962,9 @@ Setup:
                              browsers of the current user with existing --user-data-dir=<path>
                              directories. Discovered-directory failures warn and skip;
                              default and explicit directory failures remain errors.
+                             The launcher pins the installation's HOME and optional
+                             absolute CHROME_USE_RELAY_DIR; without one it clears an
+                             inherited relay override. Reinstall to refresh old launchers.
   extension install --user-data-dir <path>
                              Add an existing custom data directory explicitly (repeatable;
                              also accepts --user-data-dir=<path>). Missing directories
@@ -7165,7 +7242,9 @@ Environment:
   AGENT_BROWSER_MAIN_WORLD       Set to 1 to bypass default internal DOM isolation
                                  (compatibility override, reduces stealth). By default,
                                  unavailable isolation reports isolation_unavailable;
-                                 wait for navigation and observe again. Some frame
+                                 failed setup is cached for one second, then a later
+                                 read can retry without a reload or main-world fallback.
+                                 Wait for navigation and observe again. Some frame
                                  operations require a supported isolated frame target.
   AGENT_BROWSER_IGNORE_HTTPS_ERRORS Ignore HTTPS certificate errors
   AGENT_BROWSER_PROVIDER         Browser provider (ios, browserbase, kernel, browseruse, browserless, agentcore)
@@ -7890,5 +7969,77 @@ mod tests {
             eval_result_text(&json!({"a": [1]})),
             "{\n  \"a\": [\n    1\n  ]\n}"
         );
+    }
+}
+
+#[cfg(test)]
+mod bwu_outcome_tests {
+    use super::bwu_login_message;
+    use serde_json::json;
+
+    #[test]
+    fn pending_verification_and_fill_only_do_not_claim_sign_in() {
+        let (ok, message) = bwu_login_message(
+            &json!({"needs":"a verification code", "next":"Use your authenticator."}),
+        );
+        assert!(!ok);
+        assert!(message.contains("Use your authenticator"));
+        let (ok, message) = bwu_login_message(&json!({"filled":["password"], "submitted":false}));
+        assert!(!ok);
+        assert!(message.contains("not confirmed"));
+        let (ok, message) = bwu_login_message(
+            &json!({"signedIn":true, "item":"example", "evidence":"form is gone"}),
+        );
+        assert!(ok);
+        assert!(message.contains("form is gone"));
+    }
+}
+
+#[cfg(test)]
+mod bwu_confirmation_tests {
+    #[test]
+    fn gated_login_keeps_approval_instructions_visible() {
+        const KEY: &str = "CU_BWU_CONFIRMATION_OUTPUT_TEST";
+        if let Ok(case) = std::env::var(KEY) {
+            let data = if case == "gate" {
+                serde_json::json!({"confirmation_required":true,"confirmation_id":"gate-fixture","site":"example.test","approval":"user","category":"password","description":"Fill a password"})
+            } else {
+                serde_json::json!({"needs":"a verification code","next":"Complete verification.","url":"https://example.test/challenge"})
+            };
+            super::print_response_with_opts(
+                &crate::connection::Response {
+                    success: true,
+                    data: Some(data),
+                    ..Default::default()
+                },
+                Some("auth_login_bwu"),
+                &super::OutputOptions::default(),
+            );
+            return;
+        }
+        for case in ["gate", "pending"] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "output::bwu_confirmation_tests::gated_login_keeps_approval_instructions_visible",
+                    "--nocapture",
+                ])
+                .env(KEY, case)
+                .env("NO_COLOR", "1")
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let text = String::from_utf8(output.stdout).unwrap();
+            if case == "gate" {
+                assert!(text.contains("Confirmation required:"), "{text}");
+                assert!(text.contains("Ask the user"), "{text}");
+                assert!(text.contains("chrome-use confirm gate-fixture"), "{text}");
+                assert!(text.contains("chrome-use deny gate-fixture"), "{text}");
+                assert!(!text.contains("Sign-in was not confirmed"), "{text}");
+            } else {
+                assert!(text.contains("Login needs a verification code"), "{text}");
+                assert!(text.contains("Complete verification."), "{text}");
+            }
+        }
     }
 }

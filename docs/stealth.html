@@ -276,7 +276,7 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
       </div>
 
       <h2>隐身模式开关（扩展设置页）</h2>
-      <p>带 session 的内部 DOM 读取要求隔离执行上下文；创建、重建或节点解析无法保持隔离时返回 <code>isolation_unavailable</code>，不再静默重试页面主世界。等待导航稳定后重新观察；部分同进程 iframe 操作可能仍不支持。用户主动执行的脚本、站点适配器、明确的编辑器模型访问和显式上下文保留现有语义。已有的 <code>AGENT_BROWSER_MAIN_WORLD=1</code> 兼容开关会取消默认隔离要求，不是保持隐身的解决办法。此策略独立于扩展的光标设置。</p>
+      <p>带 session 的内部 DOM 读取要求隔离执行上下文；创建、重建或节点解析无法保持隔离时返回 <code>isolation_unavailable</code>，不再静默重试页面主世界。隔离上下文创建失败只缓存一秒；之后的读取可重新尝试创建，无需刷新页面，也不会回退到主世界。等待导航稳定后重新观察；部分同进程 iframe 操作可能仍不支持。用户主动执行的脚本、站点适配器、明确的编辑器模型访问和显式上下文保留现有语义。已有的 <code>AGENT_BROWSER_MAIN_WORLD=1</code> 兼容开关会取消默认隔离要求，不是保持隐身的解决办法。此策略独立于扩展的光标设置。</p>
       <p>
         扩展设置页有一个<strong>隐身模式</strong>开关，<strong>默认开启</strong>。开启时，chrome-use 不往它操作的网页里加任何自己的东西：
         没有浮层，没有具名的页面全局变量，站点适配器的点击和输入通过 <code>args.ui</code> 用真实的输入事件完成。

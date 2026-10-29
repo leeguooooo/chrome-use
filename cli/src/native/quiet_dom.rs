@@ -16,6 +16,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -30,17 +31,45 @@ pub(crate) struct WorldCache(Mutex<WorldCacheState>);
 struct WorldCacheState {
     next_generation: u64,
     worlds: HashMap<String, WorldEntry>,
+    #[cfg(test)]
+    now: Option<Instant>,
+}
+
+impl WorldCacheState {
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(now) = self.now {
+            return now;
+        }
+        Instant::now()
+    }
 }
 
 struct WorldEntry {
     generation: u64,
     context: Option<Option<i64>>,
+    retry_after: Option<Instant>,
 }
 
+// Avoid repeating a failed setup for every read in a burst, but do not let a
+// transient CDP failure disable isolated reads until the next navigation.
+const WORLD_RETRY_DELAY: Duration = Duration::from_secs(1);
+
 impl WorldCache {
+    /// Freeze this transport's cache clock without affecting CDP timeout timers.
+    #[cfg(test)]
+    pub(crate) fn set_time_for_test(&self, now: Instant) {
+        self.0.lock().unwrap().now = Some(now);
+    }
+
     fn cached(&self, session: &str) -> (u64, Option<Option<i64>>) {
         let mut state = self.0.lock().unwrap();
-        if let Some(entry) = state.worlds.get(session) {
+        let now = state.now();
+        if let Some(entry) = state.worlds.get_mut(session) {
+            if entry.retry_after.is_some_and(|after| now >= after) {
+                entry.context = None;
+                entry.retry_after = None;
+            }
             return (entry.generation, entry.context);
         }
         let generation = state.next_generation;
@@ -50,6 +79,7 @@ impl WorldCache {
             WorldEntry {
                 generation,
                 context: None,
+                retry_after: None,
             },
         );
         (generation, None)
@@ -57,6 +87,7 @@ impl WorldCache {
 
     fn store(&self, session: &str, generation: u64, context: Option<i64>) -> bool {
         let mut state = self.0.lock().unwrap();
+        let now = state.now();
         let Some(entry) = state.worlds.get_mut(session) else {
             return false;
         };
@@ -64,6 +95,7 @@ impl WorldCache {
             return false;
         }
         entry.context = Some(context);
+        entry.retry_after = context.is_none().then(|| now + WORLD_RETRY_DELAY);
         true
     }
 
@@ -184,6 +216,8 @@ fn gone(e: &str) -> bool {
 }
 
 /// The isolated world's context for this tab, created when there is none.
+/// Failed setup is cached for one second; a later read can retry without
+/// reloading the page. A failure never falls back to the main world.
 pub async fn world(client: &CdpClient, session_id: &str) -> Result<i64, String> {
     let (_, cached) = client.quiet_worlds.cached(session_id);
     match cached {
