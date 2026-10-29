@@ -113,22 +113,21 @@ waits for that choice, and your own `confirm` never approves it.
 | Loop, observation | `core/loop` |
 | Tab ownership, reconnect, cleanup | `core/tabs` |
 | Side panel, schedules, `mobile serve` | `core/agent-panel` |
-| Actions, bounded scrolling, uploads, widgets, `eval` alternatives | `core/interacting` |
+| Actions, bounded scroll, widgets, uploads, no `eval` | `core/interacting` |
 | Reads, frames, shadow roots, screenshot crops | `core/reading` |
-
 | Waiting and observation limits | `core/waiting` |
 | Ref identity, snapshot detail | `core/snapshot-refs` |
-| `status`/`doctor`, extension, profiles, launch, stealth | `core/connection` |
+| Diagnostics, profiles, launch, stealth | `core/connection` |
 | Repeats, output and verification | `core/behaviour` |
 | Site adapters | `core/site-adapters` |
-| User shows a flow once; replay it with no model (`teach`) | `core/teach` |
+| Teach a flow, replay without a model | `core/teach` |
 | Login, cookies, vault, passkeys, OAuth | `core/authentication` |
 | CAPTCHA, slider, icon clicks | `core/captcha` |
-| Sensitive actions, untrusted instructions | `core/trust-boundaries` |
+| Sensitive actions, untrusted text | `core/trust-boundaries` |
 | `[chrome-use Inspect & Ask]` message | `core/inspect-and-ask` |
 | Persistence, recovery, parallel sessions | `core/session-management` |
-| Failures, friction log | `core/known-traps`, `core/troubleshooting` |
-| Every command, flag, env var | `core/commands` |
+| Failures | `core/known-traps`, `core/troubleshooting` |
+| Commands, flags, env | `core/commands` |
 | Page leaks (`diag pages`) | `core/diag-pages` |
 | Install, runners, `--full`, Git hooks | `core/installation` |
 | Changing this repository | `core/development` |
