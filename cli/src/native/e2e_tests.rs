@@ -16568,3 +16568,111 @@ async fn e2e_reads_leave_out_text_a_person_cannot_see() {
     let closed = execute_command(&json!({"id":"11","action":"close"}), &mut state).await;
     assert_success(&closed);
 }
+
+/// Exploratory event probe for #771, not a detector verdict or speed benchmark.
+/// The fixture owns the listeners; chrome-use's input path adds none.
+#[tokio::test]
+#[ignore]
+async fn e2e_humanize_input_probe() {
+    use super::{humanize, interaction};
+    struct RestoreInputState(humanize::HumanizeLevel, (f64, f64));
+    impl Drop for RestoreInputState {
+        fn drop(&mut self) {
+            humanize::set_detected_level(self.0);
+            humanize::set_last_cursor(self.1);
+        }
+    }
+    let _restore = RestoreInputState(humanize::active_level(), humanize::last_cursor());
+    assert!(
+        std::env::var_os("AGENT_BROWSER_HUMANIZE").is_none(),
+        "probe requires no env override"
+    );
+    let pointer = r##"<!doctype html><style>body{margin:0;width:1000px;height:700px}button{position:absolute;left:700px;top:300px;width:120px;height:50px}</style><button id="target">Probe target</button><script>
+window.probe={moves:0,raw:0,coalesced:[],gap:null,trusted:true,clicks:0,last:0,x:20,y:20,maxJump:0};
+for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.addEventListener(type,e=>{
+ const p=window.probe;p.trusted=p.trusted&&e.isTrusted;
+ if(type==='pointerrawupdate')p.raw++;
+ if(type==='pointermove'){p.moves++;p.maxJump=Math.max(p.maxJump,Math.hypot(e.clientX-p.x,e.clientY-p.y));p.x=e.clientX;p.y=e.clientY;p.last=e.timeStamp;try{p.coalesced.push(typeof e.getCoalescedEvents==='function'?e.getCoalescedEvents().length:null)}catch(_){p.coalesced.push(null)}}
+ if(type==='pointerdown')p.gap=e.timeStamp-p.last;
+},{capture:true});target.onclick=()=>probe.clicks++;
+</script>"##;
+    let (port, server) = spawn_html_server(pointer.to_string()).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let browser = state
+        .browser
+        .as_ref()
+        .unwrap()
+        .client
+        .send_command("Browser.getVersion", None, None)
+        .await
+        .unwrap();
+    let mut results = Vec::new();
+    for level in [
+        humanize::HumanizeLevel::Off,
+        humanize::HumanizeLevel::Fast,
+        humanize::HumanizeLevel::Human,
+    ] {
+        let mut samples = Vec::new();
+        for run in 0..6 {
+            humanize::set_detected_level(humanize::HumanizeLevel::Off);
+            {
+                let mgr = state.browser.as_ref().unwrap();
+                let session = mgr.active_session_id().unwrap().to_string();
+                interaction::move_pointer(&mgr.client, &session, 20.0, 20.0)
+                    .await
+                    .unwrap();
+            }
+            eval_in(&mut state,"probe={moves:0,raw:0,coalesced:[],gap:null,trusted:true,clicks:0,last:0,x:20,y:20,maxJump:0}").await;
+            humanize::set_detected_level(level);
+            let started = std::time::Instant::now();
+            {
+                let mgr = state.browser.as_ref().unwrap();
+                let session = mgr.active_session_id().unwrap().to_string();
+                interaction::click_at_point(&mgr.client, &session, 760.0, 325.0, "left", 1)
+                    .await
+                    .unwrap();
+            }
+            let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+            let mut sample = eval_in(&mut state, "probe").await;
+            assert_eq!(sample["clicks"], 1, "{sample}");
+            assert_eq!(sample["trusted"], true, "{sample}");
+            sample["clickMs"] = json!(elapsed);
+            if run > 0 {
+                samples.push(sample);
+            }
+        }
+        results.push(json!({"level":format!("{level:?}"),"samples":samples}));
+    }
+    let sticky = r##"<!doctype html><style>body{margin:0;height:2200px}header{position:fixed;left:0;top:0;height:120px;width:100%;z-index:9;background:#ccc}button{position:absolute;top:600px;left:80px;width:140px;height:50px}</style><header>Sticky header</header><button>Sticky target</button><script>window.targetClicks=0;window.headerClicks=0;document.querySelector('button').onclick=()=>targetClicks++;document.querySelector('header').onclick=()=>headerClicks++;</script>"##;
+    let (sticky_port, sticky_server) = spawn_html_server(sticky.to_string()).await;
+    assert_success(&run_cmd(&mut state,json!({"id":"sticky-open","action":"navigate","url":format!("http://127.0.0.1:{sticky_port}/")})).await);
+    assert_success(
+        &run_cmd(
+            &mut state,
+            json!({"id":"sticky-snapshot","action":"snapshot","interactive":true,"settleMs":0}),
+        )
+        .await,
+    );
+    let reference = state
+        .ref_map
+        .entries_sorted()
+        .into_iter()
+        .find(|(_, e)| e.name == "Sticky target")
+        .map(|(r, _)| r)
+        .expect("sticky fixture target ref");
+    eval_in(&mut state, "scrollTo(0,600)").await;
+    let sticky_result = run_cmd(
+        &mut state,
+        json!({"id":"sticky-click","action":"click","selector":format!("@{reference}")}),
+    )
+    .await;
+    let sticky_state = eval_in(&mut state, "({targetClicks,headerClicks,scrollY})").await;
+    println!(
+        "HUMANIZE_PROBE {}",
+        json!({"browser":browser,"executable":std::env::current_exe().unwrap().to_string_lossy(),"mode":"isolated headless direct CDP","warmupPerLevel":1,"samplesPerLevel":5,"pointer":results,"stickyResult":sticky_result,"stickyState":sticky_state})
+    );
+    run_cmd(&mut state, json!({"id":"close","action":"close"})).await;
+    server.abort();
+    sticky_server.abort();
+}

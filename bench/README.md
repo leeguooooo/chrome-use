@@ -212,3 +212,25 @@ Every invocation has a timeout. Failures exit nonzero; cleanup closes only the
 owned session. This is correctness acceptance,
 not a speed measurement or a model round-trip benchmark. Matching a binary hash
 does not independently establish its source provenance.
+
+## Native pointer event probe
+
+The **Input behavior probe** workflow is manual-only. Run it from Actions or
+`gh workflow run input-probe.yml --ref <commit-or-branch>` once the workflow is
+on the default branch. It builds one fresh Release test binary, records its
+SHA-256, toolchain, Chrome and machine/load metadata, then runs
+`e2e_humanize_input_probe` in an isolated headless Chrome on Linux.
+
+Each input level has one warmup and five recorded native clicks from a known
+rest point. The fixture records trustedness, pointer/raw-update counts,
+`getCoalescedEvents()` sizes, coordinate jumps, move-to-press gaps, click wall
+time and actual click counts. It also records the result of clicking a
+verified ref below a fixed header. The fixture owns its event listeners;
+the input implementation adds none.
+
+Download the `input-probe-<sha>` artifact for provenance and complete samples.
+A successful probe means its native click checks ran, not that any detector
+passed or a behavior gap was fixed. Results describe that Linux/headless/direct
+CDP context; they do not establish relay, headed, Windows or physical-mouse
+behavior. Compare like-for-like fresh builds with alternating samples before
+claiming a timing change, and report failures and input counts with any timing.
