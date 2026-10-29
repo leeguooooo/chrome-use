@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -204,18 +205,20 @@ pub async fn click_reporting(
     // (A) Scroll the target into view first so the computed coordinates land
     // inside the viewport. Without this, an element below the fold (or revealed
     // after scroll/popup) yields off-viewport coordinates and the click lands on
-    // whatever currently occupies that point. Best-effort: ignore failures.
+    // whatever currently occupies that point. The same live handle is kept
+    // for a final hit-test after a settling gap or sticky-header recovery.
     // The same round trip reports whether the control is disabled.
-    let disabled = scroll_into_view_if_needed(
+    let scroll = scroll_into_view_if_needed(
         client,
         session_id,
         ref_map,
         selector_or_ref,
         iframe_sessions,
+        mode != "dom" && button == "left" && click_count == 1,
     )
-    .await;
+    .await?;
     let mut warning = None;
-    match disabled.as_deref() {
+    match scroll.disabled.as_deref() {
         Some("disabled") => return Err(disabled_click_error(selector_or_ref)),
         // aria-disabled is advisory: the browser still delivers the click and
         // some pages answer it (a validation message), so warn, don't refuse.
@@ -346,7 +349,39 @@ pub async fn click_reporting(
                     return Err(occluded_refusal(selector_or_ref, &cover));
                 }
             }
-            dispatch_click(client, &effective_session_id, tx, ty, button, click_count).await?;
+            let guarded =
+                scroll.recentered || humanize::active_level() == humanize::HumanizeLevel::Human;
+            let target = if guarded {
+                match scroll.target {
+                    Some(target) => Some(target),
+                    None => {
+                        let (object_id, session_id) = resolve_element_object_id(
+                            client,
+                            session_id,
+                            ref_map,
+                            selector_or_ref,
+                            iframe_sessions,
+                        )
+                        .await?;
+                        Some(ClickTargetGuard {
+                            object_id,
+                            session_id,
+                        })
+                    }
+                }
+            } else {
+                None
+            };
+            dispatch_click_guarded(
+                client,
+                &effective_session_id,
+                tx,
+                ty,
+                button,
+                click_count,
+                target.as_ref(),
+            )
+            .await?;
             Ok(ClickOutcome::trusted("pointer", warning))
         }
         Err(e) => {
@@ -509,17 +544,67 @@ async fn point_misses_element(
     )
 }
 
-/// Best-effort scroll-into-view before a coordinate click. Uses Chrome's
-/// instant nearest-edge scrolling, including in background tabs with CSS smooth
-/// scrolling. Resolution failures are ignored —
-/// the subsequent resolve will surface a real "not found" error.
+struct ClickTargetGuard {
+    object_id: String,
+    session_id: String,
+}
+
+#[derive(Default)]
+struct ScrollBeforeClick {
+    disabled: Option<String>,
+    target: Option<ClickTargetGuard>,
+    recentered: bool,
+}
+
+/// Verify the same live node at the exact landing point, never a re-query.
+async fn verify_live_click_target(
+    client: &CdpClient,
+    target: &ClickTargetGuard,
+    point: Option<(f64, f64)>,
+) -> Result<(), String> {
+    let args = point.map(|(x, y)| {
+        vec![
+            serde_json::json!({"value":x}),
+            serde_json::json!({"value":y}),
+        ]
+    });
+    let reply = tokio::time::timeout(Duration::from_millis(500), client.send_command(
+        "Runtime.callFunctionOn",
+        Some(serde_json::json!({"objectId":target.object_id,"functionDeclaration":CLICK_TARGET_GUARD_JS,"arguments":args.unwrap_or_default(),"returnByValue":true})),
+        Some(&target.session_id),
+    )).await.map_err(|_| "click stopped before press: the original target could not be rechecked; no mouse button was sent".to_string())?
+        .map_err(|error| format!("click stopped before press: target check failed ({error}); no mouse button was sent"))?;
+    if reply["result"]["value"] == true {
+        return Ok(());
+    }
+    let reason = reply["result"]["value"]
+        .as_str()
+        .unwrap_or("target could not be confirmed");
+    Err(format!("click stopped before press: {reason}; no mouse button was sent. Observe the page before trying again."))
+}
+
+const CLICK_TARGET_GUARD_JS: &str = r#"function(x,y) {
+    if (!this.isConnected) return 'original target is no longer connected';
+    const el=this.nodeType===1?this:this.parentElement;
+    if (!el) return 'original target has no element';
+    if (el.matches(':disabled')) return 'original target is disabled';
+    const r=el.getBoundingClientRect();
+    if (!(r.width>0 && r.height>0)) return 'original target is not visible';
+    if (x===undefined || y===undefined) { x=r.left+r.width/2; y=r.top+r.height/2; }
+    const hit=this.ownerDocument.elementFromPoint(x,y);
+    return hit===el || el.contains(hit) ? true : 'original target no longer owns the click point';
+}"#;
+
+/// Resolve once and scroll before clicking. A small semantic sticky/fixed
+/// edge header gets one centering attempt on that handle; dialogs are untouched.
 async fn scroll_into_view_if_needed(
     client: &CdpClient,
     session_id: &str,
     ref_map: &RefMap,
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
-) -> Option<String> {
+    coordinate_click: bool,
+) -> Result<ScrollBeforeClick, String> {
     let Ok((object_id, effective_session_id)) = resolve_element_object_id(
         client,
         session_id,
@@ -529,43 +614,66 @@ async fn scroll_into_view_if_needed(
     )
     .await
     else {
-        return None;
+        return Ok(ScrollBeforeClick::default());
     };
+    let allow_recenter = coordinate_click
+        && parse_ref(selector_or_ref).is_some()
+        && !ref_map.ref_is_in_iframe(selector_or_ref);
     let reply = client
         .send_command_typed::<_, Value>(
             "Runtime.callFunctionOn",
             &CallFunctionOnParams {
                 function_declaration: SCROLL_AND_PROBE_DISABLED_JS.to_string(),
-                object_id: Some(object_id),
-                arguments: None,
+                object_id: Some(object_id.clone()),
+                arguments: Some(vec![serde_json::json!({"value":allow_recenter})]),
                 return_by_value: Some(true),
                 await_promise: Some(false),
             },
             Some(&effective_session_id),
         )
-        .await;
-    // Let the scroll settle so the following getBoxModel sees final coordinates.
+        .await?;
     wait_for_paint_settled(client, &effective_session_id).await;
-    reply
-        .ok()?
-        .get("result")?
-        .get("value")?
+    let status = reply["result"]["value"]
         .as_str()
-        .map(String::from)
+        .ok_or("click stopped before pointer input: target scroll state could not be confirmed")?;
+    let recentered = status == "recentered";
+    let disabled = (!status.is_empty() && !recentered).then(|| status.to_string());
+    let target = ClickTargetGuard {
+        object_id,
+        session_id: effective_session_id,
+    };
+    if recentered {
+        verify_live_click_target(client, &target, None).await?;
+    }
+    Ok(ScrollBeforeClick {
+        disabled,
+        target: Some(target),
+        recentered,
+    })
 }
 
-/// Scroll the element into view, then say whether it can take a click:
-/// `"disabled"` for a form control the browser will not click (`:disabled`,
-/// which also covers a `<fieldset disabled>` ancestor), `"aria-disabled"`
-/// when it or an ancestor declares `aria-disabled="true"`, `""` otherwise.
-const SCROLL_AND_PROBE_DISABLED_JS: &str = "function() { try { \
-        this.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' }); \
-    } catch (e) {} \
-    try { \
-        if (this.matches && this.matches(':disabled')) return 'disabled'; \
-        if (this.closest && this.closest('[aria-disabled=\"true\"]')) return 'aria-disabled'; \
-    } catch (e) {} \
-    return ''; }";
+const SCROLL_AND_PROBE_DISABLED_JS: &str = r#"function(allowRecenter) {
+    const el=this.nodeType===1?this:this.parentElement;
+    if (!el) return '';
+    try { el.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'}); } catch (_) {}
+    if (el.matches(':disabled')) return 'disabled';
+    if (el.closest('[aria-disabled="true"]')) return 'aria-disabled';
+    if (!allowRecenter || !this.isConnected) return '';
+    const doc=this.ownerDocument,w=doc.defaultView,r=el.getBoundingClientRect();
+    const hit=doc.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+    if (!hit || hit===el || el.contains(hit)) return '';
+    const modal='dialog,[role="dialog"],[role="alertdialog"],[aria-modal="true"],[popover]';
+    if (el.closest(modal) || hit.closest(modal)) return '';
+    for(let bar=hit;bar;bar=bar.parentElement) {
+        if (!bar.matches('header,nav,[role="banner"],[role="navigation"]') || bar.contains(el)) continue;
+        const style=w.getComputedStyle(bar),b=bar.getBoundingClientRect();
+        const edge=(b.top<=1 && b.bottom>0) || (b.bottom>=w.innerHeight-1 && b.top<w.innerHeight);
+        if (!['sticky','fixed'].includes(style.position) || !edge || b.width<w.innerWidth*.6 || b.height>w.innerHeight*.35) continue;
+        el.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
+        return 'recentered';
+    }
+    return '';
+}"#;
 
 /// Dispatch a click through the DOM (`element.click()`) instead of via screen
 /// coordinates. Targets the intended element directly, so it works when a
@@ -5657,6 +5765,18 @@ async fn dispatch_click(
     button: &str,
     click_count: i32,
 ) -> Result<(), String> {
+    dispatch_click_guarded(client, session_id, x, y, button, click_count, None).await
+}
+
+async fn dispatch_click_guarded(
+    client: &CdpClient,
+    session_id: &str,
+    x: f64,
+    y: f64,
+    button: &str,
+    click_count: i32,
+    target: Option<&ClickTargetGuard>,
+) -> Result<(), String> {
     // Move toward the target along a human-like path. At HumanizeLevel::Off this
     // is a single zero-delay step to (x, y) — identical to the old teleport — so
     // the default behaviour is unchanged. At Fast/Human it's a curved,
@@ -5667,6 +5787,13 @@ async fn dispatch_click(
     let level = humanize::active_level();
     let seed = humanize::next_seed();
     move_pointer_with(client, session_id, x, y, level, seed).await?;
+    let settle = humanize::settle_before_press(level, seed);
+    if !settle.is_zero() {
+        tokio::time::sleep(settle).await;
+    }
+    if let Some(target) = target {
+        verify_live_click_target(client, target, Some((x, y))).await?;
+    }
 
     let button_value = match button {
         "right" => 2,

@@ -16829,6 +16829,12 @@ for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.add
                 "{sample}"
             );
             assert_eq!(sample["trusted"], true, "{sample}");
+            if level == humanize::HumanizeLevel::Human {
+                assert!(
+                    sample["gap"].as_f64().is_some_and(|gap| gap >= 55.0),
+                    "Human settling was not observed: {sample}"
+                );
+            }
             sample["clickMs"] = json!(elapsed);
             if run > 0 {
                 samples.push(sample);
@@ -16867,4 +16873,108 @@ for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.add
     run_cmd(&mut state, json!({"id":"close","action":"close"})).await;
     server.abort();
     sticky_server.abort();
+}
+
+#[tokio::test]
+#[ignore]
+async fn e2e_humanize_targeting_safety() {
+    use super::humanize;
+    assert!(std::env::var_os("AGENT_BROWSER_HUMANIZE").is_none());
+    let _floor = humanize::floor_level(humanize::HumanizeLevel::Human);
+    let html = r##"<!doctype html><style>
+body{margin:0;height:2200px}header{position:fixed;left:0;top:0;height:120px;width:100%;z-index:9;background:#ccc}
+button{position:absolute;top:600px;left:80px;width:140px;height:50px}#target{z-index:2}#danger{z-index:1}
+#modal{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.1)}
+</style>__HEADER__<button id="danger">Danger</button><button id="target">Sticky target</button>
+<script>
+const mode='__MODE__';window.out={target:0,header:0,danger:0,downs:0,moved:false,replaced:false,trusted:true};window.armed=false;window.targetMutations=[];
+const target=document.getElementById('target');target.onclick=e=>{out.target++;out.trusted=out.trusted&&e.isTrusted};document.getElementById('danger').onclick=()=>out.danger++;
+document.querySelector('header').onclick=()=>out.header++;document.addEventListener('pointerdown',()=>out.downs++,{capture:true});
+if(mode==='replace')window.addEventListener('scroll',()=>{if(armed&&scrollY!==600&&!out.replaced){const copy=target.cloneNode(true);copy.onclick=()=>out.danger++;target.replaceWith(copy);out.replaced=true}});
+if(mode==='move')target.addEventListener('pointerenter',()=>setTimeout(()=>{target.style.left='450px';out.moved=true},40),{once:true});
+new MutationObserver(rs=>targetMutations.push(...rs)).observe(document.documentElement,{subtree:true,attributes:true,childList:true});
+</script>"##;
+    let mut state = DaemonState::new();
+    for (index, mode) in ["normal", "modal", "replace", "move"]
+        .into_iter()
+        .enumerate()
+    {
+        let header = if mode == "modal" {
+            "<div id=\"modal\" role=\"dialog\" aria-modal=\"true\"><header>Modal header</header></div>"
+        } else {
+            "<header>Sticky header</header>"
+        };
+        let (port, server) =
+            spawn_html_server(html.replace("__HEADER__", header).replace("__MODE__", mode)).await;
+        if index == 0 {
+            launch_on(port, &mut state).await;
+        } else {
+            assert_success(&run_cmd(&mut state,json!({"id":"open","action":"navigate","url":format!("http://127.0.0.1:{port}/")})).await);
+        }
+        assert_success(
+            &run_cmd(
+                &mut state,
+                json!({"id":"snapshot","action":"snapshot","interactive":true,"settleMs":0}),
+            )
+            .await,
+        );
+        let reference = state
+            .ref_map
+            .entries_sorted()
+            .into_iter()
+            .find(|(_, e)| e.name == "Sticky target")
+            .map(|(r, _)| r)
+            .unwrap();
+        eval_in(&mut state, "scrollTo(0,600)").await;
+        eval_in(
+            &mut state,
+            "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
+        )
+        .await;
+        eval_in(&mut state, "armed=true;targetMutations=[]").await;
+        let names = eval_in(&mut state, "Object.getOwnPropertyNames(window).sort()").await;
+        let response = run_cmd(
+            &mut state,
+            json!({"id":"click","action":"click","selector":format!("@{reference}")}),
+        )
+        .await;
+        let after = eval_in(
+            &mut state,
+            "({out,scrollY,mutations:targetMutations.length})",
+        )
+        .await;
+        assert_eq!(after["out"]["header"], 0, "{mode}: {response} {after}");
+        assert_eq!(after["out"]["danger"], 0, "{mode}: {response} {after}");
+        assert_eq!(
+            eval_in(&mut state, "Object.getOwnPropertyNames(window).sort()").await,
+            names,
+            "{mode}"
+        );
+        if mode == "normal" {
+            assert_success(&response);
+            assert_eq!(after["out"]["target"], 1, "{after}");
+            assert_eq!(after["out"]["trusted"], true);
+            assert_eq!(after["mutations"], 0);
+        } else {
+            assert_eq!(response["success"], false, "{mode}: {response} {after}");
+            assert_eq!(after["out"]["target"], 0);
+            assert_eq!(after["out"]["downs"], 0, "{mode}: {response} {after}");
+            if mode == "modal" {
+                assert_eq!(after["scrollY"], 600);
+                assert_eq!(after["mutations"], 0);
+            }
+            if mode == "replace" {
+                assert_eq!(after["out"]["replaced"], true, "{after}");
+            }
+            if mode == "move" {
+                assert_eq!(after["out"]["moved"], true, "{after}");
+            }
+        }
+        println!(
+            "HUMANIZE_TARGET_SAFETY {}",
+            json!({"case":mode,"response":response,"after":after})
+        );
+        server.abort();
+    }
+    run_cmd(&mut state, json!({"id":"close","action":"close"})).await;
 }

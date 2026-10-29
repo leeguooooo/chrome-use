@@ -375,8 +375,11 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 
 任务已获授权时，内置 skill 要求 agent 先识别并尝试普通验证码：易盾普通和旋转拼图用 `solve-slider`，能看清的图标点选用截图识别顺序并点击，核验页面结果后继续。用 `chrome-use skills get core/captcha` 加载流程。重试有次数限制；识别不清或缺少操作能力时才交接。这不代表所有厂商和题型都能解开。先激活目标标签再截图取坐标；验证码厂商返回成功或重发倒计时不走，都不能证明网站已接受验证。
 
+常规 Human 指针点击会在移动结束后、按下前加入按种子变化的 60–200ms 停顿，Fast 和 Off 保持原有时序。Human 的元素/ref 点击会在停顿后回查同一个存活元素是否仍位于落点。顶层 `@ref` 若被视口边缘较小的 fixed/sticky header 或导航栏遮住，可在输入前尝试居中一次；原元素必须仍连通并通过最终命中检查。默认可信路径仍会拒绝对话框、模态/弹出层和无法核验的目标。`click stopped before press` 表示尚未发送鼠标按下，指针可能已移动，重试前应先查看页面。
+
 | 命令 | 用途 |
 |---|---|
+| `--humanize off\|fast\|human` | 默认 Fast；Human 常规指针点击增加按种子变化的 60–200ms 停顿，并在按下前回查存活目标 |
 | `chrome-use extension install --user-data-dir <path>` | macOS/Linux：为已有的自定义 Chrome 数据目录注册 host，可重复指定，也接受等号形式；还会自动扫描正在运行的自定义目录。Windows 使用 HKCU，不支持此选项。 |
 | `--window user`（默认）/ `--window dedicated` | 扩展连接：AI 标签开在你当前的窗口里，每个会话一个标签组，组名前面带 ✦；`dedicated` 改为同一 profile 的所有 AI 会话共用一个后台窗口 |
 | `chrome-use open <url>` | 连接你的 Chrome 并导航。25 秒后 `load` 仍没到、但标签页里的页面明显可用时算成功，附 ⚠ 警告；如果无法确认这个页面来自这次请求（走扩展中继时总是如此），返回里带 `commit: "unverified"` 和标签页的真实 URL。页面不可用时报 `navigation_incomplete:`，写明已知的信息（是否提交、readyState、候选资源） |

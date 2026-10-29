@@ -3019,6 +3019,13 @@ only honours real input ignores such a click. A DOM-dispatched click still
 moves keyboard focus like a real one, so `click <input>` followed by
 `press Meta+a` lands on that input.
 
+Human pointer clicks settle for a seeded 60-200ms before press, then recheck
+that the same live element owns the landing point. Fast/Off timing is unchanged.
+A top-level @ref under a small fixed/sticky semantic edge header/navigation bar
+may be centered once before input. The same handle is rechecked; modal/dialog
+and popover blockers remain refusals. "click stopped before press" means no
+mouse button was sent; the pointer may have moved, so observe before retrying.
+
 A disabled control (`:disabled`) is refused with an error: the browser
 delivers no click to it, and a Save that is still disabled usually means the
 page never registered the edit before it. An `aria-disabled="true"` target is
@@ -7089,6 +7096,9 @@ Options:
   --screenshot-dir <path>    Default screenshot output directory (or AGENT_BROWSER_SCREENSHOT_DIR)
   --screenshot-quality <n>   JPEG quality 0-100; ignored for PNG (or AGENT_BROWSER_SCREENSHOT_QUALITY)
   --screenshot-format <fmt>  Screenshot format: png, jpeg (or AGENT_BROWSER_SCREENSHOT_FORMAT)
+  --humanize <level>         off|fast|human; default fast with adaptive escalation
+                             Human regular pointer clicks settle 60-200ms before press
+                             (also AGENT_BROWSER_HUMANIZE)
   --headed                   Always on (default). Headless is forbidden (bot-detection tell);
                              display-less servers can opt back in with AGENT_BROWSER_ALLOW_HEADLESS=1
   --cdp <port>               Connect via CDP (Chrome DevTools Protocol)
