@@ -448,6 +448,20 @@ def capture_trace_complete(events):
     return bool(started) and started.issubset(settled)
 
 
+def report_signature_matches(events, rows):
+    answered = {e.get("captureId") for e in events
+        if e.get("type") == "dom-answer" and e.get("captureStillPending")
+        and (e.get("result") or {}).get("rows") == rows
+        and (e.get("result") or {}).get("ready") == "complete"}
+    timed_out = {e.get("captureId") for e in events
+        if e.get("type") == "capture-error"
+        and "timeout" in e.get("error", "").lower()
+        and "page.capturescreenshot" in e.get("error", "").lower()
+        and "25000ms" in e.get("error", "")
+        and 24000 <= e.get("elapsedMs", 0) <= 35000}
+    return bool(answered.intersection(timed_out))
+
+
 def run_case(args, fixture, windows, root, output, state, kind, repeat):
     case_id = state + "-" + kind + "-" + str(repeat) + "-" + uuid.uuid4().hex[:8]
     work = root / case_id
@@ -557,9 +571,7 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat):
                     record["sessionCleanupError"] = str(exc)
             events = fixture.events(case_id)
             record["trace"] = events
-            pending_dom = {e.get("captureId") for e in events if e.get("type") == "dom-answer" and e.get("captureStillPending") and (e.get("result") or {}).get("rows") == args.rows}
-            capture_errors = {e.get("captureId") for e in events if e.get("type") == "capture-error" and "timeout" in e.get("error", "").lower()}
-            record["matchesReportSignature"] = bool(record["setupVerified"] and pending_dom.intersection(capture_errors))
+            record["matchesReportSignature"] = bool(record["setupVerified"] and report_signature_matches(events, args.rows))
             (artifact / "result.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
     return record
 

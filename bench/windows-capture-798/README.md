@@ -96,7 +96,9 @@ point; the job has a separate 60-minute outer limit.
 - `ISSUES`: at least one confirmed setup had a failed or incorrect capture.
 - `INCONCLUSIVE`: setup or cleanup could not be confirmed.
 - `matchingReportSignature`: count of cases with a timed-out capture and a
-  matching DOM reply while that capture was still pending.
+  matching DOM reply while that capture was still pending. The error must name
+  `Page.captureScreenshot` and its 25000ms budget, with observed elapsed time
+  between 24 and 35 seconds; attachment-recovery timeouts do not qualify.
 
 A non-PASS result makes the diagnostic job fail so a missing result cannot look
 green. Artifacts are uploaded even on failure. A matching signature reproduces

@@ -103,6 +103,18 @@ async function run(owned, url, resolveEarly) {
         self.assertFalse(probe.capture_trace_complete([start, {"type": "capture-answer", "captureId": "other"}]))
         self.assertTrue(probe.capture_trace_complete([start, {"type": "capture-error", "captureId": "main"}]))
 
+    def test_signature_requires_the_screenshot_budget_and_matching_live_dom(self):
+        dom = {"type": "dom-answer", "captureId": "one", "captureStillPending": True,
+               "result": {"rows": 123, "ready": "complete"}}
+        timeout = {"type": "capture-error", "captureId": "one", "elapsedMs": 25001,
+                   "error": "relay timeout after 25000ms: chrome.debugger.sendCommand(Page.captureScreenshot)"}
+        self.assertTrue(probe.report_signature_matches([dom, timeout], 123))
+        self.assertFalse(probe.report_signature_matches([dom, dict(timeout, captureId="other")], 123))
+        self.assertFalse(probe.report_signature_matches([dom, dict(timeout, elapsedMs=8000,
+            error="relay timeout after 8000ms: debugger recovery")], 123))
+        self.assertFalse(probe.report_signature_matches([dict(dom, captureStillPending=False), timeout], 123))
+        self.assertFalse(probe.report_signature_matches([dom, dict(timeout, elapsedMs=60000)], 123))
+
     def test_chrome_version_uses_file_metadata_without_starting_chrome(self):
         binary = Path("C:/fixture/tool $(not-code).exe")
         with mock.patch.dict(os.environ, {"SystemRoot": "C:/Windows"}), mock.patch.object(
