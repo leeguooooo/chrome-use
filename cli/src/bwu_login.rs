@@ -687,7 +687,22 @@ fn run_inner(flags: &Flags, cmd: &Value) -> Result<i32, String> {
         Some("auth_login_bwu"),
         &crate::output::OutputOptions::from_flags(flags),
     );
-    Ok(if response.success { 0 } else { 1 })
+    Ok(login_exit_code(&response))
+}
+
+/// Keep the CLI's per-site approval exit code through the secret child.
+fn login_exit_code(response: &crate::connection::Response) -> i32 {
+    if !response.success {
+        return 1;
+    }
+    if response
+        .data
+        .as_ref()
+        .is_some_and(|data| data["confirmation_required"] == true && data.get("site").is_some())
+    {
+        return 3;
+    }
+    0
 }
 
 /// Whether login walls are signed in automatically (#434):
@@ -729,7 +744,8 @@ fn login_response(
             output.status
         )
     })?;
-    if !output.status.success() && response.success {
+    let pending_site_gate = output.status.code() == Some(3) && login_exit_code(&response) == 3;
+    if !output.status.success() && response.success && !pending_site_gate {
         response.success = false;
         response.error = Some(format!("auth login --bwu exited with {}", output.status));
     }
@@ -801,6 +817,9 @@ fn run_login_child(p: &Prepared, args: &[std::ffi::OsString]) -> Result<(), Stri
             .unwrap_or_else(|| "auth login --bwu failed".into()));
     }
     if let Some(data) = response.data.as_ref() {
+        if data["confirmation_required"] == true {
+            return Err(format!("login awaits confirmation {} for {}. Ask the user to approve in the chrome-use side panel, then run confirm in the same session; do not report a completed login.", data["confirmation_id"].as_str().unwrap_or(""), data["site"].as_str().unwrap_or(&p.host)));
+        }
         if let Some(needs) = data["needs"].as_str() {
             return Err(format!(
                 "login needs {needs}. {}",
@@ -1114,6 +1133,9 @@ if n == 0:
         sys.exit(1)
     elif scenario == 'unsupported':
         print(json.dumps({'success': True, 'data': {'otp': 'unsupported', 'needs': 'a verification code', 'filled': ['password'], 'submitted': True}, 'error': None}))
+    elif scenario == 'gate':
+        print(json.dumps({'success': True, 'data': {'confirmation_required': True, 'confirmation_id': 'gate-fixture', 'site': 'example.test', 'approval': 'user'}, 'error': None}))
+        sys.exit(3)
     else:
         print(json.dumps({'success': True, 'data': {'otp': 'deferred', 'needs': 'a verification code', 'filled': ['password'], 'submitted': True}, 'error': None}))
 else:
@@ -1147,6 +1169,7 @@ else:
             ("already-done", "1", true),
             ("password-failed", "1", false),
             ("unsupported", "1", true),
+            ("gate", "1", true),
         ] {
             let _ = std::fs::remove_file(&calls);
             std::fs::write(dir.path().join("scenario"), scenario).unwrap();
@@ -1158,6 +1181,10 @@ else:
                     .as_deref()
                     .unwrap()
                     .contains("the site rejected the code"));
+            }
+            if scenario == "gate" {
+                assert_eq!(login_exit_code(&r), 3);
+                assert_eq!(r.data.as_ref().unwrap()["confirmation_id"], "gate-fixture");
             }
             if scenario == "accepted" {
                 assert_eq!(r.data.unwrap()["filled"], json!(["password", "totp"]));

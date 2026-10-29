@@ -528,7 +528,7 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
     }
 
     if let Some(data) = &resp.data {
-        if action == Some("auth_login_bwu") {
+        if action == Some("auth_login_bwu") && data["confirmation_required"] != true {
             let (ok, message) = bwu_login_message(data);
             println!(
                 "{} {}",
@@ -7969,5 +7969,54 @@ mod bwu_outcome_tests {
         );
         assert!(ok);
         assert!(message.contains("form is gone"));
+    }
+}
+
+#[cfg(test)]
+mod bwu_confirmation_tests {
+    #[test]
+    fn gated_login_keeps_approval_instructions_visible() {
+        const KEY: &str = "CU_BWU_CONFIRMATION_OUTPUT_TEST";
+        if let Ok(case) = std::env::var(KEY) {
+            let data = if case == "gate" {
+                serde_json::json!({"confirmation_required":true,"confirmation_id":"gate-fixture","site":"example.test","approval":"user","category":"password","description":"Fill a password"})
+            } else {
+                serde_json::json!({"needs":"a verification code","next":"Complete verification.","url":"https://example.test/challenge"})
+            };
+            super::print_response_with_opts(
+                &crate::connection::Response {
+                    success: true,
+                    data: Some(data),
+                    ..Default::default()
+                },
+                Some("auth_login_bwu"),
+                &super::OutputOptions::default(),
+            );
+            return;
+        }
+        for case in ["gate", "pending"] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "output::bwu_confirmation_tests::gated_login_keeps_approval_instructions_visible",
+                    "--nocapture",
+                ])
+                .env(KEY, case)
+                .env("NO_COLOR", "1")
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let text = String::from_utf8(output.stdout).unwrap();
+            if case == "gate" {
+                assert!(text.contains("Confirmation required:"), "{text}");
+                assert!(text.contains("Ask the user"), "{text}");
+                assert!(text.contains("chrome-use confirm gate-fixture"), "{text}");
+                assert!(text.contains("chrome-use deny gate-fixture"), "{text}");
+                assert!(!text.contains("Sign-in was not confirmed"), "{text}");
+            } else {
+                assert!(text.contains("Login needs a verification code"), "{text}");
+                assert!(text.contains("Complete verification."), "{text}");
+            }
+        }
     }
 }

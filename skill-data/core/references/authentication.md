@@ -185,7 +185,7 @@ expires, inspect the page and use `--totp` on its authenticator challenge.
   that refuses the passkey is reported with its message.
 - `--no-submit` fills only: no passkey and no one-time code (sites submit a
   code on its last digit).
-- Result: `{"item", "filled": [...], "submitted", "submittedWith", "signedIn", "evidence", "otp": "filled" | "not asked" | "none", "passkey": "used" | "not asked" | "unsupported" | "unavailable" | "none", "url"}`.
+- Result: `{"item", "filled": [...], "submitted", "submittedWith", "signedIn", "evidence", "otp": "deferred" | "filled" | "not asked" | "unsupported" | "none", "passkey": "used" | "not asked" | "unsupported" | "unavailable" | "none", "url"}`.
 - **Success means the site took it.** After submitting, it watches the page
   until the sign-in form is gone from a loaded page (read twice in a row) and
   reports `signedIn: true` with that `evidence` (e.g. "the sign-in form is gone
