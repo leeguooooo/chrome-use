@@ -1,0 +1,93 @@
+name: Windows capture probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      samples:
+        description: Fresh-profile repetitions per state and capture kind (1-5)
+        required: true
+        default: '5'
+      rows:
+        description: Synthetic 32px rows in the long loopback report (100-3000)
+        required: true
+        default: '1000'
+      dpr:
+        description: Emulated device pixel ratio (1 or 2)
+        required: true
+        default: '1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-capture-probe-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CHROME_USE_NO_UPDATE_CHECK: '1'
+      PROBE_SAMPLES: ${{ inputs.samples }}
+      PROBE_ROWS: ${{ inputs.rows }}
+      PROBE_DPR: ${{ inputs.dpr }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+      - name: Check fixture and diagnostic generator without a browser
+        run: python bench/windows-capture-798/test_probe.py
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: cli
+          key: x86_64-pc-windows-msvc-release
+      - name: Validate inputs and build the exact Release CLI
+        shell: pwsh
+        run: |
+          if ($env:PROBE_SAMPLES -notmatch '^[1-5]$') { throw 'samples must be 1-5' }
+          if ($env:PROBE_ROWS -notmatch '^[0-9]+$' -or [int]$env:PROBE_ROWS -lt 100 -or [int]$env:PROBE_ROWS -gt 3000) { throw 'rows must be 100-3000' }
+          if ($env:PROBE_DPR -notmatch '^[12]$') { throw 'dpr must be 1 or 2' }
+          New-Item -ItemType Directory -Path probe-artifacts -Force | Out-Null
+          cargo build --release --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc 2>&1 | Tee-Object probe-artifacts/build.log
+          if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+          $binary = (Resolve-Path cli/target/x86_64-pc-windows-msvc/release/chrome-use.exe).Path
+          "PROBE_BINARY=$binary" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Get-FileHash $binary -Algorithm SHA256 | Format-List | Out-File probe-artifacts/binary-sha256.txt
+          cargo --version | Out-File probe-artifacts/toolchain.txt
+          rustc --version | Out-File probe-artifacts/toolchain.txt -Append
+      - name: Install isolated Chrome for Testing and image decoder
+        shell: pwsh
+        run: |
+          & $env:PROBE_BINARY install 2>&1 | Tee-Object probe-artifacts/chrome-install.log
+          if ($LASTEXITCODE -ne 0) { throw 'Chrome for Testing install failed' }
+          $chrome = Get-ChildItem -Path (Join-Path $env:USERPROFILE '.chrome-use/browsers') -Filter chrome.exe -Recurse |
+            Where-Object { $_.FullName -match 'chrome-win64' } | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $chrome) { throw 'Installed Chrome for Testing executable not found' }
+          "PROBE_CHROME=$($chrome.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          python -m pip install --disable-pip-version-check Pillow
+          if ($LASTEXITCODE -ne 0) { throw 'Image decoder install failed' }
+          python -m pip freeze | Out-File probe-artifacts/python-packages.txt
+      - name: Run the Windows relay capture matrix
+        shell: pwsh
+        run: |
+          python bench/windows-capture-798/probe.py --binary "$env:PROBE_BINARY" --chrome "$env:PROBE_CHROME" --extension extensions/ab-connect --output probe-artifacts/results --samples $env:PROBE_SAMPLES --rows $env:PROBE_ROWS --dpr $env:PROBE_DPR
+          if ($LASTEXITCODE -ne 0) { throw "Probe verdict is not PASS (exit $LASTEXITCODE); inspect summary and raw evidence" }
+      - name: Retain diagnostic evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-capture-${{ github.sha }}-dpr${{ inputs.dpr }}
+          path: probe-artifacts
+          retention-days: 14
+          if-no-files-found: warn
