@@ -1,0 +1,1345 @@
+{
+  "sources": [
+    {
+      "name": "baseline",
+      "cliVersion": "chrome-use 1.5.275\nreport bugs / rough edges: https://github.com/leeguooooo/chrome-use/issues",
+      "browserUserAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+      "sourceHash": "36c88ba329fa11b7a97b0b2e093c8bc3622af78569878295834a9e0f5a9d0687",
+      "sourceCommit": "a64bd22bd842854d39ace747defa485e9bba03a0",
+      "binarySha256": "b4d6c03797eac83265cfe2d8c831699bc3b361ae132011a8cce1b47a944ab266",
+      "cargoArgs": [
+        "build",
+        "--release",
+        "--bin",
+        "chrome-use"
+      ]
+    },
+    {
+      "name": "candidate",
+      "cliVersion": "chrome-use 1.5.275\nreport bugs / rough edges: https://github.com/leeguooooo/chrome-use/issues",
+      "browserUserAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+      "sourceHash": "3ca7bd038cf88c1cef093351626212035283778f2757782720a7aff065bf78f1",
+      "sourceCommit": "a64bd22bd842854d39ace747defa485e9bba03a0",
+      "binarySha256": "d0f6f4f3c04d57b6d56b9d043b2d45fa214701765205c6accf5c369d8c214e31",
+      "cargoArgs": [
+        "build",
+        "--release",
+        "--bin",
+        "chrome-use"
+      ]
+    }
+  ],
+  "mode": "headed isolated launch",
+  "machine": {
+    "os": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+    "cores": 8,
+    "loadBefore": [
+      1.76806640625,
+      2.70751953125,
+      2.5849609375
+    ],
+    "compilerPidsBefore": {
+      "cargo": 0,
+      "rustc": 0
+    },
+    "loadAfter": [
+      2.3115234375,
+      2.7255859375,
+      2.5947265625
+    ],
+    "compilerPidsAfter": {
+      "cargo": 1,
+      "rustc": 1
+    }
+  },
+  "samples": [
+    {
+      "side": "baseline",
+      "page": "fixture-quiet",
+      "noSettle": false,
+      "ms": 130.81,
+      "responseBytes": 709,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 115
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-quiet",
+      "noSettle": true,
+      "ms": 15.5,
+      "responseBytes": 700,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-quiet",
+      "noSettle": false,
+      "ms": 128.27,
+      "responseBytes": 710,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 113
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-quiet",
+      "noSettle": true,
+      "ms": 15.02,
+      "responseBytes": 699,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-quiet",
+      "noSettle": false,
+      "ms": 124.33,
+      "responseBytes": 709,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 106
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-quiet",
+      "noSettle": true,
+      "ms": 15.28,
+      "responseBytes": 700,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-quiet",
+      "noSettle": false,
+      "ms": 135.71,
+      "responseBytes": 709,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 119
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-quiet",
+      "noSettle": true,
+      "ms": 14.72,
+      "responseBytes": 699,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-quiet",
+      "noSettle": false,
+      "ms": 123.04,
+      "responseBytes": 709,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 108
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-quiet",
+      "noSettle": true,
+      "ms": 14.12,
+      "responseBytes": 699,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-quiet",
+      "noSettle": false,
+      "ms": 118.7,
+      "responseBytes": 709,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 104
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-quiet",
+      "noSettle": true,
+      "ms": 13.81,
+      "responseBytes": 699,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-quiet",
+      "noSettle": false,
+      "ms": 123.32,
+      "responseBytes": 709,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 108
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-quiet",
+      "noSettle": true,
+      "ms": 15.23,
+      "responseBytes": 700,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-quiet",
+      "noSettle": false,
+      "ms": 122.64,
+      "responseBytes": 709,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 105
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-quiet",
+      "noSettle": true,
+      "ms": 13.91,
+      "responseBytes": 699,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-quiet",
+      "noSettle": false,
+      "ms": 132.5,
+      "responseBytes": 709,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 117
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-quiet",
+      "noSettle": true,
+      "ms": 14.18,
+      "responseBytes": 699,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-quiet",
+      "noSettle": false,
+      "ms": 140.79,
+      "responseBytes": 709,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 124
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-quiet",
+      "noSettle": true,
+      "ms": 14.19,
+      "responseBytes": 700,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-hidden-mutation",
+      "noSettle": false,
+      "ms": 1026.62,
+      "responseBytes": 916,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [
+          "dom"
+        ],
+        "pendingRequests": [],
+        "quiet": false,
+        "sawChange": true,
+        "waitedMs": 1002
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-hidden-mutation",
+      "noSettle": true,
+      "ms": 19.73,
+      "responseBytes": 700,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-hidden-mutation",
+      "noSettle": false,
+      "ms": 1022.35,
+      "responseBytes": 915,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [
+          "dom"
+        ],
+        "pendingRequests": [],
+        "quiet": false,
+        "sawChange": true,
+        "waitedMs": 1000
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-hidden-mutation",
+      "noSettle": true,
+      "ms": 17.82,
+      "responseBytes": 699,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-hidden-mutation",
+      "noSettle": false,
+      "ms": 1020.64,
+      "responseBytes": 915,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [
+          "dom"
+        ],
+        "pendingRequests": [],
+        "quiet": false,
+        "sawChange": true,
+        "waitedMs": 1000
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-hidden-mutation",
+      "noSettle": true,
+      "ms": 18.52,
+      "responseBytes": 700,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-hidden-mutation",
+      "noSettle": false,
+      "ms": 1024.55,
+      "responseBytes": 916,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [
+          "dom"
+        ],
+        "pendingRequests": [],
+        "quiet": false,
+        "sawChange": true,
+        "waitedMs": 1002
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-hidden-mutation",
+      "noSettle": true,
+      "ms": 17.36,
+      "responseBytes": 699,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-hidden-mutation",
+      "noSettle": false,
+      "ms": 1025.06,
+      "responseBytes": 915,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [
+          "dom"
+        ],
+        "pendingRequests": [],
+        "quiet": false,
+        "sawChange": true,
+        "waitedMs": 1001
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-hidden-mutation",
+      "noSettle": true,
+      "ms": 17.69,
+      "responseBytes": 700,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-hidden-mutation",
+      "noSettle": false,
+      "ms": 1019.67,
+      "responseBytes": 915,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [
+          "dom"
+        ],
+        "pendingRequests": [],
+        "quiet": false,
+        "sawChange": true,
+        "waitedMs": 1001
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-hidden-mutation",
+      "noSettle": true,
+      "ms": 14.49,
+      "responseBytes": 700,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-hidden-mutation",
+      "noSettle": false,
+      "ms": 1017.65,
+      "responseBytes": 915,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [
+          "dom"
+        ],
+        "pendingRequests": [],
+        "quiet": false,
+        "sawChange": true,
+        "waitedMs": 1002
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-hidden-mutation",
+      "noSettle": true,
+      "ms": 16.78,
+      "responseBytes": 699,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-hidden-mutation",
+      "noSettle": false,
+      "ms": 1017.77,
+      "responseBytes": 914,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [
+          "dom"
+        ],
+        "pendingRequests": [],
+        "quiet": false,
+        "sawChange": true,
+        "waitedMs": 1001
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-hidden-mutation",
+      "noSettle": true,
+      "ms": 15.61,
+      "responseBytes": 699,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-hidden-mutation",
+      "noSettle": false,
+      "ms": 1025.96,
+      "responseBytes": 916,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [
+          "dom"
+        ],
+        "pendingRequests": [],
+        "quiet": false,
+        "sawChange": true,
+        "waitedMs": 1003
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-hidden-mutation",
+      "noSettle": true,
+      "ms": 17.77,
+      "responseBytes": 699,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-hidden-mutation",
+      "noSettle": false,
+      "ms": 1024.11,
+      "responseBytes": 915,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [
+          "dom"
+        ],
+        "pendingRequests": [],
+        "quiet": false,
+        "sawChange": true,
+        "waitedMs": 1001
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-hidden-mutation",
+      "noSettle": true,
+      "ms": 17.08,
+      "responseBytes": 700,
+      "treeBytes": 117,
+      "treeHash": "1e5c8171f2d82598d13738199c86cacc5303e4402c7b09909deba80c230f8525",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "github",
+      "noSettle": false,
+      "ms": 1123.61,
+      "responseBytes": 85600,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [
+          "animation"
+        ],
+        "pendingRequests": [],
+        "quiet": false,
+        "sawChange": false,
+        "waitedMs": 1001
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "github",
+      "noSettle": true,
+      "ms": 115.98,
+      "responseBytes": 85383,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "github",
+      "noSettle": false,
+      "ms": 225.65,
+      "responseBytes": 85387,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 120
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "github",
+      "noSettle": true,
+      "ms": 106.49,
+      "responseBytes": 85382,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "github",
+      "noSettle": false,
+      "ms": 1122.22,
+      "responseBytes": 85598,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [
+          "animation"
+        ],
+        "pendingRequests": [],
+        "quiet": false,
+        "sawChange": true,
+        "waitedMs": 1002
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "github",
+      "noSettle": true,
+      "ms": 116.29,
+      "responseBytes": 85383,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "github",
+      "noSettle": false,
+      "ms": 226.43,
+      "responseBytes": 85387,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 120
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "github",
+      "noSettle": true,
+      "ms": 106.18,
+      "responseBytes": 85382,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "github",
+      "noSettle": false,
+      "ms": 1121.43,
+      "responseBytes": 85600,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [
+          "animation"
+        ],
+        "pendingRequests": [],
+        "quiet": false,
+        "sawChange": false,
+        "waitedMs": 1000
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "github",
+      "noSettle": true,
+      "ms": 114.12,
+      "responseBytes": 85383,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "github",
+      "noSettle": false,
+      "ms": 227.98,
+      "responseBytes": 85387,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 120
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "github",
+      "noSettle": true,
+      "ms": 113.88,
+      "responseBytes": 85383,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "github",
+      "noSettle": false,
+      "ms": 1114.13,
+      "responseBytes": 85599,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [
+          "animation"
+        ],
+        "pendingRequests": [],
+        "quiet": false,
+        "sawChange": false,
+        "waitedMs": 1001
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "github",
+      "noSettle": true,
+      "ms": 118.1,
+      "responseBytes": 85383,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "github",
+      "noSettle": false,
+      "ms": 224.09,
+      "responseBytes": 85387,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 112
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "github",
+      "noSettle": true,
+      "ms": 106.97,
+      "responseBytes": 85382,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "github",
+      "noSettle": false,
+      "ms": 1124.21,
+      "responseBytes": 85601,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [
+          "animation"
+        ],
+        "pendingRequests": [],
+        "quiet": false,
+        "sawChange": false,
+        "waitedMs": 1002
+      }
+    },
+    {
+      "side": "baseline",
+      "page": "github",
+      "noSettle": true,
+      "ms": 115.21,
+      "responseBytes": 85383,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "github",
+      "noSettle": false,
+      "ms": 227.43,
+      "responseBytes": 85387,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 113
+      }
+    },
+    {
+      "side": "candidate",
+      "page": "github",
+      "noSettle": true,
+      "ms": 107.61,
+      "responseBytes": 85382,
+      "treeBytes": 41368,
+      "treeHash": "fe2957222d2a8f463dc673c58fb46b96cd9521b9ce3760bd3b67211d47f52a83",
+      "settle": {
+        "pending": [],
+        "pendingRequests": [],
+        "quiet": true,
+        "sawChange": false,
+        "waitedMs": 0
+      }
+    }
+  ],
+  "failures": [],
+  "fixtureActivity": {
+    "fixture-quiet-baseline": {
+      "before": {
+        "ticks": 0,
+        "visibility": "visible"
+      },
+      "after": {
+        "ticks": 0,
+        "visibility": "visible"
+      }
+    },
+    "fixture-quiet-candidate": {
+      "before": {
+        "ticks": 0,
+        "visibility": "visible"
+      },
+      "after": {
+        "ticks": 0,
+        "visibility": "visible"
+      }
+    },
+    "fixture-hidden-mutation-baseline": {
+      "before": {
+        "ticks": 66,
+        "visibility": "visible"
+      },
+      "after": {
+        "ticks": 800,
+        "visibility": "visible"
+      }
+    },
+    "fixture-hidden-mutation-candidate": {
+      "before": {
+        "ticks": 66,
+        "visibility": "visible"
+      },
+      "after": {
+        "ticks": 732,
+        "visibility": "visible"
+      }
+    }
+  },
+  "summary": [
+    {
+      "side": "baseline",
+      "page": "fixture-hidden-mutation",
+      "noSettle": false,
+      "n": 5,
+      "medianMs": 1025.06,
+      "rangeMs": [
+        1017.65,
+        1026.62
+      ],
+      "pending": [
+        [
+          "dom"
+        ],
+        [
+          "dom"
+        ],
+        [
+          "dom"
+        ],
+        [
+          "dom"
+        ],
+        [
+          "dom"
+        ]
+      ]
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-hidden-mutation",
+      "noSettle": true,
+      "n": 5,
+      "medianMs": 17.77,
+      "rangeMs": [
+        16.78,
+        19.73
+      ],
+      "pending": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-hidden-mutation",
+      "noSettle": false,
+      "n": 5,
+      "medianMs": 1022.35,
+      "rangeMs": [
+        1017.77,
+        1024.55
+      ],
+      "pending": [
+        [
+          "dom"
+        ],
+        [
+          "dom"
+        ],
+        [
+          "dom"
+        ],
+        [
+          "dom"
+        ],
+        [
+          "dom"
+        ]
+      ]
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-hidden-mutation",
+      "noSettle": true,
+      "n": 5,
+      "medianMs": 17.08,
+      "rangeMs": [
+        14.49,
+        17.82
+      ],
+      "pending": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-quiet",
+      "noSettle": false,
+      "n": 5,
+      "medianMs": 124.33,
+      "rangeMs": [
+        123.04,
+        132.5
+      ],
+      "pending": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "side": "baseline",
+      "page": "fixture-quiet",
+      "noSettle": true,
+      "n": 5,
+      "medianMs": 15.23,
+      "rangeMs": [
+        14.12,
+        15.5
+      ],
+      "pending": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-quiet",
+      "noSettle": false,
+      "n": 5,
+      "medianMs": 128.27,
+      "rangeMs": [
+        118.7,
+        140.79
+      ],
+      "pending": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "side": "candidate",
+      "page": "fixture-quiet",
+      "noSettle": true,
+      "n": 5,
+      "medianMs": 14.19,
+      "rangeMs": [
+        13.81,
+        15.02
+      ],
+      "pending": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "side": "baseline",
+      "page": "github",
+      "noSettle": false,
+      "n": 5,
+      "medianMs": 1122.22,
+      "rangeMs": [
+        1114.13,
+        1124.21
+      ],
+      "pending": [
+        [
+          "animation"
+        ],
+        [
+          "animation"
+        ],
+        [
+          "animation"
+        ],
+        [
+          "animation"
+        ],
+        [
+          "animation"
+        ]
+      ]
+    },
+    {
+      "side": "baseline",
+      "page": "github",
+      "noSettle": true,
+      "n": 5,
+      "medianMs": 115.98,
+      "rangeMs": [
+        114.12,
+        118.1
+      ],
+      "pending": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "side": "candidate",
+      "page": "github",
+      "noSettle": false,
+      "n": 5,
+      "medianMs": 226.43,
+      "rangeMs": [
+        224.09,
+        227.98
+      ],
+      "pending": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "side": "candidate",
+      "page": "github",
+      "noSettle": true,
+      "n": 5,
+      "medianMs": 106.97,
+      "rangeMs": [
+        106.18,
+        113.88
+      ],
+      "pending": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    }
+  ],
+  "verdict": "BASELINE_CAPTURED",
+  "sourceFiles": {
+    "cli/src/native/settle.rs": "36988d6f6015586bd2518162e30564efc66d740d619ee701e64c3eefdd6bd203",
+    "cli/src/native/e2e_tests.rs": "db115e9d03cd2d11aff6311513f282a79c09fb2bad05c24f47ddc607c33effb7",
+    "cli/src/output.rs": "320f04158aae68fd70a6cfb6083878ccb29894ff0d9d78558b1caba9dc94b5d6",
+    "skill-data/core/references/waiting.md": "4ffc05b9f4bb450b37548eb5506af85aa5f714c8af7f42402069a9c8f07e8e1a"
+  }
+}

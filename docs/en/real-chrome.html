@@ -172,6 +172,7 @@
         (<code>profile_window_unavailable</code>). Unknown means nothing is created, and neither error is retried
         automatically. The first-tab cleanup codes are covered in <a href="/en/troubleshooting.html">Troubleshooting</a>.
       </p>
+      <p><code>browsers --who &lt;domain&gt;</code> inspects cookie names on disk, never values; presence is not proof that a session is still accepted. On macOS, SQLite reads use the PATH <code>sqlite3</code> first and fall back to <code>/usr/bin/sqlite3</code> only when it cannot start because it is missing or has an unsupported executable format. Execution permission denials and errors from an already-started SQLite query remain explicit errors; locked or corrupt databases are not retried with another tool.</p>
 
       <h2>Multiple Chrome profiles: see which one, then pick it</h2>
       <p>

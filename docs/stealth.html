@@ -228,6 +228,7 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
         <code>type</code> 逐键输入、滚轮滚动，只慢一点。自带风控、厂商探测看不出来的网站（抖音、小红书、B站、X、微博、快手、知乎、淘宝、
         京东、YouTube 等）一律 <code>human</code>。
       </p>
+      <p>常规 Human 指针点击会在移动结束后、按下前加入按种子变化的 60–200ms 停顿，Fast 和 Off 保持原有时序。Human 的元素/ref 点击会在停顿后回查同一个存活元素是否仍位于落点。顶层 <code>@ref</code> 若被视口边缘较小的 fixed/sticky header 或导航栏遮住，可使用一段可信 wheel 手势滚到可点击位置。整个手势有 10 秒上限，节奏来自 humanize，并保留原元素句柄与文档 epoch。滚轮落点不明、传输失败或上下文改变时停止，不回退到 DOM 滚动，也不重放输入；按下前必须再次精确命中同一个元素。默认可信路径仍会拒绝对话框、模态/弹出层和无法核验的目标。<code>click stopped before press</code> 表示尚未发送鼠标按下，指针或视口可能已移动，重试前应先查看页面。</p>
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>

@@ -11236,38 +11236,38 @@ async fn handle_scroll(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
 /// Wheel `selector`'s element into view over its scroll container. False
 /// when it could not (not found, the wheel moved nothing): the caller then
 /// scrolls the old way.
-async fn wheel_into_view(state: &DaemonState, selector: &str) -> bool {
+async fn wheel_into_view(
+    state: &DaemonState,
+    selector: &str,
+    input_attempted: &mut bool,
+) -> Result<bool, String> {
     let Some(mgr) = state.browser.as_ref() else {
-        return false;
+        return Ok(false);
     };
     let Ok(session_id) = mgr.active_session_id().map(str::to_string) else {
-        return false;
+        return Ok(false);
     };
     let mut last_off = f64::NAN;
     let mut stuck = 0;
-    let deadline = std::time::Instant::now() + UI_SCROLL_BUDGET;
     for _ in 0..UI_SCROLL_STEPS {
-        // A long page over a slow relay must not hold the session: past the
-        // budget the caller finishes with one direct scroll (#798).
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        // Found and measured without the page's querySelector /
-        // getBoundingClientRect / getComputedStyle being called.
-        let Some(node) = quiet_node(state, &session_id, selector).await else {
-            return false;
+        let node = if let Some(reference) = super::element::parse_ref(selector) {
+            state
+                .ref_map
+                .get(&reference)
+                .and_then(|entry| entry.backend_node_id)
+        } else {
+            super::quiet_dom::query_selector(&mgr.client, &session_id, selector).await?
         };
-        let Ok(m) = super::quiet_dom::measure(&mgr.client, &session_id, node).await else {
-            return false;
-        };
+        let Some(node) = node else { return Ok(false) };
+        let m = super::quiet_dom::measure(&mgr.client, &session_id, node).await?;
         let off = ui_offscreen_dy(&m);
         if off == 0.0 {
-            return true;
+            return Ok(true);
         }
         if (off - last_off).abs() < 1.0 {
             stuck += 1;
             if stuck >= UI_SCROLL_STUCK {
-                return false;
+                return Ok(false);
             }
         } else {
             stuck = 0;
@@ -11281,22 +11281,13 @@ async fn wheel_into_view(state: &DaemonState, selector: &str) -> bool {
             .unwrap_or((0.0, 0.0, vw, vh));
         let (cx, cy, cw, ch) = clip_box((cx, cy, cw, ch), vw, vh);
         let (x, y) = jitter_point(cx + cw / 2.0, cy + ch / 2.0, cw / 5.0, ch / 5.0);
-        if interaction::move_pointer(&mgr.client, &session_id, x, y)
-            .await
-            .is_err()
-        {
-            return false;
-        }
+        *input_attempted = true;
+        interaction::move_pointer(&mgr.client, &session_id, x, y).await?;
         let step = off.clamp(-(ch * 0.8).max(120.0), (ch * 0.8).max(120.0));
-        if dispatch_wheel(&mgr.client, &session_id, x, y, 0.0, step)
-            .await
-            .is_err()
-        {
-            return false;
-        }
+        dispatch_wheel(&mgr.client, &session_id, x, y, 0.0, step).await?;
         tokio::time::sleep(jitter_ms(90, 260)).await;
     }
-    false
+    Ok(false)
 }
 
 /// One wheel scroll by (dx, dy) over `selector`'s element, or the page.
@@ -16784,14 +16775,45 @@ async fn handle_selectall(cmd: &Value, state: &mut DaemonState) -> Result<Value,
 const SCROLL_INTO_VIEW_TIMEOUT: Duration = Duration::from_secs(15);
 
 async fn handle_scrollintoview(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    scroll_into_view_with_budget(cmd, state, UI_SCROLL_BUDGET).await
+}
+
+/// Canceling a CDP waiter does not cancel a command already sent to Chrome.
+/// On a wheel-phase timeout, never overlap it with the direct-scroll fallback.
+async fn scroll_into_view_with_budget(
+    cmd: &Value,
+    state: &mut DaemonState,
+    wheel_budget: Duration,
+) -> Result<Value, String> {
     let selector = cmd
         .get("selector")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'selector' parameter")?;
     // With humanize on, wheel it into view over the container it scrolls in,
     // as args.ui does; scrollIntoView moves the page with no input event.
-    if !humanize::active_level().is_off() && wheel_into_view(state, selector).await {
-        return Ok(json!({ "scrolled": selector, "via": "wheel" }));
+    if !humanize::active_level().is_off() {
+        let mut input_attempted = false;
+        let result = tokio::time::timeout(
+            wheel_budget,
+            wheel_into_view(state, selector, &mut input_attempted),
+        )
+        .await;
+        let error = match result {
+            Ok(Ok(true)) => return Ok(json!({ "scrolled": selector, "via": "wheel" })),
+            Ok(Ok(false)) => None,
+            Ok(Err(error)) => Some(error),
+            Err(_) => Some(format!(
+                "wheel phase did not finish within {}ms",
+                wheel_budget.as_millis()
+            )),
+        };
+        if let Some(error) = error {
+            return Err(if input_attempted {
+                format!("action_outcome_unknown: scrollintoview stopped after input was attempted ({error}). Chrome may still be handling that input; no direct scroll was sent. Inspect the page before trying again.")
+            } else {
+                format!("scrollintoview stopped while measuring the target ({error}). No input or direct scroll was attempted; inspect the page before trying again.")
+            });
+        }
     }
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
@@ -29613,3 +29635,7 @@ mod site_ui_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "scroll_deadline_tests.rs"]
+mod scroll_deadline_tests;

@@ -1170,6 +1170,8 @@ A refused dynamic-form ref now reports `code: "stale_ref"` with `retryable: fals
 
 Ordinary selector and `--clip` screenshots use the same CLI pixel-cropping path, including after page scroll. Viewport regions capture the existing surface; off-screen regions capture the full page before cropping. Neither path scrolls or activates the tab.
 
+`scrollintoview` bounds the entire humanized wheel phase to 10 seconds, including target lookup and CDP replies. A stalled or errored phase stops without a direct-scroll fallback. If input was attempted, the error is `action_outcome_unknown`: Chrome may still be processing it, so inspect before retrying. A completed wheel phase that cannot reach the target may still use the existing direct-scroll fallback, which has its own 15-second limit.
+
 ### Bitwarden authenticator challenges
 
 ```bash
@@ -1185,3 +1187,5 @@ secret command; do not retrieve them into the conversation. Pending verification
 returns `needs` and `next`; only an observed completed sign-in gets `signedIn`.
 Fields that only indicate verification, including inputs limited to fewer than six characters, stay pending (`otp: unsupported`); no TOTP is fetched or submitted automatically. This includes five-character Steam fields; inspect those before explicit `--totp`.
 See `core/authentication` for setup, authorization and custom-sequence limits.
+
+Regular Human pointer clicks now use a seeded 60–200ms settling pause after movement and before pressing. Fast and Off keep their existing timing. Human selector/ref clicks recheck the same live element at the landing point after the pause. A verified top-level `@ref` hidden by a small fixed/sticky semantic edge header/navigation bar may use one trusted wheel gesture toward a clear position. The gesture is bounded to 10 seconds, uses humanize pacing, and keeps the original live handle and document epoch. Unknown wheel points, transport failures and context changes stop without a DOM-scroll fallback or input replay; the same element must pass the final exact hit-test. The default trusted path still refuses dialogs, modal/popover blockers and unverifiable targets. `click stopped before press` means no mouse button was sent; inspect before retrying, because the pointer or viewport may have moved.

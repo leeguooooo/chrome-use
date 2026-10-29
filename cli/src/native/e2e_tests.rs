@@ -12659,6 +12659,62 @@ document.getElementById('go').addEventListener('click', async () => {
 /// quiet window passes.
 #[tokio::test]
 #[ignore]
+async fn e2e_settle_ignores_scroll_timelines_and_waits_for_clock_animations() {
+    let page = r##"<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body {height:3000px} #scrollTarget {position:sticky;top:0}</style>
+<div id="scrollTarget">Scroll decoration</div><button id="finiteTarget">Finite action</button>
+<script>
+window.scrollAnimation = scrollTarget.animate([{opacity:.5},{opacity:1}], {duration:'auto',timeline:new ScrollTimeline({source:document.scrollingElement})});
+window.finiteDone = false;
+window.startFinite = () => {
+ const a = finiteTarget.animate([{opacity:.5},{opacity:1}], {duration:350});
+ a.finished.then(() => finiteDone = true);
+ return {running:a.playState, durationType:typeof a.effect.getComputedTiming().duration};
+};
+</script>"##.to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    assert_evaluate(&mut state, "scroll-kind", "({kind:scrollAnimation.timeline.constructor.name,durationType:typeof scrollAnimation.effect.getComputedTiming().duration,duration:String(scrollAnimation.effect.getComputedTiming().duration)})", json!({"kind":"ScrollTimeline","durationType":"object","duration":"100%"})).await;
+    let snapshot = Box::pin(execute_command(
+        &json!({"id":"scroll-snapshot","action":"snapshot","interactive":true}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&snapshot);
+    assert_eq!(get_data(&snapshot)["settle"]["quiet"], true, "{snapshot}");
+    assert_eq!(get_data(&snapshot)["settle"]["pending"], json!([]));
+    assert!(get_data(&snapshot)["snapshot"]
+        .as_str()
+        .unwrap()
+        .contains("Finite action"));
+    assert_evaluate(
+        &mut state,
+        "start-finite",
+        "startFinite()",
+        json!({"running":"running","durationType":"number"}),
+    )
+    .await;
+    let finite = Box::pin(execute_command(
+        &json!({"id":"finite-snapshot","action":"snapshot","interactive":true}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&finite);
+    assert_eq!(get_data(&finite)["settle"]["quiet"], true, "{finite}");
+    assert_evaluate(&mut state, "finished", "finiteDone", json!(true)).await;
+    assert_success(
+        &Box::pin(execute_command(
+            &json!({"id":"close","action":"close"}),
+            &mut state,
+        ))
+        .await,
+    );
+    server.abort();
+}
+
+#[tokio::test]
+#[ignore]
 async fn e2e_settle_is_cheap_on_a_static_page() {
     let page = r##"<!doctype html><meta charset="utf-8"><title>static</title>
 <button>Only button</button>"##
@@ -16738,4 +16794,273 @@ async fn e2e_reads_leave_out_text_a_person_cannot_see() {
     assert_eq!(get_data(&after)["result"], before, "{after}");
     let closed = execute_command(&json!({"id":"11","action":"close"}), &mut state).await;
     assert_success(&closed);
+}
+
+/// Exploratory event probe for #771, not a detector verdict or speed benchmark.
+/// The fixture owns the listeners; chrome-use's input path adds none.
+#[tokio::test]
+#[ignore]
+async fn e2e_humanize_input_probe() {
+    use super::{humanize, interaction};
+    struct RestoreInputState(humanize::HumanizeLevel, (f64, f64));
+    impl Drop for RestoreInputState {
+        fn drop(&mut self) {
+            humanize::set_detected_level(self.0);
+            humanize::set_last_cursor(self.1);
+        }
+    }
+    let _restore = RestoreInputState(humanize::active_level(), humanize::last_cursor());
+    assert!(
+        std::env::var_os("AGENT_BROWSER_HUMANIZE").is_none(),
+        "probe requires no env override"
+    );
+    let pointer = r##"<!doctype html><style>body{margin:0;width:1000px;height:700px}button{position:absolute;left:700px;top:300px;width:120px;height:50px}</style><button id="target">Probe target</button><script>
+window.probeRecording=false;window.lastPointerMove=null;window.probe={};
+const point=e=>({type:e.type,t:e.timeStamp,x:e.clientX,y:e.clientY,trusted:e.isTrusted,pressure:e.pressure,width:e.width,height:e.height,pointerType:e.pointerType,buttons:e.buttons,movementX:e.movementX,movementY:e.movementY});
+for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.addEventListener(type,e=>{
+ if(type==='pointermove')window.lastPointerMove=point(e);
+ if(!probeRecording)return;
+ const p=window.probe;p.trusted=p.trusted&&e.isTrusted;
+ let coalesced=null;try{if(typeof e.getCoalescedEvents==='function')coalesced=e.getCoalescedEvents().map(point)}catch(_){}
+ p.events.push({...point(e),coalesced});
+ if(type==='pointerrawupdate')p.raw++;
+ if(type==='pointermove'){p.moves++;const jump=Math.hypot(e.clientX-p.x,e.clientY-p.y);if(p.moves===1)p.firstJump=jump;else p.moveIntervals.push(e.timeStamp-p.last);p.maxJump=Math.max(p.maxJump,jump);p.x=e.clientX;p.y=e.clientY;p.last=e.timeStamp;p.coalesced.push(coalesced===null?null:coalesced.length)}
+ if(type==='pointerdown'){p.downs++;p.gap=e.timeStamp-p.last;}
+},{capture:true});target.onclick=e=>{if(probeRecording){probe.clicks++;probe.trusted=probe.trusted&&e.isTrusted;probe.events.push({...point(e),coalesced:null})}};
+</script>"##;
+    let (port, server) = spawn_html_server(pointer.to_string()).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let browser = state
+        .browser
+        .as_ref()
+        .unwrap()
+        .client
+        .send_command("Browser.getVersion", None, None)
+        .await
+        .unwrap();
+    let mut results = Vec::new();
+    for level in [
+        humanize::HumanizeLevel::Off,
+        humanize::HumanizeLevel::Fast,
+        humanize::HumanizeLevel::Human,
+    ] {
+        let mut samples = Vec::new();
+        for run in 0..6 {
+            eval_in(&mut state, "probeRecording=false;lastPointerMove=null").await;
+            humanize::set_detected_level(humanize::HumanizeLevel::Off);
+            {
+                let mgr = state.browser.as_ref().unwrap();
+                let session = mgr.active_session_id().unwrap().to_string();
+                interaction::move_pointer(&mgr.client, &session, 20.0, 20.0)
+                    .await
+                    .unwrap();
+            }
+            let rest = eval_in(&mut state, r#"(async()=>{
+                await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+                const rest=lastPointerMove;
+                if(!rest||!rest.trusted||rest.x!==20||rest.y!==20)throw new Error('trusted resting pointer was not established');
+                probe={rest,moves:0,downs:0,raw:0,events:[],coalesced:[],firstJump:null,moveIntervals:[],gap:null,trusted:true,clicks:0,last:0,x:rest.x,y:rest.y,maxJump:0};
+                probeRecording=true;return rest;
+            })()"#).await;
+            assert_eq!(rest["trusted"], true, "{rest}");
+            assert_eq!(rest["x"].as_f64(), Some(20.0), "{rest}");
+            assert_eq!(rest["y"].as_f64(), Some(20.0), "{rest}");
+            humanize::set_detected_level(level);
+            let started = std::time::Instant::now();
+            {
+                let mgr = state.browser.as_ref().unwrap();
+                let session = mgr.active_session_id().unwrap().to_string();
+                interaction::click_at_point(&mgr.client, &session, 760.0, 325.0, "left", 1)
+                    .await
+                    .unwrap();
+            }
+            let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+            let mut sample = eval_in(&mut state, "probe").await;
+            assert_eq!(sample["clicks"], 1, "{sample}");
+            assert_eq!(sample["downs"], 1, "{sample}");
+            assert!(sample["moves"].as_u64().is_some_and(|n| n > 0), "{sample}");
+            assert!(
+                sample["gap"].as_f64().is_some_and(f64::is_finite),
+                "{sample}"
+            );
+            assert_eq!(sample["trusted"], true, "{sample}");
+            if level == humanize::HumanizeLevel::Human {
+                assert!(
+                    sample["gap"].as_f64().is_some_and(|gap| gap >= 55.0),
+                    "Human settling was not observed: {sample}"
+                );
+            }
+            sample["clickMs"] = json!(elapsed);
+            if run > 0 {
+                samples.push(sample);
+            }
+        }
+        results.push(json!({"level":format!("{level:?}"),"samples":samples}));
+    }
+    let sticky = r##"<!doctype html><style>body{margin:0;height:2200px}header{position:fixed;left:0;top:0;height:120px;width:100%;z-index:9;background:#ccc}button{position:absolute;top:600px;left:80px;width:140px;height:50px}</style><header>Sticky header</header><button>Sticky target</button><script>window.targetClicks=0;window.headerClicks=0;document.querySelector('button').onclick=()=>targetClicks++;document.querySelector('header').onclick=()=>headerClicks++;</script>"##;
+    let (sticky_port, sticky_server) = spawn_html_server(sticky.to_string()).await;
+    assert_success(&run_cmd(&mut state,json!({"id":"sticky-open","action":"navigate","url":format!("http://127.0.0.1:{sticky_port}/")})).await);
+    assert_success(
+        &run_cmd(
+            &mut state,
+            json!({"id":"sticky-snapshot","action":"snapshot","interactive":true,"settleMs":0}),
+        )
+        .await,
+    );
+    let reference = state
+        .ref_map
+        .entries_sorted()
+        .into_iter()
+        .find(|(_, e)| e.name == "Sticky target")
+        .map(|(r, _)| r)
+        .expect("sticky fixture target ref");
+    eval_in(&mut state, "scrollTo(0,600)").await;
+    let sticky_result = run_cmd(
+        &mut state,
+        json!({"id":"sticky-click","action":"click","selector":format!("@{reference}")}),
+    )
+    .await;
+    let sticky_state = eval_in(&mut state, "({targetClicks,headerClicks,scrollY})").await;
+    println!(
+        "HUMANIZE_PROBE {}",
+        json!({"browser":browser,"executable":std::env::current_exe().unwrap().to_string_lossy(),"mode":"isolated headless direct CDP","warmupPerLevel":1,"samplesPerLevel":5,"pointer":results,"stickyResult":sticky_result,"stickyState":sticky_state})
+    );
+    run_cmd(&mut state, json!({"id":"close","action":"close"})).await;
+    server.abort();
+    sticky_server.abort();
+}
+
+#[tokio::test]
+#[ignore]
+async fn e2e_humanize_targeting_safety() {
+    use super::humanize;
+    struct RestoreCursor((f64, f64));
+    impl Drop for RestoreCursor {
+        fn drop(&mut self) {
+            humanize::set_last_cursor(self.0);
+        }
+    }
+    let _cursor = RestoreCursor(humanize::last_cursor());
+    assert!(std::env::var_os("AGENT_BROWSER_HUMANIZE").is_none());
+    let _floor = humanize::floor_level(humanize::HumanizeLevel::Human);
+    let html = r##"<!doctype html><style>
+body{margin:0;height:2200px}header{position:fixed;left:0;top:0;height:120px;width:100%;z-index:9;background:#ccc}
+button{position:absolute;top:600px;left:80px;width:140px;height:50px}#target{z-index:2}#danger{z-index:1}
+#modal{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.1)}
+</style>__HEADER__<button id="danger">Danger</button><button id="target">Sticky target</button>
+<script>
+const mode='__MODE__';window.out={target:0,header:0,danger:0,downs:0,wheels:[],moved:false,replaced:false,trusted:true};window.armed=false;window.targetMutations=[];
+const target=document.getElementById('target');target.onclick=e=>{out.target++;out.trusted=out.trusted&&e.isTrusted};document.getElementById('danger').onclick=()=>out.danger++;
+document.querySelector('header').onclick=()=>out.header++;document.addEventListener('pointerdown',()=>out.downs++,{capture:true});document.addEventListener('wheel',e=>out.wheels.push({trusted:e.isTrusted,dy:e.deltaY,mode:e.deltaMode}),{capture:true,passive:true});
+if(mode==='replace')window.addEventListener('scroll',()=>{if(armed&&scrollY!==600&&!out.replaced){const copy=target.cloneNode(true);copy.onclick=()=>out.danger++;target.replaceWith(copy);out.replaced=true}});
+if(mode==='move')target.addEventListener('pointerenter',()=>setTimeout(()=>{target.style.left='450px';out.moved=true},40),{once:true});
+new MutationObserver(rs=>targetMutations.push(...rs)).observe(document.documentElement,{subtree:true,attributes:true,childList:true});
+</script>"##;
+    let mut state = DaemonState::new();
+    for (index, mode) in ["normal", "modal", "unknown", "replace", "move"]
+        .into_iter()
+        .enumerate()
+    {
+        let header = if mode == "modal" {
+            "<div id=\"modal\" role=\"dialog\" aria-modal=\"true\" hidden><header>Modal header</header></div>"
+        } else if mode == "unknown" {
+            "<div id=\"modal\" hidden><header>Unknown overlay</header></div>"
+        } else {
+            "<header>Sticky header</header>"
+        };
+        let (port, server) =
+            spawn_html_server(html.replace("__HEADER__", header).replace("__MODE__", mode)).await;
+        if index == 0 {
+            launch_on(port, &mut state).await;
+        } else {
+            assert_success(&run_cmd(&mut state,json!({"id":"open","action":"navigate","url":format!("http://127.0.0.1:{port}/")})).await);
+        }
+        assert_success(
+            &run_cmd(
+                &mut state,
+                json!({"id":"snapshot","action":"snapshot","interactive":true,"settleMs":0}),
+            )
+            .await,
+        );
+        let reference = state
+            .ref_map
+            .entries_sorted()
+            .into_iter()
+            .find(|(_, e)| e.name == "Sticky target")
+            .map(|(r, _)| r)
+            .unwrap();
+        eval_in(&mut state, "scrollTo(0,600)").await;
+        if matches!(mode, "modal" | "unknown") {
+            eval_in(&mut state, "document.getElementById('modal').hidden=false").await;
+        }
+        eval_in(
+            &mut state,
+            "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
+        )
+        .await;
+        eval_in(&mut state, "armed=true;targetMutations=[]").await;
+        let names = eval_in(&mut state, "Object.getOwnPropertyNames(window).sort()").await;
+        // Navigation's adaptive detector can reset the runtime level.
+        humanize::set_detected_level(humanize::HumanizeLevel::Human);
+        let response = run_cmd(
+            &mut state,
+            json!({"id":"click","action":"click","selector":format!("@{reference}")}),
+        )
+        .await;
+        let after = eval_in(
+            &mut state,
+            "({out,scrollY,mutations:targetMutations.length})",
+        )
+        .await;
+        assert_eq!(after["out"]["header"], 0, "{mode}: {response} {after}");
+        assert_eq!(after["out"]["danger"], 0, "{mode}: {response} {after}");
+        let wheels = after["out"]["wheels"].as_array().unwrap();
+        assert!(
+            wheels.iter().all(|event| event["trusted"] == true),
+            "{mode}: {after}"
+        );
+        assert!(
+            wheels.len() <= 9,
+            "one Human gesture must not be replayed: {mode}: {after}"
+        );
+        if matches!(mode, "normal" | "replace" | "move") {
+            assert!(
+                !wheels.is_empty(),
+                "header recovery must use trusted wheel input: {mode}: {after}"
+            );
+        }
+        assert_eq!(
+            eval_in(&mut state, "Object.getOwnPropertyNames(window).sort()").await,
+            names,
+            "{mode}"
+        );
+        if mode == "normal" {
+            assert_success(&response);
+            assert_eq!(after["out"]["target"], 1, "{after}");
+            assert_eq!(after["out"]["trusted"], true);
+            assert_eq!(after["mutations"], 0);
+        } else {
+            assert_eq!(response["success"], false, "{mode}: {response} {after}");
+            assert_eq!(after["out"]["target"], 0);
+            assert_eq!(after["out"]["downs"], 0, "{mode}: {response} {after}");
+            if matches!(mode, "modal" | "unknown") {
+                assert!(wheels.is_empty(), "{mode}: {after}");
+                assert_eq!(after["scrollY"], 600);
+                assert_eq!(after["mutations"], 0);
+            }
+            if mode == "replace" {
+                assert_eq!(after["out"]["replaced"], true, "{after}");
+            }
+            if mode == "move" {
+                assert_eq!(after["out"]["moved"], true, "{after}");
+            }
+        }
+        println!(
+            "HUMANIZE_TARGET_SAFETY {}",
+            json!({"case":mode,"level":format!("{:?}",humanize::active_level()),"response":response,"after":after})
+        );
+        server.abort();
+    }
+    run_cmd(&mut state, json!({"id":"close","action":"close"})).await;
 }

@@ -276,6 +276,13 @@ inherited relay override. To refresh an existing launcher, rerun `extension
 install` with the intended environment; private rigs should also pass
 `--no-open --no-profile` and set `CHROME_USE_NO_BROWSER_SCAN=1`.
 
+`browsers --who <domain>` inspects cookie names on disk, never values; presence
+is not proof that a session is still accepted. On macOS, SQLite reads use the
+PATH `sqlite3` first and fall back to `/usr/bin/sqlite3` only when it cannot
+start because it is missing or has an unsupported executable format. Execution
+permission denials and errors from an already-started SQLite query remain
+explicit errors; locked or corrupt databases are not retried with another tool.
+
 `extension install` is the one-time setup. `chrome-use extension connect` (alias `chrome-use reconnect`) re-attaches to an already-installed extension's relay without reinstalling anything. Chrome still shows its "chrome-use started debugging this browser" bar on attached agent tabs; `chrome-use extension connect --silent` removes it by restarting Chrome once with `--silent-debugger-extension-api` (tabs and logins are restored; it refuses when several Chrome instances are running). `--keep-banner` leaves Chrome alone, and without either flag it asks first in an interactive terminal.
 
 All AI sessions in a Chrome profile share one background agent window, with one tab group per session; your own window stays separate. Existing windows with verified agent ownership are reused, including fullscreen windows. Unknown ownership or failed placeholder cleanup refuses instead of creating more windows. User tabs are never moved or deleted to reclaim a window. If you open or drag your own tabs into the agent window, that window becomes yours: agent tabs already there keep working, and new agent tabs go to one fresh agent window that later sessions share.
@@ -339,6 +346,10 @@ For scoped, depth-limited, regex-filtered or budgeted snapshots, JSON `refs` con
 
 Interactive snapshots add `context` only to repeated controls with the same role and name when named parent lines do not already distinguish them. Context omits the control’s own name and punctuation, stays within about 100 characters (60 for unnamed controls), and must differ between controls. Unique controls have no context; use a scoped or full snapshot for missing details such as a unique product’s price.
 
+Scroll-driven animations use percentages instead of finite time durations, so they do not
+hold the settle wait open. Finite time-based animations, DOM changes and in-flight
+requests keep their existing checks.
+
 Prefer `snapshot -i -c` for compact controls, scoped reads for a known region, and `--diff` only when the last observation leaves a question. Use `batch` for known action sequences (a step takes its own `--observe`: `batch "fill @e1 Ada" "click @e2 --observe"`; `pick` and `hover` observe like `click`), `script` for bounded observe/decide/act/verify flows, and `form fill --map` for several fields. Verify the requested result at the end: `observed.status: complete` means the capture is complete, not the task, so wait for the page's own final signal (`wait --text`). On a small page (tree at most 4 KB and 60 lines) an observation carries the whole current tree as `observed.snapshot` plus `observed.changes` (`+`/`-` lines only); larger pages keep `delta`. `observed.text` lists visible text lines that changed in any frame (receipts, logs, page counters), never input, textarea, select or editable content, and nothing at all while any password field holds a value (`textStatus: redacted`); a frame it could not read is listed in `textFrames` and makes the observation `partial`. `observed.target` names the tab and target on every JSON reply. `observed.announced` holds the text of toasts and alert/status/aria-live regions that appeared while the action ran and the page settled, even ones gone before the reply ("video under review, not saved"). An element screenshot is `screenshot <selector> <path>` or `screenshot <path> --selector <selector>`. Add `--with-screenshot <path>` only when pixels answer a question the tree cannot.
 
 After a successful trusted insertion, contenteditable `fill` keeps focus on the editor without synthetic `change` or `focusout` events. If read-back fails, it reports the failure instead of overwriting the editor DOM. Use the page's own save or commit action when needed.
@@ -389,12 +400,15 @@ The agent operates in your Chrome: you'll see tabs opening, pages loading, click
 
 For an authorized task, the bundled skill tells the agent to inspect and attempt ordinary CAPTCHAs before handing off: `solve-slider` for ordinary and rotating Yidun puzzles, screenshot-guided ordered clicks for readable icon challenges, then verify the site's result and continue. Load `chrome-use skills get core/captcha`. Attempts are bounded; unavailable or ambiguous challenges still need a handoff. This workflow does not guarantee every provider or challenge can be solved. Activate the target before capturing coordinates; a provider success or frozen resend countdown does not establish site acceptance.
 
+Regular Human pointer clicks now use a seeded 60–200ms settling pause after movement and before pressing. Fast and Off keep their existing timing. Human selector/ref clicks recheck the same live element at the landing point after the pause. A verified top-level `@ref` hidden by a small fixed/sticky semantic edge header/navigation bar may use one trusted wheel gesture toward a clear position. The gesture is bounded to 10 seconds, uses humanize pacing, and keeps the original live handle and document epoch. Unknown wheel points, transport failures and context changes stop without a DOM-scroll fallback or input replay; the same element must pass the final exact hit-test. The default trusted path still refuses dialogs, modal/popover blockers and unverifiable targets. `click stopped before press` means no mouse button was sent; inspect before retrying, because the pointer or viewport may have moved.
+
 | Command | Purpose |
 |---|---|
+| `--humanize off\|fast\|human` | Fast is the default; Human regular pointer clicks add a seeded 60–200ms settling gap and recheck the live target before press |
 | `chrome-use extension install --user-data-dir <path>` | macOS/Linux: register an existing custom Chrome data directory (repeatable; equals form accepted). Running custom directories are also discovered automatically. Windows uses HKCU and rejects this option. |
 | `--window user` (default) / `--window dedicated` | Extension relay: AI tabs open in your current window, each session in its own tab group starting with ✦; `dedicated` moves all AI sessions into one shared background window per profile |
 | `chrome-use open <url>` | Connect to your Chrome and navigate. If `load` has not arrived after 25s but the tab's page is clearly usable, it succeeds with a ⚠ warning; when that page can't be tied to this request (always over the extension relay) the reply carries `commit: "unverified"` and the tab's real URL. A page that isn't usable fails with `navigation_incomplete:`, saying what is known (commit, readyState, candidate resources) |
-| `chrome-use snapshot -i` | Read the page; the start of every interaction (`-u` adds each link's absolute URL) |
+| `chrome-use snapshot -i` | Read the page after settling; ignores scroll-driven animation timelines (`-u` adds absolute link URLs) |
 | `chrome-use read --links` | The page as text, plus a bounded `## Links` list of `[text](absolute URL)` (first 100, `--max-links <n>` up to 1000) |
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | Click by text, by snapshot ref, or on a raw viewport coordinate |
 | `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` replaces a whole value and `type` appends, both with trusted input events; a ⚠ warning says when the page did not react (e.g. its Save stayed disabled) |
@@ -548,6 +562,8 @@ which still says to confirm on the phone) is reported on every command as
 `qrSrc`): give that code to the user and do not reload or navigate until they
 have scanned it. Auto-login and `site` login walls wait for it too.
 See [Login & Credentials](https://chrome-use.leeguoo.com/en/login-auth.html).
+`scrollintoview` bounds the entire humanized wheel phase to 10 seconds, including target lookup and CDP replies. A stalled or errored phase stops without a direct-scroll fallback. If input was attempted, the error is `action_outcome_unknown`: Chrome may still be processing it, so inspect before retrying. A completed wheel phase that cannot reach the target may still use the existing direct-scroll fallback, which has its own 15-second limit.
+
 
 ## Agent loop (experimental)
 
