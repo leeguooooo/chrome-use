@@ -167,6 +167,7 @@
         <li><code>site info &lt;name&gt;/&lt;cmd&gt;</code>：查一个适配器声明了哪些参数、以及它会在哪个域名上运行——调之前先看这个，就知道该传什么。</li>
         <li><code>site info &lt;name&gt;</code>：同上，但列出一个 pack 里的全部适配器，每个都带一行 <code>usage</code>，写明必填参数。</li>
         <li><code>site &lt;name&gt;/&lt;cmd&gt; [args] --json</code>：真正运行。加 <code>--json</code> 拿一行可解析的结构化输出。</li>
+        <li>无法读取当前 URL 时，<code>site_domain_unverified</code> 会停止域名导航和 OpenCLI 回退。URL 读取超时不代表标签页在错误的网站。重试前先检查 <code>get url</code> 和 <code>snapshot</code>。</li>
       </ul>
 
       <p>

@@ -20,6 +20,9 @@ chrome-use site github/issues owner/repo --json   # run it → JSON (navigates t
   **positionally** or after `--`: `chrome-use site demo/pr-list -- --state closed`.
 - It navigates to the adapter's domain (reusing the current tab if you're already on it), so
   login-gated feeds (`bilibili/feed`, `twitter/...`) work because they run as *you*.
+- If the current tab URL cannot be read, `site_domain_unverified` stops domain navigation
+  and OpenCLI fallback. A URL-read timeout does not mean the tab is on another site.
+  Check `get url` and `snapshot` before running the adapter again; do not reload blindly.
 - If no adapter fits, fall back to the normal `snapshot`/`eval` loop. chrome-use fetches and
   runs two default sources: the official [chrome-use-sites](https://github.com/leeguooooo/chrome-use-sites)
   pack and the [bb-sites](https://github.com/epiral/bb-sites) community pack. On a shared

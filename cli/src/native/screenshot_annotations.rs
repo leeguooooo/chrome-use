@@ -30,9 +30,9 @@ pub(super) fn render(
 ) -> Result<String, String> {
     let bytes = STANDARD
         .decode(encoded)
-        .map_err(|e| format!("Failed to decode screenshot for annotations: {e}"))?;
+        .map_err(|e| format!("Failed to decode screenshot for processing: {e}"))?;
     let image = image::load_from_memory(&bytes)
-        .map_err(|e| format!("Failed to read screenshot for annotations: {e}"))?
+        .map_err(|e| format!("Failed to read screenshot for processing: {e}"))?
         .to_rgba8();
     let mut image = crop(image, region, raster_region)?;
     draw(&mut image, annotations, region)?;
@@ -42,11 +42,11 @@ pub(super) fn render(
         let quality = options.quality.unwrap_or(80).clamp(0, 100) as u8;
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
             .encode_image(&image.to_rgb8())
-            .map_err(|e| format!("Failed to encode annotated JPEG: {e}"))?;
+            .map_err(|e| format!("Failed to encode screenshot JPEG: {e}"))?;
     } else {
         image
             .write_to(&mut out, ImageFormat::Png)
-            .map_err(|e| format!("Failed to encode annotated PNG: {e}"))?;
+            .map_err(|e| format!("Failed to encode screenshot PNG: {e}"))?;
     }
     Ok(STANDARD.encode(out.into_inner()))
 }
@@ -55,7 +55,7 @@ pub(super) fn render(
 /// drawing labels. This avoids asking Chrome to resize to a small selector clip.
 fn crop(image: RgbaImage, region: &Rect, raster_region: &Rect) -> Result<RgbaImage, String> {
     if raster_region.width <= 0.0 || raster_region.height <= 0.0 {
-        return Err("Annotated screenshot: invalid capture geometry".into());
+        return Err("Screenshot: invalid capture geometry".into());
     }
     let sx = f64::from(image.width()) / raster_region.width;
     let sy = f64::from(image.height()) / raster_region.height;
@@ -71,9 +71,7 @@ fn crop(image: RgbaImage, region: &Rect, raster_region: &Rect) -> Result<RgbaIma
         || x + width > f64::from(image.width())
         || y + height > f64::from(image.height())
     {
-        return Err(
-            "Annotated screenshot: requested region extends outside captured pixels".into(),
-        );
+        return Err("Screenshot: requested region extends outside captured pixels".into());
     }
     if x == 0.0
         && y == 0.0
@@ -110,7 +108,7 @@ fn draw(
         || image.width() == 0
         || image.height() == 0
     {
-        return Err("Annotated screenshot: invalid raster geometry".to_string());
+        return Err("Screenshot: invalid raster geometry".to_string());
     }
     let sx = f64::from(image.width()) / region.width;
     let sy = f64::from(image.height()) / region.height;

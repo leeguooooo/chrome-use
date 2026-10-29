@@ -15,6 +15,10 @@ async fn fixture(session: String, context: i64) -> (CdpClient, tokio::task::Join
         let mut race_other = false;
         let mut evaluations = 0;
         let mut refuse_first_world = false;
+        let mut fail_next = None;
+        let mut frame_reads = 0;
+        let mut world_attempts = 0;
+        let mut main_world_evaluations = 0;
         while let Some(Ok(message)) = ws.next().await {
             let Message::Text(raw) = message else {
                 continue;
@@ -23,6 +27,17 @@ async fn fixture(session: String, context: i64) -> (CdpClient, tokio::task::Join
             let method = command["method"].as_str().unwrap();
             let mut event = None;
             let mut event_before_reply = false;
+            if method == "Page.getFrameTree" {
+                frame_reads += 1;
+            }
+            if method == "Page.createIsolatedWorld" {
+                world_attempts += 1;
+            }
+            if fail_next.as_deref() == Some(method) {
+                fail_next = None;
+                ws.send(Message::Text(json!({"id":command["id"],"error":{"code":-32000,"message":"fixture transient relay timeout"}}).to_string().into())).await.unwrap();
+                continue;
+            }
             if method == "Page.createIsolatedWorld" && refuse_first_world && document == 0 {
                 ws.send(Message::Text(json!({"id":command["id"],"error":{"code":-32000,"message":"No frame for given id"}}).to_string().into())).await.unwrap();
                 continue;
@@ -87,9 +102,18 @@ async fn fixture(session: String, context: i64) -> (CdpClient, tokio::task::Join
                     refuse_first_world = true;
                     json!({})
                 }
-                "Test.stats" => json!({"creations":creations,"evaluations":evaluations}),
+                "Test.failNext" => {
+                    fail_next = Some(command["params"]["method"].as_str().unwrap().to_string());
+                    json!({})
+                }
+                "Test.stats" => {
+                    json!({"creations":creations,"evaluations":evaluations,"frameReads":frame_reads,"worldAttempts":world_attempts,"mainWorldEvaluations":main_world_evaluations})
+                }
                 "Runtime.evaluate" => {
                     evaluations += 1;
+                    if command["params"].get("contextId").is_none() {
+                        main_world_evaluations += 1;
+                    }
                     // Old numeric context ids remain valid but now identify a
                     // different document. There is deliberately no CDP error.
                     let value = if command["params"]["contextId"] == context + document {
@@ -138,6 +162,115 @@ async fn read(client: &CdpClient, session: &str) -> Value {
         .await
         .unwrap()["result"]["value"]
         .clone()
+}
+
+async fn refused_read(client: &CdpClient, session: &str) -> String {
+    client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({"expression":"location.href","returnByValue":true})),
+            Some(session),
+        )
+        .await
+        .unwrap_err()
+}
+
+#[tokio::test]
+async fn transient_world_setup_failure_recovers_without_navigation() {
+    for method in ["Page.getFrameTree", "Page.createIsolatedWorld"] {
+        let session = uuid::Uuid::new_v4().to_string();
+        let (client, server) = fixture(session.clone(), 90).await;
+        let start = std::time::Instant::now();
+        client.quiet_worlds.set_time_for_test(start);
+        client
+            .send_command(
+                "Test.failNext",
+                Some(json!({"method":method})),
+                Some(&session),
+            )
+            .await
+            .unwrap();
+        let error = refused_read(&client, &session).await;
+        assert!(error.contains("isolation_unavailable"), "{error}");
+        assert!(error.contains("fixture transient relay timeout"), "{error}");
+        let before = client
+            .send_command("Test.stats", None, Some(&session))
+            .await
+            .unwrap();
+        assert_eq!(before["evaluations"], 0);
+        assert!(refused_read(&client, &session)
+            .await
+            .contains("no isolated world on this target"));
+        assert_eq!(
+            client
+                .send_command("Test.stats", None, Some(&session))
+                .await
+                .unwrap(),
+            before,
+            "back-to-back reads must not repeatedly attempt failed setup"
+        );
+
+        for elapsed in [500, 999] {
+            client
+                .quiet_worlds
+                .set_time_for_test(start + std::time::Duration::from_millis(elapsed));
+            assert!(refused_read(&client, &session)
+                .await
+                .contains("no isolated world on this target"));
+            assert_eq!(
+                client
+                    .send_command("Test.stats", None, Some(&session))
+                    .await
+                    .unwrap(),
+                before,
+                "setup must stay cached until the full retry interval expires"
+            );
+        }
+        client
+            .quiet_worlds
+            .set_time_for_test(start + std::time::Duration::from_secs(1));
+        assert_eq!(read(&client, &session).await, "current-0");
+        assert_eq!(read(&client, &session).await, "current-0");
+        let after = client
+            .send_command("Test.stats", None, Some(&session))
+            .await
+            .unwrap();
+        assert_eq!(after["creations"], 1);
+        assert_eq!(after["frameReads"], 2);
+        assert_eq!(after["evaluations"], 2);
+        assert_eq!(after["mainWorldEvaluations"], 0);
+        drop(client);
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn persistent_world_setup_failure_still_refuses_after_retry() {
+    let session = uuid::Uuid::new_v4().to_string();
+    let (client, server) = fixture(session.clone(), 100).await;
+    let start = std::time::Instant::now();
+    client.quiet_worlds.set_time_for_test(start);
+    client
+        .send_command("Test.refuseWorld", None, Some(&session))
+        .await
+        .unwrap();
+    assert!(refused_read(&client, &session)
+        .await
+        .contains("No frame for given id"));
+    client
+        .quiet_worlds
+        .set_time_for_test(start + std::time::Duration::from_secs(1));
+    let error = refused_read(&client, &session).await;
+    assert!(error.contains("isolation_unavailable"), "{error}");
+    assert!(error.contains("No frame for given id"), "{error}");
+    let stats = client
+        .send_command("Test.stats", None, Some(&session))
+        .await
+        .unwrap();
+    assert_eq!(stats["worldAttempts"], 2);
+    assert_eq!(stats["evaluations"], 0);
+    drop(client);
+    server.abort();
 }
 
 async fn event(client: &CdpClient, session: &str, command: &str) {

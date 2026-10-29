@@ -169,6 +169,7 @@
         <li><code>site info &lt;name&gt;/&lt;cmd&gt;</code>: shows which params an adapter declares and which domain it runs on — check this before calling, and you'll know what to pass.</li>
         <li><code>site info &lt;name&gt;</code>: the same for every adapter in one pack, each with a <code>usage</code> line showing its required args.</li>
         <li><code>site &lt;name&gt;/&lt;cmd&gt; [args] --json</code>: actually runs it. Add <code>--json</code> for one line of parseable structured output.</li>
+        <li>If the current URL cannot be read, <code>site_domain_unverified</code> stops domain navigation and OpenCLI fallback. A URL-read timeout does not establish that the tab is on the wrong site. Check <code>get url</code> and <code>snapshot</code> before trying again.</li>
       </ul>
 
       <p>

@@ -204,9 +204,16 @@ successful check or a transient failure does not substitute for page readiness.
 Fast pages can finish before any check is sent.
 
 For isolated development, set `CHROME_USE_RELAY_DIR` to the same absolute
-directory in the native-host launcher and the CLI. This scopes relay discovery
-without changing HOME; combine it with unique session names and an explicit
-`--browser` ID. Relative paths are rejected before discovery. Omit it for ordinary shared-profile discovery.
+directory when installing the native host and running the CLI. On macOS/Linux,
+`extension install` pins the installation's `HOME` and relay override in its
+launcher, so Chrome cannot redirect that host into the ordinary registry by
+starting it under another HOME. An install with no relay override generates a
+launcher that clears any inherited override. Re-run the install with the intended
+environment to refresh an older launcher. Private rigs should set
+`CHROME_USE_NO_BROWSER_SCAN=1` and pass `--no-open --no-profile`; this registers
+only the explicitly supplied test profile and does not open a browser. Combine
+this with unique session names and an explicit `--browser` ID. Relative relay
+paths are rejected before discovery. Omit the override for ordinary discovery.
 
 Native agent-panel configuration journals are also scoped by this directory,
 under `agent-panel/profiles/<profile-id>/configuration`. Without an override they

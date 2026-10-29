@@ -269,6 +269,13 @@ On macOS/Linux, `chrome-use extension install` also registers the native host in
 
 `chrome-use open` then drives your real, logged-in Chrome over **native messaging**: no debug port, no token, and **no "Allow remote debugging?" dialog, ever**. The raw remote-debugging-port alternative (which pops a consent dialog) is described in the [real Chrome guide](https://chrome-use.leeguoo.com/en/real-chrome.html).
 
+On macOS/Linux, the generated native-host launcher keeps the installation's
+`HOME` and optional absolute `CHROME_USE_RELAY_DIR`, even if Chrome starts it
+with a different environment. Without an override at installation it clears an
+inherited relay override. To refresh an existing launcher, rerun `extension
+install` with the intended environment; private rigs should also pass
+`--no-open --no-profile` and set `CHROME_USE_NO_BROWSER_SCAN=1`.
+
 `extension install` is the one-time setup. `chrome-use extension connect` (alias `chrome-use reconnect`) re-attaches to an already-installed extension's relay without reinstalling anything. Chrome still shows its "chrome-use started debugging this browser" bar on attached agent tabs; `chrome-use extension connect --silent` removes it by restarting Chrome once with `--silent-debugger-extension-api` (tabs and logins are restored; it refuses when several Chrome instances are running). `--keep-banner` leaves Chrome alone, and without either flag it asks first in an interactive terminal.
 
 All AI sessions in a Chrome profile share one background agent window, with one tab group per session; your own window stays separate. Existing windows with verified agent ownership are reused, including fullscreen windows. Unknown ownership or failed placeholder cleanup refuses instead of creating more windows. User tabs are never moved or deleted to reclaim a window. If you open or drag your own tabs into the agent window, that window becomes yours: agent tabs already there keep working, and new agent tabs go to one fresh agent window that later sessions share.
@@ -343,6 +350,8 @@ When a hidden Monaco module API can be matched to the requested editor, `fill` u
 
 `screenshot --annotate` draws numbered labels into the captured image in the CLI, without inserting page nodes or styles. JSON annotation boxes remain capture-relative CSS pixels; labels scale to the image resolution. Explicit clips take precedence over full-page and selector captures. Frame references use their owning renderer and top-viewport geometry. Nested out-of-process frames support rotation, skew, reflection and perspective through protocol quads and isolated-world viewport measurements, including scrollbar space. Annotation boxes enclose the projected corners. Collapsed or ill-conditioned transforms, perspective-horizon crossings and missing frame geometry report errors instead of guessed positions. Cropping also happens in the CLI; an off-viewport region is cropped from a full-page capture. Regions outside the page are refused.
 
+Ordinary selector and `--clip` screenshots use the same CLI pixel-cropping path, including after page scroll. Viewport regions capture the existing surface; off-screen regions capture the full page before cropping. Neither path scrolls or activates the tab.
+
 The extension relay allows up to 25 seconds for each screenshot capture, below the CLI's 30-second CDP deadline. Native captures after viewport or DPR changes can take longer than ordinary commands. This waits for the same capture; it does not replay it or activate the tab. A timeout still fails and does not cancel Chrome's pending capture, so avoid overlapping capture retries.
 
 The extension relay attaches to nested out-of-process iframe targets recursively, so snapshots can resolve their contents up to the existing three-level expansion limit. Chrome must allow debugger access to each target. If a frame or ref is missing, inspect `frames` and take a fresh snapshot; do not guess another target.
@@ -404,7 +413,7 @@ For an authorized task, the bundled skill tells the agent to inspect and attempt
 | `chrome-use dialog status` · `dialog accept\|dismiss` | Handle a native `confirm()` / `prompt()` opened by a click |
 | `chrome-use download @e2 ./video.mp4` | Download with the same cookies as the logged-in browser, without navigating the current tab |
 | `chrome-use network route "*/api/me" --body '{"vip":true}'` | Mock a response, rewrite an outgoing request, or block one |
-| `chrome-use site github/issues epiral/bb-browser --json` | Run a site adapter and get clean JSON from the site's own API |
+| `chrome-use site github/issues epiral/bb-browser --json` | Run a site adapter and get clean JSON from the site's own API. If the current URL cannot be read, `site_domain_unverified` stops domain navigation and fallback; check `get url` and `snapshot` before retrying |
 | `chrome-use site info github/issues` · `site info github` | Show one adapter's args and domain, or every adapter in a pack with its args and a usage line |
 | `chrome-use tab close t2` · `close` | Close a tab, or end the session and close every tab it created. Both read the tabs back before reporting them closed (`tabsClosed`, `verifiedAbsent: true`); a tab still open or not confirmed gone fails with `close incomplete` and keeps the session and its tab ownership for a retry. `tab close` on the session's last tab ends the session (`sessionClosed: true`). Tabs the session did not create are never closed. Confirming over the relay needs ab-connect 0.5.33+ |
 | `chrome-use session list` · `session stop [name]` | Manage session workers |
@@ -573,7 +582,7 @@ In an internal drill on 2026-10-27 (Haiku subagents, small samples), hidden fake
 
 ## Anti-detection
 
-Session-scoped internal DOM reads require an isolated execution context. If creation, recreation or node resolution cannot keep that context, the command returns `isolation_unavailable` rather than retrying in the page world. Wait for navigation to settle and observe again; some same-process frame operations may remain unsupported. User-requested evaluation, site adapters, deliberate editor-model access and explicitly supplied contexts keep their existing semantics. The existing `AGENT_BROWSER_MAIN_WORLD=1` compatibility override disables this default isolation requirement; it is not a stealth-preserving workaround. This policy is independent of the extension cursor setting.
+Session-scoped internal DOM reads require an isolated execution context. If creation, recreation or node resolution cannot keep that context, the command returns `isolation_unavailable` rather than retrying in the page world. Failed isolated-context setup is cached for one second; a later read retries setup without reloading the page or falling back to the main world. Wait for navigation to settle and observe again; some same-process frame operations may remain unsupported. User-requested evaluation, site adapters, deliberate editor-model access and explicitly supplied contexts keep their existing semantics. The existing `AGENT_BROWSER_MAIN_WORLD=1` compatibility override disables this default isolation requirement; it is not a stealth-preserving workaround. This policy is independent of the extension cursor setting.
 
 In extension settings, enabling **Stealth mode** or disabling **Agent cursor** removes existing cursor overlays and their page global through current debugger connections. Detached or unreachable tabs show an unconfirmed-cleanup warning in settings; reload affected pages before relying on stealth. Cleanup retries when the agent normally reattaches, without forcing a new connection.
 

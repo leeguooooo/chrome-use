@@ -206,3 +206,80 @@ async fn e2e_screenshot_annotations_leave_no_dom_mutations() {
     server.abort();
     child_server.abort();
 }
+
+/// A selector is measured in viewport coordinates but must crop document pixels.
+/// This also exercises the ordinary (unannotated) off-screen capture path.
+#[tokio::test]
+#[ignore]
+async fn e2e_screenshot_regions_preserve_pixels_after_scroll_without_annotations() {
+    let html = r##"<!doctype html><style>
+      body { margin:0;height:3200px;background:white }
+      .block { position:absolute;left:40px;width:160px;height:80px }
+      #visible { top:800px;background:rgb(18,171,52) }
+      #offscreen { top:2400px;background:rgb(31,89,211) }
+      </style><div class="block" id="visible"></div><div class="block" id="offscreen"></div>
+      <script>window.captureMutations=[];new MutationObserver(r=>captureMutations.push(...r)).observe(document.documentElement,{subtree:true,childList:true,attributes:true});</script>"##;
+    let (port, server) = spawn_html_server(html.to_string()).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    for scale in [1.0, 2.0] {
+        assert_success(&run_cmd(&mut state, json!({"id":"vp","action":"viewport","width":1000,"height":700,"deviceScaleFactor":scale})).await);
+        eval_in(&mut state, "scrollTo(0,600);captureMutations=[]").await;
+        let before = eval_in(&mut state, "Object.getOwnPropertyNames(window).sort()").await;
+        for (index, extra, size, expected) in [
+            (
+                0,
+                json!({"selector":"#visible"}),
+                (160.0, 80.0),
+                [18, 171, 52],
+            ),
+            (
+                1,
+                json!({"selector":"#offscreen"}),
+                (160.0, 80.0),
+                [31, 89, 211],
+            ),
+            (
+                2,
+                json!({"clip":{"x":60,"y":810,"width":80,"height":40}}),
+                (80.0, 40.0),
+                [18, 171, 52],
+            ),
+        ] {
+            let mut cmd = json!({"id":format!("crop-{index}"),"action":"screenshot","base64":true});
+            for (key, value) in extra.as_object().unwrap() {
+                cmd[key] = value.clone();
+            }
+            let shot = run_cmd(&mut state, cmd).await;
+            assert_success(&shot);
+            let data = get_data(&shot);
+            let path = data["path"].as_str().unwrap();
+            let image = image::open(path).unwrap().to_rgb8();
+            assert_eq!(
+                image.dimensions(),
+                ((size.0 * scale) as u32, (size.1 * scale) as u32),
+                "{data}"
+            );
+            assert_eq!(
+                image.get_pixel(image.width() / 2, image.height() / 2).0,
+                expected,
+                "wrong document region at scale {scale}, case {index}"
+            );
+            assert_eq!(eval_in(&mut state, "scrollY").await, json!(600));
+            assert_eq!(
+                eval_in(&mut state, "captureMutations.length").await,
+                json!(0)
+            );
+            assert_eq!(
+                eval_in(&mut state, "Object.getOwnPropertyNames(window).sort()").await,
+                before
+            );
+            assert!(data
+                .get("annotations")
+                .is_none_or(|labels| labels.as_array().is_some_and(Vec::is_empty)));
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    run_cmd(&mut state, json!({"id":"close","action":"close"})).await;
+    server.abort();
+}

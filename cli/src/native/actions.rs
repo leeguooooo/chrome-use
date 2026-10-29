@@ -6373,10 +6373,17 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
 /// Least time a `--until-done` rerun must have left to be worth starting.
 const SITE_RERUN_MIN_BUDGET: Duration = Duration::from_secs(3);
 
-/// Navigate to the adapter's domain unless the tab is already on it.
+/// Navigate only after reading a URL that is outside the adapter's domain.
+/// An unreadable URL is unknown, not evidence that navigation is needed.
 async fn ensure_site_domain(domain: &str, state: &mut DaemonState) -> Result<(), String> {
     let current = match state.browser.as_ref() {
-        Some(mgr) => mgr.get_url().await.unwrap_or_default(),
+        Some(mgr) => mgr.get_url().await.map_err(|error| {
+            format!(
+                "site_domain_unverified: could not read the current tab URL; \
+                 no domain navigation was attempted. Check `get url` and `snapshot` \
+                 before running the adapter again. Original error: {error}"
+            )
+        })?,
         None => String::new(),
     };
     let on_domain = url::Url::parse(&current)
@@ -6390,6 +6397,10 @@ async fn ensure_site_domain(domain: &str, state: &mut DaemonState) -> Result<(),
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "site_domain_tests.rs"]
+mod site_domain_tests;
 
 /// Start a site run (or `eval --background`): evaluate the start script
 /// without serialising its result, and return the CDP handle (objectId) of
