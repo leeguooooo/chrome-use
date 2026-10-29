@@ -2570,6 +2570,8 @@ pub(crate) fn load_unverified_warning(
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct NavigationContinued {
     pub warning: String,
+    /// The usable document actually observed, retained if a later URL read fails.
+    pub observed_url: String,
     /// `false` when the page is usable but nothing ties it to this
     /// navigation; reported as `commit: "unverified"`.
     pub commit_verified: bool,
@@ -2699,11 +2701,13 @@ where
         (CommitEvidence::Committed { .. }, Some(p)) if p.is_ready() => Ok(NavigationContinued {
             warning: load_incomplete_warning(wait_until, elapsed_ms, budget_ms, p),
             commit_verified: true,
+            observed_url: p.url.clone(),
         }),
         (CommitEvidence::Unknown { .. }, Some(p)) if p.unusable_reason().is_none() => {
             Ok(NavigationContinued {
                 warning: load_unverified_warning(target, wait_until, elapsed_ms, budget_ms, p),
                 commit_verified: false,
+                observed_url: p.url.clone(),
             })
         }
         _ => Err(navigation_incomplete_error(
@@ -5762,6 +5766,7 @@ impl BrowserManager {
         // cleanly but the page is usable anyway (issues #10, #126). Surfaced to the
         // CLI in the response so the agent knows to expect a still-rendering page.
         let mut nav_warning: Option<String> = None;
+        let mut observed_url: Option<String> = None;
         // `false` when that page is usable but nothing ties it to this
         // navigation; reported as `commit: "unverified"` (#502, option C).
         let mut commit_verified = true;
@@ -5897,6 +5902,7 @@ impl BrowserManager {
                 )
                 .await?;
                 commit_verified = continued.commit_verified;
+                observed_url = Some(continued.observed_url);
                 nav_warning = Some(continued.warning);
                 PageNavigateResult {
                     frame_id: String::new(),
@@ -5972,6 +5978,7 @@ impl BrowserManager {
                 )
                 .await?;
                 commit_verified = continued.commit_verified;
+                observed_url = Some(continued.observed_url);
                 nav_warning = Some(continued.warning);
             }
         }
@@ -6003,7 +6010,12 @@ impl BrowserManager {
                     }
                 }
                 (
-                    current_url.unwrap_or_else(|_| url.to_string()),
+                    current_url.unwrap_or_else(|_| {
+                        observed_url
+                            .clone()
+                            .filter(|u| !u.is_empty())
+                            .unwrap_or_else(|| url.to_string())
+                    }),
                     title.unwrap_or_default(),
                 )
             }
@@ -7637,8 +7649,8 @@ impl BrowserManager {
         // on a hidden page (menu-blur.js, 0.5.92); older extensions never do.
         let stealth = out.get("stealth").and_then(Value::as_bool) == Some(true);
         let why_open = if stealth {
-            " (stealth mode is on, so chrome-use did not signal the page; with stealth mode \
-             off in the extension's settings it closes such a menu itself)"
+            " (stealth mode is on, so chrome-use did not send a synthetic visibility event; \
+             close the password manager's UI manually if its menu remains open)"
         } else {
             ""
         };
