@@ -1168,4 +1168,6 @@ Valid incremental snapshots return JSON `refs` only for nodes in the delta. A no
 
 A refused dynamic-form ref now reports `code: "stale_ref"` with `retryable: false`. Refresh `snapshot -i`, then use the current dialog's ref or a unique stable CSS/semantic locator; no input is sent by the refusal. Keep verification enabled and do not replace trusted input with a DOM click. For `debugger_access_denied`, close a visible autofill menu or save-login bar first; hiding a tab may not dismiss a save-login bar. Candidate-extension lookup is best effort and never replaces the original access denial.
 
+Ordinary selector and `--clip` screenshots use the same CLI pixel-cropping path, including after page scroll. Viewport regions capture the existing surface; off-screen regions capture the full page before cropping. Neither path scrolls or activates the tab.
+
 `scrollintoview` bounds the entire humanized wheel phase to 10 seconds, including target lookup and CDP replies. A stalled or errored phase stops without a direct-scroll fallback. If input was attempted, the error is `action_outcome_unknown`: Chrome may still be processing it, so inspect before retrying. A completed wheel phase that cannot reach the target may still use the existing direct-scroll fallback, which has its own 15-second limit.

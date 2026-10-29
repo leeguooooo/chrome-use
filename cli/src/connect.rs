@@ -1284,12 +1284,12 @@ fn install_native_host() -> Result<Vec<String>, String> {
 fn install_native_host_with_dirs(custom_dirs: &InstallUserDataDirs) -> Result<Vec<String>, String> {
     let home = dirs::home_dir().ok_or("no home dir")?;
     let ab_dir = home.join(".chrome-use");
-    std::fs::create_dir_all(&ab_dir).map_err(|e| e.to_string())?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
 
     #[cfg(target_os = "windows")]
     {
         let _ = custom_dirs;
+        std::fs::create_dir_all(&ab_dir).map_err(|e| e.to_string())?;
         install_native_host_windows(&ab_dir, &exe)
     }
     #[cfg(not(target_os = "windows"))]
@@ -1318,13 +1318,25 @@ fn install_native_host_with_dirs(custom_dirs: &InstallUserDataDirs) -> Result<Ve
             .chain(&custom_dirs.discovered)
             .cloned()
             .collect();
-        install_native_host_unix(&ab_dir, &exe, &manifest_dirs, &discovered, &custom_roots)
+        let relay_dir = relay_url_override(std::env::var_os("CHROME_USE_RELAY_DIR"))?
+            .and_then(|path| path.parent().map(Path::to_path_buf));
+        install_native_host_unix(
+            &ab_dir,
+            &exe,
+            &manifest_dirs,
+            &discovered,
+            &custom_roots,
+            &home,
+            relay_dir.as_deref(),
+        )
     }
 }
 
 /// macOS/Linux: write an `nm-host.sh` launcher and drop a host manifest into
 /// each supplied default or custom directory. Discovered directories are best-effort;
 /// required directories fail installation. Record custom roots for offline uninstall.
+/// Keep the installation's home and relay registry when Chrome starts the host
+/// with its own environment, including for a private-HOME acceptance profile.
 #[cfg(not(target_os = "windows"))]
 fn install_native_host_unix(
     ab_dir: &std::path::Path,
@@ -1332,15 +1344,15 @@ fn install_native_host_unix(
     manifest_dirs: &[PathBuf],
     discovered_dirs: &[PathBuf],
     custom_roots: &[PathBuf],
+    home: &Path,
+    relay_dir: Option<&Path>,
 ) -> Result<Vec<String>, String> {
+    let script = native_host_launcher(exe, home, relay_dir)?;
+    std::fs::create_dir_all(ab_dir).map_err(|e| e.to_string())?;
     // Chrome execs the manifest `path` directly with the calling extension's
     // origin as argv[1]; a launcher lets us run the binary in __nm-host mode
     // regardless of how/where chrome-use is installed.
     let launcher = ab_dir.join("nm-host.sh");
-    let script = format!(
-        "#!/bin/sh\n# chrome-use native-messaging host launcher (auto-generated)\nexec \"{}\" __nm-host \"$@\"\n",
-        exe.display()
-    );
     std::fs::write(&launcher, script).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
@@ -1405,6 +1417,39 @@ fn install_native_host_unix(
         return Err("no Chrome/Chromium NativeMessagingHosts directory found".into());
     }
     Ok(written)
+}
+
+/// Quote paths as literal shell strings; a path is data even when it
+/// contains quotes, substitutions or backticks. The status parser decodes the
+/// same double-quoted form without executing any shell text.
+#[cfg(not(target_os = "windows"))]
+fn native_host_launcher(
+    exe: &Path,
+    home: &Path,
+    relay_dir: Option<&Path>,
+) -> Result<String, String> {
+    fn quoted(path: &Path) -> Result<String, String> {
+        let value = path
+            .to_str()
+            .ok_or("native-host launcher paths must be UTF-8")?;
+        if !path.is_absolute() || value.contains(['\n', '\r', '\0']) {
+            return Err(
+                "native-host launcher paths must be absolute and contain no line breaks or NUL"
+                    .into(),
+            );
+        }
+        let escaped = value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('$', "\\$")
+            .replace('`', "\\`");
+        Ok(format!("\"{escaped}\""))
+    }
+    let registry = match relay_dir {
+        Some(path) => format!("export CHROME_USE_RELAY_DIR={}\n", quoted(path)?),
+        None => "unset CHROME_USE_RELAY_DIR\n".to_string(),
+    };
+    Ok(format!("#!/bin/sh\n# chrome-use native-messaging host launcher (auto-generated)\nexport HOME={}\n{registry}exec {} __nm-host \"$@\"\n", quoted(home)?, quoted(exe)?))
 }
 
 /// Windows: write host manifest(s) under `~/.chrome-use` whose `path` points
@@ -1743,9 +1788,22 @@ pub fn parse_launcher_target(script: &str) -> Option<String> {
         };
         // Quoted form: exec "…/chrome-use" __nm-host "$@"
         if let Some(after) = rest.strip_prefix('"') {
-            if let Some(end) = after.find('"') {
-                return Some(after[..end].to_string());
+            let mut path = String::new();
+            let mut chars = after.chars();
+            while let Some(ch) = chars.next() {
+                match ch {
+                    '"' => return Some(path),
+                    '\\' => {
+                        let next = chars.next()?;
+                        if !matches!(next, '$' | '`' | '"' | '\\') {
+                            path.push('\\');
+                        }
+                        path.push(next);
+                    }
+                    _ => path.push(ch),
+                }
             }
+            return None;
         }
         // Unquoted fallback: exec /path/chrome-use __nm-host "$@"
         if let Some(tok) = rest.split_whitespace().next() {
@@ -5253,6 +5311,8 @@ invalid /usr/bin/chromium --user-data-dir=/tmp/invalid-uid
             std::slice::from_ref(&manifest_dir),
             &[],
             std::slice::from_ref(&data_dir),
+            &root,
+            None,
         )
         .unwrap();
         assert_eq!(paths.len(), super::HOST_NAMES.len());
@@ -5290,7 +5350,118 @@ invalid /usr/bin/chromium --user-data-dir=/tmp/invalid-uid
             assert!(super::verify_host_manifest(&path, host, &launcher).is_err());
         }
         std::fs::remove_dir_all(&data_dir).unwrap();
-        assert!(super::install_native_host_unix(&ab_dir, &exe, &[manifest_dir], &[], &[]).is_err());
+        assert!(super::install_native_host_unix(
+            &ab_dir,
+            &exe,
+            &[manifest_dir],
+            &[],
+            &[],
+            &root,
+            None
+        )
+        .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_host_launcher_keeps_install_environment_and_literal_paths() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let home = root.join(r#"install home '$HOME' `touch injected` $(touch injected)"#);
+        let ab_dir = home.join(".chrome-use");
+        let profile = root.join("Chrome Data");
+        std::fs::create_dir_all(&profile).unwrap();
+        let exe = root.join(r#"tool "$HOME" ' `touch injected` $(touch injected) \"#);
+        std::fs::write(
+            &exe,
+            r#"#!/bin/sh
+printf '%s\000' "$HOME" "${CHROME_USE_RELAY_DIR-__unset__}" "$@"
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let relay = root.join(r#"private relay "$HOME" `touch injected` $(touch injected)"#);
+        for registry in [Some(relay.as_path()), None] {
+            super::install_native_host_unix(
+                &ab_dir,
+                &exe,
+                &[profile.join("NativeMessagingHosts")],
+                &[],
+                &[],
+                &home,
+                registry,
+            )
+            .unwrap();
+            let launcher = ab_dir.join("nm-host.sh");
+            assert_eq!(
+                super::parse_launcher_target(&std::fs::read_to_string(&launcher).unwrap())
+                    .as_deref(),
+                exe.to_str()
+            );
+            let output = std::process::Command::new(&launcher)
+                .env("HOME", root.join("wrong inherited home"))
+                .env("CHROME_USE_RELAY_DIR", root.join("wrong inherited relay"))
+                .current_dir(root)
+                .args([
+                    "chrome-extension://fixture/",
+                    "argument with $money",
+                    "quoted'argument",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            let values: Vec<_> = stdout.split('\0').collect();
+            assert_eq!(
+                values,
+                [
+                    home.to_str().unwrap(),
+                    registry.and_then(Path::to_str).unwrap_or("__unset__"),
+                    "__nm-host",
+                    "chrome-extension://fixture/",
+                    "argument with $money",
+                    "quoted'argument",
+                    ""
+                ]
+            );
+            assert!(!root.join("injected").exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_host_launcher_refuses_ambiguous_paths_before_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = root.path().join("tool");
+        let profile = root.path().join("profile");
+        std::fs::create_dir(&profile).unwrap();
+        for (home, relay) in [
+            (PathBuf::from("relative-home"), None),
+            (root.path().join("line\nbreak"), None),
+            (
+                root.path().join("home"),
+                Some(PathBuf::from("relative-relay")),
+            ),
+        ] {
+            let ab_dir = root.path().join("must-not-write");
+            assert!(super::install_native_host_unix(
+                &ab_dir,
+                &exe,
+                &[profile.join("NativeMessagingHosts")],
+                &[],
+                &[],
+                &home,
+                relay.as_deref()
+            )
+            .is_err());
+            assert!(!ab_dir.exists());
+            assert!(!profile.join("NativeMessagingHosts").exists());
+        }
     }
 
     #[cfg(unix)]
@@ -5314,6 +5485,8 @@ invalid /usr/bin/chromium --user-data-dir=/tmp/invalid-uid
                 std::slice::from_ref(&default_dir),
                 std::slice::from_ref(&blocked_hosts),
                 std::slice::from_ref(&blocked),
+                temp.path(),
+                None,
             )
             .unwrap();
             assert_eq!(written.len(), super::HOST_NAMES.len());
@@ -5327,6 +5500,8 @@ invalid /usr/bin/chromium --user-data-dir=/tmp/invalid-uid
                 std::slice::from_ref(&blocked_hosts),
                 &[],
                 std::slice::from_ref(&blocked),
+                temp.path(),
+                None,
             )
             .is_err());
         };

@@ -3985,7 +3985,7 @@ Options:
                        so XPath works as before: `screenshot //main shot`.
                        Unknown options are refused rather than read as a
                        selector or path.
-  --clip <x,y,w,h>     Capture a pixel region, e.g. `screenshot --clip 0,0,200,40 corner.png`
+  --clip <x,y,w,h>     Crop a document-space pixel region in the CLI, e.g. `screenshot --clip 0,0,200,40 corner.png`
   --max-width <px>     Downscale so the image's width ≤ px (preserves aspect)
   --max-height <px>    Downscale so the image's height ≤ px
   --scale <0..1>       Downscale by a factor, e.g. 0.5 (DPR-1, so screenshot px
@@ -4004,7 +4004,9 @@ Options:
                        or unstable transforms, perspective-horizon crossings and
                        unavailable geometry report an error.
                        Crops happen in the CLI; off-viewport crops capture the full
-                       page first. Regions outside the page are refused.
+                       page first. This also applies without --annotate, and
+                       does not scroll or activate the tab. Regions outside
+                       the page are refused.
                        Each label [N] corresponds to ref @eN from snapshot.
                        Prints a legend mapping labels to element roles/names.
                        With --json, annotations are included in the response.
@@ -6885,6 +6887,9 @@ Setup:
                              browsers of the current user with existing --user-data-dir=<path>
                              directories. Discovered-directory failures warn and skip;
                              default and explicit directory failures remain errors.
+                             The launcher pins the installation's HOME and optional
+                             absolute CHROME_USE_RELAY_DIR; without one it clears an
+                             inherited relay override. Reinstall to refresh old launchers.
   extension install --user-data-dir <path>
                              Add an existing custom data directory explicitly (repeatable;
                              also accepts --user-data-dir=<path>). Missing directories
