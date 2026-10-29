@@ -382,6 +382,8 @@
 <span class="du-prompt">$</span> chrome-use set media light reduced-motion  <span class="du-cmt"># 浅色 + 减少动效</span></code></pre>
       </div>
 
+      <p><code>set device &quot;iPhone 13&quot;</code> 使用 390 × 844 CSS 视口、3× 缩放和 iOS 15 用户代理。 <code>set device off</code>（别名 <code>reset</code>、<code>none</code>，也可写 <code>device off</code>）清除当前标签页的设备尺寸、 用户代理和触摸模拟覆盖，新标签页也不再继承模拟的用户代理。 用户代理恢复浏览器默认值，不恢复此前的 <code>--user-agent</code> 或 <code>set useragent</code> 值；显式无头启动保留已有的用户代理兼容处理。复位后会读取真实视口尺寸，不调整 Chrome 窗口大小；中途失败会说明已清除了哪些覆盖。 relay 需要扩展 0.5.98+，成功复位后会忘记旧尺寸覆盖，空闲重连时不会重新套用手机视口。<code>viewport reset</code> 只清尺寸覆盖，保留用户代理设置。</p>
+
       <!-- ============================================================ -->
       <h2>Cookie 与存储</h2>
       <div class="du-code">

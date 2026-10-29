@@ -127,7 +127,7 @@ waits for that choice, and your own `confirm` never approves it.
 | `[chrome-use Inspect & Ask]` message | `core/inspect-and-ask` |
 | Persistence, idle recovery, parallel sessions | `core/session-management` |
 | Blocked autofill frame, failures, friction log | `core/known-traps`, `core/troubleshooting` |
-| Every command, flag, env var | `core/commands` |
+| Commands, flags, env vars, device resets | `core/commands` |
 | Page leaks (`diag pages`) | `core/diag-pages` |
 | Install, runners, `--full`, Git hooks | `core/installation` |
 | Changing this repository | `core/development` |

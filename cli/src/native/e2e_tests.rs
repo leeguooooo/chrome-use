@@ -4100,6 +4100,91 @@ async fn e2e_viewport_emulation() {
     assert_success(&resp);
 }
 
+#[tokio::test]
+#[ignore]
+async fn e2e_device_off_restores_browser_defaults_for_current_and_future_tabs() {
+    let mut state = DaemonState::new();
+    assert_success(
+        &Box::pin(execute_command(
+            &json!({"id":"launch","action":"launch","headless":true,"userAgent":"DeviceResetLaunchOverride/1.0"}),
+            &mut state,
+        ))
+        .await,
+    );
+    let read = json!({"id":"read","action":"evaluate","script":"({ua:navigator.userAgent,dpr:devicePixelRatio,touch:navigator.maxTouchPoints,screenWidth:screen.width})"});
+    let before = Box::pin(execute_command(&read, &mut state)).await;
+    assert_success(&before);
+    let mut defaults = get_data(&before)["result"].clone();
+    assert_eq!(defaults["ua"], "DeviceResetLaunchOverride/1.0");
+    let native = state
+        .browser
+        .as_ref()
+        .unwrap()
+        .client
+        .send_command("Browser.getVersion", None, None)
+        .await
+        .unwrap();
+    defaults["ua"] = json!(native["userAgent"]
+        .as_str()
+        .unwrap()
+        .replace("HeadlessChrome", "Chrome"));
+    let device = Box::pin(execute_command(
+        &json!({"id":"device","action":"device","device":"iPhone 13"}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&device);
+    assert_eq!(get_data(&device)["width"], 390);
+    assert_eq!(get_data(&device)["height"], 844);
+    {
+        let mgr = state.browser.as_ref().unwrap();
+        mgr.client
+            .send_command(
+                "Emulation.setTouchEmulationEnabled",
+                Some(json!({"enabled":true,"maxTouchPoints":5})),
+                Some(mgr.active_session_id().unwrap()),
+            )
+            .await
+            .unwrap();
+    }
+    let emulated = Box::pin(execute_command(&read, &mut state)).await;
+    assert_success(&emulated);
+    assert!(get_data(&emulated)["result"]["ua"]
+        .as_str()
+        .unwrap()
+        .contains("iPhone OS 15_0"));
+    assert_eq!(get_data(&emulated)["result"]["dpr"], 3.0);
+    assert_eq!(get_data(&emulated)["result"]["touch"], 5);
+    let reset = Box::pin(execute_command(
+        &json!({"id":"reset","action":"device","device":"off"}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&reset);
+    assert_eq!(get_data(&reset)["reset"], true);
+    assert!(state.viewport.is_none());
+    assert!(state.session_setup.user_agent.is_none());
+    let after = Box::pin(execute_command(&read, &mut state)).await;
+    assert_success(&after);
+    assert_eq!(get_data(&after)["result"], defaults);
+    let tab = Box::pin(execute_command(
+        &json!({"id":"new","action":"tab_new","url":"about:blank"}),
+        &mut state,
+    ))
+    .await;
+    assert_success(&tab);
+    let new_tab = Box::pin(execute_command(&read, &mut state)).await;
+    assert_success(&new_tab);
+    assert_eq!(get_data(&new_tab)["result"], defaults);
+    assert_success(
+        &Box::pin(execute_command(
+            &json!({"id":"close","action":"close"}),
+            &mut state,
+        ))
+        .await,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Hover, scroll, press
 // ---------------------------------------------------------------------------
