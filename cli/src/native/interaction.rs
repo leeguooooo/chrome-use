@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -204,18 +205,20 @@ pub async fn click_reporting(
     // (A) Scroll the target into view first so the computed coordinates land
     // inside the viewport. Without this, an element below the fold (or revealed
     // after scroll/popup) yields off-viewport coordinates and the click lands on
-    // whatever currently occupies that point. Best-effort: ignore failures.
+    // whatever currently occupies that point. The same live handle is kept
+    // for a final hit-test after a settling gap or sticky-header recovery.
     // The same round trip reports whether the control is disabled.
-    let disabled = scroll_into_view_if_needed(
+    let scroll = scroll_into_view_if_needed(
         client,
         session_id,
         ref_map,
         selector_or_ref,
         iframe_sessions,
+        mode != "dom" && button == "left" && click_count == 1,
     )
-    .await;
+    .await?;
     let mut warning = None;
-    match disabled.as_deref() {
+    match scroll.disabled.as_deref() {
         Some("disabled") => return Err(disabled_click_error(selector_or_ref)),
         // aria-disabled is advisory: the browser still delivers the click and
         // some pages answer it (a validation message), so warn, don't refuse.
@@ -346,10 +349,46 @@ pub async fn click_reporting(
                     return Err(occluded_refusal(selector_or_ref, &cover));
                 }
             }
-            dispatch_click(client, &effective_session_id, tx, ty, button, click_count).await?;
+            let guarded = scroll.header_recovered
+                || humanize::active_level() == humanize::HumanizeLevel::Human;
+            let target = if guarded {
+                match scroll.target {
+                    Some(target) => Some(target),
+                    None => {
+                        let (object_id, session_id) = resolve_element_object_id(
+                            client,
+                            session_id,
+                            ref_map,
+                            selector_or_ref,
+                            iframe_sessions,
+                        )
+                        .await?;
+                        Some(ClickTargetGuard {
+                            object_id,
+                            session_id,
+                            epoch: None,
+                        })
+                    }
+                }
+            } else {
+                None
+            };
+            dispatch_click_guarded(
+                client,
+                &effective_session_id,
+                tx,
+                ty,
+                button,
+                click_count,
+                target.as_ref(),
+            )
+            .await?;
             Ok(ClickOutcome::trusted("pointer", warning))
         }
         Err(e) => {
+            if scroll.header_recovered {
+                return Err(format!("click stopped before press: coordinate resolution failed after header wheel recovery ({e}); no mouse button was sent"));
+            }
             // (B) The coordinate path failed — typically a persistent overlay
             // failing the occlusion guard, or coordinates that won't resolve.
             // Fall back to a DOM-dispatched `.click()` on the intended element,
@@ -509,17 +548,197 @@ async fn point_misses_element(
     )
 }
 
-/// Best-effort scroll-into-view before a coordinate click. Uses Chrome's
-/// instant nearest-edge scrolling, including in background tabs with CSS smooth
-/// scrolling. Resolution failures are ignored —
-/// the subsequent resolve will surface a real "not found" error.
+#[derive(PartialEq, Eq)]
+struct ClickEpoch {
+    frame_id: String,
+    loader_id: String,
+}
+
+struct ClickTargetGuard {
+    object_id: String,
+    session_id: String,
+    epoch: Option<ClickEpoch>,
+}
+
+#[derive(Default)]
+struct ScrollBeforeClick {
+    disabled: Option<String>,
+    target: Option<ClickTargetGuard>,
+    header_recovered: bool,
+}
+
+struct HeaderScrollPlan {
+    x: f64,
+    y: f64,
+    dy: f64,
+}
+
+async fn read_click_epoch(client: &CdpClient, session: &str) -> Result<Option<ClickEpoch>, String> {
+    let tree = tokio::time::timeout(
+        Duration::from_millis(500),
+        client.send_command("Page.getFrameTree", None, Some(session)),
+    )
+    .await
+    .map_err(|_| {
+        "click stopped before press: document identity could not be read; no mouse button was sent"
+            .to_string()
+    })??;
+    let frame = &tree["frameTree"]["frame"];
+    Ok(match (frame["id"].as_str(), frame["loaderId"].as_str()) {
+        (Some(id), Some(loader)) if !id.is_empty() && !loader.is_empty() => Some(ClickEpoch {
+            frame_id: id.to_string(),
+            loader_id: loader.to_string(),
+        }),
+        _ => None,
+    })
+}
+
+async fn verify_click_epoch(client: &CdpClient, target: &ClickTargetGuard) -> Result<(), String> {
+    if let Some(expected) = target.epoch.as_ref() {
+        if read_click_epoch(client, &target.session_id).await?.as_ref() != Some(expected) {
+            return Err("click stopped before press: the original document changed or could not be confirmed; no mouse button was sent".to_string());
+        }
+    }
+    Ok(())
+}
+
+async fn click_guard_value(
+    client: &CdpClient,
+    target: &ClickTargetGuard,
+    function: &str,
+    args: Vec<Value>,
+) -> Result<Value, String> {
+    let reply=tokio::time::timeout(Duration::from_millis(500),client.send_command(
+        "Runtime.callFunctionOn",Some(json!({"objectId":target.object_id,"functionDeclaration":function,"arguments":args,"returnByValue":true})),Some(&target.session_id),
+    )).await.map_err(|_| "click stopped before press: the original target could not be rechecked; no mouse button was sent".to_string())?
+        .map_err(|error|format!("click stopped before press: target check failed ({error}); no mouse button was sent"))?;
+    Ok(reply["result"]["value"].clone())
+}
+
+async fn recheck_header_wheel_point(
+    client: &CdpClient,
+    target: &ClickTargetGuard,
+    plan: &HeaderScrollPlan,
+) -> Result<bool, String> {
+    verify_click_epoch(client, target).await?;
+    let value = click_guard_value(
+        client,
+        target,
+        SCROLL_AND_PROBE_DISABLED_JS,
+        vec![
+            json!({"value":true}),
+            json!({"value":plan.x}),
+            json!({"value":plan.y}),
+        ],
+    )
+    .await?;
+    if value.as_str() == Some("ready") {
+        return Ok(true);
+    }
+    if value["header"] == true {
+        return Ok(false);
+    }
+    Err("click stopped before press: the original header wheel context could not be confirmed; no mouse button was sent".to_string())
+}
+
+/// Verify the same live node and document at the exact landing point.
+async fn verify_live_click_target(
+    client: &CdpClient,
+    target: &ClickTargetGuard,
+    point: Option<(f64, f64)>,
+) -> Result<(), String> {
+    verify_click_epoch(client, target).await?;
+    let args = point
+        .map(|(x, y)| vec![json!({"value":x}), json!({"value":y})])
+        .unwrap_or_default();
+    let value = click_guard_value(client, target, CLICK_TARGET_GUARD_JS, args).await?;
+    if value == true {
+        return Ok(());
+    }
+    let reason = value.as_str().unwrap_or("target could not be confirmed");
+    Err(format!("click stopped before press: {reason}; no mouse button was sent. Observe the page before trying again."))
+}
+
+const CLICK_TARGET_GUARD_JS: &str = r#"function(x,y) {
+    if (!this.isConnected || this.ownerDocument.defaultView?.document!==this.ownerDocument) return 'original target context changed';
+    const el=this.nodeType===1?this:this.parentElement;
+    if (!el) return 'original target has no element';
+    if (el.matches(':disabled')) return 'original target is disabled';
+    const r=el.getBoundingClientRect();
+    if (!(r.width>0 && r.height>0)) return 'original target is not visible';
+    if (x===undefined || y===undefined) {x=r.left+r.width/2;y=r.top+r.height/2;}
+    let hit=this.ownerDocument.elementFromPoint(x,y);
+    while(hit?.shadowRoot) {
+        const inner=hit.shadowRoot.elementFromPoint(x,y);
+        if(!inner || inner===hit)break;
+        hit=inner;
+    }
+    for(let node=hit;node;node=node.parentNode||node.host)if(node===el)return true;
+    return 'original target no longer owns the click point';
+}"#;
+
+/// One bounded, acknowledged gesture. A canceled waiter cannot cancel Chrome,
+/// so an unfinished gesture never falls back to a DOM scroll or another input.
+async fn recover_header_with_wheel(
+    client: &CdpClient,
+    target: &ClickTargetGuard,
+    plan: HeaderScrollPlan,
+    budget: Duration,
+) -> Result<(), String> {
+    let mut input_attempted = false;
+    let outcome = tokio::time::timeout(budget, async {
+        if recheck_header_wheel_point(client, target, &plan).await? {
+            return Ok(());
+        }
+        input_attempted = true;
+        move_pointer(client, &target.session_id, plan.x, plan.y).await?;
+        let level = humanize::active_level();
+        for (dx, dy, pause) in humanize::scroll_segments(0.0, plan.dy, level, humanize::next_seed())
+        {
+            if recheck_header_wheel_point(client, target, &plan).await? {
+                return Ok(());
+            }
+            client
+                .send_command(
+                    "Input.dispatchMouseEvent",
+                    Some(
+                        json!({"type":"mouseWheel","x":plan.x,"y":plan.y,"deltaX":dx,"deltaY":dy}),
+                    ),
+                    Some(&target.session_id),
+                )
+                .await?;
+            if !pause.is_zero() {
+                tokio::time::sleep(pause).await;
+            }
+        }
+        Ok::<(), String>(())
+    })
+    .await;
+    let error = match outcome {
+        Ok(Ok(())) => return Ok(()),
+        Ok(Err(error)) => error,
+        Err(_) => format!(
+            "header wheel gesture did not finish within {}ms",
+            budget.as_millis()
+        ),
+    };
+    Err(if input_attempted {
+        format!("action_outcome_unknown: click header recovery stopped after input was attempted ({error}). Chrome may still be handling it; no mouse button was sent. Inspect before trying again.")
+    } else {
+        format!("click stopped before press: header recovery could not be confirmed ({error}); no mouse button was sent")
+    })
+}
+
+/// Existing nearest-edge preparation is unchanged. New header recovery uses
+/// trusted wheel input only, with the same original handle and document epoch.
 async fn scroll_into_view_if_needed(
     client: &CdpClient,
     session_id: &str,
     ref_map: &RefMap,
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
-) -> Option<String> {
+    coordinate_click: bool,
+) -> Result<ScrollBeforeClick, String> {
     let Ok((object_id, effective_session_id)) = resolve_element_object_id(
         client,
         session_id,
@@ -529,43 +748,131 @@ async fn scroll_into_view_if_needed(
     )
     .await
     else {
-        return None;
+        return Ok(ScrollBeforeClick::default());
+    };
+    let allow_header = coordinate_click
+        && parse_ref(selector_or_ref).is_some()
+        && !ref_map.ref_is_in_iframe(selector_or_ref);
+    let epoch = if allow_header {
+        read_click_epoch(client, &effective_session_id).await?
+    } else {
+        None
     };
     let reply = client
         .send_command_typed::<_, Value>(
             "Runtime.callFunctionOn",
             &CallFunctionOnParams {
                 function_declaration: SCROLL_AND_PROBE_DISABLED_JS.to_string(),
-                object_id: Some(object_id),
-                arguments: None,
+                object_id: Some(object_id.clone()),
+                arguments: Some(vec![CallArgument {
+                    value: Some(json!(allow_header)),
+                    object_id: None,
+                }]),
                 return_by_value: Some(true),
                 await_promise: Some(false),
             },
             Some(&effective_session_id),
         )
-        .await;
-    // Let the scroll settle so the following getBoxModel sees final coordinates.
+        .await?;
     wait_for_paint_settled(client, &effective_session_id).await;
-    reply
-        .ok()?
-        .get("result")?
-        .get("value")?
-        .as_str()
-        .map(String::from)
+    let value = &reply["result"]["value"];
+    let mut target = ClickTargetGuard {
+        object_id,
+        session_id: effective_session_id,
+        epoch: None,
+    };
+    let mut disabled = None;
+    let header_recovered = if value["header"] == true {
+        let number = |name: &str| {
+            value[name]
+                .as_f64()
+                .filter(|n| n.is_finite())
+                .ok_or_else(|| {
+                    "click stopped before press: invalid header wheel geometry".to_string()
+                })
+        };
+        let (x, y, dy, vw, vh) = (
+            number("x")?,
+            number("y")?,
+            number("dy")?,
+            number("vw")?,
+            number("vh")?,
+        );
+        if x < 0.0 || y < 0.0 || x >= vw || y >= vh || dy.abs() < 1.0 || dy.abs() > vh + 1.0 {
+            return Err(
+                "click stopped before press: header wheel point could not be confirmed".into(),
+            );
+        }
+        target.epoch = Some(
+            epoch
+                .ok_or("click stopped before press: header recovery requires document identity")?,
+        );
+        recover_header_with_wheel(
+            client,
+            &target,
+            HeaderScrollPlan { x, y, dy },
+            Duration::from_secs(10),
+        )
+        .await?;
+        wait_for_paint_settled(client, &target.session_id).await;
+        verify_live_click_target(client, &target, None).await?;
+        true
+    } else {
+        // Keep the existing optional disabled probe for ordinary clicks.
+        // Only an explicit header plan enters the stricter recovery protocol.
+        disabled = value
+            .as_str()
+            .filter(|status| !status.is_empty())
+            .map(String::from);
+        false
+    };
+    Ok(ScrollBeforeClick {
+        disabled,
+        target: Some(target),
+        header_recovered,
+    })
 }
 
-/// Scroll the element into view, then say whether it can take a click:
-/// `"disabled"` for a form control the browser will not click (`:disabled`,
-/// which also covers a `<fieldset disabled>` ancestor), `"aria-disabled"`
-/// when it or an ancestor declares `aria-disabled="true"`, `""` otherwise.
-const SCROLL_AND_PROBE_DISABLED_JS: &str = "function() { try { \
-        this.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' }); \
-    } catch (e) {} \
-    try { \
-        if (this.matches && this.matches(':disabled')) return 'disabled'; \
-        if (this.closest && this.closest('[aria-disabled=\"true\"]')) return 'aria-disabled'; \
-    } catch (e) {} \
-    return ''; }";
+const SCROLL_AND_PROBE_DISABLED_JS: &str = r#"function(allowHeader,wheelX,wheelY) {
+    const el=this.nodeType===1?this:this.parentElement;
+    if(!el)return '';
+    const recheck=Number.isFinite(wheelX)&&Number.isFinite(wheelY);
+    if(!recheck){try{el.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});}catch(_){}}
+    if(el.matches(':disabled'))return 'disabled';
+    if(el.closest('[aria-disabled="true"]'))return 'aria-disabled';
+    if(!allowHeader)return '';
+    if(!this.isConnected || this.ownerDocument.defaultView?.document!==this.ownerDocument)return {blocked:true};
+    const doc=this.ownerDocument,w=doc.defaultView,r=el.getBoundingClientRect();
+    if(!(r.width>0&&r.height>0))return recheck?{blocked:true}:'';
+    const modal='dialog,[role="dialog"],[role="alertdialog"],[aria-modal="true"],[popover]';
+    if(recheck){
+        const at=doc.elementFromPoint(wheelX,wheelY);
+        if(!at||el.closest(modal)||at.closest(modal)||!at.contains(el))return {blocked:true};
+    }
+    const hit=doc.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+    if(hit===el||el.contains(hit))return recheck?'ready':'';
+    if(!hit||el.closest(modal)||hit.closest(modal))return recheck?{blocked:true}:'';
+    for(let bar=hit;bar;bar=bar.parentElement){
+        if(!bar.matches('header,nav,[role="banner"],[role="navigation"]')||bar.contains(el))continue;
+        const style=w.getComputedStyle(bar),b=bar.getBoundingClientRect();
+        const edge=(b.top<=1&&b.bottom>0)||(b.bottom>=w.innerHeight-1&&b.top<w.innerHeight);
+        if(!['sticky','fixed'].includes(style.position)||!edge||b.width<w.innerWidth*.6||b.height>w.innerHeight*.35)continue;
+        let scroller=doc.scrollingElement||doc.documentElement;
+        for(let p=el.parentElement;p&&p!==doc.documentElement;p=p.parentElement){
+            const s=w.getComputedStyle(p);
+            if(/(auto|scroll)/.test(s.overflowY)&&p.scrollHeight>p.clientHeight+1){scroller=p;break;}
+        }
+        const page=scroller===doc.scrollingElement||scroller===doc.documentElement;
+        const q=page?{left:0,top:0,right:w.innerWidth,bottom:w.innerHeight}:scroller.getBoundingClientRect();
+        const left=Math.max(0,q.left),top=Math.max(0,q.top),right=Math.min(w.innerWidth,q.right),bottom=Math.min(w.innerHeight,q.bottom);
+        if(right<=left||bottom<=top)return recheck?{blocked:true}:'';
+        const x=recheck?wheelX:(left+right)/2,y=recheck?wheelY:(top+bottom)/2,at=doc.elementFromPoint(x,y);
+        const controls='input,textarea,select,button,a,iframe,object,embed,video,audio,canvas,svg,[contenteditable],[role="button"],[role="slider"],[role="spinbutton"],[role="combobox"],[role="application"]';
+        if(x<left||x>=right||y<top||y>=bottom||!at||at.closest(modal)||at.closest(controls)||bar.contains(at)||!scroller.contains(at)||!at.contains(el))return recheck?{blocked:true}:'';
+        return {header:true,x,y,dy:r.top+r.height/2-(top+bottom)/2,vw:w.innerWidth,vh:w.innerHeight};
+    }
+    return recheck?{blocked:true}:'';
+}"#;
 
 /// Dispatch a click through the DOM (`element.click()`) instead of via screen
 /// coordinates. Targets the intended element directly, so it works when a
@@ -5657,6 +5964,18 @@ async fn dispatch_click(
     button: &str,
     click_count: i32,
 ) -> Result<(), String> {
+    dispatch_click_guarded(client, session_id, x, y, button, click_count, None).await
+}
+
+async fn dispatch_click_guarded(
+    client: &CdpClient,
+    session_id: &str,
+    x: f64,
+    y: f64,
+    button: &str,
+    click_count: i32,
+    target: Option<&ClickTargetGuard>,
+) -> Result<(), String> {
     // Move toward the target along a human-like path. At HumanizeLevel::Off this
     // is a single zero-delay step to (x, y) — identical to the old teleport — so
     // the default behaviour is unchanged. At Fast/Human it's a curved,
@@ -5667,6 +5986,13 @@ async fn dispatch_click(
     let level = humanize::active_level();
     let seed = humanize::next_seed();
     move_pointer_with(client, session_id, x, y, level, seed).await?;
+    let settle = humanize::settle_before_press(level, seed);
+    if !settle.is_zero() {
+        tokio::time::sleep(settle).await;
+    }
+    if let Some(target) = target {
+        verify_live_click_target(client, target, Some((x, y))).await?;
+    }
 
     let button_value = match button {
         "right" => 2,
@@ -7702,3 +8028,7 @@ mod contenteditable_fill_tests;
 #[cfg(test)]
 #[path = "monaco_clipboard_tests.rs"]
 mod monaco_clipboard_tests;
+
+#[cfg(test)]
+#[path = "click_header_wheel_tests.rs"]
+mod click_header_wheel_tests;

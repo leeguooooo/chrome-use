@@ -79,6 +79,7 @@
         <a href="https://github.com/leeguooooo/chrome-use/issues">issues</a> 提一条——30 秒的反馈就能让工具更利。
       </p>
 
+      <p>自动填充扩展的框架阻止调试器访问时，<code>get url</code> 仍可读取 Chrome 中当前固定标签页的实时记录。 显式 <code>open &lt;url&gt;</code> 会先走浏览器标签 API，再处理调试器恢复，旧页面的受保护框架或恢复失败 不会永久拦住这次导航。标签页授权检查仍然生效；子框架导航和带 referrer 的导航仍需要 CDP。 不会重放输入、表单提交或登录。这提供的是显式离开阻塞页的路径，不保证隐身模式下能自动关闭 第三方扩展的弹层。导航恢复需要 relay 扩展 0.5.98+。</p>
       <h2>侧栏报 Specified native messaging host not found.</h2>
       <p>在 macOS/Linux 上，<code>chrome-use extension install</code> 还会为正在运行、以 <code>--user-data-dir=&lt;path&gt;</code> 单独启动的 Chromium 系浏览器注册本地 host，扫描到的自定义目录必须已经存在。如果浏览器尚未运行或无法被扫描到，可执行 <code>chrome-use extension install --user-data-dir &quot;/path/Chrome Data&quot;</code>；也接受 <code>--user-data-dir=&lt;path&gt;</code>，可重复指定多个目录。显式指定的目录不存在时会报错。命令会列出写入的清单，并回读校验 host 名称和启动器路径。这只确认注册完成；之后请在该 Chrome 里重新打开侧栏，或等扩展自动重连。Windows 使用 HKCU 注册表注册，不支持此选项。 自动扫描仅限当前用户的进程；发现目录写入或校验失败时警告并跳过，可用 <code>--user-data-dir</code> 重试，默认或显式目录失败仍报错。成功写入的自定义数据目录记录在 <code>~/.chrome-use/custom-host-dirs.json</code>，供状态查询和浏览器停止后的卸载清理使用；记录失败会警告卸载可能残留清单。</p>
 

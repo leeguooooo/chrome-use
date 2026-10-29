@@ -1,6 +1,7 @@
 // Analyze the fixture marker pixels, allowing for the screenshot color profile.
 import {readFileSync,writeFileSync,existsSync} from 'node:fs';import{inflateSync}from'node:zlib';import{join}from'node:path';
 const out=process.argv[2],surface=process.argv[3]||'page';const summary={};
+if (!['page','desktop'].includes(surface)) throw Error('Unsupported surface: '+surface);
 for(const label of ['baseline','visible','hidden','navigation','navigation-hidden','detach-before','detached']){
  const file=join(out,label+'-'+surface+'.png');if(!existsSync(file))continue;
  const png=readFileSync(file);let offset=8,width,height,channels,idat=[];
@@ -12,4 +13,5 @@ for(const label of ['baseline','visible','hidden','navigation','navigation-hidde
  for(let x=0;x<width;x++){const i=x*channels;if(row[i]>200&&row[i+1]<100&&row[i+2]>200){count++;bounds=[Math.min(bounds[0],x),Math.min(bounds[1],y),Math.max(bounds[2],x),Math.max(bounds[3],y)]}}previous=row}
  summary[label]={width,height,magentaPixels:count,bounds:count?bounds:null};
 }
+if (!Object.keys(summary).length) throw Error('No capture images found for '+surface);
 writeFileSync(join(out,surface==='page'?'pixels.json':'pixels-desktop.json'),JSON.stringify(summary,null,2));console.log(JSON.stringify(summary));

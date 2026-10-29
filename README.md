@@ -346,6 +346,10 @@ For scoped, depth-limited, regex-filtered or budgeted snapshots, JSON `refs` con
 
 Interactive snapshots add `context` only to repeated controls with the same role and name when named parent lines do not already distinguish them. Context omits the control’s own name and punctuation, stays within about 100 characters (60 for unnamed controls), and must differ between controls. Unique controls have no context; use a scoped or full snapshot for missing details such as a unique product’s price.
 
+Scroll-driven animations use percentages instead of finite time durations, so they do not
+hold the settle wait open. Finite time-based animations, DOM changes and in-flight
+requests keep their existing checks.
+
 Prefer `snapshot -i -c` for compact controls, scoped reads for a known region, and `--diff` only when the last observation leaves a question. Use `batch` for known action sequences (a step takes its own `--observe`: `batch "fill @e1 Ada" "click @e2 --observe"`; `pick` and `hover` observe like `click`), `script` for bounded observe/decide/act/verify flows, and `form fill --map` for several fields. Verify the requested result at the end: `observed.status: complete` means the capture is complete, not the task, so wait for the page's own final signal (`wait --text`). On a small page (tree at most 4 KB and 60 lines) an observation carries the whole current tree as `observed.snapshot` plus `observed.changes` (`+`/`-` lines only); larger pages keep `delta`. `observed.text` lists visible text lines that changed in any frame (receipts, logs, page counters), never input, textarea, select or editable content, and nothing at all while any password field holds a value (`textStatus: redacted`); a frame it could not read is listed in `textFrames` and makes the observation `partial`. `observed.target` names the tab and target on every JSON reply. `observed.announced` holds the text of toasts and alert/status/aria-live regions that appeared while the action ran and the page settled, even ones gone before the reply ("video under review, not saved"). An element screenshot is `screenshot <selector> <path>` or `screenshot <path> --selector <selector>`. Add `--with-screenshot <path>` only when pixels answer a question the tree cannot.
 
 After a successful trusted insertion, contenteditable `fill` keeps focus on the editor without synthetic `change` or `focusout` events. If read-back fails, it reports the failure instead of overwriting the editor DOM. Use the page's own save or commit action when needed.
@@ -396,12 +400,15 @@ The agent operates in your Chrome: you'll see tabs opening, pages loading, click
 
 For an authorized task, the bundled skill tells the agent to inspect and attempt ordinary CAPTCHAs before handing off: `solve-slider` for ordinary and rotating Yidun puzzles, screenshot-guided ordered clicks for readable icon challenges, then verify the site's result and continue. Load `chrome-use skills get core/captcha`. Attempts are bounded; unavailable or ambiguous challenges still need a handoff. This workflow does not guarantee every provider or challenge can be solved. Activate the target before capturing coordinates; a provider success or frozen resend countdown does not establish site acceptance.
 
+Regular Human pointer clicks now use a seeded 60–200ms settling pause after movement and before pressing. Fast and Off keep their existing timing. Human selector/ref clicks recheck the same live element at the landing point after the pause. A verified top-level `@ref` hidden by a small fixed/sticky semantic edge header/navigation bar may use one trusted wheel gesture toward a clear position. The gesture is bounded to 10 seconds, uses humanize pacing, and keeps the original live handle and document epoch. Unknown wheel points, transport failures and context changes stop without a DOM-scroll fallback or input replay; the same element must pass the final exact hit-test. The default trusted path still refuses dialogs, modal/popover blockers and unverifiable targets. `click stopped before press` means no mouse button was sent; inspect before retrying, because the pointer or viewport may have moved.
+
 | Command | Purpose |
 |---|---|
+| `--humanize off\|fast\|human` | Fast is the default; Human regular pointer clicks add a seeded 60–200ms settling gap and recheck the live target before press |
 | `chrome-use extension install --user-data-dir <path>` | macOS/Linux: register an existing custom Chrome data directory (repeatable; equals form accepted). Running custom directories are also discovered automatically. Windows uses HKCU and rejects this option. |
 | `--window user` (default) / `--window dedicated` | Extension relay: AI tabs open in your current window, each session in its own tab group starting with ✦; `dedicated` moves all AI sessions into one shared background window per profile |
 | `chrome-use open <url>` | Connect to your Chrome and navigate. If `load` has not arrived after 25s but the tab's page is clearly usable, it succeeds with a ⚠ warning; when that page can't be tied to this request (always over the extension relay) the reply carries `commit: "unverified"` and the tab's real URL. A page that isn't usable fails with `navigation_incomplete:`, saying what is known (commit, readyState, candidate resources) |
-| `chrome-use snapshot -i` | Read the page; the start of every interaction (`-u` adds each link's absolute URL) |
+| `chrome-use snapshot -i` | Read the page after settling; ignores scroll-driven animation timelines (`-u` adds absolute link URLs) |
 | `chrome-use read --links` | The page as text, plus a bounded `## Links` list of `[text](absolute URL)` (first 100, `--max-links <n>` up to 1000) |
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | Click by text, by snapshot ref, or on a raw viewport coordinate |
 | `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` replaces a whole value and `type` appends, both with trusted input events; a ⚠ warning says when the page did not react (e.g. its Save stayed disabled) |
@@ -479,6 +486,16 @@ stays bound to the same Chrome tab, and one whose tab is gone is refused rather
 than given to another tab. If the tab the agent was driving is gone, commands
 on the current tab are refused until it picks one with `tab select <ref>`,
 `tab new` or `--tab <ref>`, so nothing runs in a tab it never chose.
+
+When an autofill extension frame blocks debugger access, `get url` can still read
+Chrome's live record for the exact pinned tab. This is an address-bar diagnostic,
+not a renderer-liveness check or proof of sign-in; internal origin checks still read the document. Explicit `open <url>` uses the
+browser tab API before attempting debugger recovery, so an old protected frame
+or a failed attachment cannot permanently trap navigation. Tab grants still
+apply; child-frame or referrer-bearing navigation still needs CDP. No input,
+form submission or login is replayed. This restores an explicit exit path; it
+does not guarantee that a third-party menu can be closed automatically under
+stealth mode. These navigation changes require relay extension 0.5.98+.
 
 ### Bitwarden login
 

@@ -113,9 +113,9 @@ waits for that choice, and your own `confirm` never approves it.
 | Full loop rules, observation fields, adapter hints, misc notes | `core/loop` |
 | `tab list --all`, other sessions' tabs, `close`, reconnect, cleanup | `core/tabs` |
 | Toolbar side panel, conversations, schedules, `mobile serve` | `core/agent-panel` |
-| Verbs, bounded scrolling, uploads, widgets, date pickers, `eval` alternatives | `core/interacting` |
+| Verbs, bounded scrolling, Human click settling, sticky headers, widgets, uploads, dates | `core/interacting` |
 | Scoped reads, frames, shadow roots, screenshots and region cropping | `core/reading` |
-| `wait`, mid-transition reads, observation limits | `core/waiting` |
+| `wait`, mid-transition reads, scroll-driven animations, observation limits | `core/waiting` |
 | Ref identity, snapshot detail | `core/snapshot-refs` |
 | `status`/`doctor`, extension, profiles, launch, stealth | `core/connection` |
 | Repeated steps, output reading, verification | `core/behaviour` |
@@ -126,7 +126,7 @@ waits for that choice, and your own `confirm` never approves it.
 | Sensitive actions, untrusted instructions | `core/trust-boundaries` |
 | `[chrome-use Inspect & Ask]` message | `core/inspect-and-ask` |
 | Persistence, idle recovery, parallel sessions | `core/session-management` |
-| Failures, friction log | `core/known-traps`, `core/troubleshooting` |
+| Blocked autofill frame, failures, friction log | `core/known-traps`, `core/troubleshooting` |
 | Commands, flags, env vars, device resets | `core/commands` |
 | Page leaks (`diag pages`) | `core/diag-pages` |
 | Install, runners, `--full`, Git hooks | `core/installation` |
