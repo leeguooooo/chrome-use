@@ -370,7 +370,11 @@ impl Fake {
                 }
                 let bid = params["backendNodeId"].as_i64().unwrap_or(1);
                 json!({"node": {"nodeId": 1, "backendNodeId": bid,
-                "nodeType": 1, "nodeName": "INPUT", "localName": "input", "nodeValue": ""}})
+                "nodeType": 1, "nodeName": "INPUT", "localName": "input", "nodeValue": "",
+                // Match the synthetic fields in DOM.getDocument. Site policy
+                // reads these attributes before input instead of guessing that
+                // a descriptor with no attributes represents an ordinary field.
+                "attributes": ["type", if bid == 55 { "email" } else { "text" }]}})
             }
             // The page as a DOM walk sees it (`snapshot --dom`).
             "DOM.getDocument" => {

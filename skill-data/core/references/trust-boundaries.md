@@ -140,6 +140,13 @@ confirmation id, and exits with code 3 (`--json`: `confirmation_required`,
 - An error saying a site is blocked or outside the organization's list is
   final. Report it; do not retry.
 
+Approval applies to the queued operation, not to a policy exemption. Hard denials
+and site restrictions are checked again. A CLI file/category confirmation cannot
+approve a separate extension-held site request; even `--confirm-interactive`
+needs the actual extension decision there. A later gate stays pending, and a
+rejected approved operation is an error. Approval authority is request-local
+and disappears when its future is canceled.
+
 The user turns these defaults off on the options page, with
 `CHROME_USE_SENSITIVE_SITES=0`, or with the `sites` block of an
 `--action-policy` file.

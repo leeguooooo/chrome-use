@@ -3145,7 +3145,7 @@ Examples:
             r##"
 chrome-use fill - Clear and fill an input field
 
-Usage: chrome-use fill <selector> <text>
+Usage: chrome-use fill <selector> <text> [--allow-clipboard-fallback]
        chrome-use fill <selector> --file <path>
        chrome-use fill <selector> --stdin
        chrome-use fill <selector> --from-env <VAR>
@@ -3167,8 +3167,29 @@ when its public globals are removed. Discovery reads a bounded module table;
 it does not invoke loaders, factories or accessors, or make requests.
 Native select-all must cover the full live model before insertion. Model changes,
 focus loss, incomplete selection or mismatched readback fail without a clipboard retry.
-When discovery finds no usable API before input, the existing fallback uses
-one trusted editor paste, reads the selected model back through the editor's
+Without an exact model API, fill/get value refuse before clipboard access.
+--allow-clipboard-fallback opts in for this command only, after the user accepts
+that it temporarily changes the system clipboard. Only fill and get value accept
+this flag; place it last, after the required text/selector. A mandatory text value
+that equals the flag stays literal, and -- ends editor option parsing.
+Clipboard policies still apply; approval cannot override a hard deny.
+Document/input/clipboard approvals require the original owned target and fresh
+HTTP(S) renderer securityOrigin; opaque or missing origins refuse. Explicit HTTP(S)
+navigation binds its original target and destination, works from blank/cold start,
+and creates a new own target for --new-tab or when no original target existed.
+Literal tab new accepts HTTP(S) or default about:blank; window new only creates
+about:blank and refuses nonblank URLs. Both bind the actual creation action.
+Select a named navigation target with `chrome-use tab <target>` first; approval
+refuses a mismatch with the active owned target.
+JavaScript/SPA actions still require document-origin verification. HTTP read URL
+approvals bind their original URL/args independently of browser presence.
+Explicit HTTP reads do not route/adopt browser tabs. Without a URL, read approval
+still depends on the current document. HTTP resources use read site-policy
+category and still check file domain rules when no browser exists.
+Field policy uses that target's refs/iframe sessions; unreadable context refuses.
+It never enables clipboard fallback after native model/input failure. Actual use
+emits a warning: comparison/restoration is not atomic and can overwrite concurrent
+clipboard writes. The opted-in fallback uses one trusted editor paste, reads the selected model back through the editor's
 copy handler, and attempts clipboard restoration from an independent Blob backup.
 An empty or unreadable backup is refused before staging; restoration is read back
 and verified. Contents are checked before input and restoration; changed or
@@ -4473,6 +4494,10 @@ Subcommands:
   html <selector>            Get inner HTML of element
   value <selector>           Get value of input element (card / password /
                              one-time-code fields masked; --reveal-values)
+                             Hidden Monaco without a usable model refuses before
+                             clipboard access. --allow-clipboard-fallback explicitly
+                             permits temporary system clipboard changes for this
+                             command only; compare/restore is not atomic.
   attr <selector> <name>     Get attribute value
   title                      Get page title
   url                        Get current URL
@@ -4984,7 +5009,9 @@ Usage: chrome-use window <operation>
 Manage browser windows.
 
 Operations:
-  new                  Open new browser window
+  new                  Open a new about:blank browser window (no URL argument)
+
+For a URL, use `chrome-use tab new <https-url>`. Explicit window URLs are refused.
 
 Global Options:
   --json               Output as JSON
@@ -5154,8 +5181,12 @@ When the response says `approval: user`, the request is waiting in the
 chrome-use extension (side panel, notification, options page). Only the
 user can approve it there: `confirm` then waits up to 40 seconds for their
 choice (Allow once, Always allow on this site, Decline) and runs the action
-if they allowed it. With --confirm-interactive the prompt also offers
-"always" for the site.
+if they allowed it. --confirm-interactive cannot approve an extension-held
+request; choose in the extension. Terminal-only gates still offer interactive
+confirmation when no extension holds the decision.
+Approved operations recheck hard denials and site restrictions. A changed policy
+can reject the operation, and another required site gate stays pending instead
+of being reported as completed.
 
 A new gated action replaces the pending one.
 
@@ -6119,9 +6150,12 @@ Usage: chrome-use batch [options] "<cmd1>" "<cmd2>" ...
 Runs multiple commands in sequence. Commands can be passed as quoted
 arguments or piped as JSON via stdin. Results are printed in order,
 separated by blank lines (or as a JSON array with --json).
+A pending confirmation always stops the batch, even without --bail, and exits 3.
+The last result retains the approval instructions and confirmation ID. No later
+step is sent. After approval, inspect the result and start a new batch for the rest.
 
 Options:
-  --bail               Stop on first error (default: continue all commands)
+  --bail               Stop on first error (pending confirmation always stops)
   --json               Output results as a JSON array
 
 Per-step flags:

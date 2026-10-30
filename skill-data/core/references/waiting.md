@@ -125,10 +125,13 @@ rejected submit tells you why in the same call. `chrome-use form fill --map
 '{"Email":"a@b.com","Country":"US","Subscribe":true}' --submit "Sign up"`. For
 rich editors (DraftJS/Monaco/CodeMirror) fill those fields with `fill` instead —
 it handles them and verifies the exact editor-model readback before reporting
-success. A hidden Monaco API matched to the exact editor, including completed
+success. An undiscoverable Monaco model refuses before clipboard access. `fill` and
+`get value` accept `--allow-clipboard-fallback` only for a user-approved temporary
+clipboard change; the flag is per-command and restoration is not atomic.
+A hidden Monaco API matched to the exact editor, including completed
 Monaco 0.52 AMD exports retained by its loader, uses native input and direct
 model readback without the clipboard. Insertion requires a verified full-model
-selection. If discovery finds no usable API before
+selection. If explicitly enabled after discovery finds no usable API before
 input, the fallback uses trusted paste and editor-generated copy readback,
 with verified clipboard restoration; concurrent clipboard use is not atomic.
 A discovered model's failure does not retry through the clipboard. `form fill`

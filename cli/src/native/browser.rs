@@ -6796,6 +6796,40 @@ impl BrowserManager {
             .ok_or_else(|| format!("tab `{spec}` is no longer open; run `tab list`"))
     }
 
+    /// Resolve a confirmation's intended page without selecting or adopting it.
+    /// External browsers must still own the exact target when approval is used.
+    pub fn confirmation_page(
+        &self,
+        spec: Option<&str>,
+    ) -> Result<(String, String, String), String> {
+        let (target, session) = match spec {
+            Some(spec) => self.resolve_tab_spec(spec)?,
+            None => self.active_tab_spec()?,
+        };
+        if self.browser_process.is_none() && !self.owned_targets().contains(&target) {
+            return Err("Confirmation target is no longer owned by this session".into());
+        }
+        let url = self
+            .target_url(&target)
+            .ok_or("Confirmation target is no longer open")?;
+        Ok((target, session, url.to_string()))
+    }
+
+    /// Read the renderer security origin without inferring it from its URL.
+    /// A sandbox can give an HTTP URL an opaque origin. Without selecting a tab or evaluating
+    /// JavaScript in either the page or an isolated world.
+    pub async fn confirmation_page_origin(&self, target: &str) -> Result<String, String> {
+        let (_, session, _) = self.confirmation_page(Some(target))?;
+        self.client
+            .send_command("Page.getFrameTree", None, Some(&session))
+            .await?
+            .pointer("/frameTree/frame/securityOrigin")
+            .and_then(Value::as_str)
+            .filter(|url| !url.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| "Could not verify confirmation target origin".into())
+    }
+
     /// The url this session last saw on `target_id`, if it is one of its pages.
     pub fn target_url(&self, target_id: &str) -> Option<&str> {
         self.pages

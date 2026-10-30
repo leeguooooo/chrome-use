@@ -10,7 +10,8 @@
 //! default: agents routinely sign in (`auth login`, `fill --from-env`) and
 //! run download automations unattended, so the other two are opt-in. The site is
 //! the host the action lands on: the URL argument for a navigation, else the
-//! page the session drives (the daemon's tracked URL, never a page read).
+//! intended command target (resolved without selecting another tab). Pending
+//! approvals also verify its renderer origin, without evaluating page JavaScript.
 //!
 //! Rules come in layers, highest first:
 //!
@@ -181,10 +182,11 @@ pub fn category_of(action: &str, cmd: &Value) -> Option<&'static str> {
     }
 }
 
-/// The URL whose host an action lands on, when the command names one.
+/// The immutable URL whose host an action lands on or reads over HTTP, when
+/// the command names one. An explicit read URL never borrows the current tab host.
 pub fn target_url(action: &str, cmd: &Value) -> Option<String> {
     match action {
-        "navigate" | "tab_new" | "window_new" | "a11y" | "download_url" => cmd
+        "navigate" | "tab_new" | "window_new" | "a11y" | "download_url" | "read" => cmd
             .get("url")
             .and_then(|v| v.as_str())
             .map(str::trim)

@@ -548,6 +548,50 @@ fn parse_cookie_header(header: &str) -> Result<Vec<Value>, String> {
     Ok(out)
 }
 
+const CLIPBOARD_FLAG: &str = "--allow-clipboard-fallback";
+const CLIPBOARD_USAGE: &str = "fill <selector> <text> [--allow-clipboard-fallback] | get value <selector> [--allow-clipboard-fallback]";
+
+/// Mandatory editor arguments are data, including a text value that happens
+/// to equal a flag. Only a final optional token before `--` grants permission.
+fn editor_clipboard_args<'a>(
+    args: &[&'a str],
+    required: usize,
+) -> Result<(Vec<&'a str>, bool), ParseError> {
+    let boundary = args.iter().position(|a| *a == "--").unwrap_or(args.len());
+    let mut allow = false;
+    for (index, arg) in args.iter().enumerate().take(boundary).skip(required) {
+        if arg.starts_with("--allow-clipboard-fallback=") {
+            return Err(ParseError::InvalidValue {
+                message: "--allow-clipboard-fallback takes no value".into(),
+                usage: CLIPBOARD_USAGE,
+            });
+        }
+        if *arg == CLIPBOARD_FLAG {
+            if index + 1 != boundary || allow {
+                return Err(ParseError::InvalidValue {
+                    message:
+                        "--allow-clipboard-fallback takes no value and must be the last option"
+                            .into(),
+                    usage: CLIPBOARD_USAGE,
+                });
+            }
+            allow = true;
+        }
+    }
+    let rest = args
+        .iter()
+        .enumerate()
+        .filter_map(|(i, a)| {
+            if i == boundary || (allow && i + 1 == boundary) {
+                None
+            } else {
+                Some(*a)
+            }
+        })
+        .collect();
+    Ok((rest, allow))
+}
+
 pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError> {
     let mut result = parse_command_inner(args, flags)?;
     stamp_command_flags(&mut result, flags);
@@ -780,6 +824,19 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
 
     let cmd = args[0].as_str();
     let rest: Vec<&str> = args[1..].iter().map(|s| s.as_str()).collect();
+    let editor_command = cmd == "fill" || (cmd == "get" && rest.first() == Some(&"value"));
+    if !editor_command
+        && rest
+            .iter()
+            .take_while(|a| **a != "--")
+            .any(|a| *a == CLIPBOARD_FLAG || a.starts_with("--allow-clipboard-fallback="))
+    {
+        return Err(ParseError::InvalidValue {
+            message: "--allow-clipboard-fallback is supported only by fill and get value".into(),
+            usage: CLIPBOARD_USAGE,
+        });
+    }
+
     let id = gen_id();
 
     if flags.cli_annotate && cmd != "screenshot" {
@@ -995,6 +1052,20 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             Ok(json!({ "id": id, "action": "dblclick", "selector": sel }))
         }
         "fill" => {
+            let literal_value = rest.get(1) == Some(&"--");
+            let required = if matches!(rest.get(1), Some(&"--file" | &"--from-env")) {
+                3
+            } else {
+                2
+            };
+            let (editor_args, allow_clipboard) = editor_clipboard_args(&rest, required)?;
+            let rest = editor_args.as_slice();
+            let stamp = |mut cmd: Value| {
+                if allow_clipboard {
+                    cmd["allowClipboardFallback"] = json!(true);
+                }
+                cmd
+            };
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
                 context: "fill".to_string(),
                 usage: "fill <selector> <text> | fill <selector> --file <path> | fill <selector> --stdin | fill <selector> --from-env <VAR>",
@@ -1003,54 +1074,60 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // `fill <sel> --file <path>` reads the value from a UTF-8 file, and
             // `fill <sel> --stdin` reads it from stdin — sent verbatim, so backticks,
             // quotes, newlines and non-ASCII pass through untouched.
-            let value = match rest.get(1).copied() {
-                Some("--file") => {
-                    let path = rest.get(2).ok_or(ParseError::InvalidValue {
-                        message: "fill --file requires a path".to_string(),
-                        usage: "fill <selector> --file <path>",
-                    })?;
-                    std::fs::read_to_string(path).map_err(|e| ParseError::InvalidValue {
-                        message: format!("fill --file: cannot read {path}: {e}"),
-                        usage: "fill <selector> --file <path>",
-                    })?
-                }
-                Some("--stdin") => {
-                    use std::io::Read;
-                    let mut buf = String::new();
-                    io::stdin()
-                        .read_to_string(&mut buf)
-                        .map_err(|e| ParseError::InvalidValue {
-                            message: format!("fill --stdin: {e}"),
-                            usage: "fill <selector> --stdin",
+            let value = if literal_value {
+                rest[1..].join(" ")
+            } else {
+                match rest.get(1).copied() {
+                    Some("--file") => {
+                        let path = rest.get(2).ok_or(ParseError::InvalidValue {
+                            message: "fill --file requires a path".to_string(),
+                            usage: "fill <selector> --file <path>",
                         })?;
-                    buf
-                }
-                // A secret from a password manager's `run` (e.g. `bwu run --env
-                // PW='item#password' -- chrome-use fill @e3 --from-env PW`): the
-                // value goes from the vault to the field without ever being an
-                // argument, a shell variable expansion, or output.
-                Some("--from-env") => {
-                    let var = rest.get(2).ok_or(ParseError::InvalidValue {
-                        message: "fill --from-env requires a variable name".to_string(),
-                        usage: "fill <selector> --from-env <VAR>",
-                    })?;
-                    let value = std::env::var(var).map_err(|_| ParseError::InvalidValue {
-                        message: format!(
-                            "fill --from-env: {var} is not set. Run this under a password \
+                        std::fs::read_to_string(path).map_err(|e| ParseError::InvalidValue {
+                            message: format!("fill --file: cannot read {path}: {e}"),
+                            usage: "fill <selector> --file <path>",
+                        })?
+                    }
+                    Some("--stdin") => {
+                        use std::io::Read;
+                        let mut buf = String::new();
+                        io::stdin().read_to_string(&mut buf).map_err(|e| {
+                            ParseError::InvalidValue {
+                                message: format!("fill --stdin: {e}"),
+                                usage: "fill <selector> --stdin",
+                            }
+                        })?;
+                        buf
+                    }
+                    // A secret from a password manager's `run` (e.g. `bwu run --env
+                    // PW='item#password' -- chrome-use fill @e3 --from-env PW`): the
+                    // value goes from the vault to the field without ever being an
+                    // argument, a shell variable expansion, or output.
+                    Some("--from-env") => {
+                        let var = rest.get(2).ok_or(ParseError::InvalidValue {
+                            message: "fill --from-env requires a variable name".to_string(),
+                            usage: "fill <selector> --from-env <VAR>",
+                        })?;
+                        let value = std::env::var(var).map_err(|_| ParseError::InvalidValue {
+                            message: format!(
+                                "fill --from-env: {var} is not set. Run this under a password \
                              manager that sets it, e.g. `bwu run --env {var}='<item>#password' \
                              -- chrome-use fill {sel} --from-env {var}`"
-                        ),
-                        usage: "fill <selector> --from-env <VAR>",
-                    })?;
-                    // A daemon this command starts inherits the environment;
-                    // drop the secret before that can happen.
-                    std::env::remove_var(var);
-                    return Ok(json!({ "id": id, "action": "fill", "selector": sel,
-                                       "value": value, "secret": true }));
+                            ),
+                            usage: "fill <selector> --from-env <VAR>",
+                        })?;
+                        // A daemon this command starts inherits the environment;
+                        // drop the secret before that can happen.
+                        std::env::remove_var(var);
+                        return Ok(stamp(json!({ "id": id, "action": "fill", "selector": sel,
+                                       "value": value, "secret": true })));
+                    }
+                    _ => rest[1..].join(" "),
                 }
-                _ => rest[1..].join(" "),
             };
-            Ok(json!({ "id": id, "action": "fill", "selector": sel, "value": value }))
+            Ok(stamp(
+                json!({ "id": id, "action": "fill", "selector": sel, "value": value }),
+            ))
         }
         "type" => {
             // `--key-events` (alias `--keys`): send real per-character keystrokes
@@ -3445,7 +3522,13 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         "window" => {
             const VALID: &[&str] = &["new"];
             match rest.first().copied() {
-                Some("new") => Ok(json!({ "id": id, "action": "window_new" })),
+                Some("new") if rest.len() == 1 => Ok(json!({ "id": id, "action": "window_new" })),
+                // This existing command creates a blank window. Never discard
+                // an explicit URL and report a different operation as success.
+                Some("new") => Err(ParseError::InvalidValue {
+                    message: "window new only creates about:blank and takes no URL; use `chrome-use tab new <https-url>`".into(),
+                    usage: "window new",
+                }),
                 Some(sub) => Err(ParseError::UnknownSubcommand {
                     subcommand: sub.to_string(),
                     valid_options: VALID,
@@ -4514,12 +4597,19 @@ fn parse_get(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             Ok(json!({ "id": id, "action": "innerhtml", "selector": sel }))
         }
         Some("value") => {
-            let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
-                context: "get value".to_string(),
-                usage: "get value <selector>",
-            })?;
-            let reveal = rest.contains(&"--reveal-values");
-            Ok(json!({ "id": id, "action": "inputvalue", "selector": sel, "revealValues": reveal }))
+            let (editor_args, allow_clipboard) = editor_clipboard_args(&rest[1..], 1)?;
+            let sel = editor_args
+                .first()
+                .ok_or_else(|| ParseError::MissingArguments {
+                    context: "get value".to_string(),
+                    usage: "get value <selector>",
+                })?;
+            let reveal = editor_args.contains(&"--reveal-values");
+            let mut cmd = json!({ "id": id, "action": "inputvalue", "selector": sel, "revealValues": reveal });
+            if allow_clipboard {
+                cmd["allowClipboardFallback"] = json!(true);
+            }
+            Ok(cmd)
         }
         Some("attr") => {
             let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
@@ -10673,5 +10763,140 @@ mod tests {
         let cmd = parse_command(&args("addinitscript window.__x = 1"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "addinitscript");
         assert_eq!(cmd["script"], "window.__x = 1");
+    }
+    #[test]
+    fn clipboard_permission_is_an_explicit_fill_or_value_flag() {
+        let flags = default_flags();
+        for args in [
+            vec![
+                "fill",
+                "#editor",
+                "replacement",
+                "--allow-clipboard-fallback",
+            ],
+            vec!["get", "value", "#editor", "--allow-clipboard-fallback"],
+        ] {
+            let args: Vec<String> = args.into_iter().map(str::to_string).collect();
+            let cleaned = crate::flags::clean_args(&args);
+            assert!(cleaned.iter().any(|a| a == "--allow-clipboard-fallback"));
+            let cmd = parse_command(&cleaned, &flags).unwrap();
+            assert_eq!(cmd["allowClipboardFallback"], true);
+            if cmd["action"] == "fill" {
+                assert_eq!(cmd["value"], "replacement");
+            }
+        }
+        for args in [
+            vec!["click", "#button", "--allow-clipboard-fallback"],
+            vec!["get", "text", "#editor", "--allow-clipboard-fallback"],
+            vec![
+                "fill",
+                "#editor",
+                "replacement",
+                "--allow-clipboard-fallback=true",
+            ],
+        ] {
+            let args: Vec<String> = args.into_iter().map(str::to_string).collect();
+            assert!(parse_command(&args, &flags).is_err(), "{args:?}");
+        }
+    }
+    #[test]
+    fn clipboard_permission_survives_batch_step_parsing() {
+        let flags = default_flags();
+        for words in [
+            vec![
+                "fill",
+                "#editor",
+                "replacement",
+                "--allow-clipboard-fallback",
+            ],
+            vec!["get", "value", "#editor", "--allow-clipboard-fallback"],
+        ] {
+            let args = words.into_iter().map(str::to_string).collect::<Vec<_>>();
+            let command = parse_batch_step(&args, &flags).unwrap();
+            assert_eq!(command["allowClipboardFallback"], true, "{command}");
+        }
+    }
+
+    #[test]
+    fn clipboard_permission_flag_rejects_a_trailing_false_value() {
+        let args = [
+            "fill",
+            "#editor",
+            "replacement",
+            "--allow-clipboard-fallback",
+            "false",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        assert!(
+            parse_command(&args, &default_flags()).is_err(),
+            "explicit false must not enable clipboard access"
+        );
+    }
+    #[test]
+    fn clipboard_flag_text_and_end_of_options_remain_literal_data() {
+        for args in [
+            vec!["fill", "#editor", "--allow-clipboard-fallback"],
+            vec!["fill", "#editor", "--", "--allow-clipboard-fallback"],
+            vec![
+                "fill",
+                "#editor",
+                "prefix",
+                "--",
+                "--allow-clipboard-fallback",
+            ],
+        ] {
+            let args: Vec<String> = args.into_iter().map(str::to_string).collect();
+            let cleaned = crate::flags::clean_args(&args);
+            for cmd in [
+                parse_command(&cleaned, &default_flags()).unwrap(),
+                parse_batch_step(&args, &default_flags()).unwrap(),
+            ] {
+                assert!(
+                    cmd["value"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with("--allow-clipboard-fallback"),
+                    "{cmd}"
+                );
+                assert_ne!(cmd["allowClipboardFallback"], true, "{cmd}");
+            }
+        }
+    }
+    #[test]
+    fn editor_end_of_options_keeps_mode_names_as_text() {
+        let args: Vec<String> = ["fill", "#editor", "--", "--file"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        for cmd in [
+            parse_command(&crate::flags::clean_args(&args), &default_flags()).unwrap(),
+            parse_batch_step(&args, &default_flags()).unwrap(),
+        ] {
+            assert_eq!(cmd["value"], "--file");
+            assert_ne!(cmd["allowClipboardFallback"], true);
+        }
+    }
+    #[test]
+    fn window_new_refuses_explicit_urls_in_direct_and_batch_parsers() {
+        let plain = parse_command(&args("window new"), &default_flags()).unwrap();
+        assert_eq!(plain["action"], "window_new");
+        assert!(plain.get("url").is_none());
+        for url in [
+            "https://destination.test/",
+            "javascript:void(0)",
+            "about:blank",
+        ] {
+            let input = args(&format!("window new {url}"));
+            for result in [
+                parse_command(&input, &default_flags()),
+                parse_batch_step(&input, &default_flags()),
+            ] {
+                let error = result.unwrap_err().format();
+                assert!(error.contains("takes no URL"), "{error}");
+                assert!(error.contains("tab new"), "{error}");
+            }
+        }
     }
 }

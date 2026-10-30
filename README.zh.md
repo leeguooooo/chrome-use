@@ -307,7 +307,9 @@ $ chrome-use open https://github.com/my-org/repo
 
 ## 用法
 
-如果能从 Monaco 模块中找到与目标编辑器对应的 API，`fill` 会使用原生输入并验证同一个实时 model（`engine: monaco-native`）；`get value` 也会直接读取该 model，不执行复制或粘贴。这条路径不使用系统剪贴板。Monaco 0.52 压缩 AMD 加载器在全局 API 被移除后保留的已完成模块导出，也可使用这条路径。发现过程只在限定范围内读取模块表，不调用加载器、模块工厂或访问器，不加载模块，也不发起请求。插入前必须验证原生全选已覆盖整个实时 model。model 被替换、焦点丢失、选区不完整或回读不匹配时会报错，输入后不会再通过剪贴板重试。如果输入前无法找到可用 API，仍使用下面的剪贴板回退；该回退并不具有原子性。Monaco 剪贴板回退将事务状态保存在私有闭包中；操作结束、初始化失败或文档仍存活时的 60 秒租约到期都会移除临时监听器。备份使用独立 Blob 构造的剪贴板项，因为浏览器返回的 ClipboardItem 可能在写入后失效。备份为空或不可读时，在暂存前拒绝操作。继续输入和恢复前都会比较内容；内容改变或归属不确定时停止操作。恢复后读取验证结果。仅能备份 Web Clipboard API 暴露的格式，无法保留应用原生元数据。即使编辑器已改变，恢复失败仍报错。执行上下文丢失可能阻止恢复，比较与写入也不是原子操作；请避免同时使用剪贴板。
+如果能从 Monaco 模块中找到与目标编辑器对应的 API，`fill` 会使用原生输入并验证同一个实时 model（`engine: monaco-native`）；`get value` 也会直接读取该 model，不执行复制或粘贴。这条路径不使用系统剪贴板。Monaco 0.52 压缩 AMD 加载器在全局 API 被移除后保留的已完成模块导出，也可使用这条路径。发现过程只在限定范围内读取模块表，不调用加载器、模块工厂或访问器，不加载模块，也不发起请求。插入前必须验证原生全选已覆盖整个实时 model。model 被替换、焦点丢失、选区不完整或回读不匹配时会报错，输入后不会再通过剪贴板重试。无法找到精确对应的 model API 时，`fill` 和 `get value` 默认在访问剪贴板前拒绝操作。只有用户接受临时改变系统剪贴板后，才在这一次命令中加 `--allow-clipboard-fallback`。该选项仅支持这两个命令，不会持久保存，也不会在原生输入或 model 验证失败后启用回退。实际使用回退时会警告：比较与恢复不是原子操作，可能覆盖同时写入剪贴板的新内容。Monaco 剪贴板回退将事务状态保存在私有闭包中；操作结束、初始化失败或文档仍存活时的 60 秒租约到期都会移除临时监听器。备份使用独立 Blob 构造的剪贴板项，因为浏览器返回的 ClipboardItem 可能在写入后失效。备份为空或不可读时，在暂存前拒绝操作。继续输入和恢复前都会比较内容；内容改变或归属不确定时停止操作。恢复后读取验证结果。仅能备份 Web Clipboard API 暴露的格式，无法保留应用原生元数据。即使编辑器已改变，恢复失败仍报错。执行上下文丢失可能阻止恢复，比较与写入也不是原子操作；请避免同时使用剪贴板。
+
+该选项应放在必填文本或选择器之后，作为最后一个选项；`--` 结束编辑器选项解析，必填文本本身等于这个选项名时仍按原文填写。剪贴板的动作策略和确认要求仍然生效。批准不会越过拒绝规则，扩展持有的站点请求仍需用户在扩展中作出决定。 文档、输入和剪贴板操作的批准绑定原有会话持有的目标及新核实的 HTTP(S) renderer securityOrigin；来源缺失或不透明时拒绝。显式 HTTP(S) 导航绑定原目标（若有）及不可变目的地址，可从 about:blank 或冷启动获批。 既有 `tab new` API 支持 HTTP(S) 或默认 about:blank，`window new` 仍只创建其已声明的 about:blank 目标。这两个创建命令绑定动作和目的地址，批准后创建新的会话目标。window 的非空白地址会被拒绝；打开地址请用 `tab new <https-url>`。原来没有持有目标，或带 `--new-tab` 时，始终创建新的会话目标，保留审批期间出现的页面。导航指定目标时，先用 `chrome-use tab <target>` 选中它；显式目标与实际活动目标不一致时拒绝批准。JavaScript URL 和页内 SPA 操作仍需核实文档来源。`read <http(s) URL>` 绑定原地址和参数，不受浏览器出现或消失影响。 显式 HTTP 读取地址不触发标签页路由或强制接管；没有地址的 read 仍按当前文档核实批准。 HTTP 资源使用 `read` 分类，没有浏览器时也会检查文件中的站点域规则。字段策略检查使用目标自己的引用和 iframe 会话；上下文缺失或不可读时，在输入前拒绝。
 
 
 跨站导航或重新连接后，页面读取使用当前文档。重建私有读取环境时，如果页面持续跳转，命令会明确失败；请重新观察页面再操作。
@@ -370,7 +372,7 @@ Ant Design / rc-picker 日期范围请先填开始时间，再填结束时间。
 
 脚本在 `advisories`（CLI `script --json` 顶层；daemon envelope 中为 `data.advisories`） 中保留提示，最多 20 条，嵌套脚本和后续失败的运行也会保留。JSON op-list 的对应 `steps` 条目另带 `noProgress`；文字输出只打印汇总提示一次。JS 脚本失败时保留 `ok:false`、`return:null`、`error`、`logs` 和 `advisories`。daemon envelope 中嵌套脚本的 `data.ok:false` 会使父脚本失败，即使传输层 `success` 为 true；调度成功不能证明程序成功。
 
-普通 CLI `--json` 返回 `success`/`data`/`timing` envelope；加 `--no-timing`（或 `AGENT_BROWSER_TIMING=0`）时回复不带 `timing`，`timing.jsonl` 照常记录。`batch --json` 打印 `{command,success,result,error}` 条目的数组；`script --json` 打印程序结果本身（`ok`、`return`、`logs`、`error`、`advisories` 等）。batch 和 script 的 CLI 输出没有顶层 `timing`。
+普通 CLI `--json` 返回 `success`/`data`/`timing` envelope；加 `--no-timing`（或 `AGENT_BROWSER_TIMING=0`）时回复不带 `timing`，`timing.jsonl` 照常记录。`batch --json` 打印 `{command,success,result,error}` 条目的数组；`script --json` 打印程序结果本身（`ok`、`return`、`logs`、`error`、`advisories` 等）。batch 和 script 的 CLI 输出没有顶层 `timing`。 遇到待确认的操作时，batch 会立即停止并以状态码 3 退出，无论是否加了 `--bail`。最后一项保留批准说明和确认 ID，后续步骤不会发送。批准后先检查结果，再为剩余操作新建 batch。
 
 MCP `chrome_use_snapshot` 可用 `diff: true` 增量重读同一页面；快照选项（包括 filter）必须与基线一致，对应 CLI `snapshot --diff`。无有效基线时返回完整树及 `diffNote`；需要当前完整树时省略 diff 或设为 false。增量是片段，须保留基线，删除行不能当作当前可操作控件。
 
