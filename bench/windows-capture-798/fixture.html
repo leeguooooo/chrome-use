@@ -1,0 +1,41 @@
+<!doctype html><meta charset="utf-8"><title>CaptureProbe __CASE__</title>
+<link rel="icon" href="data:,">
+<style>
+html,body{margin:0}#top{height:160px;background:#12ab34;position:relative}
+.row{height:32px;box-sizing:border-box;border-bottom:1px solid #ccc;background:#3478c1;position:relative}
+#target{height:128px;background:#c84d19;position:relative}
+.nonce{position:absolute;left:32px;top:16px;height:16px;display:flex}
+.nonce span{display:block;width:8px;height:16px;flex-shrink:0}
+#middle .nonce,#middle .nonce span{height:8px}
+</style>
+<div id="top"><div class="nonce"></div></div>
+<main id="rows">__ROWS__</main>
+<div id="target"><div class="nonce"></div></div>
+<script>
+window.fixtureState = {generation:'00000000',events:[],mutations:0};
+window.fixtureAdvance = function(generation) {
+  if (!/^[0-9a-f]{8}$/.test(generation)) throw new Error('invalid fixture generation');
+  const value = Number.parseInt(generation,16);
+  for (const strip of document.querySelectorAll('.nonce')) {
+    strip.replaceChildren();
+    for (let i=31;i>=0;i--) {
+      const bit=document.createElement('span');bit.style.background=(value>>>i)&1?'#fff':'#000';strip.append(bit);
+    }
+  }
+  document.querySelector('#rows > .row').firstChild.nodeValue='Fixture generation '+generation;
+  fixtureState.generation=generation;
+  return generation;
+};
+window.fixtureSnapshot = function() {
+  return {generation:fixtureState.generation,events:fixtureState.events.slice(),mutations:fixtureState.mutations,
+    globals:Object.getOwnPropertyNames(window).sort(),
+    requests:performance.getEntriesByType('resource').filter(e=>!e.name.startsWith('data:')).map(e=>({name:e.name,type:e.initiatorType})),
+    ready:document.readyState,rows:document.querySelectorAll('#rows > .row').length,
+    visibility:document.visibilityState,focused:document.hasFocus()};
+};
+for (const type of ['focus','blur','visibilitychange','resize','pointerdown','mousedown','keydown','input']) {
+  window.addEventListener(type,event=>fixtureState.events.push({type:event.type,trusted:event.isTrusted,atMs:performance.now()}),true);
+}
+new MutationObserver(records=>{fixtureState.mutations+=records.length}).observe(document.body,{subtree:true,childList:true,attributes:true,characterData:true});
+fixtureAdvance('00000000');
+</script>

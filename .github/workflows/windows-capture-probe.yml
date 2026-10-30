@@ -3,6 +3,14 @@ name: Windows capture probe
 on:
   workflow_dispatch:
     inputs:
+      experiment:
+        description: Original states or minimized fresh-generation baseline/view/focus suite
+        type: choice
+        options:
+          - original
+          - candidates
+        default: candidates
+        required: true
       samples:
         description: Fresh-profile repetitions per state and capture kind (1-5)
         required: true
@@ -19,7 +27,7 @@ on:
         description: Read the same attachment while capture is pending (disable for an observer-effect control)
         type: boolean
         required: true
-        default: true
+        default: false
 
 permissions:
   contents: read
@@ -34,6 +42,7 @@ jobs:
     timeout-minutes: 60
     env:
       CHROME_USE_NO_UPDATE_CHECK: '1'
+      PROBE_EXPERIMENT: ${{ inputs.experiment }}
       PROBE_SAMPLES: ${{ inputs.samples }}
       PROBE_ROWS: ${{ inputs.rows }}
       PROBE_DPR: ${{ inputs.dpr }}
@@ -52,6 +61,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .node-version
+      - name: Install decoder for pure image checks
+        run: python -m pip install --disable-pip-version-check Pillow
       - name: Check fixture and diagnostic generator without a browser
         run: python bench/windows-capture-798/test_probe.py
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -61,6 +72,7 @@ jobs:
       - name: Validate inputs and build the exact Release CLI
         shell: pwsh
         run: |
+          if ($env:PROBE_EXPERIMENT -notmatch '^(original|candidates)$') { throw 'invalid experiment' }
           if ($env:PROBE_SAMPLES -notmatch '^[1-5]$') { throw 'samples must be 1-5' }
           if ($env:PROBE_ROWS -notmatch '^[0-9]+$' -or [int]$env:PROBE_ROWS -lt 100 -or [int]$env:PROBE_ROWS -gt 3000) { throw 'rows must be 100-3000' }
           if ($env:PROBE_DPR -notmatch '^[12]$') { throw 'dpr must be 1 or 2' }
@@ -89,13 +101,13 @@ jobs:
         shell: pwsh
         run: |
           $control = if ($env:PROBE_PENDING_DOM -eq 'true') { '--pending-dom-control' } else { '--no-pending-dom-control' }
-          python bench/windows-capture-798/probe.py $control --binary "$env:PROBE_BINARY" --chrome "$env:PROBE_CHROME" --extension extensions/ab-connect --output probe-artifacts/results --samples $env:PROBE_SAMPLES --rows $env:PROBE_ROWS --dpr $env:PROBE_DPR
+          python bench/windows-capture-798/probe.py $control --experiment $env:PROBE_EXPERIMENT --binary "$env:PROBE_BINARY" --chrome "$env:PROBE_CHROME" --extension extensions/ab-connect --output probe-artifacts/results --samples $env:PROBE_SAMPLES --rows $env:PROBE_ROWS --dpr $env:PROBE_DPR
           if ($LASTEXITCODE -ne 0) { throw "Probe verdict is not PASS (exit $LASTEXITCODE); inspect summary and raw evidence" }
       - name: Retain diagnostic evidence even on failure
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-capture-${{ github.sha }}-dpr${{ inputs.dpr }}
+          name: windows-capture-${{ github.sha }}-${{ inputs.experiment }}-dpr${{ inputs.dpr }}
           path: probe-artifacts
           retention-days: 14
           if-no-files-found: warn

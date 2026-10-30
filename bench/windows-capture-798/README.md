@@ -1,144 +1,141 @@
 # Windows relay screenshot diagnostic (#798)
 
-This is a manual experiment, not a production workaround or a stealth score.
-It uses a freshly built Release CLI, Chrome for Testing, a new profile for every
-sample, and a synthetic loopback report. It refuses to run outside an ephemeral
-Windows GitHub Actions job. No AWS instance or existing browser is used.
+This manual experiment uses a freshly built Release CLI, Chrome for Testing and
+one new synthetic loopback profile per case. It refuses to run outside Windows
+GitHub Actions. It does not use a maintainer browser, real account or AWS instance.
+The shipped extension and CLI source remain unchanged. Generated extension diffs,
+whole-extension hashes, source SHA, executable hashes, toolchain, OS/image and
+Pillow versions are retained. This is diagnostic instrumentation, not a general
+stealth benchmark or proof that the reporter's document has been fixed.
 
-The proposed claim is narrow: a particular known window state and capture type
-can time out while a read on the same debugger attachment still answers. A
-successful matrix means that matrix did not reproduce the report. It cannot
-prove the reporter's Windows account, physical display, other extensions or
-original report has been fixed.
+## Frozen original controls
 
-## Evidence contract
+The original 45-case matrices at source `f9599826712e89b2ba1c4074ff67285ba80c3d7a`
+are runs `40909669657` (pending DOM read enabled) and `40909841620` (disabled).
+Both reproduced 15 minimized native screenshot timeouts. Their original reports
+remain unchanged, including ten full-image harness failures per run: innerWidth
+included a scrollbar, whereas the native full clip and actual PNG were 1265px
+wide. These are harness dimension errors, not product failures. The updated full
+check uses the actual native clip and independently observed document extent.
+Do not present reclassification of those old images as a new product measurement.
 
-The manual workflow `windows-capture-probe.yml` builds the exact checked-out CLI
-in Release mode. It records the source SHA, binary and Chrome hashes/versions,
-OS/image version, CPU count, memory state, raw CPU counters, Python and decoder
-versions. It does not use the CLI on PATH. Setup must produce and decode a green
-warmup screenshot before the long report is loaded.
+The `original` workflow option retains the three-state matrix for separate future
+investigations. It is not a replacement for those immutable controls.
 
-For each repetition, the order of normal, covered and minimized states rotates.
-Each state has a viewport, full-page and off-screen selector case. Every case
-uses a fresh Chrome/profile/session, so a timed-out screenshot is never followed
-by a second capture or fallback in the same profile. There are five repetitions
-by default; no timing winner or speedup is inferred from a single result.
+## Candidate suite
 
-The controller locates exactly one fixture-titled HWND owned by the Chrome PID
-it started. It confirms native Win32 state before capture:
+Dispatch `experiment: candidates`, `samples: 5`, `rows: 1000`, `dpr: 1` and
+`pending_dom_control: false`. All three configurations run in one job against
+one exact Release executable, so their binary hash is shared. Configuration
+order rotates each repetition. Each configuration has viewport, full-page and
+off-screen selector cases, yielding 45 fresh profiles:
 
-- Normal: restored and its center belongs to that window or its child.
-- Covered: a fixture-owned topmost window covers its complete outer rectangle;
-  `WindowFromPoint` identifies that cover.
-- Minimized: `IsIconic` is true.
+- `baseline`: the existing fromSurface:true screenshot request.
+- `view`: select fromSurface:false before the one native screenshot send.
+- `focus`: reassert the existing Emulation.setFocusEmulationEnabled:true
+  primitive on the same attachment, then send one fromSurface:true screenshot.
+  A failed or unacknowledged two-second control stops before capture.
 
-These state changes are intentional and limited to the disposable CI desktop.
-They are not a proposed activation/minimization recovery on a user's machine.
-If the CI desktop cannot provide the requested state, the probe stops and reports
-`INCONCLUSIVE`, retaining the setup failure instead of counting it as a pass.
+Warmup first decodes a green fixture sentinel in the disposable window. Setup
+may restore that owned window for warmup and intentionally minimize it once.
+No restore, activation, bring-to-front, window update, synthetic input, animation
+clock change or capture fallback occurs during measurement. A timed-out original
+native promise is never followed by another screenshot in that profile.
 
-The long document's row count and readyState must be verified. Main-report
-capture start and completion/error events must also arrive with matching capture
-IDs. Missing diagnostic transport or absent capture work is inconclusive, even
-if a CLI process exits successfully. Successful images
-are decoded and checked for dimensions plus colored sentinel pixels, not merely
-file existence. A long-report viewport pixel differs from the warmup page, so a
-stale warmup frame cannot pass by having the same green header. Full-page images
-also check a middle row and the bottom target. Full-resolution captures avoid the CLI's default downscale.
-The controlled raster is bounded at 200 million pixels, including DPR; use fewer
-rows if a larger DPR would exceed that bound. This limit bounds the experiment,
-not the product's supported report size.
+After minimization is confirmed/calibrated and three read-only setup state samples
+agree, measurement starts before any generation write and cannot be reset. Thus
+the measured interval includes generation writes/reads and capture. The fixture's own application changes a random 32-bit
+generation, encoded as black/white pixel strips at the top, middle and bottom,
+and changes a row's text. A DOM read must confirm this new generation. Every
+configuration makes the same writes and reads: they can themselves wake a
+renderer, so success of the new baseline must be reported rather than attributed
+to either candidate. PNG decoding checks the new generation independently of the
+DOM. Full images check all three strips and colored sentinel pixels; selector
+and viewport check their visible strip. CLI dimensions must match viewport,
+selector bounds or the independently checked native full clip at the recorded
+DPR/scale. Full resolution avoids the product's default downscale. Raster size
+is limited to 200 million pixels, including DPR.
 
-## Same-attachment diagnostic hook
+The synthetic application owns its event listeners, globals and MutationObserver;
+these are fixture code, not injection into a website. Before measurement it saves
+its focus/visibility/resize/input event log, globals, DOM mutation count and
+resource requests. After wrapper settlement, a direct read on the same debugger
+attachment must return the same snapshot and generation. This also runs after a
+timeout without invoking CLI health recovery. Any observable change makes that
+case inconclusive for a no-side-effects claim.
 
-A generated, unshipped relay copy observes the actual
-`tabCommandDependencies.sendCommand` edge immediately around
-`chrome.debugger.sendCommand`. The production repository source is not changed.
-Each native attempt has a capture ID, actual tab/session target and attachment
-epoch. Successful native attach/detach calls and `onDetach` advance that epoch;
-attach/detach attempts, retries, target changes or epoch uncertainty invalidate
-the sample. The warmup and measured capture must use the same target and epoch;
-intervening attachment history is checked even when a recovery occurred before
-the outer sender was entered.
+## Native and attachment evidence
 
-Only an agent-owned exact loopback fixture URL with this case's query ID is
-observed. Before native dispatch, a local HTTP handshake reads the original
-Chrome HWND/PID/title and expected normal/covered/minimized state. The cover must
-be the window this probe created, with this probe's PID/title. The entire
-handshake must finish within 250 ms. This is an acknowledged timing intervention,
-used in both diagnostic modes. Native state is sampled again after capture;
-a state or window identity change makes the sample inconclusive. These endpoint
-samples do not claim continuous native window monitoring.
+The controller tracks the exact started Chrome PID, original HWND and unique
+fixture title. Before setup minimization, a WinEvent hook thread is installed
+with a nonzero Chrome PID and an exact HWND/PID callback filter. It pumps messages
+on that same thread, retains the callback, requires the owned minimize-start
+event as calibration and records unhook acknowledgments. Callback errors, pump
+failure, overflow and incomplete shutdown fail closed. During measurement,
+20ms samples read only that window plus the foreground handle ID. Event source
+and receipt ticks are retained; a bounded 100ms drain permits queued notifications
+to arrive. This evidence is bounded observation, not a claim of absolutely
+lossless monitoring. State drift, foreground/rectangle changes, relevant native
+events, excessive sample gaps or missing calibration prevent PASS.
+See Microsoft's [hook contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwineventhook)
+and [event definitions](https://learn.microsoft.com/en-us/windows/win32/winauto/event-constants).
 
-If the native capture is still pending after two seconds, and its wrapper,
-target and epoch are unchanged, the same worker/attachment sends one direct,
-read-only DOM control. The actual Debuggee omits absent optional fields instead
-of passing a null session ID. Epochs are recorded before and after the answer.
-The outer 25-second relay timeout is logged separately from native promise
-settlement, so an unresolved native request is not mistaken for an unattempted
-capture or a canceled operation. A stalled health-recovery promise cannot emit a
-native-send event or satisfy the report signature.
+The unshipped worker observes the actual chrome.debugger.sendCommand edge,
+recording target, unique attempt ID and attachment epoch. Attach/detach attempts,
+acknowledgments, onDetach, retries and target changes invalidate the sample.
+Warmup and measurement must share the same target/epoch. An unresolved health
+recovery promise is not a capture dispatch. A loopback handshake samples native
+window state near dispatch; it must finish within 250ms. This timing intervention
+is common to every configuration. The outer 25-second wrapper timeout is distinct
+from native promise settlement. Native response arrival is timestamped before the
+asynchronous ownership proof; proof and trace emission have separate times. Optional pending DOM observation, if enabled,
+requires that same target/epoch and a still-pending capture at two seconds.
+There is no additional debugger client or Runtime subscription.
 
-There is no second debugger client, new Runtime subscription or page listener/
-global/input. JSON records go only to the fixture's local HTTP sink, with
-loopback-only host access in the generated manifest. The generated manifest and
-background diffs and whole-extension hash are retained. This instrumented relay
-is not evidence for a general stealth claim. No screenshot bytes, user reports,
-credentials or environment token dumps go to the sink.
+## Local native PNG transport
 
-A raw DOM read could itself wake a renderer. The manual workflow's
-`pending_dom_control: false` option disables that read while retaining capture
-event logging and the same setup, for an observer-effect control. Compare that
-control if captures complete around the injected read or an instrumented run
-does not reproduce the report; do not call that difference a cause without
-repeatable evidence. The mode is recorded in metadata and every case.
+For diagnosis, a successful native screenshot answer can upload its raw synthetic
+PNG to the loopback-only fixture sink. Ownership, exact case URL and epoch are
+checked at send, response and upload. The sink accepts only registered cases,
+canonical UUID attempt identities and a matching native send/answer; paths come
+from registration, with exclusive creation preventing overwrite. It rejects
+chunked, missing-length, oversized, invalid-base64 and invalid PNG/IHDR bodies,
+with a 32MiB decoded limit and 44MiB HTTP body limit and 200MP bound. Upload acknowledgment or explicit
+error is traced and flushed with a bounded wait before browser cleanup. These
+bytes contain only this disposable synthetic fixture. Nothing is sent to an
+external telemetry service.
 
-A successful capture's ordinary post-capture CLI DOM read is retained separately.
-It may run product health recovery and is not same-attachment evidence. After a
-failed capture it is skipped to avoid resetting an attachment while its native
-capture may still be pending; only explicit teardown follows.
+`native.png` is diagnostic evidence, never the requested command's output.
+It cannot substitute for `capture.png`, turn a nonzero CLI exit into success,
+or hide a crop/dimension/freshness failure. Both images decode their own nonce.
+A missing required raw upload or uncertain attachment is inconclusive, never
+PASS. Native success and requested CLI success remain separate facts.
 
-## Run and interpret
+## Verdicts and cleanup
 
-After the workflow is registered on the default branch, dispatch it with
-`samples` (1–5), `rows` (100–3000) and DPR (1 or 2). Defaults are five samples,
-1000 rows and DPR 1. All CLI subprocess exit codes and stdout/stderr are saved;
-the report includes every failure and incorrect image. A 30-minute experiment
-budget stops before another case starts and writes a partial, inconclusive
-summary. Per-case results and incremental progress are retained before that
-point; the job has a separate 60-minute outer limit.
+Every CLI exit/stdout/stderr, native trace, PNG, window trajectory and generated
+diff is retained. PASS requires verified setup, stable target/epoch/window,
+complete diagnostics, unchanged fixture snapshot, fresh correctly sized/pixeled
+requested PNG, exit zero, no forced deadline kill and confirmed cleanup. A
+verified failed or incorrect capture is ISSUES; uncertain setup, diagnostics or
+cleanup is INCONCLUSIVE. The optional matchingReportSignature additionally
+requires a same-epoch DOM answer while native capture and wrapper were pending.
+A non-PASS makes the job fail and still uploads artifacts. No mechanism inside
+Chrome is inferred solely from a timeout.
 
-`results/summary.json` gives:
+The job has a 60-minute limit and matrix a 30-minute budget. HKCU native-host
+registrations are restored, session close is explicit, and only the process tree
+started for that case is terminated. No .bat/.cmd script is shipped.
 
-- `PASS`: all requested setups, original/dispatch/final window states, native
-  lineage, zero-exit/non-killed CLI results, decoded images and cleanup passed,
-  with no exception. The report was not reproduced in this matrix.
-- `ISSUES`: at least one confirmed setup had a failed or incorrect capture.
-- `INCONCLUSIVE`: setup/cleanup, window identity/state, one native attempt,
-  attachment epoch, trace completeness or exception-free execution was not confirmed.
-- `matchingReportSignature`: count of cases with a timed-out capture and a
-  matching DOM reply while that capture was still pending. The error must name
-  `Page.captureScreenshot` and its 25000ms budget, with observed elapsed time
-  between 24 and 35 seconds; attachment-recovery timeouts do not qualify.
-
-A non-PASS result makes the diagnostic job fail so a missing result cannot look
-green. Artifacts are uploaded even on failure. A matching signature reproduces
-an observed symptom; it does not establish a compositor, GPU, memory, relay or
-window-state cause by itself. Compare the full matrix and resource records
-before choosing a fix.
-
-The harness changes only its own native-host HKCU registrations during a case,
-then restores their previous values. It terminates only the Chrome process tree
-it created. No `.bat` or `.cmd` launcher is shipped; Chrome starts the native
-host EXE through the existing Windows origin-argument entry point.
-
-## Local checks without a browser
+## Pure checks, no browser
 
 ```sh
-python3 bench/windows-capture-798/test_probe.py
+python3 -m venv /tmp/windows-capture-check
+/tmp/windows-capture-check/bin/python -m pip install Pillow
+/tmp/windows-capture-check/bin/python bench/windows-capture-798/test_probe.py
 actionlint .github/workflows/windows-capture-probe.yml
 ```
 
-These exercise the synthetic server, generated worker code and ownership/origin/
-pending-promise guards. They do not launch Chrome or count as Windows acceptance.
+These check generator/native-edge guards, candidate single-send behavior,
+unacknowledged focus control, nonce pixels, dimension checks, bounded image
+transport, and verdict failure paths. They are not Windows runtime acceptance.
