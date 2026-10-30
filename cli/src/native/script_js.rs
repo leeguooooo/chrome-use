@@ -54,6 +54,8 @@ pub async fn run_js(
     // drops its sender (channel closes). `__log` is handled locally (no browser).
     let mut logs: Vec<Value> = Vec::new();
     let mut advisories: Vec<Value> = Vec::new();
+    let mut held_policy_stop: Option<Value> = None;
+    let mut steps: Vec<Value> = Vec::new();
     while let Some(msg) = req_rx.recv().await {
         let action = msg.cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
         if action == "__log" {
@@ -62,12 +64,30 @@ pub async fn run_js(
             let _ = msg.reply.send(json!({ "success": true, "data": null }));
             continue;
         }
+        if let Some(gate) = &held_policy_stop {
+            steps.push(json!({"op":action,"ok":false,"blockedByApproval":true}));
+            let _ = msg
+                .reply
+                .send(json!({"success":true,"data":gate,"error":null}));
+            continue;
+        }
         let result = Box::pin(execute_command(&msg.cmd, state)).await;
+        let pending = super::script::execution_barrier(&result);
+        let mut step = json!({"op":action,"ok":result["success"] == true && pending.is_none() && (action != "script" || result.pointer("/data/ok") == Some(&json!(true)))});
+        if pending.is_some() {
+            if let Some(nested) = result.pointer("/data/steps").filter(|s| s.is_array()) {
+                step["steps"] = nested.clone();
+            }
+        }
+        steps.push(step);
+        if pending.is_some() {
+            held_policy_stop = pending;
+        }
         super::progress::collect_advisories(&result, &mut advisories);
         let _ = msg.reply.send(result);
     }
 
-    match engine.await {
+    let outcome: Result<Value, String> = match engine.await {
         Ok(Ok(ret)) => Ok(json!({ "return": ret, "logs": logs, "advisories": advisories })),
         Ok(Err(e)) => {
             Ok(json!({"ok":false,"return":null,"error":e,"logs":logs,"advisories":advisories}))
@@ -75,6 +95,13 @@ pub async fn run_js(
         Err(e) => Ok(
             json!({"ok":false,"return":null,"error":format!("script engine thread failed: {e}"),"logs":logs,"advisories":advisories}),
         ),
+    };
+    if let Some(gate) = held_policy_stop {
+        let mut result = outcome?;
+        result["steps"] = json!(steps);
+        Ok(super::script::policy_stopped_result(&gate, result))
+    } else {
+        outcome
     }
 }
 
@@ -200,6 +227,12 @@ const CU_PRELUDE: &str = r#"
 globalThis.cu = {
   _call(action, params) {
     const r = JSON.parse(__cu(action, JSON.stringify(params || {})));
+    if (r && r.data && r.data.approval_refused === true) {
+      throw new Error(r.data.error || 'Script stopped after approval refusal');
+    }
+    if (r && r.data && r.data.confirmation_required === true) {
+      throw new Error('Script paused for confirmation ' + (r.data.confirmation_id || ''));
+    }
     if (!r || r.success !== true || (action === 'script' && r.data && r.data.ok === false)) {
       throw new Error((r && (r.error || (r.data && r.data.error))) || ('cu.' + action + ' failed'));
     }
@@ -374,6 +407,8 @@ pub async fn run_js_in(
     // job finishes, which closes this channel and ends the loop.
     let mut logs: Vec<Value> = Vec::new();
     let mut advisories: Vec<Value> = Vec::new();
+    let mut held_policy_stop: Option<Value> = None;
+    let mut steps: Vec<Value> = Vec::new();
     while let Some(msg) = req_rx.recv().await {
         let action = msg.cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
         if action == "__log" {
@@ -382,7 +417,25 @@ pub async fn run_js_in(
             let _ = msg.reply.send(json!({ "success": true, "data": null }));
             continue;
         }
+        if let Some(gate) = &held_policy_stop {
+            steps.push(json!({"op":action,"ok":false,"blockedByApproval":true}));
+            let _ = msg
+                .reply
+                .send(json!({"success":true,"data":gate,"error":null}));
+            continue;
+        }
         let result = Box::pin(execute_command(&msg.cmd, state)).await;
+        let pending = super::script::execution_barrier(&result);
+        let mut step = json!({"op":action,"ok":result["success"] == true && pending.is_none() && (action != "script" || result.pointer("/data/ok") == Some(&json!(true)))});
+        if pending.is_some() {
+            if let Some(nested) = result.pointer("/data/steps").filter(|s| s.is_array()) {
+                step["steps"] = nested.clone();
+            }
+        }
+        steps.push(step);
+        if pending.is_some() {
+            held_policy_stop = pending;
+        }
         super::progress::collect_advisories(&result, &mut advisories);
         let _ = msg.reply.send(result);
     }
@@ -391,7 +444,7 @@ pub async fn run_js_in(
     if let Some(handle) = state.script_contexts.map.get_mut(name) {
         handle.busy = false;
     }
-    match outcome {
+    let outcome: Result<Value, String> = match outcome {
         Ok(Ok(ret)) => {
             Ok(json!({ "return": ret, "logs": logs, "advisories": advisories, "context": name }))
         }
@@ -404,6 +457,13 @@ pub async fn run_js_in(
                 "script context `{name}` ended without a result; it has been released"
             ),"logs":logs,"advisories":advisories,"context":name}))
         }
+    };
+    if let Some(gate) = held_policy_stop {
+        let mut result = outcome?;
+        result["steps"] = json!(steps);
+        Ok(super::script::policy_stopped_result(&gate, result))
+    } else {
+        outcome
     }
 }
 

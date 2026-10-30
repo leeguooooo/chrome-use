@@ -126,7 +126,7 @@ JSON</code></pre>
       <div class="du-callout tip">
         <div class="du-callout-title">💡 提示</div>
         <code>evaluate</code> 的返回值裹在 <code>.result</code> 里，所以引用页面求值结果写 <code>{{t.result}}</code> 而不是 <code>{{t}}</code>。
-        用 <code>--dry-run</code> 只校验程序结构、不碰浏览器；用 <code>--arg k=v</code> 预置变量，<code>--arg-env k=环境变量名</code> 从环境变量取值，密码不用写在命令行上。<code>do</code> 上的 <code>"or"</code> 列出备选步骤：前一个找不到可操作的目标（不存在或不唯一）时才按顺序试下一个，已经执行过的步骤不会重来；<a href="teach.html">示范录制</a>生成的脚本就是这样写的。退出码：0 成功、1 运行失败或断言不过、2 程序非法。
+        用 <code>--dry-run</code> 只校验程序结构、不碰浏览器；用 <code>--arg k=v</code> 预置变量，<code>--arg-env k=环境变量名</code> 从环境变量取值，密码不用写在命令行上。<code>do</code> 上的 <code>"or"</code> 列出备选步骤：前一个找不到可操作的目标（不存在或不唯一）时才按顺序试下一个，已经执行过的步骤不会重来；<a href="teach.html">示范录制</a>生成的脚本就是这样写的。退出码：0 成功、1 运行失败或断言不过、2 程序非法、3 等待审批。
       </div>
 
       <h2>JS 程序形式</h2>
@@ -135,6 +135,10 @@ JSON</code></pre>
         这是 ego(lite) 的 code base 写法，控制流就是 JS 本身的 <code>for</code> / <code>if</code> / <code>break</code>。
         <strong>不用 <code>await</code></strong>：每个 <code>cu.*</code> 调用会阻塞到浏览器返回，脚本是同步的。
       </p>
+      <p>JSON 在 <code>autoConfirm</code> 后遇到的安全拒绝会以 <code>approval_refused:true</code> 向外层传播，外层 <code>optional</code> 或 <code>catch</code> 也会停止后续浏览器调用。普通错误和最初的直接拒绝仍按显式 <code>optional</code> / <code>catch</code> 处理。</p>
+
+      <p>脚本遇到审批时返回 <code>ok:false</code>、<code>confirmation_required:true</code>、审批 ID 和此前的操作记录，CLI 退出码为 3。JSON 的 <code>optional</code> / <code>or</code> 和 JavaScript 的 <code>catch</code> 都不能越过待审批步骤，本次执行后续的 bridge 调用也不会发给浏览器。现有 <code>autoConfirm</code> 可以回答命令级确认，但后续的原生审批或安全拒绝仍会停止程序。请在脚本外完成审批，再继续剩余操作，不要重跑已经完成的步骤。命名 JavaScript 上下文的下一次执行会重新开始检查，但不会自动批准或消费原来的请求。</p>
+
       <div class="du-code">
         <div class="du-code-head"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="du-code-name">bash</span></div>
 <pre><code>chrome-use script --timeout 120000 &lt;&lt;'JS'

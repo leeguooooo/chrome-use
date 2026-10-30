@@ -38,6 +38,11 @@ enum Flow {
     Return(Value),
 }
 
+enum PolicyStop {
+    Pending(Value),
+    Refused,
+}
+
 struct Ctx {
     vars: Map<String, Value>,
     steps: Vec<Value>,
@@ -45,6 +50,7 @@ struct Ctx {
     start: Instant,
     budget: Option<Duration>,
     auto_confirm: bool,
+    policy_stop: Option<PolicyStop>,
     op_count: usize,
 }
 
@@ -156,6 +162,7 @@ pub async fn handle_script(cmd: &Value, state: &mut DaemonState) -> Result<Value
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         op_count: 0,
+        policy_stop: None,
     };
     if let Some(args) = cmd.get("args").and_then(|v| v.as_object()) {
         for (k, v) in args {
@@ -170,7 +177,7 @@ pub async fn handle_script(cmd: &Value, state: &mut DaemonState) -> Result<Value
         Err(e) => (Value::Null, Some(e)),
     };
     let timed_out = ctx.timed_out();
-    Ok(json!({
+    let result = json!({
         "ok": err.is_none() && !timed_out,
         "return": ret,
         "vars": Value::Object(ctx.vars),
@@ -178,7 +185,158 @@ pub async fn handle_script(cmd: &Value, state: &mut DaemonState) -> Result<Value
         "advisories": ctx.advisories,
         "timedOut": timed_out,
         "error": err,
-    }))
+    });
+    Ok(match ctx.policy_stop {
+        Some(PolicyStop::Pending(gate)) => pending_script_result(&gate, result),
+        Some(PolicyStop::Refused) => {
+            let mut result = result;
+            result["approval_refused"] = json!(true);
+            result
+        }
+        None => result,
+    })
+}
+
+/// Only permission metadata crosses the pause boundary, never the held command.
+pub(crate) fn approval_payload(gate: &Value) -> Value {
+    let mut data = Map::new();
+    for key in [
+        "confirmation_required",
+        "confirmation_id",
+        "approval",
+        "site",
+        "action",
+        "category",
+        "description",
+        "requestedActions",
+    ] {
+        if let Some(value) = gate.get(key) {
+            data.insert(key.to_string(), value.clone());
+        }
+    }
+    Value::Object(data)
+}
+
+pub(super) fn pending_gate(response: &Value) -> Option<Value> {
+    (response["success"] == true
+        && response.pointer("/data/confirmation_required") == Some(&json!(true)))
+    .then(|| approval_payload(&response["data"]))
+}
+
+pub(super) fn execution_barrier(response: &Value) -> Option<Value> {
+    pending_gate(response).or_else(|| {
+        (response["success"] == true && response.pointer("/data/approval_refused") == Some(&json!(true)))
+            .then(|| json!({"approval_refused":true,"error":response.pointer("/data/error").cloned().unwrap_or(Value::Null)}))
+    })
+}
+
+pub(super) fn policy_stopped_result(stop: &Value, mut result: Value) -> Value {
+    if stop["approval_refused"] != true {
+        return pending_script_result(stop, result);
+    }
+    result["ok"] = json!(false);
+    result["return"] = Value::Null;
+    result["approval_refused"] = json!(true);
+    result["error"] = stop
+        .get("error")
+        .cloned()
+        .filter(|e| e.is_string())
+        .unwrap_or_else(|| json!("Script stopped after an approved operation was refused"));
+    result
+}
+
+pub(super) fn pending_script_result(gate: &Value, mut result: Value) -> Value {
+    if let Some(fields) = approval_payload(gate).as_object() {
+        for (key, value) in fields {
+            result[key] = value.clone();
+        }
+    }
+    result["ok"] = json!(false);
+    result["return"] = Value::Null;
+    result["error"] = json!(format!("Script paused for confirmation {}; approve outside this execution, then continue only the remaining operations", gate["confirmation_id"].as_str().unwrap_or("")));
+    result
+}
+
+fn approval_refusal(response: &Value) -> Option<String> {
+    if response.pointer("/data/denied") == Some(&json!(true)) {
+        return Some("approval was declined".into());
+    }
+    if response["success"] == true {
+        return None;
+    }
+    let message = response["error"].as_str()?;
+    let lower = message.to_ascii_lowercase();
+    let policy = lower.starts_with("action '")
+        && (lower.contains(" denied by policy:")
+            || lower.contains(" denied by your organization's chrome-use policy:")
+            || lower.contains(" refused:"));
+    (policy
+        || lower.starts_with("confirmation target")
+        || lower.starts_with("could not verify confirmation target")
+        || lower.starts_with("cannot classify the intended field for site policy")
+        || lower.starts_with("approved navigation "))
+    .then(|| message.to_string())
+}
+
+/// Resolve one confirmation attempt before optional/fallback error handling.
+fn confirmation_reply(response: Value, original_gate: &Value, state: &DaemonState) -> Value {
+    let response = response
+        .pointer("/data/result")
+        .cloned()
+        .unwrap_or(response);
+    if execution_barrier(&response).is_some() {
+        return response;
+    }
+    let original_id = original_gate["confirmation_id"]
+        .as_str()
+        .filter(|id| !id.is_empty());
+    let held_id = state.pending_confirmation.as_ref().and_then(|pending| {
+        pending
+            .site
+            .as_ref()
+            .map(|site| site.id.as_str())
+            .or_else(|| pending.cmd["id"].as_str())
+    });
+    if original_id.is_some() && original_id == held_id {
+        return json!({"success":true,"data":original_gate,"error":null});
+    }
+    if let Some(reason) = approval_refusal(&response) {
+        let mut data = json!({"approval_refused":true,"error":reason});
+        if let Some(steps) = response.pointer("/data/steps").filter(|s| s.is_array()) {
+            data["steps"] = steps.clone();
+        }
+        return json!({"success":true,"data":data,"error":null});
+    }
+    response
+}
+
+fn hold_confirmation(
+    ctx: &mut Ctx,
+    verb: &str,
+    gate: Value,
+    nested_steps: Option<&Value>,
+) -> String {
+    let message = format!(
+        "op `{verb}` paused for confirmation {}",
+        gate["confirmation_id"].as_str().unwrap_or("")
+    );
+    let mut step = json!({"op":verb,"ok":false,"confirmation_required":true});
+    if let Some(steps) = nested_steps.filter(|steps| steps.is_array()) {
+        step["steps"] = steps.clone();
+    }
+    ctx.steps.push(step);
+    ctx.policy_stop = Some(PolicyStop::Pending(gate));
+    message
+}
+
+fn hold_refusal(ctx: &mut Ctx, verb: &str, reason: &str, nested_steps: Option<&Value>) -> String {
+    let mut step = json!({"op":verb,"ok":false,"approval_refused":true});
+    if let Some(steps) = nested_steps.filter(|steps| steps.is_array()) {
+        step["steps"] = steps.clone();
+    }
+    ctx.steps.push(step);
+    ctx.policy_stop = Some(PolicyStop::Refused);
+    format!("op `{verb}` stopped: {reason}")
 }
 
 fn run_block<'a>(
@@ -201,6 +359,9 @@ fn run_block<'a>(
 
             if obj.contains_key("do") {
                 if let Err(e) = run_action(obj, ctx, state).await {
+                    if ctx.policy_stop.is_some() {
+                        return Err(e);
+                    }
                     run_fallbacks(obj, e, ctx, state).await?;
                 }
             } else if let Some(ret) = obj.get("return") {
@@ -272,29 +433,28 @@ async fn run_action(
 
     let mut resp = Box::pin(execute_command(&Value::Object(sub), state)).await;
 
-    // Confirmation gate: a policy-gated op replies confirmation_required instead of
-    // acting. Auto-confirm only when the script opted in; otherwise fail the step —
-    // never block the single socket on an interactive prompt.
-    let needs_confirm = resp
-        .pointer("/data/confirmation_required")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if needs_confirm {
-        if ctx.auto_confirm {
-            let confirm = json!({ "action": "confirm", "id": format!("s{}c", ctx.op_count) });
-            let cr = Box::pin(execute_command(&confirm, state)).await;
-            resp = cr.pointer("/data/result").cloned().unwrap_or(cr);
-        } else {
-            let _ = Box::pin(execute_command(
-                &json!({ "action": "deny", "id": "d" }),
-                state,
-            ))
-            .await;
-            return Err(format!(
-                "op `{}` requires confirmation — pass autoConfirm:true or adjust the action policy",
-                verb
-            ));
+    if let Some(original_gate) = pending_gate(&resp) {
+        let nested_pause =
+            alias_action(verb) == "script" && resp.pointer("/data/ok") == Some(&json!(false));
+        if ctx.auto_confirm && !nested_pause {
+            let confirm = json!({"action":"confirm", "id":format!("s{}c", ctx.op_count)});
+            let reply = Box::pin(execute_command(&confirm, state)).await;
+            resp = confirmation_reply(reply, &original_gate, state);
         }
+    }
+    if let Some(stop) = execution_barrier(&resp) {
+        return Err(if stop["approval_refused"] == true {
+            hold_refusal(
+                ctx,
+                verb,
+                stop["error"]
+                    .as_str()
+                    .unwrap_or("an approved operation was refused"),
+                resp.pointer("/data/steps"),
+            )
+        } else {
+            hold_confirmation(ctx, verb, stop, resp.pointer("/data/steps"))
+        });
     }
 
     super::progress::collect_advisories(&resp, &mut ctx.advisories);
@@ -372,6 +532,7 @@ async fn run_fallbacks(
                     .push(json!({ "fallback": alt.get("do"), "after": last }));
                 return Ok(());
             }
+            Err(e) if ctx.policy_stop.is_some() => return Err(e),
             Err(e) if nothing_dispatched(&e) => last = e,
             Err(e) => return Err(e),
         }
@@ -471,25 +632,32 @@ async fn eval_cond(cond: &Value, ctx: &mut Ctx, state: &mut DaemonState) -> Resu
             .unwrap_or(false));
     }
     if let Some(sel) = obj.get("exists") {
-        return Ok(probe_visible(&resolve(sel, &ctx.vars), state).await);
+        return probe_visible(&resolve(sel, &ctx.vars), ctx, state).await;
     }
     if let Some(sel) = obj.get("gone") {
-        return Ok(!probe_visible(&resolve(sel, &ctx.vars), state).await);
+        return Ok(!probe_visible(&resolve(sel, &ctx.vars), ctx, state).await?);
     }
     Err(format!("unsupported condition: {}", cond))
 }
 
-async fn probe_visible(sel: &Value, state: &mut DaemonState) -> bool {
+async fn probe_visible(
+    sel: &Value,
+    ctx: &mut Ctx,
+    state: &mut DaemonState,
+) -> Result<bool, String> {
     let cmd = json!({ "action": "isvisible", "selector": sel, "id": "cond" });
     let r = Box::pin(execute_command(&cmd, state)).await;
+    if let Some(gate) = pending_gate(&r) {
+        return Err(hold_confirmation(ctx, "isvisible", gate, None));
+    }
     if r.get("success").and_then(|v| v.as_bool()) != Some(true) {
-        return false;
+        return Ok(false);
     }
     let d = r.get("data");
-    d.and_then(|d| d.get("visible"))
+    Ok(d.and_then(|d| d.get("visible"))
         .and_then(|v| v.as_bool())
         .or_else(|| d.and_then(|v| v.as_bool()))
-        .unwrap_or(false)
+        .unwrap_or(false))
 }
 
 // --- value bus -------------------------------------------------------------
@@ -746,3 +914,7 @@ mod tests {
         assert_eq!(count_ops(prog.as_array().unwrap()), 2);
     }
 }
+
+#[cfg(test)]
+#[path = "script_confirmation_tests.rs"]
+mod confirmation_tests;

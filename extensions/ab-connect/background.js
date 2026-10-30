@@ -1310,7 +1310,7 @@ function isPermanentAttachError(e) {
 // across the transient window of a process swap (with a couple of short retries).
 // Returns the tabId on success, or null when the tab is genuinely gone
 // (closed / restricted). (issues #20.1, #23)
-async function recoverSessionTab(sessionId) {
+async function recoverSessionTab(sessionId, beforeRecoveryTarget = () => {}) {
   const tabId = resolveSessionTab(sessionId, sessionToTab, childSessionToTab);
   // 1) Fast path: the encoded Chrome tabId still exists — re-attach it (covers
   //    the common renderer-process swap where the tabId is preserved, #23).
@@ -1318,6 +1318,7 @@ async function recoverSessionTab(sessionId) {
     for (let i = 0; i < 3; i++) {
       const tab = await chrome.tabs.get(tabId).catch(() => null);
       if (!eligible(tab)) break; // tabId is gone — fall through to targetId recovery
+      beforeRecoveryTarget(tabId);
       try {
         await attachTab(tabId);
         if (tabs.has(tabId)) return tabId;
@@ -1343,11 +1344,13 @@ async function recoverSessionTab(sessionId) {
     const replacement = followReplacement(replacedTabs, tabId);
     if (replacement !== tabId) {
       let tab = await chrome.tabs.get(replacement).catch(() => null);
+      if (eligible(tab)) beforeRecoveryTarget(replacement);
       if (eligible(tab) && tab.discarded) {
         await reviveDiscardedTab(chrome.tabs, replacement).catch(() => false);
         tab = await chrome.tabs.get(replacement).catch(() => null);
       }
       if (eligible(tab)) {
+        beforeRecoveryTarget(replacement);
         try {
           await attachTab(replacement);
           if (tabs.has(replacement)) {
@@ -1388,6 +1391,7 @@ async function recoverSessionTab(sessionId) {
       if (t && t.tabId != null) {
         const tab = await chrome.tabs.get(t.tabId).catch(() => null);
         if (eligible(tab)) {
+          beforeRecoveryTarget(t.tabId);
           // Preserve the diagnostic before attach yields; commits during the
           // replacement window must contribute to the same reload history.
           transferReloadState(reloadStates, tabId, t.tabId);
@@ -2040,13 +2044,25 @@ async function handleForwardCdpCommand(msg) {
       throw new Error(`unknown sessionId ${sessionId} for ${method}`);
     }
     guardTab(tabId, agentSession);
+    let browserNavigationReady = false;
     if (!tabs.has(tabId) && canUseBrowserNavigationFallback(method, params, childSid)) {
-      const live = await withRelayTimeout(chrome.tabs.get(tabId), 'chrome.tabs.get(Page.navigate)');
-      if (!eligible(live)) throw new Error(`Chrome tab ${tabId} is not a navigable web tab`);
-      // The exact stable tab still exists. Navigating it needs no attachment;
-      // the subsequent page command recovers the debugger after it leaves.
-    } else if (!tabs.has(tabId)) {
-      const recovered = await recoverSessionTab(sessionId);
+      let missing = false;
+      const live = await withRelayTimeout(chrome.tabs.get(tabId), 'chrome.tabs.get(Page.navigate)').catch(error => {
+        if (!isMissingTabError(error, tabId)) throw error;
+        missing = true;
+        return null;
+      });
+      if (!missing) {
+        if (!eligible(live)) throw new Error(`Chrome tab ${tabId} is not a navigable web tab`);
+        browserNavigationReady = true;
+      }
+      // Only a confirmed missing id enters the existing replacement recovery.
+      // A live stable tab needs no attachment to navigate out of a protected page.
+    }
+    if (!browserNavigationReady && !tabs.has(tabId)) {
+      const beforeRecoveryTarget = canUseBrowserNavigationFallback(method, params, childSid)
+        ? id => guardTab(id, agentSession) : undefined;
+      const recovered = await recoverSessionTab(sessionId, beforeRecoveryTarget);
       if (!recovered) {
         // A dead tab's host record goes now, so the next getTargets does not
         // list it and attaching to it fails (#519).
@@ -2058,6 +2074,7 @@ async function handleForwardCdpCommand(msg) {
         );
       }
       tabId = recovered;
+      guardTab(tabId, agentSession);
     }
   } else if (typeof params?.targetId === 'string') {
     tabId = tabForTarget(params.targetId);

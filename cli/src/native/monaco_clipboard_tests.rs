@@ -1,15 +1,41 @@
 //! Protocol fault injection. Payload semantics are checked separately by Node;
 //! these fixtures do not establish real Chrome clipboard permissions or events.
-use super::{fill_monaco_via_clipboard, CdpClient};
+use super::{fill_monaco_via_clipboard, finish_fill, read_hidden_monaco, CdpClient};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 
+#[derive(Clone, Copy)]
+enum Operation {
+    ClipboardFill,
+    HiddenFill,
+    HiddenRead,
+}
+
 async fn run(
+    setup: bool,
+    input: bool,
+    cleanup: bool,
+    changed: bool,
+) -> (Result<String, String>, Vec<Value>) {
+    run_mode(
+        setup,
+        input,
+        cleanup,
+        changed,
+        Operation::ClipboardFill,
+        true,
+    )
+    .await
+}
+
+async fn run_mode(
     setup_error: bool,
     input_error: bool,
     cleanup_error: bool,
     changed_before_input: bool,
+    operation: Operation,
+    allow_clipboard: bool,
 ) -> (Result<String, String>, Vec<Value>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -29,7 +55,7 @@ async fn run(
                 "Page.getFrameTree" => json!({"frameTree":{"frame":{"id":"frame"}}}),
                 "Page.createIsolatedWorld" => json!({"executionContextId":42}),
                 "Runtime.evaluate" => json!({"result":{"type":"boolean","value":true}}),
-                "Runtime.releaseObject" => json!({}),
+                "Runtime.releaseObject" | "Runtime.releaseObjectGroup" => json!({}),
                 "Input.dispatchKeyEvent" => {
                     if input_error {
                         error = Some(json!({"code":-32000,"message":"input rejected"}));
@@ -38,7 +64,11 @@ async fn run(
                 }
                 "Runtime.callFunctionOn" => {
                     let script = request["params"]["functionDeclaration"].as_str().unwrap();
-                    if script == include_str!("monaco_clipboard.js") {
+                    if request["params"]["objectId"] == "anchor"
+                        && script != include_str!("monaco_clipboard.js")
+                    {
+                        json!({"result":{"type":"object","subtype":"null","value":null}})
+                    } else if script == include_str!("monaco_clipboard.js") {
                         assert_eq!(request["params"]["returnByValue"], false);
                         json!({"result":{"type":"object","objectId":"transaction"}})
                     } else {
@@ -87,7 +117,27 @@ async fn run(
     let client = CdpClient::connect(&format!("ws://{address}"))
         .await
         .unwrap();
-    let result = fill_monaco_via_clipboard(&client, "session", "anchor", "replacement").await;
+    let permission = if allow_clipboard {
+        super::ClipboardFallback::Allowed
+    } else {
+        super::ClipboardFallback::Denied
+    };
+    let result = super::MONACO_CLIPBOARD_FALLBACK
+        .scope(std::cell::Cell::new(permission), async {
+            match operation {
+                Operation::ClipboardFill => {
+                    fill_monaco_via_clipboard(&client, "session", "anchor", "replacement").await
+                }
+                Operation::HiddenRead => read_hidden_monaco(&client, "session", "anchor").await,
+                Operation::HiddenFill => {
+                    let mut engine = "monaco-unsupported".to_string();
+                    finish_fill(&client, "session", "anchor", "replacement", &mut engine)
+                        .await
+                        .map(|_| engine)
+                }
+            }
+        })
+        .await;
     server.abort();
     let commands = seen.lock().unwrap().clone();
     (result, commands)
@@ -136,4 +186,42 @@ async fn monaco_changed_clipboard_refuses_input_and_preserves_the_reason() {
         .iter()
         .any(|r| r["method"] == "Input.dispatchKeyEvent"));
     assert_finished(&commands);
+}
+
+#[tokio::test]
+async fn undiscoverable_monaco_defaults_do_not_stage_clipboard() {
+    for mode in [Operation::HiddenFill, Operation::HiddenRead] {
+        let (result, commands) = run_mode(false, false, false, false, mode, false).await;
+        let error = result.unwrap_err();
+        assert!(error.contains("--allow-clipboard-fallback"), "{error}");
+        assert!(
+            !commands
+                .iter()
+                .any(|r| r["params"]["functionDeclaration"] == include_str!("monaco_clipboard.js")),
+            "clipboard transaction was created: {commands:?}"
+        );
+        assert!(
+            !commands.iter().any(|r| r["method"]
+                .as_str()
+                .is_some_and(|m| m.starts_with("Input."))),
+            "input was dispatched: {commands:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn explicitly_allowed_hidden_monaco_uses_legacy_checks_without_sticky_permission() {
+    for mode in [Operation::HiddenFill, Operation::HiddenRead] {
+        let (result, commands) = run_mode(false, false, false, false, mode, true).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert!(commands
+            .iter()
+            .any(|r| r["params"]["functionDeclaration"] == include_str!("monaco_clipboard.js")));
+        assert_finished(&commands);
+        let (result, commands) = run_mode(false, false, false, false, mode, false).await;
+        assert!(result.is_err());
+        assert!(!commands
+            .iter()
+            .any(|r| r["params"]["functionDeclaration"] == include_str!("monaco_clipboard.js")));
+    }
 }
