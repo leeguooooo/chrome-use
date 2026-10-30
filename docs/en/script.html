@@ -127,7 +127,7 @@ JSON</code></pre>
       <div class="du-callout tip">
         <div class="du-callout-title">💡 Tip</div>
         <code>evaluate</code>'s return value is wrapped under <code>.result</code>, so reference a page value as <code>{{t.result}}</code>, not <code>{{t}}</code>.
-        <code>--dry-run</code> validates the program's shape without touching the browser; <code>--arg k=v</code> seeds a variable, and <code>--arg-env k=ENV_VAR</code> seeds one from an environment variable so a secret stays off the command line. A <code>do</code>'s <code>"or"</code> lists alternative steps, tried in order only when the one before found nothing to act on (missing or ambiguous target), never after a step that acted; <a href="teach.html">teach by demonstration</a> writes scripts this way. Exit codes: 0 ok, 1 runtime failure or failed assert, 2 invalid program.
+        <code>--dry-run</code> validates the program's shape without touching the browser; <code>--arg k=v</code> seeds a variable, and <code>--arg-env k=ENV_VAR</code> seeds one from an environment variable so a secret stays off the command line. A <code>do</code>'s <code>"or"</code> lists alternative steps, tried in order only when the one before found nothing to act on (missing or ambiguous target), never after a step that acted; <a href="teach.html">teach by demonstration</a> writes scripts this way. Exit codes: 0 ok, 1 runtime failure or failed assert, 2 invalid program, 3 pending approval.
       </div>
 
       <h2>JS program form</h2>
@@ -136,6 +136,10 @@ JSON</code></pre>
         This is ego(lite)'s "code base" idiom; control flow is just JS's own <code>for</code> / <code>if</code> / <code>break</code>.
         <strong>No <code>await</code></strong>: every <code>cu.*</code> call blocks until the browser returns, so the script is synchronous.
       </p>
+      <p>JSON refusals after <code>autoConfirm</code> carry <code>approval_refused:true</code> through nested programs; outer optional steps and catches also stop further browser calls. Ordinary errors and initial direct denials retain explicit optional/catch handling.</p>
+
+      <p>Scripts pause at approval with <code>ok:false</code>, <code>confirmation_required:true</code>, the approval ID and prior operation trace; the CLI exits 3. JSON <code>optional</code>/<code>or</code> and JavaScript catches cannot advance past a held gate. Later bridge calls are blocked for that execution, including raw bridge calls. Existing <code>autoConfirm</code> may answer a command prompt, but a second native gate or refusal stops the program. Approve outside the paused execution, then continue only the remaining operations. A named JavaScript context starts a fresh execution next time; this does not approve or consume the held request.</p>
+
       <div class="du-code">
         <div class="du-code-head"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="du-code-name">bash</span></div>
 <pre><code>chrome-use script --timeout 120000 &lt;&lt;'JS'

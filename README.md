@@ -50,7 +50,6 @@ Showcase your product here and support ongoing maintenance.
 </table>
 
 
-
 ## Paid setup and project sponsorship
 
 Need help connecting your agent to your signed-in Chrome or setting up a browser workflow? Email us with your environment, the workflow and expected result, and where you are stuck. We review feasibility and agree on scope, acceptance criteria and a quote before work starts.
@@ -356,7 +355,6 @@ After a successful trusted insertion, contenteditable `fill` keeps focus on the 
 
 `dblclick` uses two trusted pointer clicks and verifies delivery to the target. Covered, disabled, transformed-frame and unmappable cross-origin targets are refused; no synthetic fallback is used. If the target changes after the first click, the second is stopped. JSON includes `dispatch: "pointer"` and `verified`; an unverified delivery carries a warning. Inspect the page before retrying an interrupted or unverified action. `AGENT_BROWSER_CLICK_MODE=dom` is not supported for double-clicks.
 
-
 When a hidden Monaco module API can be matched to the requested editor, `fill` uses native input and verifies that exact live model (`engine: monaco-native`); `get value` reads the same model without copy or paste. This path does not use the system clipboard. The same path covers completed exports retained by the Monaco 0.52 minified AMD loader after its public globals are removed. Discovery reads a bounded module table without invoking the loader, module factories or accessors; it does not load modules or make requests. The native select-all must cover the complete live model before insertion. A changed model, lost focus, incomplete selection or mismatched readback is an error, with no clipboard retry after input. If no exact model API is found, `fill` and `get value` refuse before clipboard access. Only after the user accepts temporary system clipboard changes, add `--allow-clipboard-fallback` to that command. The flag is supported only by these two commands, is not persistent, and never permits fallback after native input or model verification fails. The opted-in fallback emits a warning: comparison/restoration is not atomic and can overwrite a concurrent clipboard write. Monaco clipboard fallback keeps transaction state in a private closure and removes temporary listeners on completion, setup errors, or a 60-second lease expiry while the document survives. The backup uses independent Blob-backed items because browser-backed ClipboardItems may expire after a write. An empty or unreadable backup is refused before staging. Contents are compared before further input and before restoration; changes or uncertain ownership stop the operation. Restoration is read back and verified. Only formats exposed by the Web Clipboard API can be backed up; native application metadata is not preserved. A restore failure is an error, even if the editor changed. Context loss can prevent restoration, and clipboard comparison/write is not atomic; avoid concurrent clipboard use.
 
 Place the opt-in after the required text/selector, as the last option; `--` ends editor option parsing, and a mandatory fill value equal to the flag remains literal text. Clipboard action-policy and confirmation rules still apply. Approval never overrides a hard deny, and extension-held site requests require the user’s actual extension decision. Approval for document, input and clipboard operations binds the original owned target and fresh HTTP(S) renderer security origin; missing or opaque origins refuse. Explicit HTTP(S) navigation binds its original target (if any) and immutable destination, so approval works from about:blank or a cold start. The existing `tab new` API accepts HTTP(S) or its default about:blank, and `window new` creates only its declared about:blank target. These creation commands bind their action and destination and create a new owned target after approval. A nonblank window URL is refused; use `tab new <https-url>` for a URL. With no original owned target or with `--new-tab`, it creates a new owned target and preserves pages that appeared while approval was pending. For a named navigation target, first select it with `chrome-use tab <target>`; approval refuses an active-target mismatch. JavaScript URLs and in-page SPA actions require document-origin verification. `read <http(s) URL>` binds the original URL and arguments independently of browser presence. An explicit HTTP read URL uses no tab routing or forced adoption; reads without a URL still depend on the current document for approval. HTTP resources use the `read` category; file domain rules are checked even without a browser. Field policy checks use the intended target’s saved refs and iframe sessions; missing or unreadable context refuses before input.
@@ -383,12 +381,15 @@ Semantic find retains the existing `--observe` unsupported warning; use one `bat
 
 Discover a scope from the page first: `find query "Beta account"` returns candidate selector anchors; choose the article/container corresponding to that heading, then use `find role button click --name Save --exact --within "<returned-selector>"`. Inspect an ambiguous scope with `snapshot -s "<selector>"` and narrow it rather than accepting the first container. Unknown semantic-find options and duplicate `--within` are refused; use `find label Email fill -- --name` to enter literal flag-looking text. `--exact false` requests substring matching.
 
-
 After three identical observed `click`, `dblclick`, or `press` attempts on the same target and screen, with no gap over 60 seconds, `observed.noProgress` advises checking state or waiting for a task-specific condition. It requires complete, settled evidence with no detected tree, request, resource, or frame activity. The hint does not change action success, prove a write failed, or retry it.
 
 Ordinary CLI/MCP connection preparation preserves this streak only on successful reuse of the same browser connection, target and session, without loading storage state. A new browser, rebind, failed preparation or storage-state load still clears the count.
 
 Scripts retain these hints in `advisories` (top-level in CLI `script --json`; `data.advisories` in the daemon envelope) (at most 20), including nested scripts and runs that later fail. JSON op-list scripts also keep `noProgress` on the relevant `steps` entry; text output prints the aggregate advisories once. A failed JS script retains `ok:false`, `return:null`, `error`, `logs`, and `advisories`. Nested script daemon-envelope `data.ok:false` fails the parent script even when transport `success` is true; dispatch success does not establish program success.
+
+Scripts pause at approval with `ok:false`, `confirmation_required:true`, the approval ID and prior operation trace; the CLI exits 3. JSON `optional`/`or` and JavaScript catches cannot advance past a held gate. Later bridge calls are blocked for that execution, including raw bridge calls. Existing `autoConfirm` may answer a command prompt, but a second native gate or refusal stops the program. Approve outside the paused execution, then continue only the remaining operations. A named JavaScript context starts a fresh execution next time; this does not approve or consume the held request.
+
+JSON refusals after `autoConfirm` carry `approval_refused:true` through nested programs; outer optional steps and catches also stop further browser calls. Ordinary errors and initial direct denials retain explicit optional/catch handling.
 
 Ordinary CLI `--json` replies use a `success`/`data`/`timing` envelope; `--no-timing` (or `AGENT_BROWSER_TIMING=0`) leaves `timing` out for a compact reply, and `timing.jsonl` is still written. `batch --json` prints an array of `{command,success,result,error}` entries; `script --json` prints the bare program result (`ok`, `return`, `logs`, `error`, `advisories`, and other program fields). Batch and script CLI output have no top-level `timing`. A pending confirmation stops the batch immediately, with or without `--bail`, and exits 3. The last result keeps the approval instructions and confirmation ID; later steps are not sent. After approval, inspect the result and start a new batch for any remaining work.
 
@@ -449,7 +450,6 @@ On the relay, extension 0.5.98+ also forgets cleared metrics after successful re
 so an idle reattachment cannot replay the old mobile viewport.
 A partial failure reports which overrides were cleared. `viewport reset` only clears metrics;
 it deliberately keeps any user-agent override.
-
 
 Upgrading installed files does not replace an already-running native host. With Chrome open during an upgrade, reload the chrome-use extension at chrome://extensions when agent sessions are idle. Reconnecting a session daemon does not replace the host. Status reports health.nativeHostVersion from the live handshake (null when unavailable), separately from the installed CLI and hostLauncherHealthy; unavailable or mismatched runtime versions produce warnings.
 
@@ -580,7 +580,6 @@ which still says to confirm on the phone) is reported on every command as
 have scanned it. Auto-login and `site` login walls wait for it too.
 See [Login & Credentials](https://chrome-use.leeguoo.com/en/login-auth.html).
 `scrollintoview` bounds the entire humanized wheel phase to 10 seconds, including target lookup and CDP replies. A stalled or errored phase stops without a direct-scroll fallback. If input was attempted, the error is `action_outcome_unknown`: Chrome may still be processing it, so inspect before retrying. A completed wheel phase that cannot reach the target may still use the existing direct-scroll fallback, which has its own 15-second limit.
-
 
 ## Agent loop (experimental)
 

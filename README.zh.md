@@ -50,7 +50,6 @@
 </table>
 
 
-
 ## 付费接入与项目赞助
 
 需要帮你把 agent 接到已登录的 Chrome，或跑通浏览器流程？ 发邮件说明设备环境、要跑通的流程和预期结果，以及目前卡在哪里。我们先评估可行性，再确认服务范围、验收方式和报价。
@@ -311,7 +310,6 @@ $ chrome-use open https://github.com/my-org/repo
 
 该选项应放在必填文本或选择器之后，作为最后一个选项；`--` 结束编辑器选项解析，必填文本本身等于这个选项名时仍按原文填写。剪贴板的动作策略和确认要求仍然生效。批准不会越过拒绝规则，扩展持有的站点请求仍需用户在扩展中作出决定。 文档、输入和剪贴板操作的批准绑定原有会话持有的目标及新核实的 HTTP(S) renderer securityOrigin；来源缺失或不透明时拒绝。显式 HTTP(S) 导航绑定原目标（若有）及不可变目的地址，可从 about:blank 或冷启动获批。 既有 `tab new` API 支持 HTTP(S) 或默认 about:blank，`window new` 仍只创建其已声明的 about:blank 目标。这两个创建命令绑定动作和目的地址，批准后创建新的会话目标。window 的非空白地址会被拒绝；打开地址请用 `tab new <https-url>`。原来没有持有目标，或带 `--new-tab` 时，始终创建新的会话目标，保留审批期间出现的页面。导航指定目标时，先用 `chrome-use tab <target>` 选中它；显式目标与实际活动目标不一致时拒绝批准。JavaScript URL 和页内 SPA 操作仍需核实文档来源。`read <http(s) URL>` 绑定原地址和参数，不受浏览器出现或消失影响。 显式 HTTP 读取地址不触发标签页路由或强制接管；没有地址的 read 仍按当前文档核实批准。 HTTP 资源使用 `read` 分类，没有浏览器时也会检查文件中的站点域规则。字段策略检查使用目标自己的引用和 iframe 会话；上下文缺失或不可读时，在输入前拒绝。
 
-
 跨站导航或重新连接后，页面读取使用当前文档。重建私有读取环境时，如果页面持续跳转，命令会明确失败；请重新观察页面再操作。
 
 `chrome-use mobile serve --bind IP:17345` 在指定 IP 不可用时按 1–60 秒指数退避等待，保持原监听地址，监听成功后才报告就绪。换网后需更新 `--bind` 和手机连接地址，不会自动改为监听所有网卡。其他监听错误仍立即报错。
@@ -365,12 +363,15 @@ Ant Design / rc-picker 日期范围请先填开始时间，再填结束时间。
 
 先从页面发现范围：`find query "Beta account"` 返回候选的选择器锚点；选出对应标题的 article/容器，再执行 `find role button click --name Save --exact --within "<返回的选择器>"`。范围有歧义时用 `snapshot -s "<选择器>"` 查看并缩小范围，不取第一个。未知语义 find 参数和重复 `--within` 会被拒绝；输入像参数的文字可写 `find label Email fill -- --name`。`--exact false` 使用子串匹配。
 
-
 同一目标和页面连续三次相同的 `click`、`dblclick` 或 `press`，相邻间隔不超过 60 秒，且完整、稳定的观察没有发现树、请求、资源或 frame 活动时，`observed.noProgress` 会提示检查状态或等待任务所需的条件。它不改变动作 success，不证明写入失败，也不会重试。
 
 普通 CLI/MCP 准备连接时，只有成功复用同一浏览器连接、目标和会话，且未加载 storage state，才会保留连续计数。新浏览器、重新绑定、准备失败或加载 storage state 仍会清空计数。
 
 脚本在 `advisories`（CLI `script --json` 顶层；daemon envelope 中为 `data.advisories`） 中保留提示，最多 20 条，嵌套脚本和后续失败的运行也会保留。JSON op-list 的对应 `steps` 条目另带 `noProgress`；文字输出只打印汇总提示一次。JS 脚本失败时保留 `ok:false`、`return:null`、`error`、`logs` 和 `advisories`。daemon envelope 中嵌套脚本的 `data.ok:false` 会使父脚本失败，即使传输层 `success` 为 true；调度成功不能证明程序成功。
+
+脚本遇到审批时返回 `ok:false`、`confirmation_required:true`、审批 ID 和此前的操作记录，CLI 退出码为 3。JSON 的 `optional` / `or` 和 JavaScript 的 `catch` 都不能越过待审批步骤，本次执行后续的 bridge 调用也不会发给浏览器。现有 `autoConfirm` 可以回答命令级确认，但后续的原生审批或安全拒绝仍会停止程序。请在脚本外完成审批，再继续剩余操作，不要重跑已经完成的步骤。命名 JavaScript 上下文的下一次执行会重新开始检查，但不会自动批准或消费原来的请求。
+
+JSON 在 `autoConfirm` 后遇到的安全拒绝会以 `approval_refused:true` 向外层传播，外层 `optional` 或 `catch` 也会停止后续浏览器调用。普通错误和最初的直接拒绝仍按显式 `optional` / `catch` 处理。
 
 普通 CLI `--json` 返回 `success`/`data`/`timing` envelope；加 `--no-timing`（或 `AGENT_BROWSER_TIMING=0`）时回复不带 `timing`，`timing.jsonl` 照常记录。`batch --json` 打印 `{command,success,result,error}` 条目的数组；`script --json` 打印程序结果本身（`ok`、`return`、`logs`、`error`、`advisories` 等）。batch 和 script 的 CLI 输出没有顶层 `timing`。 遇到待确认的操作时，batch 会立即停止并以状态码 3 退出，无论是否加了 `--bail`。最后一项保留批准说明和确认 ID，后续步骤不会发送。批准后先检查结果，再为剩余操作新建 batch。
 
@@ -428,7 +429,6 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 复位后会读取真实视口尺寸，不调整 Chrome 窗口大小；中途失败会说明已清除了哪些覆盖。
 relay 需要扩展 0.5.98+，成功复位后会忘记旧尺寸覆盖，空闲重连时不会重新套用手机视口。
 `viewport reset` 只清尺寸覆盖，保留用户代理设置。
-
 
 升级磁盘上的程序不会替换正在运行的 native host。升级时 Chrome 已打开的，等 agent 会话空闲后，在 chrome://extensions 重新加载 chrome-use 扩展。重连会话 daemon 不会替换 host。status 的 health.nativeHostVersion 来自运行中 host 的握手，无法取得时为 null；与磁盘 CLI 版本及 hostLauncherHealthy 分开显示，无法核实或版本不一致时给出警告。
 
