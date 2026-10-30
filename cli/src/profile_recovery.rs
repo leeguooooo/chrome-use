@@ -182,6 +182,15 @@ mod tests {
     }
 
     #[test]
+    fn recovery_hardening_slow_final_probe_cannot_open_after_deadline() {
+        let mut r = Recovery::new(true);
+        r.observe(seconds(0), false, CLOSED);
+        assert_eq!(r.observe(seconds(20), false, CLOSED), Decision::Open);
+        // The caller re-evaluates after its final relay I/O, before launching.
+        assert_eq!(r.observe(seconds(45), false, CLOSED), Decision::Done);
+    }
+
+    #[test]
     fn recovery_hardening_cold_start_and_total_deadline_never_open() {
         let mut r = Recovery::new(false);
         assert!(!r.needs_profile(seconds(0)));

@@ -2755,11 +2755,45 @@ pub(crate) fn is_side_instance(command_line: &str, roots: &[PathBuf]) -> bool {
         }
         dir
     };
-    let dir = dir.trim_end_matches('/');
-    !dir.is_empty()
-        && !roots
-            .iter()
-            .any(|root| root.to_string_lossy().trim_end_matches('/') == dir)
+    let path = Path::new(dir);
+    // Relative argv belongs to the browser's cwd, not this CLI's cwd.
+    // Resolve existing directories before comparing: a lexical difference
+    // does not establish a separate profile when symlinks or aliases exist.
+    if !path.is_absolute() {
+        return false;
+    }
+    let Ok(path) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        return false;
+    };
+    if !metadata.is_dir() {
+        return false;
+    }
+    for root in roots {
+        let known = match std::fs::canonicalize(root) {
+            Ok(known) => known,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return false,
+        };
+        if path == known {
+            return false;
+        }
+        let Ok(known_metadata) = std::fs::metadata(known) else {
+            return false;
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if metadata.dev() == known_metadata.dev() && metadata.ino() == known_metadata.ino() {
+                return false;
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = known_metadata;
+    }
+    true
 }
 
 /// Whether a browser process named `name` runs for the user's own profiles,
@@ -5895,22 +5929,25 @@ printf '%s\000' "$HOME" "${CHROME_USE_RELAY_DIR-__unset__}" "$@"
     #[test]
     fn automation_chromes_on_their_own_data_dir_are_not_the_users_chrome() {
         use super::is_side_instance;
-        let roots = vec![std::path::PathBuf::from(
-            "/Users/u/Library/Application Support/Google/Chrome",
-        )];
+        let fixture = tempfile::tempdir().unwrap();
+        let own = fixture.path().join("user Chrome");
+        let other = fixture.path().join("other Chrome");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let roots = vec![own.clone()];
+        let own = own.to_string_lossy().replace('\\', "/");
+        let other = other.to_string_lossy().replace('\\', "/");
         let app = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
         // A scraper's Chrome kept running for days beside the real one.
         assert!(is_side_instance(
             &format!(
                 "{app} --no-startup-window --remote-debugging-address=127.0.0.1 \
-                 --remote-debugging-port=9341 --user-data-dir=/Users/u/runtime/sessions/a"
+                 --remote-debugging-port=9341 --user-data-dir=\"{other}\""
             ),
             &roots
         ));
         assert!(is_side_instance(
-            &format!(
-                "{app} --headless=new --user-data-dir=\"/tmp/scratch dir/prof\" --disable-gpu"
-            ),
+            &format!("{app} --headless=new --user-data-dir=\"{other}\" --disable-gpu"),
             &roots
         ));
         // The user's own Chrome, however it was started.
@@ -5921,7 +5958,7 @@ printf '%s\000' "$HOME" "${CHROME_USE_RELAY_DIR-__unset__}" "$@"
         assert!(!is_side_instance(
             &format!(
                 "{app} --remote-debugging-port=9222 \
-                 --user-data-dir=/Users/u/Library/Application Support/Google/Chrome/"
+                 --user-data-dir=\"{own}/\""
             ),
             &roots
         ));
@@ -5958,10 +5995,43 @@ printf '%s\000' "$HOME" "${CHROME_USE_RELAY_DIR-__unset__}" "$@"
                 "{args}"
             );
         }
-        assert!(super::is_side_instance(
-            "Chrome --remote-debugging-port=9222 --user-data-dir='/tmp/other dir' https://example.invalid",
+    }
+
+    #[test]
+    fn recovery_hardening_directory_identity_not_lexical_aliases() {
+        let fixture = tempfile::tempdir().unwrap();
+        let own = fixture.path().join("user");
+        let other = fixture.path().join("other");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let roots = vec![own.clone()];
+        let command = |path: &str| format!("Chrome --headless --user-data-dir=\"{path}\"");
+        let own_arg = own.to_string_lossy().replace('\\', "/");
+        let other_arg = other.to_string_lossy().replace('\\', "/");
+        assert!(!super::is_side_instance(&command("."), &roots));
+        assert!(!super::is_side_instance(&command("../user"), &roots));
+        assert!(!super::is_side_instance(
+            &command(&format!("{own_arg}/.")),
             &roots
         ));
+        assert!(!super::is_side_instance(
+            &command(&format!("{other_arg}/../user")),
+            &roots
+        ));
+        assert!(super::is_side_instance(&command(&other_arg), &roots));
+        assert!(!super::is_side_instance(
+            &command(&format!("{other_arg}/missing")),
+            &roots
+        ));
+        #[cfg(unix)]
+        {
+            let alias = fixture.path().join("alias");
+            std::os::unix::fs::symlink(&own, &alias).unwrap();
+            assert!(!super::is_side_instance(
+                &command(alias.to_str().unwrap()),
+                &roots
+            ));
+        }
     }
 
     #[test]

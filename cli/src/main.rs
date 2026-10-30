@@ -1580,7 +1580,10 @@ fn wait_for_relay(
             profile_recovery::Decision::Open => {
                 // Metadata reads can take time. Do not create a window if the
                 // relay came up meanwhile, and still let callers recheck it.
-                if !relay_down() {
+                let ready = !relay_down();
+                if recovery.observe(started.elapsed(), ready, candidate)
+                    != profile_recovery::Decision::Open
+                {
                     return None;
                 }
                 if let Some(profile) = profile {
