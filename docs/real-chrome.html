@@ -160,11 +160,7 @@
 
       <h2>profile 里要开着窗口</h2>
       <p>
-        chrome-use 要求 profile 已经开着窗口，自动化时所有 AI 会话共用一个后台专用窗口，人使用自己的窗口。没有窗口时它会停下并报
-        <code>profile not open</code>（错误码 <code>profile_not_open</code>）：先在那个 profile 里打开一个窗口，再重跑。
-        Chrome 还开着、但装扩展的 profile 已经没有窗口时，扩展不会运行，relay 也会断开：chrome-use 会在后台给那个 profile 开一个窗口，约 20 秒后仍然没有窗口才报这个错误，<code>chrome-use status</code> 会写出是哪个 profile。
-        判断不了有没有窗口时报 <code>profile window unavailable</code>（<code>profile_window_unavailable</code>）。
-        判断不了就什么都不创建，这两个错误都不会自动重试。第一个标签页清理相关的错误码见<a href="/troubleshooting.html">故障排查</a>。
+        浏览器命令通常要求所选 Chrome profile 已有打开的窗口。如果 Chrome 正在运行、relay 未连接，且 Local State 未把该 profile 列为 active，恢复流程会先等同一个 profile 持续未列出满 20 秒，给刚打开的窗口或 relay 留出启动时间；状态变为 active 或无法判断时，会取消待发出的开窗请求。之后最多请求打开一个 profile 窗口，并在请求后 20 秒再次检查，总等待仍不超过原有的 45 秒。打开窗口不代表 relay 已连接。这项恢复在 macOS 上可能短暂把 Chrome 提到前台；焦点恢复只是尽力而为，不保证回到原来的另一个 Chrome 窗口。这个例外仅限 profile 恢复，普通标签页操作仍留在后台。<code>status</code> 只读元数据，不会打开窗口。<code>AGENT_BROWSER_NO_AUTO_RECONNECT</code> 可关闭自动恢复。元数据缺失或格式错误时不会请求开窗。进程参数有歧义时，仍按用户浏览器正在运行处理；只有能明确识别为其他数据目录下的自动化实例才会排除。恢复后仍未连接时，按错误中给出的 profile 或 relay 状态处理，不要只因 relay 断开就重启 Chrome。
       </p>
 
       <h2>多个 Chrome profile：看清是哪一个，然后选它</h2>

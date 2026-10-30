@@ -115,11 +115,22 @@ most drops you never even see. If a command *does* surface the error:
    `extension install` by hand.
    `status` is daemon-free and reports CLI, live/expected extension, driving
    profile, and current session state even when that session worker is stuck.
-   If the error (or `status`) says `profile not open`, Chrome is running but the
-   profile with the extension has no window, so its extension is not running.
-   The CLI opens a window there in the background on the next command; if the
-   error comes back anyway, ask the user to open a window in that profile.
-   Reloading the extension or restarting Chrome is not the fix.
+   Browser commands normally require an open window in the selected Chrome profile. If its
+   relay is down while Chrome is running and Local State does not list that profile as
+   active, recovery first waits for the same profile to remain unlisted for 20 seconds.
+   This gives a recently opened window or relay time to finish starting; active or unknown
+   metadata cancels the pending window request. Recovery then requests one profile window
+   and checks again 20 seconds after that request, within the existing 45-second relay
+   wait. Opening a window does not prove the relay connected. This recovery can briefly
+   bring Chrome to the foreground on macOS. Focus restoration is best effort; it does not
+   guarantee returning to another Chrome window. This exception applies only to profile
+   recovery; ordinary tab actions stay in the background. `status` only reads metadata and
+   never opens a window. `AGENT_BROWSER_NO_AUTO_RECONNECT` disables automatic recovery.
+   Missing or malformed metadata does not trigger a window request. An ambiguous process
+   command line still counts as a running user browser; only a clearly separate automation
+   instance on another data root is excluded. If recovery still cannot connect, follow the
+   reported profile or relay error; do not restart Chrome merely because its relay is
+   down.
 3. **Never** tell the user to quit/restart Chrome with `--remote-debugging-port`
    to recover a dropped relay — that throws away their tabs and defeats the
    extension path. (The old error text said this; it no longer does.)
@@ -218,6 +229,9 @@ entirely in the background — new tabs open un-focused and the agent never
 force-fronts a tab. Focus is emulated, so the page keeps rendering and keeps
 running timers instead of being throttled. You don't need to do anything; just
 don't expect the user's view to follow you.
+Profile-recovery exception: reopening a profile window can briefly foreground
+Chrome; focus restoration is best effort and does not preserve another Chrome
+window. This does not change ordinary tab actions.
 
 **But a background tab really is hidden.** `document.visibilityState` stays
 `'hidden'` — focus emulation does not change it, and no CDP override does

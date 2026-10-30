@@ -58,14 +58,24 @@ never closes a forced tab; it stays open for the user.
 For which pages leak or grow (heap, DOM nodes, listeners), run
 `diag pages --json` (read-only; `--measure`, `--watch <s>`; `--force` only on
 the user's request); its schema is in references/diag-pages.md.
-`profile not open` means the user's Chrome profile has no window: chrome-use
-never opens one. Ask the user to open a window in that profile first, then
-rerun. A relay that is down because Chrome runs with the extension's profile
-closed is recovered by opening a window there in the background; if that
-still fails it is reported as `profile not open` too. Then do not tell the
-user to reload the extension or restart Chrome: name the profile the error
-(or `status`) gives and ask them to open a window in it. `profile window unavailable` means it could not tell; unknown means
-nothing is created, so do not retry in a loop. After
+Browser commands normally require an open window in the selected Chrome profile. If its
+relay is down while Chrome is running and Local State does not list that profile as
+active, recovery first waits for the same profile to remain unlisted for 20 seconds. This
+gives a recently opened window or relay time to finish starting; active or unknown
+metadata cancels the pending window request. Recovery then requests one profile window and
+checks again 20 seconds after that request, within the existing 45-second relay wait.
+Opening a window does not prove the relay connected. This recovery can briefly bring
+Chrome to the foreground on macOS. Focus restoration is best effort; it does not guarantee
+returning to another Chrome window. This exception applies only to profile recovery;
+ordinary tab actions stay in the background. `status` only reads metadata and never opens
+a window. `AGENT_BROWSER_NO_AUTO_RECONNECT` disables automatic recovery. Missing or
+malformed metadata does not trigger a window request. An ambiguous process command line
+still counts as a running user browser; only a clearly separate automation instance on
+another data root is excluded. If recovery still cannot connect, follow the reported
+profile or relay error; do not restart Chrome merely because its relay is down.
+`profile not open` names the profile that is still unlisted after recovery.
+`profile window unavailable` means the window state could not be verified.
+After
 `first_tab_cleanup_incomplete`, run `close` in the same session before
 opening again.
 An empty tab list is not a disconnected browser: read the error before

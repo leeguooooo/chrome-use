@@ -138,8 +138,7 @@ pub fn run_connect(args: &[String], json: bool) {
     if health.debugger_warns() {
         health_warnings.push(health.debugger.clone());
     }
-    // The relay is down because its profile is closed: say which, since
-    // waiting or reloading the extension cannot bring it back.
+    // Report the unlisted candidate profile without inferring worker state.
     let closed_profile = if health.transport_responsive {
         None
     } else {
@@ -2729,17 +2728,72 @@ pub(crate) fn is_side_instance(command_line: &str, roots: &[PathBuf]) -> bool {
     if !automation {
         return false;
     }
-    // Paths may hold spaces (`Application Support`), so the value runs to the
-    // next flag rather than the next space.
-    let Some((_, rest)) = command_line.split_once("--user-data-dir=") else {
+    // `ps args` flattens argv. Only exclude a process when the data-dir
+    // boundary is unambiguous; spaces or positional arguments may be part
+    // of the path, and an unknown instance must count as the user's browser.
+    let flag = "--user-data-dir=";
+    let Some((before, rest)) = command_line.split_once(flag) else {
         return false;
     };
-    let dir = rest.split(" --").next().unwrap_or("").trim();
-    let dir = dir.trim_end_matches('/');
-    !dir.is_empty()
-        && !roots
-            .iter()
-            .any(|root| root.to_string_lossy().trim_end_matches('/') == dir)
+    if !before.ends_with(char::is_whitespace) || rest.contains(flag) {
+        return false;
+    }
+    let dir = if let Some(quote @ ('\'' | '"')) = rest.chars().next() {
+        let Some((dir, tail)) = rest[1..].split_once(quote) else {
+            return false;
+        };
+        if dir.contains(['\\', '\'', '"'])
+            || (!tail.is_empty() && !tail.starts_with(char::is_whitespace))
+        {
+            return false;
+        }
+        dir
+    } else {
+        let dir = rest.split(" --").next().unwrap_or("").trim();
+        if dir.chars().any(char::is_whitespace) || dir.contains(['\\', '\'', '"']) {
+            return false;
+        }
+        dir
+    };
+    let path = Path::new(dir);
+    // Relative argv belongs to the browser's cwd, not this CLI's cwd.
+    // Resolve existing directories before comparing: a lexical difference
+    // does not establish a separate profile when symlinks or aliases exist.
+    if !path.is_absolute() {
+        return false;
+    }
+    let Ok(path) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        return false;
+    };
+    if !metadata.is_dir() {
+        return false;
+    }
+    for root in roots {
+        let known = match std::fs::canonicalize(root) {
+            Ok(known) => known,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return false,
+        };
+        if path == known {
+            return false;
+        }
+        let Ok(known_metadata) = std::fs::metadata(known) else {
+            return false;
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if metadata.dev() == known_metadata.dev() && metadata.ino() == known_metadata.ino() {
+                return false;
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = known_metadata;
+    }
+    true
 }
 
 /// Whether a browser process named `name` runs for the user's own profiles,
@@ -2856,8 +2910,9 @@ pub(crate) fn launch_chrome_for_relay(selector: Option<&str>) -> Option<String> 
 
 /// Start one profile in the background: Chrome starts in it when it is not
 /// running, and a running Chrome opens a window in it (the new process hands
-/// its command line to the running one), without raising Chrome over the
-/// user's work. `name_data_dir` passes the profile's data root as
+/// its command line to the running one), with a background launch request.
+/// A running Chrome may still take focus; restoration is best effort and
+/// does not preserve another Chrome window. `name_data_dir` passes the root as
 /// `--user-data-dir`, so the request reaches the Chrome running on that root
 /// and no other; it is left out when starting Chrome, which must keep its
 /// default data dir. Returns a human description of what was started, or None
@@ -2993,17 +3048,20 @@ pub(crate) fn profile_listed_active(local_state: &serde_json::Value, dir: &str) 
     let list = local_state
         .pointer("/profile/last_active_profiles")?
         .as_array()?;
+    // A partly corrupt list is unknown even when it also contains `dir`.
+    if list
+        .iter()
+        .any(|entry| entry.as_str().is_none_or(|value| value.trim().is_empty()))
+    {
+        return None;
+    }
     Some(list.iter().any(|entry| entry.as_str() == Some(dir)))
 }
 
-/// The profile the relay would come from, when Chrome is running but that
-/// profile has no window open. Closing a profile's last window leaves Chrome
-/// running (always on macOS) with the profile unloaded, and its extension
-/// with it: no worker, no native host, no relay, and the worker's reconnect
-/// timer cannot fire because the worker is gone. Waiting, reconnecting and
-/// reloading the extension all fail the same way until a window opens there.
-/// `None` when Chrome is not provably running, the profile has no extension,
-/// or its window state cannot be read.
+/// A candidate relay profile not listed as active in `Local State` while
+/// Chrome provably runs. This metadata may lag and does not itself prove
+/// whether its worker is loaded. Recovery waits before requesting a window.
+/// `None` means not running, no extension, active, or unreadable metadata.
 pub(crate) fn closed_relay_profile(selector: Option<&str>) -> Option<ChromeProfileInfo> {
     if chrome_process() != ChromeProcess::Running {
         return None;
@@ -3016,12 +3074,8 @@ pub(crate) fn closed_relay_profile(selector: Option<&str>) -> Option<ChromeProfi
     (profile_listed_active(&local_state, &profile.dir) == Some(false)).then(|| profile.clone())
 }
 
-/// The `profile not open` message for a relay that is down because its
-/// profile is closed (see [`closed_relay_profile`]); same code as the
-/// first-tab check, which sees the case while the relay is up. `opened`:
-/// chrome-use already asked Chrome to open a window there and the profile
-/// still shows none, so only the user can open it. Otherwise (`status`) it
-/// says the next command opens one in the background.
+/// Describe unlisted profile metadata with a disconnected relay. `opened`
+/// only acknowledges a window request, not an open window or a live relay.
 pub(crate) fn closed_relay_profile_message(profile: &ChromeProfileInfo, opened: bool) -> String {
     let label = profile
         .email
@@ -3030,18 +3084,19 @@ pub(crate) fn closed_relay_profile_message(profile: &ChromeProfileInfo, opened: 
         .map(|who| format!("{} ({who})", profile.dir))
         .unwrap_or_else(|| profile.dir.clone());
     let next = if opened {
-        "chrome-use asked Chrome to open a window there in the background, but the profile \
-         still shows none. Open a window in that profile yourself (pick it in Chrome's profile \
+        "chrome-use requested a window there, but Local State still does not list one. \
+         Open a window in that profile yourself (pick it in Chrome's profile \
          menu, or press Cmd+N / Ctrl+N in Chrome), then rerun the same command."
     } else {
-        "The next command that drives the browser opens a window there in the background \
-         (not with AGENT_BROWSER_NO_AUTO_RECONNECT set); or open one yourself: pick that \
-         profile in Chrome's profile menu, or press Cmd+N / Ctrl+N in Chrome."
+        "A browser command can request a window after a stable 20s observation \
+         (unless AGENT_BROWSER_NO_AUTO_RECONNECT is set). Recovery may briefly foreground Chrome; \
+         focus restoration is best effort and cannot guarantee returning to another Chrome window. \
+         Or open the profile yourself in Chrome's profile menu, then rerun."
     };
     format!(
-        "profile not open: Chrome is running, but the profile with the chrome-use extension, \
-         {label}, has no open window, so the extension is not running and the relay cannot \
-         come up. {next} Reloading the extension or restarting Chrome is not needed."
+        "profile not open: Chrome is running, but Local State does not list the chrome-use profile \
+         {label} as having an open window and the relay is not connected. {next} \
+         An open window alone does not confirm a connected relay."
     )
 }
 
@@ -5874,20 +5929,25 @@ printf '%s\000' "$HOME" "${CHROME_USE_RELAY_DIR-__unset__}" "$@"
     #[test]
     fn automation_chromes_on_their_own_data_dir_are_not_the_users_chrome() {
         use super::is_side_instance;
-        let roots = vec![std::path::PathBuf::from(
-            "/Users/u/Library/Application Support/Google/Chrome",
-        )];
+        let fixture = tempfile::tempdir().unwrap();
+        let own = fixture.path().join("user Chrome");
+        let other = fixture.path().join("other Chrome");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let roots = vec![own.clone()];
+        let own = own.to_string_lossy().replace('\\', "/");
+        let other = other.to_string_lossy().replace('\\', "/");
         let app = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
         // A scraper's Chrome kept running for days beside the real one.
         assert!(is_side_instance(
             &format!(
                 "{app} --no-startup-window --remote-debugging-address=127.0.0.1 \
-                 --remote-debugging-port=9341 --user-data-dir=/Users/u/runtime/sessions/a"
+                 --remote-debugging-port=9341 --user-data-dir=\"{other}\""
             ),
             &roots
         ));
         assert!(is_side_instance(
-            &format!("{app} --headless=new --user-data-dir=/tmp/scratch dir/prof --disable-gpu"),
+            &format!("{app} --headless=new --user-data-dir=\"{other}\" --disable-gpu"),
             &roots
         ));
         // The user's own Chrome, however it was started.
@@ -5898,7 +5958,7 @@ printf '%s\000' "$HOME" "${CHROME_USE_RELAY_DIR-__unset__}" "$@"
         assert!(!is_side_instance(
             &format!(
                 "{app} --remote-debugging-port=9222 \
-                 --user-data-dir=/Users/u/Library/Application Support/Google/Chrome/"
+                 --user-data-dir=\"{own}/\""
             ),
             &roots
         ));
@@ -5910,6 +5970,68 @@ printf '%s\000' "$HOME" "${CHROME_USE_RELAY_DIR-__unset__}" "$@"
             &format!("{app} --remote-debugging-port=9222"),
             &roots
         ));
+    }
+
+    #[test]
+    fn recovery_hardening_ambiguous_data_dirs_never_hide_a_user_browser() {
+        let root = "/Users/u/Library/Application Support/Google/Chrome";
+        let roots = vec![PathBuf::from(root)];
+        for args in [
+            format!("--user-data-dir={root} https://example.invalid"),
+            format!("--user-data-dir=\"{root}\" https://example.invalid"),
+            format!("--user-data-dir='{root}/' --disable-gpu"),
+            "--user-data-dir=/tmp/scratch dir/prof --disable-gpu".into(),
+            "--user-data-dir=/tmp/profile https://example.invalid".into(),
+            "--user-data-dir=\"/tmp/unclosed".into(),
+            "--user-data-dir=\"/tmp/profile\"suffix".into(),
+            "--user-data-dir=/tmp/one --user-data-dir=/tmp/two".into(),
+            "https://example.invalid/--user-data-dir=/tmp/profile".into(),
+        ] {
+            assert!(
+                !super::is_side_instance(
+                    &format!("Chrome --remote-debugging-port=9222 {args}"),
+                    &roots
+                ),
+                "{args}"
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_hardening_directory_identity_not_lexical_aliases() {
+        let fixture = tempfile::tempdir().unwrap();
+        let own = fixture.path().join("user");
+        let other = fixture.path().join("other");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let roots = vec![own.clone()];
+        let command = |path: &str| format!("Chrome --headless --user-data-dir=\"{path}\"");
+        let own_arg = own.to_string_lossy().replace('\\', "/");
+        let other_arg = other.to_string_lossy().replace('\\', "/");
+        assert!(!super::is_side_instance(&command("."), &roots));
+        assert!(!super::is_side_instance(&command("../user"), &roots));
+        assert!(!super::is_side_instance(
+            &command(&format!("{own_arg}/.")),
+            &roots
+        ));
+        assert!(!super::is_side_instance(
+            &command(&format!("{other_arg}/../user")),
+            &roots
+        ));
+        assert!(super::is_side_instance(&command(&other_arg), &roots));
+        assert!(!super::is_side_instance(
+            &command(&format!("{other_arg}/missing")),
+            &roots
+        ));
+        #[cfg(unix)]
+        {
+            let alias = fixture.path().join("alias");
+            std::os::unix::fs::symlink(&own, &alias).unwrap();
+            assert!(!super::is_side_instance(
+                &command(alias.to_str().unwrap()),
+                &roots
+            ));
+        }
     }
 
     #[test]
@@ -5953,6 +6075,22 @@ printf '%s\000' "$HOME" "${CHROME_USE_RELAY_DIR-__unset__}" "$@"
             listed(&state(serde_json::json!("Default")), "Default"),
             None
         );
+    }
+
+    #[test]
+    fn recovery_hardening_malformed_active_profile_members_are_unknown() {
+        for list in [
+            serde_json::json!([null]),
+            serde_json::json!([123]),
+            serde_json::json!([""]),
+            serde_json::json!([" "]),
+            serde_json::json!(["Other", null]),
+            serde_json::json!(["Default", 123]),
+            serde_json::json!(["Default", ""]),
+        ] {
+            let state = serde_json::json!({"profile": {"last_active_profiles": list}});
+            assert_eq!(super::profile_listed_active(&state, "Default"), None);
+        }
     }
 
     #[test]

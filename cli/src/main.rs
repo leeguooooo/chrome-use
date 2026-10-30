@@ -32,6 +32,7 @@ mod opencli;
 mod output;
 mod ownership;
 mod panel_evidence;
+mod profile_recovery;
 mod profiles;
 mod read;
 mod report;
@@ -1546,11 +1547,11 @@ fn run_tabs_cleanup(flags: &flags::Flags, rest: &[String]) {
 }
 
 /// Wait up to 45s for the relay of `target_browser` to come up, polling every
-/// `poll`. With `check_closed`, a Chrome that runs with the extension's
-/// profile closed is noticed: no wait brings that relay back, so a window is
-/// opened there in the background, as a Chrome that is not running is
-/// started in it. If the profile still shows no window after a 20s grace
-/// (Chrome writes a window opened just now to `Local State` up to 10s late),
+/// `poll`. With `check_closed`, a running Chrome's unlisted extension profile
+/// is observed for 20s before requesting a window, allowing a recent
+/// window or relay to finish starting before making another window request.
+/// Recovery may briefly take focus; restoration is best effort. If the
+/// profile still shows no window 20s after that request,
 /// this returns it, and whether a window was asked for, for the caller to
 /// name instead of failing with advice that cannot help.
 fn wait_for_relay(
@@ -1565,31 +1566,45 @@ fn wait_for_relay(
             .is_none()
     };
     let started = std::time::Instant::now();
-    let deadline = started + std::time::Duration::from_secs(45);
-    let mut opened = None;
-    if check_closed && relay_down() {
-        if let Some(profile) = connect::closed_relay_profile(target_browser) {
-            let started_window = connect::start_profile_in_background(&profile, true);
-            if let Some(what) = &started_window {
-                eprint!(" {what} had no open window, so its extension was not running; opened one in the background…");
-                let _ = std::io::Write::flush(&mut std::io::stderr());
-            }
-            opened = Some(started_window.is_some());
-        }
-    }
-    while relay_down() && std::time::Instant::now() < deadline {
-        if let Some(asked) = opened {
-            if started.elapsed() >= std::time::Duration::from_secs(20) {
-                if let Some(profile) = connect::closed_relay_profile(target_browser) {
-                    return Some((profile, asked));
+    let mut recovery = profile_recovery::Recovery::new(check_closed);
+    loop {
+        let ready = !relay_down();
+        let now = started.elapsed();
+        let profile = if !ready && recovery.needs_profile(now) {
+            connect::closed_relay_profile(target_browser)
+        } else {
+            None
+        };
+        let candidate = profile.as_ref().map(|p| (p.root.as_str(), p.dir.as_str()));
+        match recovery.observe(started.elapsed(), ready, candidate) {
+            profile_recovery::Decision::Open => {
+                // Metadata reads can take time. Do not create a window if the
+                // relay came up meanwhile, and still let callers recheck it.
+                let ready = !relay_down();
+                if recovery.observe(started.elapsed(), ready, candidate)
+                    != profile_recovery::Decision::Open
+                {
+                    return None;
                 }
-                // The window is there: wait for its relay as usual.
-                opened = None;
+                if let Some(profile) = profile {
+                    let started_window = connect::start_profile_in_background(&profile, true);
+                    if let Some(what) = &started_window {
+                        eprint!(" {what} is still unlisted as active; requested a window (Chrome may briefly take focus)…");
+                        let _ = std::io::Write::flush(&mut std::io::stderr());
+                    }
+                    recovery.requested(started.elapsed(), started_window.is_some());
+                }
             }
+            profile_recovery::Decision::Closed { requested } => {
+                return relay_down()
+                    .then(|| profile.map(|profile| (profile, requested)))
+                    .flatten();
+            }
+            profile_recovery::Decision::Done => return None,
+            profile_recovery::Decision::Wait => {}
         }
         std::thread::sleep(poll);
     }
-    None
 }
 
 fn run_status(session: &str, json_mode: bool) {
@@ -1606,8 +1621,7 @@ fn run_status(session: &str, json_mode: bool) {
     if health.debugger_warns() {
         warnings.push(health.debugger.clone());
     }
-    // Down because the extension's profile is closed: the generic "connect"
-    // hint cannot help, so name the profile and the fix.
+    // Name the unlisted candidate profile without inferring worker state.
     let closed_profile = if relay_up {
         None
     } else {
@@ -3089,8 +3103,8 @@ fn main() {
                     exit(1);
                 }
                 Ok(None) => {
-                    // Its profile is closed: no worker to reconnect, so the
-                    // advice below would send the reader the wrong way.
+                    // Name the unlisted profile instead of guessing why its
+                    // relay is disconnected.
                     if let Some((profile, opened)) = &closed_profile {
                         eprintln!(
                             "{} {}",
@@ -3924,11 +3938,9 @@ fn main() {
                     ),
                 }
             }
-            // Chrome was already running, but the extension's profile has no
-            // window: waiting cannot bring that relay back, so open one in the
-            // background, and say what is wrong if that does not help. Not
-            // after starting Chrome here: its new window reaches `Local
-            // State` only seconds later.
+            // Observe an already-running Chrome's unlisted profile before
+            // requesting a window. Skip after starting Chrome here: its new
+            // window may take time to reach Local State.
             eprint!(
                 "{} Chrome relay dropped — reconnecting…",
                 color::success_indicator()
