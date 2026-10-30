@@ -12,7 +12,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
       observeDebuggerCommand:(_,promise)=>promise, sendTabCommand,
       setTimeout:fn=>{timers.push(fn);return timers.length}, clearTimeout(){},
       fetch:async (url,options)=>{if(url.endsWith('/trace')) emitted.push(JSON.parse(options.body));
-        return {json:async()=>({valid:true,snapshot:{}})};},
+        return {ok:true,json:async()=>({valid:true,snapshot:{},saved:true})};},
       chrome:{tabs:{get:async()=>({url})},debugger:{
         onDetach:{addListener:fn=>{onDetach=fn}}, attach:async()=>({}),detach:async()=>({}),
         sendCommand:(target,method)=>{

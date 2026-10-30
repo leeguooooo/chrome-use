@@ -20,11 +20,12 @@ spec.loader.exec_module(probe)
 class ProbeTests(unittest.TestCase):
     def test_fixture_has_exact_work_and_accepts_trace(self):
         fixture = probe.Fixture(123)
+        fixture.register("fixture", Path(tempfile.gettempdir()))
         try:
             report = urllib.request.urlopen(fixture.base + "/report?test").read().decode()
             warm = urllib.request.urlopen(fixture.base + "/warmup?test").read().decode()
-            self.assertEqual(report.count('<div class=row>'), 123)
-            self.assertEqual(warm.count('<div class=row>'), 1)
+            self.assertEqual(report.count('<div class="row"'), 123)
+            self.assertEqual(warm.count('<div class="row"'), 1)
             event = {"caseId": "fixture", "type": "dom-answer", "result": {"rows": 123}}
             request = urllib.request.Request(fixture.base + "/trace", data=json.dumps(event).encode(),
                 headers={"Content-Type": "application/json"}, method="POST")
@@ -67,6 +68,14 @@ class ProbeTests(unittest.TestCase):
             env.update(PROBE_HELPER=source[source.index("// Generated CI fixture observer"):source.index("const HOST_NAME =")],
                 PROBE_SENDER=source[start:source.index("function anyConnectedTab", start)], PROBE_EXPECT_DOM="false")
             subprocess.run(["node", str(Path(__file__).with_name("test-relay-observer.cjs"))], env=env, check=True)
+
+            for candidate in ("baseline", "view", "focus"):
+                destination=Path(tmp)/candidate
+                probe.instrument(root/"extensions/ab-connect",destination,"http://127.0.0.1:12345","case",False,candidate)
+                generated=(destination/"background.js").read_text()
+                subprocess.run(["node","--check",str(destination/"background.js")],check=True)
+                candidate_env=dict(env,PROBE_HELPER=generated[generated.index("// Generated CI fixture observer"):generated.index("const HOST_NAME =")],PROBE_CANDIDATE=candidate)
+                subprocess.run(["node",str(Path(__file__).with_name("test-candidates.cjs"))],env=candidate_env,check=True)
 
 
     def good_record(self):
@@ -158,6 +167,105 @@ class ProbeTests(unittest.TestCase):
         changed = copy.deepcopy(record)
         changed["trace"][2]["attempts"].append(changed["trace"][2]["attempts"][0])
         self.assertFalse(probe.report_signature_matches(changed["trace"],123,changed))
+
+    def test_full_raster_uses_native_clip_and_document_extent_not_inner_width(self):
+        geometry = {"dpr":1,"width":1280,"height":720,"scrollWidth":1265,"scrollHeight":32288,
+                    "target":{"width":1265,"height":128}}
+        request = {"clip":{"x":0,"y":0,"width":1265,"height":32288,"scale":1}}
+        self.assertEqual(probe.expected_raster("full", geometry, request), (1265,32288))
+        self.assertEqual(probe.expected_raster("selector", geometry, request), (1265,128))
+        self.assertEqual(probe.expected_raster("viewport", geometry, request), (1280,720))
+        geometry["dpr"] = 2
+        self.assertEqual(probe.expected_raster("full", geometry, request), (2530,64576))
+        request["clip"]["height"] = 720
+        with self.assertRaisesRegex(RuntimeError,"document extent"):
+            probe.expected_raster("full", geometry, request)
+        with self.assertRaisesRegex(RuntimeError,"finite native clip"):
+            probe.expected_raster("full", geometry, {})
+
+    def candidate_record(self):
+        import copy
+        record = self.good_record()
+        record.update(candidateExperiment=True, candidate="baseline", generation="5aa55aa5")
+        record["state"] = "minimized"
+        for key in ("windowBefore", "windowAfter"):
+            record[key]["window"].update(minimized=True, foreground=456)
+        sent = record["trace"][1]
+        sent.update(candidate="baseline", request={"fromSurface":True})
+        sent["windowControl"]["snapshot"] = copy.deepcopy(record["windowBefore"])
+        page = {"generation":"5aa55aa5", "events":[], "globals":["fixtureState"], "mutations":100, "requests":[]}
+        record["pageBefore"] = page
+        record["trace"].append({"type":"page-after-answer", "operationId":"op", "captureId":"capture",
+            "target":copy.deepcopy(sent["target"]), "epoch":3, "result":copy.deepcopy(page)})
+        record["nativeMonitor"] = {"calibrated":True,"installed":4,"unhooked":[True]*4,
+            "pumpStoppedExpected":True,"overflow":False,"errors":[],"startTick":1000,"endTick":1100,"events":[],
+            "samples":[{"tick":t,"identityValid":True,"window":copy.deepcopy(record["windowBefore"]["window"])} for t in (1000,1020,1040,1060,1080,1100)]}
+        record["image"]["freshnessValid"] = True
+        return record
+
+    def test_candidate_requires_native_and_page_observation_without_hiding_cli_failures(self):
+        import copy
+        good = self.candidate_record()
+        self.assertEqual(probe.case_verdict(good),"PASS")
+        mutations = [lambda r:r["nativeMonitor"]["events"].append({"event":0x17,"tick":1050}),
+            lambda r:r["nativeMonitor"]["samples"][1]["window"].update(minimized=False),
+            lambda r:r["nativeMonitor"].update(pumpStoppedExpected=False),
+            lambda r:r["nativeMonitor"].update(overflow=True),
+            lambda r:r["nativeMonitor"]["errors"].append("callback error"),
+            lambda r:r["nativeMonitor"].update(unhooked=[True,False,True,True]),
+            lambda r:r["trace"][-1]["result"]["events"].append({"type":"focus"}),
+            lambda r:r["trace"][-1]["result"].update(mutations=101),
+            lambda r:r["trace"][1]["request"].update(fromSurface=False)]
+        for mutate in mutations:
+            bad = copy.deepcopy(good); mutate(bad)
+            self.assertEqual(probe.case_verdict(bad),"INCONCLUSIVE")
+        for mutate in [lambda r:r["capture"].update(exit=1), lambda r:r["image"].update(freshnessValid=False)]:
+            bad=copy.deepcopy(good);mutate(bad)
+            self.assertEqual(probe.case_verdict(bad),"ISSUES")
+        bad=copy.deepcopy(good)
+        bad["capture"]["exit"]=1
+        bad["nativeImage"]={"freshnessValid":True,"pixelValid":True,"dimensionsValid":True}
+        self.assertEqual(probe.case_verdict(bad),"ISSUES","raw PNG must not mask CLI failure")
+
+    def test_native_png_sink_requires_registered_attempt_and_cannot_overwrite(self):
+        import base64,io,uuid,copy
+        from PIL import Image
+        fixture=probe.Fixture(123)
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture.register("image-case",Path(tmp))
+            op,cap=str(uuid.uuid4()),str(uuid.uuid4())
+            target={"tabId":7,"sessionId":None}
+            trace={"caseId":"image-case","operationId":op,"captureId":cap,"target":target,"epoch":2}
+            fixture.traces.extend([dict(trace,type="capture-native-send",fixturePath="/report"),dict(trace,type="capture-native-answer",responseOwned=True)])
+            data=io.BytesIO();Image.new("RGB",(8,8),(0,0,0)).save(data,format="PNG")
+            event=dict(trace,data=base64.b64encode(data.getvalue()).decode())
+            def post(e):
+                return urllib.request.urlopen(urllib.request.Request(fixture.base+"/native-image",data=json.dumps(e).encode(),headers={"Content-Type":"application/json"},method="POST"))
+            for change in [{"caseId":"unknown"},{"captureId":"../file"},{"epoch":3},{"data":"invalid"}]:
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    post(dict(event,**change))
+                caught.exception.close()
+            response=json.load(post(event));self.assertTrue(response["saved"])
+            self.assertEqual((Path(tmp)/"native.png").read_bytes(),data.getvalue())
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                post(event)
+            caught.exception.close()
+        fixture.close()
+
+    def test_png_generation_is_decoded_from_pixels_not_dom_or_static_sentinels(self):
+        from PIL import Image,ImageDraw
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp)/"frame.png"
+            image=Image.new("RGB",(1280,720),(52,120,193));draw=ImageDraw.Draw(image)
+            draw.rectangle((0,0,1279,159),fill=(18,171,52))
+            generation="5aa55aa5"
+            for bit in range(32):
+                white=(int(generation,16)>>(31-bit))&1
+                draw.rectangle((32+bit*8,16,39+bit*8,31),fill=(255,255,255) if white else (0,0,0))
+            image.save(p)
+            geo={"dpr":1,"width":1280,"height":720}
+            self.assertTrue(probe.inspect_image(p,"viewport",geo,{},generation)["freshnessValid"])
+            self.assertFalse(probe.inspect_image(p,"viewport",geo,{},"00000000")["freshnessValid"])
 
     def test_chrome_version_uses_file_metadata_without_starting_chrome(self):
         binary = Path("C:/fixture/tool $(not-code).exe")
