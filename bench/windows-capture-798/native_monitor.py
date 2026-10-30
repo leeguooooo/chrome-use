@@ -9,6 +9,8 @@ EVENTS = (0x0003, 0x0016, 0x0017, 0x800B)
 
 class NativeWindowMonitor:
     def __init__(self, windows, hwnd, pid, case_id):
+        if not isinstance(hwnd, int) or not isinstance(pid, int) or hwnd <= 0 or pid <= 0:
+            raise ValueError("native monitoring requires a nonzero owned HWND and PID")
         self.windows, self.hwnd, self.pid, self.case_id = windows, hwnd, pid, case_id
         self.lock = threading.Lock()
         self.ready, self.stopped = threading.Event(), threading.Event()
@@ -112,6 +114,8 @@ class NativeWindowMonitor:
             return any(event["event"] == 0x0016 for event in self.events)
 
     def begin_measurement(self):
+        if self.start_tick is not None:
+            raise RuntimeError("native measurement start cannot be reset")
         if not self.calibrated():
             raise RuntimeError("owned minimize event did not calibrate the native hooks")
         self.start_tick = self.windows.k.GetTickCount64()

@@ -4,8 +4,8 @@ import hashlib
 import struct
 import uuid
 
-MAX_BODY = 128 * 1024 * 1024
-MAX_PNG = 96 * 1024 * 1024
+MAX_BODY = 44 * 1024 * 1024
+MAX_PNG = 32 * 1024 * 1024
 
 
 def canonical_uuid(value):

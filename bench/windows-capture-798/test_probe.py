@@ -186,36 +186,66 @@ class ProbeTests(unittest.TestCase):
     def candidate_record(self):
         import copy
         record = self.good_record()
-        record.update(candidateExperiment=True, candidate="baseline", generation="5aa55aa5")
+        record.update(candidateExperiment=True, candidate="baseline", generation="5aa55aa5",generationStartedTick=1010,generationConfirmedTick=1030)
         record["state"] = "minimized"
         for key in ("windowBefore", "windowAfter"):
             record[key]["window"].update(minimized=True, foreground=456)
         sent = record["trace"][1]
-        sent.update(candidate="baseline", request={"fromSurface":True})
+        sent.update(candidate="baseline", request={"fromSurface":True},sentMs=10)
         sent["windowControl"]["snapshot"] = copy.deepcopy(record["windowBefore"])
         page = {"generation":"5aa55aa5", "events":[], "globals":["fixtureState"], "mutations":100, "requests":[]}
         record["pageBefore"] = page
         record["trace"].append({"type":"page-after-answer", "operationId":"op", "captureId":"capture",
             "target":copy.deepcopy(sent["target"]), "epoch":3, "result":copy.deepcopy(page)})
+        record["trace"][2]["attempts"][0]["nativeOutcome"] = "answer"
+        record["trace"].extend([{"type":"capture-native-answer","operationId":"op","captureId":"capture",
+            "target":copy.deepcopy(sent["target"]),"epoch":3,"responseOwned":True,"nativeReceivedMs":20,"ownershipVerifiedMs":21,"atMs":22},
+            {"type":"native-image-ack","operationId":"op","captureId":"capture",
+            "target":copy.deepcopy(sent["target"]),"epoch":3,"saved":{"sha256":"f"*64}}])
+        record["nativeImage"]={"sha256":"f"*64,"freshnessValid":True}
         record["nativeMonitor"] = {"calibrated":True,"installed":4,"unhooked":[True]*4,
             "pumpStoppedExpected":True,"overflow":False,"errors":[],"startTick":1000,"endTick":1100,"events":[],
             "samples":[{"tick":t,"identityValid":True,"window":copy.deepcopy(record["windowBefore"]["window"])} for t in (1000,1020,1040,1060,1080,1100)]}
         record["image"]["freshnessValid"] = True
         return record
 
+    def test_native_monitor_rejects_zero_scope_before_loading_windows_apis(self):
+        from native_monitor import NativeWindowMonitor
+        for hwnd,pid in [(0,1),(1,0),(-1,1),(1,-1)]:
+            with self.assertRaisesRegex(ValueError,"nonzero owned"):
+                NativeWindowMonitor(None,hwnd,pid,"fixture")
+
+    def test_native_measurement_start_cannot_be_reset_after_generation(self):
+        from native_monitor import NativeWindowMonitor
+        monitor=NativeWindowMonitor.__new__(NativeWindowMonitor)
+        monitor.start_tick=None
+        monitor.calibrated=lambda:True
+        monitor.windows=mock.Mock()
+        monitor.windows.k.GetTickCount64.return_value=1000
+        monitor.begin_measurement()
+        with self.assertRaisesRegex(RuntimeError,"cannot be reset"):
+            monitor.begin_measurement()
+
     def test_candidate_requires_native_and_page_observation_without_hiding_cli_failures(self):
         import copy
         good = self.candidate_record()
         self.assertEqual(probe.case_verdict(good),"PASS")
         mutations = [lambda r:r["nativeMonitor"]["events"].append({"event":0x17,"tick":1050}),
+            lambda r:r["nativeMonitor"]["events"].append({"event":0x17,"tick":1020}),
+            lambda r:r.update(generationStartedTick=999),
             lambda r:r["nativeMonitor"]["samples"][1]["window"].update(minimized=False),
             lambda r:r["nativeMonitor"].update(pumpStoppedExpected=False),
             lambda r:r["nativeMonitor"].update(overflow=True),
             lambda r:r["nativeMonitor"]["errors"].append("callback error"),
             lambda r:r["nativeMonitor"].update(unhooked=[True,False,True,True]),
-            lambda r:r["trace"][-1]["result"]["events"].append({"type":"focus"}),
-            lambda r:r["trace"][-1]["result"].update(mutations=101),
-            lambda r:r["trace"][1]["request"].update(fromSurface=False)]
+            lambda r:next(e for e in r["trace"] if e["type"]=="page-after-answer")["result"]["events"].append({"type":"focus"}),
+            lambda r:next(e for e in r["trace"] if e["type"]=="page-after-answer")["result"].update(mutations=101),
+            lambda r:r["trace"][1]["request"].update(fromSurface=False),
+            lambda r:r.update(diagnosticError="flush deadline"),
+            lambda r:r.update(trace=[e for e in r["trace"] if e["type"]!="capture-native-answer"]),
+            lambda r:r.update(trace=[e for e in r["trace"] if e["type"]!="native-image-ack"]),
+            lambda r:r["nativeImage"].update(sha256="wrong"),
+            lambda r:r["trace"].append({"type":"native-image-error","operationId":"op"})]
         for mutate in mutations:
             bad = copy.deepcopy(good); mutate(bad)
             self.assertEqual(probe.case_verdict(bad),"INCONCLUSIVE")
@@ -224,8 +254,20 @@ class ProbeTests(unittest.TestCase):
             self.assertEqual(probe.case_verdict(bad),"ISSUES")
         bad=copy.deepcopy(good)
         bad["capture"]["exit"]=1
-        bad["nativeImage"]={"freshnessValid":True,"pixelValid":True,"dimensionsValid":True}
+        bad["nativeImage"].update(freshnessValid=True,pixelValid=True,dimensionsValid=True)
         self.assertEqual(probe.case_verdict(bad),"ISSUES","raw PNG must not mask CLI failure")
+
+    def test_known_pending_timeout_needs_no_png_but_cannot_masquerade_as_cli_success(self):
+        record=self.candidate_record()
+        end=record["trace"][2]
+        end.update(type="capture-wrapper-error",error="relay timeout after 25000ms")
+        end["attempts"][0].update(nativePending=True,nativeOutcome=None)
+        record["trace"]=[e for e in record["trace"] if e["type"] not in ("capture-native-answer","native-image-ack")]
+        record.pop("nativeImage")
+        record["capture"].update(exit=1,response={"success":False})
+        self.assertEqual(probe.case_verdict(record),"ISSUES")
+        record["capture"].update(exit=0,response={"success":True})
+        self.assertEqual(probe.case_verdict(record),"INCONCLUSIVE")
 
     def test_native_png_sink_requires_registered_attempt_and_cannot_overwrite(self):
         import base64,io,uuid,copy

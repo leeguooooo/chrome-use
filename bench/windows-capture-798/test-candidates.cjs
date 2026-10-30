@@ -2,12 +2,13 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 (async()=>{
   const events=[],calls=[],timers=[];
-  let failFocus=false, pendingFocus=false;
-  const context={performance:{now:()=>10},crypto:require('node:crypto').webcrypto,URL,AbortController,
+  let failFocus=false, pendingFocus=false, blockOwnership=false, releaseOwnership;
+  let clock=0;
+  const context={performance:{now:()=>++clock},crypto:require('node:crypto').webcrypto,URL,AbortController,
     ownedTabs:new Set([7]),setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){},
     fetch:async(url,options)=>{if(url.endsWith('/trace'))events.push(JSON.parse(options.body));
       return {ok:true,json:async()=>({valid:true,snapshot:{},saved:true})};},
-    chrome:{tabs:{get:async()=>({url:'http://127.0.0.1:12345/report?case'})},debugger:{
+    chrome:{tabs:{get:async()=>{if(blockOwnership){blockOwnership=false;return new Promise(resolve=>{releaseOwnership=resolve});}return {url:'http://127.0.0.1:12345/report?case'};}},debugger:{
       onDetach:{addListener(){}},attach:async()=>{},detach:async()=>{},
       sendCommand:async(target,command,args)=>{
         calls.push({target,command,args});
@@ -16,7 +17,7 @@ const vm = require('node:vm');
           if(pendingFocus)return new Promise(()=>{});
           return {};
         }
-        return {data:'synthetic'};
+        blockOwnership=true;return {data:'synthetic'};
       },
     }},
   };
@@ -25,6 +26,12 @@ const vm = require('node:vm');
   const operation=await context.fixtureCaptureContext(7);
   const clip={x:0,y:0,width:1265,height:32288,scale:1};
   await context.fixtureSendCommand(operation,{tabId:7},'Page.captureScreenshot',{fromSurface:true,clip,captureBeyondViewport:true});
+  assert.equal(operation.attempts[0].nativePending,false,'native settlement must precede asynchronous ownership proof');
+  assert.equal(events.some(e=>e.type==='capture-native-answer'),false);
+  releaseOwnership({url:'http://127.0.0.1:12345/report?case'});
+  await new Promise(resolve=>setImmediate(resolve));
+  const answer=events.find(e=>e.type==='capture-native-answer');
+  assert.ok(answer.nativeReceivedMs<=answer.ownershipVerifiedMs && answer.ownershipVerifiedMs<=answer.atMs);
   const capture=calls.filter(c=>c.command==='Page.captureScreenshot');
   assert.equal(capture.length,1);
   assert.equal(capture[0].args.fromSurface,process.env.PROBE_CANDIDATE!=='view');

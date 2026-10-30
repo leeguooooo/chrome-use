@@ -462,7 +462,11 @@ def inspect_image(path, kind, geometry, native_request, generation=None):
         dpr = geometry["dpr"]
         points = [("top", 20, 20, EXPECTED[kind])]
         if kind == "viewport":
-            points.append(("long-report", 20, 408, (52, 120, 193)))
+            points.extend([("long-report", 20, 408, (52, 120, 193)),
+                           ("lower-right", geometry["width"] - 40, geometry["height"] - 40, (52, 120, 193))])
+        elif kind == "selector":
+            points.extend([("middle", 20, geometry["target"]["height"] / 2, (200, 77, 25)),
+                           ("lower-right", geometry["target"]["width"] - 40, geometry["target"]["height"] - 20, (200, 77, 25))])
         elif kind == "full":
             points.extend([("middle", 20, 160 + geometry["rows"] // 2 * 32 + 24, (52, 120, 193)),
                            ("bottom", 20, geometry["scrollHeight"] - 64, (200, 77, 25))])
@@ -596,6 +600,8 @@ def report_signature_matches(events, rows, record):
 def experiment_evidence_valid(record):
     if not record.get("candidateExperiment"):
         return True
+    if "diagnosticError" in record or "nativeImageError" in record:
+        return False
     monitor = record.get("nativeMonitor") or {}
     if (monitor.get("calibrated") is not True or monitor.get("installed") != 4
         or monitor.get("unhooked") != [True] * 4 or monitor.get("pumpStoppedExpected") is not True
@@ -603,6 +609,9 @@ def experiment_evidence_valid(record):
         return False
     start, end = monitor.get("startTick"), monitor.get("endTick")
     if not isinstance(start, int) or not isinstance(end, int) or end < start:
+        return False
+    generation_start, generation_end = record.get("generationStartedTick"), record.get("generationConfirmedTick")
+    if not isinstance(generation_start, int) or not isinstance(generation_end, int) or not start <= generation_start <= generation_end <= end:
         return False
     samples = [v for v in monitor.get("samples", []) if start <= v["tick"] <= end]
     original = record.get("windowBefore", {}).get("window", {})
@@ -639,12 +648,32 @@ def experiment_evidence_valid(record):
     elif focus:
         return False
     answers = [e for e in events if e.get("type") == "capture-native-answer"]
-    if answers:
+    errors = [e for e in events if e.get("type") == "capture-native-error"]
+    end = context[1]
+    attempt = end["attempts"][0]
+    if any(e.get("type") in ("native-image-error", "page-after-error") for e in events):
+        return False
+    if (record.get("capture", {}).get("response") or {}).get("success") is True and end["type"] != "capture-wrapper-answer":
+        return False
+    known_answer = end["type"] == "capture-wrapper-answer" or attempt.get("nativeOutcome") == "answer" or bool(answers)
+    if known_answer:
         acks = [e for e in events if e.get("type") == "native-image-ack"]
-        if (len(answers) != 1 or len(acks) != 1 or acks[0].get("captureId") != sent["captureId"]
-            or acks[0].get("target") != sent["target"] or acks[0].get("epoch") != sent["epoch"]
-            or "nativeImage" not in record):
+        if (len(answers) != 1 or errors or len(acks) != 1
+            or (end["type"] == "capture-wrapper-answer" and (attempt.get("nativeOutcome") != "answer" or attempt.get("nativePending") is not False))
+            or answers[0].get("responseOwned") is not True
+            or any(e.get("captureId") != sent["captureId"] or e.get("target") != sent["target"] or e.get("epoch") != sent["epoch"] for e in [answers[0], acks[0]])
+            or "nativeImage" not in record
+            or (acks[0].get("saved") or {}).get("sha256") != record["nativeImage"].get("sha256")):
             return False
+        answer = answers[0]
+        times = [sent.get("sentMs"), answer.get("nativeReceivedMs"), answer.get("ownershipVerifiedMs"), answer.get("atMs")]
+        if not all(isinstance(t, (float, int)) and math.isfinite(t) for t in times) or times != sorted(times):
+            return False
+    elif attempt.get("nativeOutcome") == "error":
+        if len(errors) != 1 or errors[0].get("captureId") != sent["captureId"] or errors[0].get("target") != sent["target"] or errors[0].get("epoch") != sent["epoch"]:
+            return False
+    elif attempt.get("nativePending") is not True or attempt.get("nativeOutcome") is not None:
+        return False
     return True
 
 
@@ -739,6 +768,18 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
                 placement = windows.minimize(hwnd)
             if monitor:
                 wait_for(monitor.calibrated, bool, 3)
+                settled = []
+                def stable_setup(window):
+                    valid = window_valid({"window":window}, "minimized", case_id, chrome.pid, int(hwnd), os.getpid())
+                    value = {k:window[k] for k in ("hwnd","pid","title","minimized","rect","foreground")}
+                    if not valid or (settled and settled[-1] != value):
+                        settled.clear()
+                    if valid:
+                        settled.append(value)
+                    return len(settled) >= 3
+                record["setupSettledWindow"] = wait_for(lambda: windows.state(hwnd), stable_setup, 3)
+                monitor.begin_measurement()
+                record["generationStartedTick"] = windows.k.GetTickCount64()
                 generation = secrets.token_hex(4)
                 if generation == "00000000":
                     generation = "00000001"
@@ -746,6 +787,7 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
                 changed = checked(invoke("generation", "eval", "fixtureAdvance(" + json.dumps(generation) + ")"))["result"]
                 if changed != generation:
                     raise RuntimeError("post-minimize fixture generation update was not confirmed")
+                record["generationConfirmedTick"] = windows.k.GetTickCount64()
                 record["pageBefore"] = checked(invoke("page-before", "eval", "fixtureSnapshot()"))["result"]
                 if record["pageBefore"]["generation"] != generation:
                     raise RuntimeError("post-minimize fixture snapshot did not contain the new generation")
@@ -769,8 +811,6 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
                 command.append("--full")
             elif kind == "selector":
                 command.extend(["--selector", "#target"])
-            if monitor:
-                monitor.begin_measurement()
             record["systemBeforeCapture"] = system_status()
             record["captureAttempted"] = True
             capture = invoke("capture", *command)
@@ -801,9 +841,17 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
                             return False
                         own = context[2]
                         page_done = any(e.get("type") in ("page-after-answer", "page-after-error") for e in own)
+                        sent, end, _ = context
+                        attempt = end["attempts"][0]
                         native_answer = any(e.get("type") == "capture-native-answer" for e in own)
-                        upload_done = not native_answer or any(e.get("type") in ("native-image-ack", "native-image-error") for e in own)
-                        return page_done and upload_done
+                        known_answer = end["type"] == "capture-wrapper-answer" or attempt.get("nativeOutcome") == "answer" or native_answer
+                        upload_done = any(e.get("type") in ("native-image-ack", "native-image-error") for e in own)
+                        native_error = any(e.get("type") == "capture-native-error" for e in own)
+                        if known_answer:
+                            return page_done and native_answer and upload_done
+                        if attempt.get("nativeOutcome") == "error":
+                            return page_done and native_error
+                        return page_done and attempt.get("nativePending") is True and attempt.get("nativeOutcome") is None
                     wait_for(lambda: fixture.events(case_id), diagnostics_complete, 7)
                 except Exception as exc:
                     record["diagnosticError"] = str(exc)

@@ -42,7 +42,9 @@ No restore, activation, bring-to-front, window update, synthetic input, animatio
 clock change or capture fallback occurs during measurement. A timed-out original
 native promise is never followed by another screenshot in that profile.
 
-After minimization, the fixture's own application changes a random 32-bit
+After minimization is confirmed/calibrated and three read-only setup state samples
+agree, measurement starts before any generation write and cannot be reset. Thus
+the measured interval includes generation writes/reads and capture. The fixture's own application changes a random 32-bit
 generation, encoded as black/white pixel strips at the top, middle and bottom,
 and changes a row's text. A DOM read must confirm this new generation. Every
 configuration makes the same writes and reads: they can themselves wake a
@@ -85,7 +87,8 @@ Warmup and measurement must share the same target/epoch. An unresolved health
 recovery promise is not a capture dispatch. A loopback handshake samples native
 window state near dispatch; it must finish within 250ms. This timing intervention
 is common to every configuration. The outer 25-second wrapper timeout is distinct
-from native promise settlement. Optional pending DOM observation, if enabled,
+from native promise settlement. Native response arrival is timestamped before the
+asynchronous ownership proof; proof and trace emission have separate times. Optional pending DOM observation, if enabled,
 requires that same target/epoch and a still-pending capture at two seconds.
 There is no additional debugger client or Runtime subscription.
 
@@ -97,7 +100,7 @@ checked at send, response and upload. The sink accepts only registered cases,
 canonical UUID attempt identities and a matching native send/answer; paths come
 from registration, with exclusive creation preventing overwrite. It rejects
 chunked, missing-length, oversized, invalid-base64 and invalid PNG/IHDR bodies,
-with a 96MiB decoded limit and 200MP bound. Upload acknowledgment or explicit
+with a 32MiB decoded limit and 44MiB HTTP body limit and 200MP bound. Upload acknowledgment or explicit
 error is traced and flushed with a bounded wait before browser cleanup. These
 bytes contain only this disposable synthetic fixture. Nothing is sent to an
 external telemetry service.

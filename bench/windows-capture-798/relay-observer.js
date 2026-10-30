@@ -67,7 +67,7 @@ function fixtureObserveWrapper(context, operation) {
       error: error ? String(error?.message || error) : null,
       epoch: fixtureEpoch(context.requested.tabId), invalidations: context.invalidations,
       attempts: context.attempts.map(a => ({ captureId: a.id, target: a.target, epoch: a.epoch,
-        nativePending: a.nativePending, elapsedMs: performance.now() - a.sentMs })) });
+        nativePending: a.nativePending, nativeOutcome: a.nativeOutcome, elapsedMs: performance.now() - a.sentMs })) });
   };
   operation.then(() => { finish('capture-wrapper-answer'); void fixturePageAfter(context); },
     error => { finish('capture-wrapper-error', error); void fixturePageAfter(context); });
@@ -179,7 +179,7 @@ async function fixtureSendCommand(context, target, command, args) {
   if (!control?.valid) fixtureInvalidate(context, 'dispatch-window-state-unverified');
   const epoch = fixtureEpoch(actual.tabId);
   if (epoch === 0 || epoch !== context.epochAtOperationStart) fixtureInvalidate(context, 'attachment-epoch-changed');
-  const attempt = { id: crypto.randomUUID(), target: actual, epoch, sentMs: performance.now(), nativePending: true, timer: null };
+  const attempt = { id: crypto.randomUUID(), target: actual, epoch, sentMs: performance.now(), nativePending: true, nativeOutcome: null, timer: null };
   context.attempts.push(attempt);
   const effectiveArgs = context.fixturePath === '/report' && __CANDIDATE__ === 'view'
     ? {...args,fromSurface:false} : args;
@@ -193,19 +193,21 @@ async function fixtureSendCommand(context, target, command, args) {
     candidate: context.fixturePath === "/report" ? __CANDIDATE__ : "warmup",
     request: { format: effectiveArgs?.format, clip: effectiveArgs?.clip, captureBeyondViewport: effectiveArgs?.captureBeyondViewport, fromSurface: effectiveArgs?.fromSurface } });
   operation.then(async result => {
-    attempt.nativePending = false; clearTimeout(attempt.timer);
+    const nativeReceivedMs = performance.now();
+    attempt.nativePending = false; attempt.nativeOutcome = "answer"; clearTimeout(attempt.timer);
     const responseTab = await chrome.tabs.get(actual.tabId).catch(()=>null);
     const responseOwned = ownedTabs.has(actual.tabId) && fixtureOwnPage(responseTab) &&
       new URL(responseTab.url).pathname === context.fixturePath;
     if (!responseOwned || context.invalidations.length || fixtureEpoch(actual.tabId) !== attempt.epoch)
       fixtureInvalidate(context,"ownership-or-attachment-changed-at-native-answer");
     attempt.answerAck = fixtureEmit(context, { type: 'capture-native-answer', captureId: attempt.id, target: actual,
-      epoch: fixtureEpoch(actual.tabId), responseOwned, encodedBytes: typeof result?.data === 'string' ? result.data.length : null });
+      epoch: fixtureEpoch(actual.tabId), responseOwned, nativeReceivedMs, ownershipVerifiedMs: performance.now(), encodedBytes: typeof result?.data === 'string' ? result.data.length : null });
     void fixtureUploadNative(context,attempt,result);
   }, error => {
-    attempt.nativePending = false; clearTimeout(attempt.timer);
+    const nativeReceivedMs = performance.now();
+    attempt.nativePending = false; attempt.nativeOutcome = "error"; clearTimeout(attempt.timer);
     fixtureEmit(context, { type: 'capture-native-error', captureId: attempt.id, target: actual,
-      epoch: fixtureEpoch(actual.tabId), error: String(error?.message || error) });
+      epoch: fixtureEpoch(actual.tabId), nativeReceivedMs, error: String(error?.message || error) });
   });
   if (__DOM_CONTROL__ && !context.invalidations.length) {
     attempt.timer = setTimeout(() => void fixtureReadWhilePending(context, attempt), Math.max(0, 2000 - (performance.now() - attempt.sentMs)));
