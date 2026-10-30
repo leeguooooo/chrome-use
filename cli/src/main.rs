@@ -1545,6 +1545,53 @@ fn run_tabs_cleanup(flags: &flags::Flags, rest: &[String]) {
     }
 }
 
+/// Wait up to 45s for the relay of `target_browser` to come up, polling every
+/// `poll`. With `check_closed`, a Chrome that runs with the extension's
+/// profile closed is noticed: no wait brings that relay back, so a window is
+/// opened there in the background, as a Chrome that is not running is
+/// started in it. If the profile still shows no window after a 20s grace
+/// (Chrome writes a window opened just now to `Local State` up to 10s late),
+/// this returns it, and whether a window was asked for, for the caller to
+/// name instead of failing with advice that cannot help.
+fn wait_for_relay(
+    target_browser: Option<&str>,
+    poll: std::time::Duration,
+    check_closed: bool,
+) -> Option<(connect::ChromeProfileInfo, bool)> {
+    let relay_down = || {
+        connect::relay_url_for_selector_or_default(target_browser)
+            .ok()
+            .flatten()
+            .is_none()
+    };
+    let started = std::time::Instant::now();
+    let deadline = started + std::time::Duration::from_secs(45);
+    let mut opened = None;
+    if check_closed && relay_down() {
+        if let Some(profile) = connect::closed_relay_profile(target_browser) {
+            let started_window = connect::start_profile_in_background(&profile, true);
+            if let Some(what) = &started_window {
+                eprint!(" {what} had no open window, so its extension was not running; opened one in the background…");
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+            }
+            opened = Some(started_window.is_some());
+        }
+    }
+    while relay_down() && std::time::Instant::now() < deadline {
+        if let Some(asked) = opened {
+            if started.elapsed() >= std::time::Duration::from_secs(20) {
+                if let Some(profile) = connect::closed_relay_profile(target_browser) {
+                    return Some((profile, asked));
+                }
+                // The window is there: wait for its relay as usual.
+                opened = None;
+            }
+        }
+        std::thread::sleep(poll);
+    }
+    None
+}
+
 fn run_status(session: &str, json_mode: bool) {
     let inventory = walk_daemons();
     let host_report = connect::native_host_report();
@@ -1558,6 +1605,16 @@ fn run_status(session: &str, json_mode: bool) {
     }
     if health.debugger_warns() {
         warnings.push(health.debugger.clone());
+    }
+    // Down because the extension's profile is closed: the generic "connect"
+    // hint cannot help, so name the profile and the fix.
+    let closed_profile = if relay_up {
+        None
+    } else {
+        connect::closed_relay_profile(None)
+    };
+    if let Some(profile) = &closed_profile {
+        warnings.push(connect::closed_relay_profile_message(profile, false));
     }
     // Printed next to the driving profile below, so it must be that profile's
     // version, not the last `hello` writer's (#319).
@@ -1625,6 +1682,7 @@ fn run_status(session: &str, json_mode: bool) {
                     "hostHealthy": host_healthy,
                     "hostLauncherHealthy": host_healthy,
                     "relayUp": relay_up,
+                    "profileClosed": closed_profile.as_ref().map(|p| p.dir.clone()),
                     "health": health,
                     "connectedProfiles": connected_profiles,
                     "warnings": warnings,
@@ -1737,7 +1795,7 @@ fn run_status(session: &str, json_mode: bool) {
             println!("  {} pid {}{}", item.name, item.pid, version);
         }
     }
-    if !relay_up {
+    if !relay_up && closed_profile.is_none() {
         println!(
             "{}",
             color::dim("Run `chrome-use extension status`, then `chrome-use extension connect`.")
@@ -2994,6 +3052,7 @@ fn main() {
                     exit(1);
                 }
             };
+            let mut closed_profile = None;
             if current_relay.is_none() && crate::connect::host_installed() {
                 crate::connect::ensure_host_installed();
                 eprint!(
@@ -3001,15 +3060,8 @@ fn main() {
                     color::success_indicator()
                 );
                 let _ = std::io::Write::flush(&mut std::io::stderr());
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
-                while connect::relay_url_for_selector_or_default(target_browser)
-                    .ok()
-                    .flatten()
-                    .is_none()
-                    && std::time::Instant::now() < deadline
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(750));
-                }
+                closed_profile =
+                    wait_for_relay(target_browser, std::time::Duration::from_millis(750), true);
                 eprintln!();
             }
             match connect::relay_url_for_selector_or_default(target_browser) {
@@ -3037,6 +3089,16 @@ fn main() {
                     exit(1);
                 }
                 Ok(None) => {
+                    // Its profile is closed: no worker to reconnect, so the
+                    // advice below would send the reader the wrong way.
+                    if let Some((profile, opened)) = &closed_profile {
+                        eprintln!(
+                            "{} {}",
+                            color::error_indicator(),
+                            connect::closed_relay_profile_message(profile, *opened)
+                        );
+                        exit(1);
+                    }
                     // Extension IS set up — the worker just hasn't reconnected yet.
                     // Accurate guidance: retry, or reload ONLY the extension. NEVER
                     // "restart Chrome" (a running Chrome picks the host up on its
@@ -3094,6 +3156,7 @@ fn main() {
                         exit(1);
                     }
                 };
+                let mut closed_profile = None;
                 if current_relay.is_none() && crate::connect::host_installed() {
                     crate::connect::ensure_host_installed();
                     eprint!(
@@ -3101,15 +3164,8 @@ fn main() {
                         color::success_indicator()
                     );
                     let _ = std::io::Write::flush(&mut std::io::stderr());
-                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
-                    while connect::relay_url_for_selector_or_default(target_browser)
-                        .ok()
-                        .flatten()
-                        .is_none()
-                        && std::time::Instant::now() < deadline
-                    {
-                        std::thread::sleep(std::time::Duration::from_millis(750));
-                    }
+                    closed_profile =
+                        wait_for_relay(target_browser, std::time::Duration::from_millis(750), true);
                     eprintln!();
                 }
                 match connect::relay_url_for_selector_or_default(target_browser) {
@@ -3129,6 +3185,14 @@ fn main() {
                         exit(1);
                     }
                     Ok(None) => {
+                        if let Some((profile, opened)) = &closed_profile {
+                            eprintln!(
+                                "{} {}",
+                                color::error_indicator(),
+                                connect::closed_relay_profile_message(profile, *opened)
+                            );
+                            exit(1);
+                        }
                         eprintln!(
                             "{} The chrome-use extension is installed but its background worker \
                              hasn't reconnected to the native host yet (MV3 workers sleep, ~30s \
@@ -3860,21 +3924,31 @@ fn main() {
                     ),
                 }
             }
+            // Chrome was already running, but the extension's profile has no
+            // window: waiting cannot bring that relay back, so open one in the
+            // background, and say what is wrong if that does not help. Not
+            // after starting Chrome here: its new window reaches `Local
+            // State` only seconds later.
             eprint!(
                 "{} Chrome relay dropped — reconnecting…",
                 color::success_indicator()
             );
             let _ = std::io::Write::flush(&mut std::io::stderr());
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
-            while connect::relay_url_for_selector_or_default(target_browser)
-                .ok()
-                .flatten()
-                .is_none()
-                && std::time::Instant::now() < deadline
-            {
-                std::thread::sleep(std::time::Duration::from_millis(300));
-            }
+            let closed = wait_for_relay(
+                target_browser,
+                std::time::Duration::from_millis(300),
+                !extension_connected && process == connect::ChromeProcess::Running,
+            );
             eprintln!();
+            if let Some((profile, opened)) = closed {
+                let message = connect::closed_relay_profile_message(&profile, opened);
+                if flags.json {
+                    print_json_error(message);
+                } else {
+                    eprintln!("{} {}", color::error_indicator(), message);
+                }
+                exit(1);
+            }
         }
     }
 

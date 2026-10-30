@@ -60,7 +60,11 @@ For which pages leak or grow (heap, DOM nodes, listeners), run
 the user's request); its schema is in references/diag-pages.md.
 `profile not open` means the user's Chrome profile has no window: chrome-use
 never opens one. Ask the user to open a window in that profile first, then
-rerun. `profile window unavailable` means it could not tell; unknown means
+rerun. A relay that is down because Chrome runs with the extension's profile
+closed is recovered by opening a window there in the background; if that
+still fails it is reported as `profile not open` too. Then do not tell the
+user to reload the extension or restart Chrome: name the profile the error
+(or `status`) gives and ask them to open a window in it. `profile window unavailable` means it could not tell; unknown means
 nothing is created, so do not retry in a loop. After
 `first_tab_cleanup_incomplete`, run `close` in the same session before
 opening again.

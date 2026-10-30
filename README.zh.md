@@ -270,7 +270,7 @@ macOS 先使用 PATH 中的 `sqlite3`，只有工具缺失或可执行格式不�
 
 AI 标签默认开在你正在用的窗口里，以后台标签打开、不抢焦点；每个会话有自己的标签组，组名前面带 ✦，一眼能和你自己的标签分开。加 `--window dedicated` 则改为同一 Chrome profile 的所有 AI 会话共用一个后台专用窗口：已有窗口只要标签归属都能确认是 AI，就会复用，全屏也不另开窗口。归属不明或空白占位页清理失败时会报错，避免继续增加窗口。不会为回收窗口而搬走或删除用户页。你在 AI 窗口里开了或拖进了自己的页面，这个窗口就归你：里面已有的 AI 标签照常工作，新的 AI 标签开到一个新的 AI 窗口，之后的会话共用它。
 
-自动化开始前，你的 Chrome profile 里必须已经开着一个窗口：没有窗口时它会停下并报 `profile not open`（错误码 `profile_not_open`），先在那个 profile 里打开一个窗口再重跑。如果它判断不了有没有窗口，会报 `profile window unavailable`（错误码 `profile_window_unavailable`），判断不了就什么都不创建。第一个标签页清理相关的错误码见[故障排查](https://chrome-use.leeguoo.com/troubleshooting.html)。
+自动化开始前，你的 Chrome profile 里必须已经开着一个窗口：没有窗口时它会停下并报 `profile not open`（错误码 `profile_not_open`），先在那个 profile 里打开一个窗口再重跑。relay 断开还有一种情况：Chrome 还开着，但装扩展的那个 profile 已经没有窗口（最后一个窗口被关了）。扩展只在它的 profile 打开时运行，所以等待或重新加载扩展都恢复不了 relay。这时 chrome-use 会在后台给那个 profile 开一个窗口，就像 Chrome 没运行时它会在后台启动 Chrome 一样；约 20 秒后那个 profile 仍然没有窗口，才报 `profile not open`。在 macOS 上，窗口打开时 Chrome 会短暂切到前台，chrome-use 随即把前台交还给你原来用的应用。`status` 会写出是哪个 profile 没开，设置 `AGENT_BROWSER_NO_AUTO_RECONNECT` 可关闭这项恢复。另外，带自己 `--user-data-dir` 的无头或远程调试 Chrome 不再被当成你的 Chrome 在运行，这类 Chrome 开着时，chrome-use 也会照常启动你的 Chrome。如果它判断不了有没有窗口，会报 `profile window unavailable`（错误码 `profile_window_unavailable`），判断不了就什么都不创建。第一个标签页清理相关的错误码见[故障排查](https://chrome-use.leeguoo.com/troubleshooting.html)。
 
 中继超时仅表示命令未在期限内完成。标签元数据无法证明 JavaScript 阻塞或命令通道正常。
 截图仍在等待时，JavaScript 也可能正常回答。保留标签，检查 `status` 和 `tab inspect <ref>`，

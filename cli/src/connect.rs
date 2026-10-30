@@ -138,6 +138,16 @@ pub fn run_connect(args: &[String], json: bool) {
     if health.debugger_warns() {
         health_warnings.push(health.debugger.clone());
     }
+    // The relay is down because its profile is closed: say which, since
+    // waiting or reloading the extension cannot bring it back.
+    let closed_profile = if health.transport_responsive {
+        None
+    } else {
+        closed_relay_profile(None)
+    };
+    if let Some(profile) = &closed_profile {
+        health_warnings.push(closed_relay_profile_message(profile, false));
+    }
     let driving_install_type = driving_profile
         .as_ref()
         .and_then(|(id, _)| {
@@ -181,6 +191,7 @@ pub fn run_connect(args: &[String], json: bool) {
                     "liveExtensionVersion": live_extension_version,
                     "relayUp": relay_url.is_some(),
                     "relayUrl": relay_url,
+                    "profileClosed": closed_profile.as_ref().map(|p| p.dir.clone()),
                     "chromeExtension": extension_status,
                     "drivingProfileId": driving_profile.as_ref().map(|(id, _)| id.clone()),
                     "drivingProfileEmail": driving_profile.as_ref().and_then(|(_, e)| e.clone()),
@@ -2664,16 +2675,84 @@ pub(crate) fn should_launch_chrome(extension_connected: bool, process: ChromePro
 
 #[cfg(unix)]
 fn pgrep_exact(name: &str) -> Option<bool> {
+    pgrep_pids(name).map(|pids| !pids.is_empty())
+}
+
+/// The pids of processes named exactly `name`. `None` is pgrep failing.
+#[cfg(unix)]
+fn pgrep_pids(name: &str) -> Option<Vec<u32>> {
     let out = std::process::Command::new("pgrep")
         .args(["-x", name])
         .output()
         .ok()?;
     // 0: found, 1: none found; anything else is pgrep failing.
     match out.status.code() {
-        Some(0) => Some(true),
-        Some(1) => Some(false),
+        Some(0) => Some(
+            String::from_utf8_lossy(&out.stdout)
+                .split_whitespace()
+                .filter_map(|pid| pid.parse().ok())
+                .collect(),
+        ),
+        Some(1) => Some(Vec::new()),
         _ => None,
     }
+}
+
+#[cfg(unix)]
+fn process_command_line(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-ww", "-o", "args=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!line.is_empty()).then_some(line)
+}
+
+/// Whether one browser process is a separate automation instance rather than
+/// the user's own browser: it names its own `--user-data-dir` outside the
+/// profile roots chrome-use reads, and it was started for automation
+/// (`--headless` or a remote-debugging flag). Such an instance can never carry
+/// the relay of the user's profiles. Counting it as "Chrome is running" kept
+/// the real Chrome from being started while a scraper's Chrome ran beside it.
+/// A user's own Chrome on a custom data dir has no automation flag, so it
+/// still counts.
+pub(crate) fn is_side_instance(command_line: &str, roots: &[PathBuf]) -> bool {
+    let automation = command_line.split_whitespace().any(|arg| {
+        arg == "--headless"
+            || arg.starts_with("--headless=")
+            || arg.starts_with("--remote-debugging-port=")
+            || arg == "--remote-debugging-pipe"
+    });
+    if !automation {
+        return false;
+    }
+    // Paths may hold spaces (`Application Support`), so the value runs to the
+    // next flag rather than the next space.
+    let Some((_, rest)) = command_line.split_once("--user-data-dir=") else {
+        return false;
+    };
+    let dir = rest.split(" --").next().unwrap_or("").trim();
+    let dir = dir.trim_end_matches('/');
+    !dir.is_empty()
+        && !roots
+            .iter()
+            .any(|root| root.to_string_lossy().trim_end_matches('/') == dir)
+}
+
+/// Whether a browser process named `name` runs for the user's own profiles,
+/// skipping [`is_side_instance`]s. `None` is pgrep failing.
+#[cfg(unix)]
+fn user_browser_running(name: &str, roots: &[PathBuf]) -> Option<bool> {
+    let pids = pgrep_pids(name)?;
+    // A command line that cannot be read counts: unknown is not someone else's.
+    Some(
+        pids.into_iter().any(|pid| {
+            process_command_line(pid).is_none_or(|args| !is_side_instance(&args, roots))
+        }),
+    )
 }
 
 /// Is a Chrome-family browser process alive at all? The extension relay can
@@ -2690,9 +2769,10 @@ pub(crate) fn chrome_process() -> ChromeProcess {
             "Google Chrome Canary",
             "Chromium",
         ];
+        let roots = chrome_profile_roots();
         let mut chrome = Some(false);
         for name in names {
-            match pgrep_exact(name) {
+            match user_browser_running(name, &roots) {
                 Some(true) => return ChromeProcess::Running,
                 Some(false) => {}
                 None => chrome = None,
@@ -2704,9 +2784,10 @@ pub(crate) fn chrome_process() -> ChromeProcess {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
+        let roots = chrome_profile_roots();
         let mut chrome = Some(false);
         for name in ["chrome", "google-chrome", "chromium", "chromium-browser"] {
-            match pgrep_exact(name) {
+            match user_browser_running(name, &roots) {
                 Some(true) => return ChromeProcess::Running,
                 Some(false) => {}
                 None => chrome = None,
@@ -2767,13 +2848,31 @@ pub(crate) fn pick_launch_profile<'a>(
 /// Start Chrome directly into one profile so the extension relay can come up.
 /// Returns a human description of what was launched, or None when nothing
 /// could be (no profiles found, unknown browser flavour, spawn failure).
-// The per-platform cfg blocks each end in `return`: on macOS the block is
-// followed by the other two, so it is a statement, not the fn tail.
-#[allow(clippy::needless_return)]
 pub(crate) fn launch_chrome_for_relay(selector: Option<&str>) -> Option<String> {
     let profiles = chrome_profiles();
     let profile = pick_launch_profile(&profiles, selector)?;
-    let profile_arg = format!("--profile-directory={}", profile.dir);
+    start_profile_in_background(profile, false)
+}
+
+/// Start one profile in the background: Chrome starts in it when it is not
+/// running, and a running Chrome opens a window in it (the new process hands
+/// its command line to the running one), without raising Chrome over the
+/// user's work. `name_data_dir` passes the profile's data root as
+/// `--user-data-dir`, so the request reaches the Chrome running on that root
+/// and no other; it is left out when starting Chrome, which must keep its
+/// default data dir. Returns a human description of what was started, or None
+/// when nothing could be (unknown browser flavour, spawn failure).
+// The per-platform cfg blocks each end in `return`: on macOS the block is
+// followed by the other two, so it is a statement, not the fn tail.
+#[allow(clippy::needless_return)]
+pub(crate) fn start_profile_in_background(
+    profile: &ChromeProfileInfo,
+    name_data_dir: bool,
+) -> Option<String> {
+    let mut chrome_args = vec![format!("--profile-directory={}", profile.dir)];
+    if name_data_dir {
+        chrome_args.insert(0, format!("--user-data-dir={}", profile.root));
+    }
     let label = profile
         .email
         .clone()
@@ -2789,13 +2888,23 @@ pub(crate) fn launch_chrome_for_relay(selector: Option<&str>) -> Option<String> 
             Some("Chromium") => "Chromium",
             _ => return None,
         };
-        // `-g`: start it in the background. The user quit Chrome; bringing it
-        // back is needed for the relay, raising it over their work is not.
+        // `-g`: in the background. Chrome (or a window of the profile) is
+        // needed for the relay; raising it over the user's work is not.
+        let previous = name_data_dir.then(front_app_bundle).flatten();
         let ok = std::process::Command::new("open")
-            .args(["-g", "-na", app, "--args", &profile_arg])
+            .args(["-g", "-na", app, "--args"])
+            .args(&chrome_args)
             .status()
             .map(|s| s.success())
             .unwrap_or(false);
+        // `-g` keeps only the new process back: a running Chrome that takes
+        // the window over still comes to the front (measured: within ~0.5s).
+        // Hand the front back to the app the user was in.
+        if let Some(previous) = previous.filter(|b| !is_chrome_bundle(b)) {
+            if ok {
+                give_front_back_from_chrome(&previous);
+            }
+        }
         return ok.then(|| format!("{app} ({label})"));
     }
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -2808,16 +2917,132 @@ pub(crate) fn launch_chrome_for_relay(selector: Option<&str>) -> Option<String> 
             _ => return None,
         };
         let ok = std::process::Command::new(bin)
-            .arg(&profile_arg)
+            .args(&chrome_args)
             .spawn()
             .is_ok();
         return ok.then(|| format!("{bin} ({label})"));
     }
     #[cfg(not(unix))]
     {
-        let _ = (profile_arg, label, root);
+        let _ = (chrome_args, label, root);
         None
     }
+}
+
+/// The value of one `lsappinfo info -only <key>` line: `"Key"="value"`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn lsappinfo_value(line: &str) -> Option<String> {
+    let (_, value) = line.trim().rsplit_once('=')?;
+    let value = value.trim().trim_matches('"');
+    (!value.is_empty() && value != "NULL").then(|| value.to_string())
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn is_chrome_bundle(bundle: &str) -> bool {
+    bundle.starts_with("com.google.Chrome") || bundle == "org.chromium.Chromium"
+}
+
+/// The bundle id of the frontmost app, from `lsappinfo` (no Automation or
+/// Accessibility permission needed).
+#[cfg(target_os = "macos")]
+fn front_app_bundle() -> Option<String> {
+    let front = std::process::Command::new("lsappinfo")
+        .arg("front")
+        .output()
+        .ok()?;
+    let asn = String::from_utf8_lossy(&front.stdout).trim().to_string();
+    if asn.is_empty() {
+        return None;
+    }
+    let info = std::process::Command::new("lsappinfo")
+        .args(["info", "-only", "bundleid", &asn])
+        .output()
+        .ok()?;
+    lsappinfo_value(&String::from_utf8_lossy(&info.stdout))
+}
+
+/// Wait up to 3s for Chrome to take the front, then reactivate `previous`
+/// (`open -b`; `lsappinfo setfront` fails with permErr outside the GUI
+/// session's own processes). Only Chrome taking it counts: if the user moved
+/// to another app meanwhile, the front stays where they put it.
+#[cfg(target_os = "macos")]
+fn give_front_back_from_chrome(previous: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while std::time::Instant::now() < deadline {
+        match front_app_bundle() {
+            Some(front) if is_chrome_bundle(&front) => {
+                let _ = std::process::Command::new("open")
+                    .args(["-b", previous])
+                    .status();
+                return;
+            }
+            Some(front) if front != previous => return,
+            _ => {}
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// Whether `Local State` lists profile `dir` as having a window open.
+/// Chrome keeps `profile.last_active_profiles` to the profiles with at least
+/// one normal browser window, rewriting it as windows open and close
+/// (`ProfileManager::OnBrowserOpened` / `OnBrowserClosed`). Only a full quit
+/// leaves it alone, so the next start can restore those profiles, which makes
+/// it meaningful only while Chrome runs. `None` when the list is missing.
+pub(crate) fn profile_listed_active(local_state: &serde_json::Value, dir: &str) -> Option<bool> {
+    let list = local_state
+        .pointer("/profile/last_active_profiles")?
+        .as_array()?;
+    Some(list.iter().any(|entry| entry.as_str() == Some(dir)))
+}
+
+/// The profile the relay would come from, when Chrome is running but that
+/// profile has no window open. Closing a profile's last window leaves Chrome
+/// running (always on macOS) with the profile unloaded, and its extension
+/// with it: no worker, no native host, no relay, and the worker's reconnect
+/// timer cannot fire because the worker is gone. Waiting, reconnecting and
+/// reloading the extension all fail the same way until a window opens there.
+/// `None` when Chrome is not provably running, the profile has no extension,
+/// or its window state cannot be read.
+pub(crate) fn closed_relay_profile(selector: Option<&str>) -> Option<ChromeProfileInfo> {
+    if chrome_process() != ChromeProcess::Running {
+        return None;
+    }
+    let profiles = chrome_profiles();
+    let profile = pick_launch_profile(&profiles, selector)?;
+    profile.extension.as_ref()?;
+    let text = std::fs::read_to_string(Path::new(&profile.root).join("Local State")).ok()?;
+    let local_state = serde_json::from_str(&text).ok()?;
+    (profile_listed_active(&local_state, &profile.dir) == Some(false)).then(|| profile.clone())
+}
+
+/// The `profile not open` message for a relay that is down because its
+/// profile is closed (see [`closed_relay_profile`]); same code as the
+/// first-tab check, which sees the case while the relay is up. `opened`:
+/// chrome-use already asked Chrome to open a window there and the profile
+/// still shows none, so only the user can open it. Otherwise (`status`) it
+/// says the next command opens one in the background.
+pub(crate) fn closed_relay_profile_message(profile: &ChromeProfileInfo, opened: bool) -> String {
+    let label = profile
+        .email
+        .as_deref()
+        .or(profile.name.as_deref())
+        .map(|who| format!("{} ({who})", profile.dir))
+        .unwrap_or_else(|| profile.dir.clone());
+    let next = if opened {
+        "chrome-use asked Chrome to open a window there in the background, but the profile \
+         still shows none. Open a window in that profile yourself (pick it in Chrome's profile \
+         menu, or press Cmd+N / Ctrl+N in Chrome), then rerun the same command."
+    } else {
+        "The next command that drives the browser opens a window there in the background \
+         (not with AGENT_BROWSER_NO_AUTO_RECONNECT set); or open one yourself: pick that \
+         profile in Chrome's profile menu, or press Cmd+N / Ctrl+N in Chrome."
+    };
+    format!(
+        "profile not open: Chrome is running, but the profile with the chrome-use extension, \
+         {label}, has no open window, so the extension is not running and the relay cannot \
+         come up. {next} Reloading the extension or restarting Chrome is not needed."
+    )
 }
 
 /// Open the Web Store install page inside one specific Chrome profile, so the
@@ -5644,6 +5869,110 @@ printf '%s\000' "$HOME" "${CHROME_USE_RELAY_DIR-__unset__}" "$@"
         assert!(!should_launch_chrome(true, ChromeProcess::NotRunning));
         assert!(!should_launch_chrome(false, ChromeProcess::Unknown));
         assert!(!should_launch_chrome(false, ChromeProcess::Running));
+    }
+
+    #[test]
+    fn automation_chromes_on_their_own_data_dir_are_not_the_users_chrome() {
+        use super::is_side_instance;
+        let roots = vec![std::path::PathBuf::from(
+            "/Users/u/Library/Application Support/Google/Chrome",
+        )];
+        let app = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+        // A scraper's Chrome kept running for days beside the real one.
+        assert!(is_side_instance(
+            &format!(
+                "{app} --no-startup-window --remote-debugging-address=127.0.0.1 \
+                 --remote-debugging-port=9341 --user-data-dir=/Users/u/runtime/sessions/a"
+            ),
+            &roots
+        ));
+        assert!(is_side_instance(
+            &format!("{app} --headless=new --user-data-dir=/tmp/scratch dir/prof --disable-gpu"),
+            &roots
+        ));
+        // The user's own Chrome, however it was started.
+        assert!(!is_side_instance(
+            &format!("{app} --profile-directory=Default chrome://extensions"),
+            &roots
+        ));
+        assert!(!is_side_instance(
+            &format!(
+                "{app} --remote-debugging-port=9222 \
+                 --user-data-dir=/Users/u/Library/Application Support/Google/Chrome/"
+            ),
+            &roots
+        ));
+        assert!(!is_side_instance(
+            &format!("{app} --user-data-dir=/Users/u/Chrome Work"),
+            &roots
+        ));
+        assert!(!is_side_instance(
+            &format!("{app} --remote-debugging-port=9222"),
+            &roots
+        ));
+    }
+
+    #[test]
+    fn lsappinfo_values_are_read_from_their_quoted_form() {
+        use super::{is_chrome_bundle, lsappinfo_value};
+        assert_eq!(
+            lsappinfo_value("\"CFBundleIdentifier\"=\"com.netease.uuremote\"\n"),
+            Some("com.netease.uuremote".to_string())
+        );
+        assert_eq!(lsappinfo_value("\"CFBundleIdentifier\"=NULL"), None);
+        assert_eq!(lsappinfo_value(""), None);
+        assert!(is_chrome_bundle("com.google.Chrome"));
+        assert!(is_chrome_bundle("com.google.Chrome.canary"));
+        assert!(!is_chrome_bundle("com.apple.Terminal"));
+    }
+
+    #[test]
+    fn a_profile_has_a_window_only_while_local_state_lists_it_active() {
+        use super::profile_listed_active as listed;
+        let state = |list: serde_json::Value| serde_json::json!({ "profile": { "last_active_profiles": list } });
+        assert_eq!(
+            listed(&state(serde_json::json!([])), "Default"),
+            Some(false)
+        );
+        assert_eq!(
+            listed(&state(serde_json::json!(["Profile 1"])), "Default"),
+            Some(false)
+        );
+        assert_eq!(
+            listed(
+                &state(serde_json::json!(["Default", "Profile 1"])),
+                "Default"
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            listed(&serde_json::json!({ "profile": {} }), "Default"),
+            None
+        );
+        assert_eq!(
+            listed(&state(serde_json::json!("Default")), "Default"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_closed_relay_profile_is_reported_as_profile_not_open() {
+        let profile = super::ChromeProfileInfo {
+            root: "/Users/u/Library/Application Support/Google/Chrome".to_string(),
+            dir: "Default".to_string(),
+            name: Some("Work".to_string()),
+            email: Some("u@example.com".to_string()),
+            gaia_name: None,
+            last_active: None,
+            extension: None,
+        };
+        let message = super::closed_relay_profile_message(&profile, true);
+        assert!(message.starts_with("profile not open: "));
+        assert!(message.contains("Default (u@example.com)"));
+        assert_eq!(
+            crate::error_envelope::classify_error(&message).code,
+            "profile_not_open"
+        );
     }
 
     #[tokio::test]

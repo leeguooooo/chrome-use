@@ -115,6 +115,11 @@ most drops you never even see. If a command *does* surface the error:
    `extension install` by hand.
    `status` is daemon-free and reports CLI, live/expected extension, driving
    profile, and current session state even when that session worker is stuck.
+   If the error (or `status`) says `profile not open`, Chrome is running but the
+   profile with the extension has no window, so its extension is not running.
+   The CLI opens a window there in the background on the next command; if the
+   error comes back anyway, ask the user to open a window in that profile.
+   Reloading the extension or restarting Chrome is not the fix.
 3. **Never** tell the user to quit/restart Chrome with `--remote-debugging-port`
    to recover a dropped relay — that throws away their tabs and defeats the
    extension path. (The old error text said this; it no longer does.)

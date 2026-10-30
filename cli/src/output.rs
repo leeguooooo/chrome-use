@@ -2876,7 +2876,12 @@ new tab anyway.
 On your own Chrome (the extension relay) the profile must have a window
 open: chrome-use never opens one itself. With no window, `open` stops with
 `profile not open` (code profile_not_open): open a window in that profile
-first, then rerun. If it cannot tell whether a window is open, it stops with
+first, then rerun. A relay that is down because Chrome runs with that
+profile closed (its extension is not running) is recovered by opening a
+window there in the background; if the profile still shows none ~20s later,
+the command stops with the same error. `status` names the closed profile.
+If it cannot tell
+whether a window is open, it stops with
 `profile window unavailable` (code profile_window_unavailable); unknown
 means nothing is created. Neither is retried automatically. If the first
 tab was created but its setup failed: first_tab_setup_failed means Chrome

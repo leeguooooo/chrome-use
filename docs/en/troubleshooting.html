@@ -579,6 +579,18 @@ EOF</code></pre>
         Neither error is retried automatically.
       </p>
       <p>
+        <code>profile not open</code> can also explain a relay that is down: Chrome is still running (on macOS,
+        closing the last window does not quit it), but the profile with the extension has no window left. The profile
+        is unloaded and its extension with it, so nothing is there to reconnect, and waiting or reloading the extension
+        fails the same way. chrome-use opens a window in that profile in the background (as it starts Chrome in the
+        background when Chrome is not running); the extension starts with it and the relay comes back. On macOS Chrome takes the front for a moment as the window
+        opens; chrome-use hands it back to the app you were in. Only if the
+        profile still shows no window about twenty seconds later does it report this error with the profile's name:
+        then open a window in that profile yourself and rerun; restarting Chrome is not needed.
+        <code>chrome-use status</code> names the closed profile too. <code>AGENT_BROWSER_NO_AUTO_RECONNECT</code> turns
+        this recovery off.
+      </p>
+      <p>
         When a first tab was created but could not be set up, the error says how its cleanup ended. With
         <code>first_tab_setup_failed</code>, Chrome confirms the tab is gone and rerunning is safe. With
         <code>first_tab_cleanup_incomplete</code>, the tab may still be open (a close acknowledgement alone is not

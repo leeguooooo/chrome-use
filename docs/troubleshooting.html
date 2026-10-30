@@ -538,6 +538,14 @@ EOF</code></pre>
         判断不了就按“没开”处理：<strong>什么都不创建</strong>。这两个错误都不会自动重试。
       </p>
       <p>
+        <code>profile not open</code> 也可能出现在 relay 断开的时候：Chrome 还在运行（在 macOS 上关掉最后一个窗口并不会退出
+        Chrome），但装扩展的那个 profile 已经没有窗口了。这时 profile 已被卸载，扩展也跟着停了，没有东西能重连，所以单纯等待和
+        重新加载扩展都没用。chrome-use 会在后台给那个 profile 开一个窗口（和 Chrome 没运行时在后台启动 Chrome 的做法一样），
+        扩展随之启动，relay 就会恢复。在 macOS 上，窗口打开时 Chrome 会短暂切到前台，chrome-use 随即把前台交还给你原来用的应用。如果约二十秒后那个 profile 仍然没有窗口，它才报这个错误并写出 profile 名；这时在那个
+        profile 里手动打开一个窗口再重跑即可，不需要重启 Chrome。<code>chrome-use status</code> 也会提示是哪个 profile 没开。
+        设置 <code>AGENT_BROWSER_NO_AUTO_RECONNECT</code> 可以关闭这项自动恢复。
+      </p>
+      <p>
         如果第一个标签页已经建了但没设置成功，错误会说明清理的结果。<code>first_tab_setup_failed</code> 表示 Chrome
         确认那个标签页已经没了，可以放心重跑。<code>first_tab_cleanup_incomplete</code> 表示它可能还开着（光有关闭确认不算数）。
         会话保留着删除权，所以再次打开前先在同一个会话里跑 <code>chrome-use close</code>。如果错误说删除权没能写到磁盘，那它只在这个会话正在运行的守护进程里：马上跑 <code>close</code>；守护进程已经退出的话，就自己在 Chrome 里关掉那个空白标签页。
