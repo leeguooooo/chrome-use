@@ -26,9 +26,8 @@ struct Browser {
     /// Bumped to drop every open connection.
     generation: u64,
     created: u32,
-    /// Every page-level `Runtime.evaluate` expression, with the session it
-    /// was sent to.
-    evaluated: Vec<(String, String)>,
+    /// Successful URL reads, through either renderer or exact browser-tab metadata.
+    url_reads: Vec<String>,
     /// The listener serving now; an older one stops and its port refuses.
     listener: u64,
     /// What `windows.getAll` answers over the relay (#486); `None` is one
@@ -163,14 +162,7 @@ impl Fake {
     /// Sessions that evaluated `location.href` since the last call.
     fn take_url_reads(&self) -> Vec<String> {
         let mut b = self.0.lock().unwrap();
-        let reads = b
-            .evaluated
-            .iter()
-            .filter(|(_, e)| e.contains("location.href"))
-            .map(|(s, _)| s.clone())
-            .collect();
-        b.evaluated.clear();
-        reads
+        std::mem::take(&mut b.url_reads)
     }
 
     fn reply(&self, req: &Value) -> Value {
@@ -180,7 +172,9 @@ impl Fake {
         if method == "Runtime.evaluate" {
             let session = req["sessionId"].as_str().unwrap_or("").to_string();
             let expression = params["expression"].as_str().unwrap_or("").to_string();
-            b.evaluated.push((session, expression));
+            if expression.contains("location.href") {
+                b.url_reads.push(session);
+            }
         }
         // #530: what ab-connect 0.5.35 answers when a reply is over Chrome's
         // 64 MiB native-messaging limit.
@@ -197,17 +191,41 @@ impl Fake {
             )});
         }
         match method {
+            "ABExt.inspectTab" => {
+                let target = params["targetId"].as_str().unwrap_or_default();
+                let session = params["sessionId"].as_str().unwrap_or_default();
+                if session != format!("S-{target}") {
+                    return json!({"__error":"inspectTab: session and target do not match"});
+                }
+                let Some((id, url)) = b.targets.iter().find(|(id, _)| id == target).cloned() else {
+                    return json!({"__error":"inspectTab: exact target no longer exists"});
+                };
+                b.url_reads.push(session.to_string());
+                let tab = id
+                    .strip_prefix('T')
+                    .and_then(|n| n.parse::<i64>().ok())
+                    .unwrap();
+                json!({"chromeTabId":tab,"targetId":id,"sessionId":session,"url":url,"committedUrl":url,"pendingUrl":""})
+            }
             "ABExt.call" => {
                 b.calls.push(format!(
                     "{}.{}",
                     params["namespace"].as_str().unwrap_or(""),
                     params["method"].as_str().unwrap_or("")
                 ));
-                let windows = b
-                    .windows
-                    .clone()
-                    .unwrap_or_else(|| json!([{"id": 1, "type": "normal"}]));
-                json!({ "result": windows })
+                if params["namespace"] == "tabs" && params["method"] == "get" {
+                    let id = format!("T{}", params["args"][0].as_i64().unwrap_or_default());
+                    let Some((_, url)) = b.targets.iter().find(|(target, _)| target == &id) else {
+                        return json!({"__error":"tabs.get: exact tab no longer exists"});
+                    };
+                    json!({"result":{"id":params["args"][0],"url":url,"groupId":-1}})
+                } else {
+                    let windows = b
+                        .windows
+                        .clone()
+                        .unwrap_or_else(|| json!([{"id": 1, "type": "normal"}]));
+                    json!({ "result": windows })
+                }
             }
             "Page.enable" if b.page_enable_hangs => json!({"__hang": true}),
             "Page.enable" if b.page_enable_fails => {
@@ -291,7 +309,22 @@ impl Fake {
                                       "attached": true}})
             }
             "Runtime.evaluate" | "Runtime.callFunctionOn" => {
-                json!({"result": {"type": "number", "value": 1}})
+                if params["expression"]
+                    .as_str()
+                    .is_some_and(|e| e.trim() == "location.href")
+                {
+                    let id = req["sessionId"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .strip_prefix("S-")
+                        .unwrap_or_default();
+                    let Some((_, url)) = b.targets.iter().find(|(target, _)| target == id) else {
+                        return json!({"__error":"renderer session no longer exists"});
+                    };
+                    json!({"result":{"type":"string","value":url}})
+                } else {
+                    json!({"result": {"type": "number", "value": 1}})
+                }
             }
             "Page.navigate" => json!({"frameId": "F1", "loaderId": "L1"}),
             "Page.createIsolatedWorld" => json!({"executionContextId":42}),
@@ -1579,8 +1612,12 @@ fn a_session_continues_after_the_extension_reloads_into_an_update() {
         // Bound to the relay profile, as the CLI binds every relay session.
         bind_to_profile(&d, &cdp);
         three_tabs(&d);
+        for (id, url) in &mut fake.0.lock().unwrap().targets {
+            *url = format!("https://tabs.test/{id}");
+        }
         let r = d.send(json!({"id": "p", "action": "url"}));
         assert_eq!(r["success"], true, "{r}");
+        assert_eq!(r["data"]["url"], "https://tabs.test/T2", "{r}");
         fake.take_url_reads();
         let created_before = fake.0.lock().unwrap().created;
 
@@ -1617,6 +1654,13 @@ fn a_session_continues_after_the_extension_reloads_into_an_update() {
         }
         if announced {
             assert_eq!(r["success"], true, "{r}");
+            assert_eq!(r["data"]["url"], "https://tabs.test/T2", "{r}");
+            let renderer =
+                d.send(json!({"id":"physical", "action":"evaluate", "script":"location.href"}));
+            assert_eq!(
+                renderer["data"]["result"], "https://tabs.test/T2",
+                "{renderer}"
+            );
             assert_only_session(&fake, "S-T2");
             let tabs = d.tabs();
             assert_eq!(tab_of(&tabs, "T1").as_deref(), Some("t1"), "{tabs:?}");

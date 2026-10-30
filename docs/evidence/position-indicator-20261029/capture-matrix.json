@@ -1,0 +1,182 @@
+{
+  "isolatedProfile": true,
+  "mode": "independent capability and hinge-capture research; no product fallback; no Overlay.enable; no input sent",
+  "platform": "darwin",
+  "arch": "arm64",
+  "probeSha256": "026f4852655e6b47459d10f12f73c1a704e0cca872a808decd2cfd1c98318285",
+  "browser": {
+    "product": "Chrome/156.0.8078.48",
+    "protocol": "1.3",
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+  },
+  "declared": null,
+  "supported": false,
+  "error": {
+    "code": -32601,
+    "message": "'Page.setInputVisualization' wasn't found"
+  },
+  "activatedBeforeBaseline": true,
+  "geometry": {
+    "dpr": 2,
+    "viewport": [
+      900,
+      557
+    ],
+    "visualScale": 1
+  },
+  "captures": [
+    {
+      "label": "baseline-surface",
+      "fromSurface": true,
+      "elapsedMs": 29.245542
+    },
+    {
+      "label": "baseline-view",
+      "fromSurface": false,
+      "elapsedMs": 265.842709
+    },
+    {
+      "label": "visible-surface",
+      "fromSurface": true,
+      "elapsedMs": 38.20041600000013
+    },
+    {
+      "label": "visible-view",
+      "fromSurface": false,
+      "elapsedMs": 267.0028749999999
+    },
+    {
+      "label": "surface-after-view",
+      "fromSurface": true,
+      "elapsedMs": 22.698167000000012
+    },
+    {
+      "label": "pre-hide-0",
+      "fromSurface": true,
+      "elapsedMs": 25.765959000000066
+    },
+    {
+      "label": "hidden-ack-0",
+      "fromSurface": true,
+      "elapsedMs": 41.105999999999995
+    },
+    {
+      "label": "pre-hide-1",
+      "fromSurface": true,
+      "elapsedMs": 25.746999999999844
+    },
+    {
+      "label": "hidden-ack-1",
+      "fromSurface": true,
+      "elapsedMs": 23.656791999999996
+    },
+    {
+      "label": "pre-hide-2",
+      "fromSurface": true,
+      "elapsedMs": 25.60050000000001
+    },
+    {
+      "label": "hidden-ack-2",
+      "fromSurface": true,
+      "elapsedMs": 32.83716699999991
+    },
+    {
+      "label": "pre-hide-3",
+      "fromSurface": true,
+      "elapsedMs": 24.93637499999977
+    },
+    {
+      "label": "hidden-ack-3",
+      "fromSurface": true,
+      "elapsedMs": 32.47062499999993
+    },
+    {
+      "label": "pre-hide-4",
+      "fromSurface": true,
+      "elapsedMs": 25.150915999999597
+    },
+    {
+      "label": "hidden-ack-4",
+      "fromSurface": true,
+      "elapsedMs": 41.055083000000195
+    },
+    {
+      "label": "pre-parallel-0",
+      "fromSurface": true,
+      "elapsedMs": 24.60050000000001
+    },
+    {
+      "label": "hidden-parallel-0",
+      "fromSurface": true,
+      "elapsedMs": 22.942999999999756
+    },
+    {
+      "label": "pre-parallel-1",
+      "fromSurface": true,
+      "elapsedMs": 25.51937500000031
+    },
+    {
+      "label": "hidden-parallel-1",
+      "fromSurface": true,
+      "elapsedMs": 32.42404099999976
+    },
+    {
+      "label": "pre-parallel-2",
+      "fromSurface": true,
+      "elapsedMs": 25.132834000000003
+    },
+    {
+      "label": "hidden-parallel-2",
+      "fromSurface": true,
+      "elapsedMs": 23.74208299999964
+    },
+    {
+      "label": "pre-parallel-3",
+      "fromSurface": true,
+      "elapsedMs": 32.11562499999991
+    },
+    {
+      "label": "hidden-parallel-3",
+      "fromSurface": true,
+      "elapsedMs": 26.63754199999994
+    },
+    {
+      "label": "pre-parallel-4",
+      "fromSurface": true,
+      "elapsedMs": 26.09229200000027
+    },
+    {
+      "label": "hidden-parallel-4",
+      "fromSurface": true,
+      "elapsedMs": 32.805041000000074
+    }
+  ],
+  "hideAcks": [
+    {
+      "i": 0,
+      "ackMs": 0.651834000000008,
+      "totalMs": 41.825166999999965
+    },
+    {
+      "i": 1,
+      "ackMs": 0.34833400000002257,
+      "totalMs": 24.01733400000012
+    },
+    {
+      "i": 2,
+      "ackMs": 0.3304169999998976,
+      "totalMs": 33.17712499999993
+    },
+    {
+      "i": 3,
+      "ackMs": 0.36124999999992724,
+      "totalMs": 32.84516699999995
+    },
+    {
+      "i": 4,
+      "ackMs": 0.3184160000000702,
+      "totalMs": 41.38941599999998
+    }
+  ],
+  "closed": true
+}

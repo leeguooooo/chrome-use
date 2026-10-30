@@ -187,26 +187,7 @@ pub async fn apply_stealth(
     if mode == StealthMode::FullLaunch {
         let ua = get_browser_user_agent(client, session_id).await;
         if let Some(ua) = ua {
-            let cleaned = ua.replace("HeadlessChrome", "Chrome");
-            if cleaned != ua {
-                let mut params = json!({
-                    "userAgent": cleaned,
-                    "platform": platform_string(),
-                    "userAgentMetadata": build_ua_metadata(&cleaned, locale),
-                });
-                // Omit the override when no locale was requested: adding an
-                // English fallback to only the page disagrees with workers.
-                if let Some(languages) = locale.and_then(accept_lang_list) {
-                    params["acceptLanguage"] = json!(languages);
-                }
-                client
-                    .send_command(
-                        "Emulation.setUserAgentOverride",
-                        Some(params),
-                        Some(session_id),
-                    )
-                    .await?;
-            }
+            apply_headless_user_agent(client, session_id, &ua, locale).await?;
         }
     }
 
@@ -289,6 +270,36 @@ fn locale_default_timezone(locale: &str) -> Option<&'static str> {
         _ => return None,
     };
     Some(tz)
+}
+
+/// Apply only FullLaunch's existing UA compatibility rule, without installing
+/// scripts or changing any other stealth setting. Callers supply a trusted UA.
+pub async fn apply_headless_user_agent(
+    client: &CdpClient,
+    session_id: &str,
+    user_agent: &str,
+    locale: Option<&str>,
+) -> Result<String, String> {
+    let cleaned = user_agent.replace("HeadlessChrome", "Chrome");
+    if cleaned != user_agent {
+        let mut params = json!({
+            "userAgent": cleaned,
+            "platform": platform_string(),
+            "userAgentMetadata": build_ua_metadata(&cleaned, locale),
+        });
+        // Match the ordinary FullLaunch policy; do not invent a language.
+        if let Some(languages) = locale.and_then(accept_lang_list) {
+            params["acceptLanguage"] = json!(languages);
+        }
+        client
+            .send_command(
+                "Emulation.setUserAgentOverride",
+                Some(params),
+                Some(session_id),
+            )
+            .await?;
+    }
+    Ok(cleaned)
 }
 
 /// Get the browser's User-Agent string via CDP.

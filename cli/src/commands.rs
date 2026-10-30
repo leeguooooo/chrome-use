@@ -3522,7 +3522,13 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         "window" => {
             const VALID: &[&str] = &["new"];
             match rest.first().copied() {
-                Some("new") => Ok(json!({ "id": id, "action": "window_new" })),
+                Some("new") if rest.len() == 1 => Ok(json!({ "id": id, "action": "window_new" })),
+                // This existing command creates a blank window. Never discard
+                // an explicit URL and report a different operation as success.
+                Some("new") => Err(ParseError::InvalidValue {
+                    message: "window new only creates about:blank and takes no URL; use `chrome-use tab new <https-url>`".into(),
+                    usage: "window new",
+                }),
                 Some(sub) => Err(ParseError::UnknownSubcommand {
                     subcommand: sub.to_string(),
                     valid_options: VALID,
@@ -3971,9 +3977,12 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     // List available iOS simulators
                     Ok(json!({ "id": id, "action": "device_list" }))
                 }
+                Some("off" | "reset" | "none") => {
+                    Ok(json!({ "id": id, "action": "device", "device": "off" }))
+                }
                 Some(sub) => Err(ParseError::UnknownSubcommand {
                     subcommand: sub.to_string(),
-                    valid_options: &["list"],
+                    valid_options: &["list", "off", "reset", "none"],
                 }),
             }
         }
@@ -6446,6 +6455,23 @@ mod tests {
         assert!(parse(&["jev", "run", "--goal", "--url", "https://x.test"]).is_err());
         assert!(parse(&["jev", "run"]).is_err());
         assert!(parse(&["jev"]).is_err());
+    }
+
+    #[test]
+    fn desktop_reset_aliases_are_available_with_and_without_set() {
+        for alias in ["off", "reset", "none"] {
+            for input in [vec!["device", alias], vec!["set", "device", alias]] {
+                let args: Vec<String> = input.iter().map(|s| s.to_string()).collect();
+                let cmd = parse_command(&args, &default_flags()).unwrap();
+                assert_eq!(cmd["action"], "device");
+                assert_eq!(cmd["device"], if input[0] == "set" { alias } else { "off" });
+            }
+        }
+        let args = vec!["device".into(), "list".into()];
+        assert_eq!(
+            parse_command(&args, &default_flags()).unwrap()["action"],
+            "device_list"
+        );
     }
 
     fn default_flags() -> Flags {
@@ -10850,6 +10876,27 @@ mod tests {
         ] {
             assert_eq!(cmd["value"], "--file");
             assert_ne!(cmd["allowClipboardFallback"], true);
+        }
+    }
+    #[test]
+    fn window_new_refuses_explicit_urls_in_direct_and_batch_parsers() {
+        let plain = parse_command(&args("window new"), &default_flags()).unwrap();
+        assert_eq!(plain["action"], "window_new");
+        assert!(plain.get("url").is_none());
+        for url in [
+            "https://destination.test/",
+            "javascript:void(0)",
+            "about:blank",
+        ] {
+            let input = args(&format!("window new {url}"));
+            for result in [
+                parse_command(&input, &default_flags()),
+                parse_batch_step(&input, &default_flags()),
+            ] {
+                let error = result.unwrap_err().format();
+                assert!(error.contains("takes no URL"), "{error}");
+                assert!(error.contains("tab new"), "{error}");
+            }
         }
     }
 }

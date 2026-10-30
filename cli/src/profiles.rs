@@ -1428,10 +1428,7 @@ fn query_cookie_names(db: &Path, tmp_db: &Path, domain: &str) -> Result<Vec<Stri
             "SELECT name FROM cookies WHERE ({}) AND (has_expires = 0 OR expires_utc > {now_chrome});",
             hosts.join(" OR ")
         );
-        let out = std::process::Command::new("sqlite3")
-            .arg(tmp_db)
-            .arg(&sql)
-            .output()
+        let out = crate::sqlite::output(&[tmp_db.as_os_str(), std::ffi::OsStr::new(&sql)])
             .map_err(|e| format!("sqlite3 unavailable: {e}"))?;
         if !out.status.success() {
             return Err(format!(
@@ -2442,5 +2439,49 @@ mod tests {
         assert_eq!(merge_warning(None, "a"), "a");
         assert_eq!(merge_warning(Some(""), "a"), "a");
         assert_eq!(merge_warning(Some("b"), "a"), "a\nb");
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod sqlite_tests {
+    use super::*;
+
+    #[test]
+    fn native_sqlite_handles_unusable_path_binary() {
+        const DB: &str = "CHROME_USE_TEST_SYNTHETIC_COOKIE_DB";
+        if let Some(db) = std::env::var_os(DB) {
+            let db = PathBuf::from(db);
+            let names =
+                query_cookie_names(&db, &db.with_file_name("copied.sqlite"), "example.test")
+                    .unwrap();
+            assert_eq!(names, ["fixture_session"]);
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let db = root.path().join("synthetic.sqlite");
+        let created = std::process::Command::new("/usr/bin/sqlite3").arg(&db).arg("CREATE TABLE cookies(host_key TEXT,name TEXT,has_expires INTEGER,expires_utc INTEGER); INSERT INTO cookies VALUES('example.test','fixture_session',0,0),('other.test','not_in_scope',0,0),('example.test','expired',1,1);").output().unwrap();
+        assert!(created.status.success());
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let bad = bin.join("sqlite3");
+        std::fs::write(&bad, b"#!/chrome-use-fixture-missing-interpreter\n").unwrap();
+        std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let checked = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "profiles::sqlite_tests::native_sqlite_handles_unusable_path_binary",
+                "--nocapture",
+            ])
+            .env(DB, &db)
+            .env("PATH", &bin)
+            .output()
+            .unwrap();
+        assert!(
+            checked.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&checked.stdout),
+            String::from_utf8_lossy(&checked.stderr)
+        );
     }
 }

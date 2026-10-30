@@ -1310,7 +1310,7 @@ function isPermanentAttachError(e) {
 // across the transient window of a process swap (with a couple of short retries).
 // Returns the tabId on success, or null when the tab is genuinely gone
 // (closed / restricted). (issues #20.1, #23)
-async function recoverSessionTab(sessionId) {
+async function recoverSessionTab(sessionId, beforeRecoveryTarget = () => {}) {
   const tabId = resolveSessionTab(sessionId, sessionToTab, childSessionToTab);
   // 1) Fast path: the encoded Chrome tabId still exists — re-attach it (covers
   //    the common renderer-process swap where the tabId is preserved, #23).
@@ -1318,6 +1318,7 @@ async function recoverSessionTab(sessionId) {
     for (let i = 0; i < 3; i++) {
       const tab = await chrome.tabs.get(tabId).catch(() => null);
       if (!eligible(tab)) break; // tabId is gone — fall through to targetId recovery
+      beforeRecoveryTarget(tabId);
       try {
         await attachTab(tabId);
         if (tabs.has(tabId)) return tabId;
@@ -1343,11 +1344,13 @@ async function recoverSessionTab(sessionId) {
     const replacement = followReplacement(replacedTabs, tabId);
     if (replacement !== tabId) {
       let tab = await chrome.tabs.get(replacement).catch(() => null);
+      if (eligible(tab)) beforeRecoveryTarget(replacement);
       if (eligible(tab) && tab.discarded) {
         await reviveDiscardedTab(chrome.tabs, replacement).catch(() => false);
         tab = await chrome.tabs.get(replacement).catch(() => null);
       }
       if (eligible(tab)) {
+        beforeRecoveryTarget(replacement);
         try {
           await attachTab(replacement);
           if (tabs.has(replacement)) {
@@ -1388,6 +1391,7 @@ async function recoverSessionTab(sessionId) {
       if (t && t.tabId != null) {
         const tab = await chrome.tabs.get(t.tabId).catch(() => null);
         if (eligible(tab)) {
+          beforeRecoveryTarget(t.tabId);
           // Preserve the diagnostic before attach yields; commits during the
           // replacement window must contribute to the same reload history.
           transferReloadState(reloadStates, tabId, t.tabId);
@@ -1763,6 +1767,8 @@ async function handleForwardCdpCommand(msg) {
       sessionId: requestedSession || entry?.sessionId || null,
       targetId: entry?.targetId || requestedTarget || null,
       url: tab.url || tab.pendingUrl || '',
+      committedUrl: tab.url || '',
+      pendingUrl: tab.pendingUrl || '',
       title: tab.title || '',
       status: tab.status || null,
       active: Boolean(tab.active),
@@ -2021,6 +2027,10 @@ async function handleForwardCdpCommand(msg) {
   // exactly the "ran on the wrong page with no warning" failure in issue #8.1,
   // and the blank-screenshot symptom after a service-worker restart (#8.2).
   // Fail loudly instead so the agent sees an actionable error, not bad data.
+  const childSid =
+    sessionId && tabIdFromSession(sessionId) == null && childSessionToTab.has(sessionId)
+      ? sessionId
+      : undefined;
   let tabId;
   if (sessionId) {
     // The stable Chrome tabId encoded in `cb-tab-<tabId>` is the source of truth
@@ -2034,8 +2044,25 @@ async function handleForwardCdpCommand(msg) {
       throw new Error(`unknown sessionId ${sessionId} for ${method}`);
     }
     guardTab(tabId, agentSession);
-    if (!tabs.has(tabId)) {
-      const recovered = await recoverSessionTab(sessionId);
+    let browserNavigationReady = false;
+    if (!tabs.has(tabId) && canUseBrowserNavigationFallback(method, params, childSid)) {
+      let missing = false;
+      const live = await withRelayTimeout(chrome.tabs.get(tabId), 'chrome.tabs.get(Page.navigate)').catch(error => {
+        if (!isMissingTabError(error, tabId)) throw error;
+        missing = true;
+        return null;
+      });
+      if (!missing) {
+        if (!eligible(live)) throw new Error(`Chrome tab ${tabId} is not a navigable web tab`);
+        browserNavigationReady = true;
+      }
+      // Only a confirmed missing id enters the existing replacement recovery.
+      // A live stable tab needs no attachment to navigate out of a protected page.
+    }
+    if (!browserNavigationReady && !tabs.has(tabId)) {
+      const beforeRecoveryTarget = canUseBrowserNavigationFallback(method, params, childSid)
+        ? id => guardTab(id, agentSession) : undefined;
+      const recovered = await recoverSessionTab(sessionId, beforeRecoveryTarget);
       if (!recovered) {
         // A dead tab's host record goes now, so the next getTargets does not
         // list it and attaching to it fails (#519).
@@ -2047,6 +2074,7 @@ async function handleForwardCdpCommand(msg) {
         );
       }
       tabId = recovered;
+      guardTab(tabId, agentSession);
     }
   } else if (typeof params?.targetId === 'string') {
     tabId = tabForTarget(params.targetId);
@@ -2062,10 +2090,6 @@ async function handleForwardCdpCommand(msg) {
   // page session — is dispatched to that sub-frame directly so e.g.
   // Accessibility.getFullAXTree pierces the OOPIF instead of re-reading the top
   // frame. `cb-tab-*` ids resolve to the page (no child sessionId). (OAuth/OOPIF)
-  const childSid =
-    sessionId && tabIdFromSession(sessionId) == null && childSessionToTab.has(sessionId)
-      ? sessionId
-      : undefined;
 
   // Idle auto-detach bookkeeping (issue #201): re-attach a released tab before
   // the command and count in-flight commands so the sweep never detaches under
@@ -2085,18 +2109,33 @@ async function handleForwardCdpCommand(msg) {
       );
     }
   }
+  // An explicit top-level navigation uses Chrome's tab API. Requiring a
+  // debugger attachment first would trap the caller on a protected overlay.
+  if (canUseBrowserNavigationFallback(method, params, childSid)) {
+    const result = await dispatchToTab(tabId, method, params, childSid, agentSession);
+    if (result?.relayFallback?.method === 'browser-level chrome.tabs.update') {
+      attachmentHealth.navigationStarted(tabId);
+    }
+    return result;
+  }
   const reset = await attachmentHealth.recover(tabId, tabCommandDependencies());
   if (reset && childSid)
     throw new Error('tab_reset: child session invalidated; rediscover frames before retrying');
   if (reset) entry = tabs.get(tabId);
   if (!reset && entry && entry.attached === false) await reattachTab(tabId, entry);
+  const rememberAfterSuccess = method === 'Emulation.clearDeviceMetricsOverride' ||
+    (method === 'Emulation.setUserAgentOverride' && params?.userAgent === '') ||
+    (method === 'Emulation.setTouchEmulationEnabled' && params?.enabled === false);
   if (entry) {
     entry.inflight++;
     entry.lastActivity = Date.now();
-    if (!childSid) rememberReplayable(entry, method, params);
+    if (!childSid && !rememberAfterSuccess) rememberReplayable(entry, method, params);
   }
   try {
-    return await dispatchToTab(tabId, method, params, childSid, agentSession);
+    const result = await dispatchToTab(tabId, method, params, childSid, agentSession);
+    // A refused or unconfirmed reset must retain the last known override.
+    if (!childSid && rememberAfterSuccess) rememberReplayable(entry, method, params);
+    return result;
   } finally {
     if (entry) {
       entry.inflight = Math.max(0, entry.inflight - 1);

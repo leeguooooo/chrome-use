@@ -3,14 +3,14 @@ use super::*;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Mutex;
 
-struct RelayMode;
+pub(super) struct RelayMode;
 impl Drop for RelayMode {
     fn drop(&mut self) {
         super::super::browser::relay_for_test(false);
     }
 }
 
-async fn fixture(
+pub(super) async fn fixture(
     managed: Value,
 ) -> (
     DaemonState,
@@ -45,6 +45,28 @@ async fn fixture_with_fields(
     Arc<Mutex<Vec<Value>>>,
     RelayMode,
 ) {
+    fixture_with_origin(
+        managed,
+        host,
+        decision,
+        fields,
+        Some(format!("https://{host}")),
+    )
+    .await
+}
+
+async fn fixture_with_origin(
+    managed: Value,
+    host: &str,
+    decision: &str,
+    fields: HashMap<String, Value>,
+    renderer_origin: Option<String>,
+) -> (
+    DaemonState,
+    tokio::task::JoinHandle<()>,
+    Arc<Mutex<Vec<Value>>>,
+    RelayMode,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}", listener.local_addr().unwrap());
     let commands = Arc::new(Mutex::new(Vec::new()));
@@ -65,7 +87,11 @@ async fn fixture_with_fields(
                 }
                 "ABExt.siteApproval" => json!({"held":true}),
                 "Page.getFrameTree" => {
-                    json!({"frameTree":{"frame":{"id":"root","url":renderer_url}}})
+                    let mut frame = json!({"id":"root","url":renderer_url});
+                    if let Some(origin) = &renderer_origin {
+                        frame["securityOrigin"] = json!(origin);
+                    }
+                    json!({"frameTree":{"frame":frame}})
                 }
                 "DOM.getDocument"
                     if fields.contains_key(request["sessionId"].as_str().unwrap_or("")) =>
@@ -273,7 +299,7 @@ async fn approved_site_cannot_suppress_file_confirmation_on_a_different_allowed_
     state.policy = Some(ActionPolicy::load(path.to_str().unwrap()).unwrap());
     state.pending_confirmation = Some(PendingConfirmation {
         action: "fill".into(),
-        target: Some(ConfirmationTarget {
+        target: Some(ConfirmationTarget::Document {
             target_id: "fixture".into(),
             origin: "https://fixture.test".into(),
         }),
@@ -429,8 +455,8 @@ async fn named_tab_site_prompt_uses_intended_origin_instead_of_current_tab() {
             .target
             .as_ref()
             .unwrap()
-            .target_id,
-        "fixture"
+            .target_id(),
+        Some("fixture")
     );
     assert_eq!(
         state.browser.as_ref().unwrap().active_target_id().unwrap(),
@@ -736,4 +762,392 @@ async fn managed_domain_denial_precedes_intended_field_reads() {
         .iter()
         .all(|r| r["method"].as_str().unwrap().starts_with("AB")));
     server.abort();
+}
+
+#[tokio::test]
+async fn field_policy_read_failure_preserves_kept_ref_no_recovery_contract() {
+    for fields in [
+        HashMap::new(),
+        [("cb-tab-1".into(), Value::Null)].into_iter().collect(),
+    ] {
+        let (mut state, server, commands, _mode) =
+            fixture_with_fields(field_policy(), "fixture.test", "once", fields).await;
+        state
+            .ref_map
+            .add("e1".into(), Some(41), "textbox", "ordinary", None);
+        state.ref_map.keep_after_failed_capture(
+            super::super::element::DocumentIdentity::default(),
+            "post-action capture denied (debugger_access_denied)",
+        );
+        let cmd = json!({"id":"kept-field","action":"fill","selector":"@e1","value":"synthetic"});
+        let gate = site_gate(&cmd, "fill", "kept-field", &mut state)
+            .await
+            .unwrap();
+        assert_eq!(gate["success"], false, "{gate}");
+        assert_eq!(gate["code"], "kept_ref_unverified", "{gate}");
+        assert_eq!(gate["retryable"], false);
+        let error = gate["error"].as_str().unwrap();
+        assert!(error.contains("debugger_access_denied"), "{error}");
+        assert!(error.contains("Nothing was acted on"), "{error}");
+        assert!(commands.lock().unwrap().iter().all(|r| r["method"]
+            .as_str()
+            .unwrap()
+            .starts_with("AB")
+            || r["method"] == "DOM.describeNode"));
+        server.abort();
+    }
+}
+
+#[test]
+fn opaque_urls_cannot_stand_in_for_a_renderer_origin() {
+    for url in [
+        "about:blank",
+        "about:srcdoc",
+        "data:text/html,synthetic",
+        "file:///tmp/synthetic.html",
+        "null",
+    ] {
+        assert!(confirmation_origin(url).is_err(), "{url}");
+    }
+    assert_eq!(
+        confirmation_origin("https://fixture.test/editor").unwrap(),
+        "https://fixture.test"
+    );
+    assert_eq!(
+        confirmation_origin("https://fixture.test:8443/editor").unwrap(),
+        "https://fixture.test:8443"
+    );
+    assert!(http_resource_command(
+        &json!({"action":"read","url":"fixture.test/resource","llms":"full","includeHidden":true})
+    ));
+    assert!(!http_resource_command(
+        &json!({"action":"read","llms":"full"})
+    ));
+    assert!(!http_resource_command(
+        &json!({"action":"read","url":"file:///tmp/synthetic"})
+    ));
+
+    for url in ["javascript:void(0)", "data:text/html,x"] {
+        assert!(replacing_navigation(&json!({"action":"navigate","url":url})).is_none());
+    }
+    assert!(replacing_navigation(
+        &json!({"action":"navigate","url":"https://fixture.test/","preferSpa":true})
+    )
+    .is_none());
+}
+
+#[tokio::test]
+async fn fresh_confirmation_requires_renderer_security_origin_not_only_matching_url() {
+    for origin in [None, Some("null".into()), Some("https://other.test".into())] {
+        let (mut state, server, commands, _mode) = fixture_with_origin(
+            json!({"actionPolicy":{"confirm":["clipboard"]}}),
+            "fixture.test",
+            "once",
+            HashMap::new(),
+            origin,
+        )
+        .await;
+        state.confirm_actions = Some(ConfirmActions {
+            categories: ["fill".into()].into_iter().collect(),
+        });
+        let cmd = json!({"id":"actual-origin","action":"fill","selector":"#editor","value":"synthetic","allowClipboardFallback":true});
+        let first = execute_command(&cmd, &mut state).await;
+        assert_eq!(first["data"]["confirmation_required"], true, "{first}");
+        assert!(commands.lock().unwrap().is_empty());
+        let error = handle_confirm(&json!({"confirmationId":"actual-origin"}), &mut state)
+            .await
+            .unwrap_err();
+        assert!(error.contains("target or origin changed"), "{error}");
+        assert!(!command_approved());
+        assert!(state.pending_confirmation.is_none());
+        state.confirm_actions = None;
+        let gate = site_gate(&cmd, "fill", "actual-origin", &mut state)
+            .await
+            .unwrap();
+        assert_eq!(gate["success"], false, "{gate}");
+        assert!(gate["error"]
+            .as_str()
+            .unwrap()
+            .contains("origin could not be verified"));
+        assert!(!commands
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r["method"] == "ABExt.siteApproval"));
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn blank_document_inputs_refuse_but_explicit_https_navigation_can_be_approved() {
+    let (mut state, server, commands, _mode) =
+        fixture(json!({"actionPolicy":{"confirm":["navigate"]}})).await;
+    state.browser.as_mut().unwrap().update_page_target_info(
+        &serde_json::from_value(
+            json!({"targetId":"fixture","url":"about:blank","title":"Blank","type":"page"}),
+        )
+        .unwrap(),
+    );
+    state.confirm_actions = Some(ConfirmActions {
+        categories: ["fill".into()].into_iter().collect(),
+    });
+    let fill = json!({"id":"blank-fill","action":"fill","selector":"#editor","value":"synthetic"});
+    let refused = execute_command(&fill, &mut state).await;
+    assert_eq!(refused["success"], false, "{refused}");
+    assert!(refused["error"].as_str().unwrap().contains("opaque"));
+    assert!(state.pending_confirmation.is_none());
+    assert!(commands.lock().unwrap().is_empty());
+    let navigate = json!({"id":"first-open","action":"navigate","url":"https://destination.test/path","waitUntil":"none"});
+    let gate = site_gate(&navigate, "navigate", "first-open", &mut state)
+        .await
+        .unwrap();
+    assert_eq!(gate["data"]["approval"], "user", "{gate}");
+    assert_eq!(gate["data"]["site"], "destination.test");
+    validate_confirmation_target(state.pending_confirmation.as_ref().unwrap(), &state)
+        .await
+        .unwrap();
+    assert!(commands
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|r| r["method"].as_str().unwrap().starts_with("AB")));
+    server.abort();
+}
+
+#[tokio::test]
+async fn approved_navigation_refuses_a_missing_original_owned_target() {
+    let (mut state, server, commands, _mode) = fixture(json!({})).await;
+    let cmd = json!({"id":"nav-a","action":"navigate","url":"https://destination.test/path"});
+    let target = confirmation_target(&cmd, &state).unwrap();
+    state
+        .browser
+        .as_mut()
+        .unwrap()
+        .unown_target("fixture")
+        .unwrap();
+    select_other_fixture_page(&mut state);
+    let pending = PendingConfirmation {
+        action: "navigate".into(),
+        cmd,
+        target,
+        site: None,
+    };
+    let error = validate_confirmation_target(&pending, &state)
+        .await
+        .unwrap_err();
+    assert!(error.contains("target or origin changed"), "{error}");
+    assert!(commands.lock().unwrap().is_empty());
+    server.abort();
+}
+
+#[tokio::test]
+async fn independent_http_read_approval_ignores_browser_appearance_and_disappearance() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for initially_connected in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/resource", listener.local_addr().unwrap());
+        let http = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            stream.read(&mut request).await.unwrap();
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 17\r\nConnection: close\r\n\r\nsynthetic receipt").await.unwrap();
+        });
+        let (mut fixture_state, server, commands, _mode) = fixture(json!({})).await;
+        let mut state = DaemonState::new();
+        state.policy = None;
+        if initially_connected {
+            state.browser = fixture_state.browser.take();
+        }
+        state.confirm_actions = Some(ConfirmActions {
+            categories: ["read".into()].into_iter().collect(),
+        });
+        let cmd = json!({"id":"read-resource","action":"read","url":url,"raw":true,"tab":"t99","forceTab":true});
+        let first = execute_command(&cmd, &mut state).await;
+        assert_eq!(first["data"]["confirmation_required"], true, "{first}");
+        if initially_connected {
+            state.browser = None;
+        } else {
+            state.browser = fixture_state.browser.take();
+        }
+        let result = execute_command(
+            &json!({"id":"approve-read","action":"confirm","confirmationId":"read-resource"}),
+            &mut state,
+        )
+        .await;
+        assert_eq!(result["success"], true, "{result}");
+        assert_eq!(result["data"]["confirmed"], true, "{result}");
+        let calls = commands.lock().unwrap();
+        assert!(
+            calls
+                .iter()
+                .all(|r| r["method"].as_str().unwrap().starts_with("AB")
+                    || matches!(
+                        r["method"].as_str(),
+                        Some("Page.getFrameTree" | "Page.createIsolatedWorld")
+                    )),
+            "{calls:?}"
+        );
+        assert_eq!(state.browser.is_some(), !initially_connected);
+        http.await.unwrap();
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn explicit_navigation_target_must_match_the_actual_active_owned_target() {
+    let (mut state, server, commands, _mode) = fixture(json!({})).await;
+    select_other_fixture_page(&mut state);
+    state
+        .browser
+        .as_mut()
+        .unwrap()
+        .set_active_for_test("fixture");
+    state.confirm_actions = Some(ConfirmActions {
+        categories: ["navigate".into()].into_iter().collect(),
+    });
+    let command = json!({"id":"explicit-mismatch","action":"navigate","tab":"t2","url":"https://destination.test/","headers":{"X-Synthetic":"receipt"}});
+    let result = execute_command(&command, &mut state).await;
+    assert_eq!(result["success"], false, "{result}");
+    assert!(
+        result["error"]
+            .as_str()
+            .unwrap()
+            .contains("chrome-use tab t2"),
+        "{result}"
+    );
+    assert!(state.pending_confirmation.is_none());
+    assert!(
+        commands.lock().unwrap().is_empty(),
+        "neither navigation nor header writes are allowed"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn independent_resource_keeps_managed_denials_and_immutable_arguments() {
+    let (mut connected, server, commands, _mode) =
+        fixture(json!({"actionPolicy":{"deny":["read"]}})).await;
+    let mut state = DaemonState::new();
+    state.policy = None;
+    state.confirm_actions = Some(ConfirmActions {
+        categories: ["read".into()].into_iter().collect(),
+    });
+    let cmd =
+        json!({"id":"read-policy","action":"read","url":"http://127.0.0.1:9/synthetic","raw":true});
+    let first = execute_command(&cmd, &mut state).await;
+    assert_eq!(first["data"]["confirmation_required"], true, "{first}");
+    let mut modified = cmd.clone();
+    modified["raw"] = json!(false);
+    let pending = PendingConfirmation {
+        action: "read".into(),
+        target: state.pending_confirmation.as_ref().unwrap().target.clone(),
+        cmd: modified,
+        site: None,
+    };
+    assert!(validate_confirmation_target(&pending, &state)
+        .await
+        .is_err());
+    state.browser = connected.browser.take();
+    let result = execute_command(
+        &json!({"id":"approve-read-policy","action":"confirm","confirmationId":"read-policy"}),
+        &mut state,
+    )
+    .await;
+    assert_eq!(result["success"], false, "{result}");
+    assert!(
+        result["error"].as_str().unwrap().contains("organization"),
+        "{result}"
+    );
+    assert!(commands
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|r| r["method"].as_str().unwrap().starts_with("AB")));
+    server.abort();
+}
+
+#[tokio::test]
+async fn cold_http_resource_keeps_file_domain_deny_confirm_and_allow_without_fetching() {
+    for rule in ["deny", "confirm", "allow"] {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("policy.json");
+        fs::write(
+            &path,
+            serde_json::to_vec(&json!({"sites":{(rule):["fixture.test"]}})).unwrap(),
+        )
+        .unwrap();
+        let mut state = DaemonState::new();
+        state.policy = Some(ActionPolicy::load(path.to_str().unwrap()).unwrap());
+        state.confirm_actions = None;
+        let cmd = json!({"id":"cold-resource-policy","action":"read","url":"https://fixture.test/resource","raw":true});
+        let gate = site_gate(&cmd, "read", "cold-resource-policy", &mut state).await;
+        match rule {
+            "deny" => {
+                let response = gate.unwrap();
+                assert_eq!(response["success"], false, "{response}");
+                assert!(response["error"].as_str().unwrap().contains("blocked"));
+                let approved = CONFIRMED_APPROVAL
+                    .scope(
+                        ConfirmedApproval::Site("fixture.test".into()),
+                        site_gate(&cmd, "read", "approved-cold-resource", &mut state),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(approved["success"], false, "{approved}");
+            }
+            "confirm" => {
+                let response = gate.unwrap();
+                assert_eq!(
+                    response["data"]["confirmation_required"], true,
+                    "{response}"
+                );
+                assert_eq!(response["data"]["category"], "read");
+                assert_eq!(response["data"]["site"], "fixture.test");
+                validate_confirmation_target(state.pending_confirmation.as_ref().unwrap(), &state)
+                    .await
+                    .unwrap();
+            }
+            _ => assert!(gate.is_none(), "{gate:?}"),
+        }
+        assert!(state.browser.is_none());
+    }
+}
+
+#[tokio::test]
+async fn new_target_bindings_keep_the_action_and_declared_blank_destination() {
+    let state = DaemonState::new();
+    for action in ["tab_new", "window_new"] {
+        let command = json!({"id":"new-blank","action":action});
+        let target = confirmation_target(&command, &state).unwrap();
+        assert!(
+            matches!(&target,Some(ConfirmationTarget::Navigation {action:bound,destination,new_target:true,target_id:None}) if bound==action && destination=="about:blank")
+        );
+        let mut pending = PendingConfirmation {
+            action: action.into(),
+            cmd: command,
+            target,
+            site: None,
+        };
+        validate_confirmation_target(&pending, &state)
+            .await
+            .unwrap();
+        pending.cmd["action"] = json!(if action == "tab_new" {
+            "window_new"
+        } else {
+            "tab_new"
+        });
+        assert!(
+            validate_confirmation_target(&pending, &state)
+                .await
+                .is_err(),
+            "approval must not transfer to another creation handler"
+        );
+    }
+    for url in ["javascript:void(0)", "data:text/html,synthetic"] {
+        assert!(confirmation_target(&json!({"action":"tab_new","url":url}), &state).is_err());
+    }
+    assert!(window_creation_destination(
+        &json!({"action":"window_new","url":"https://destination.test/"})
+    )
+    .is_err());
 }

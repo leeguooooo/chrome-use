@@ -182,10 +182,11 @@ pub fn category_of(action: &str, cmd: &Value) -> Option<&'static str> {
     }
 }
 
-/// The URL whose host an action lands on, when the command names one.
+/// The immutable URL whose host an action lands on or reads over HTTP, when
+/// the command names one. An explicit read URL never borrows the current tab host.
 pub fn target_url(action: &str, cmd: &Value) -> Option<String> {
     match action {
-        "navigate" | "tab_new" | "window_new" | "a11y" | "download_url" => cmd
+        "navigate" | "tab_new" | "window_new" | "a11y" | "download_url" | "read" => cmd
             .get("url")
             .and_then(|v| v.as_str())
             .map(str::trim)

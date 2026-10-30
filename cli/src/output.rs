@@ -528,6 +528,10 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
     }
 
     if let Some(data) = &resp.data {
+        if action == Some("device") && data["reset"] == true {
+            println!("{} Device emulation off: metrics, user-agent and touch overrides cleared (native viewport {}x{})", color::success_indicator(), data["width"], data["height"]);
+            return;
+        }
         if action == Some("auth_login_bwu") && data["confirmation_required"] != true {
             let (ok, message) = bwu_login_message(data);
             println!(
@@ -2845,6 +2849,14 @@ chrome-use open - Launch the browser, optionally navigate
 
 Usage: chrome-use open [url] [--new-tab]
 
+On relay 0.5.98+, explicit top-level navigation uses Chrome's tab API before
+recovering debugger access. A protected autofill frame cannot permanently veto
+this exit path; no form/input is replayed. Tab grants still apply. `get url`
+can read the pinned tab's live Chrome metadata while its renderer is blocked.
+Legacy relays missing inspectTab retain the renderer URL read; other errors
+still fail. Missing tab ids use only confirmed replacement/target recovery,
+with grants rechecked; closed tabs still fail.
+
 Without a URL, launches the browser but stays on about:blank. This lets
 you stage state (network routes, cookies, init scripts) before the first
 real navigation — useful for SSR debug, auth setup, and capturing fresh
@@ -3019,6 +3031,15 @@ only honours real input ignores such a click. A DOM-dispatched click still
 moves keyboard focus like a real one, so `click <input>` followed by
 `press Meta+a` lands on that input.
 
+Human pointer clicks settle for a seeded 60-200ms before press, then recheck
+that the same live element owns the landing point. Fast/Off timing is unchanged.
+A top-level @ref under a small fixed/sticky semantic edge header/navigation bar
+may get one trusted wheel gesture (10s cap, humanize pacing). The same handle
+and document epoch are rechecked; unknown wheel points, context changes or
+transport errors stop without DOM-scroll fallback or input replay. Modal/dialog
+and popover blockers remain refusals. "click stopped before press" means no
+mouse button was sent; pointer/viewport may have moved, so observe before retrying.
+
 A disabled control (`:disabled`) is refused with an error: the browser
 delivers no click to it, and a Save that is still disabled usually means the
 page never registered the edit before it. An `aria-disabled="true"` target is
@@ -3152,10 +3173,20 @@ that it temporarily changes the system clipboard. Only fill and get value accept
 this flag; place it last, after the required text/selector. A mandatory text value
 that equals the flag stays literal, and -- ends editor option parsing.
 Clipboard policies still apply; approval cannot override a hard deny.
-Approval is bound to the original owned tab and origin. If they change or cannot
-be verified, rerun the original command for fresh approval.
-Field policy checks use that target's refs and iframe sessions; missing or unreadable
-context refuses before input.
+Document/input/clipboard approvals require the original owned target and fresh
+HTTP(S) renderer securityOrigin; opaque or missing origins refuse. Explicit HTTP(S)
+navigation binds its original target and destination, works from blank/cold start,
+and creates a new own target for --new-tab or when no original target existed.
+Literal tab new accepts HTTP(S) or default about:blank; window new only creates
+about:blank and refuses nonblank URLs. Both bind the actual creation action.
+Select a named navigation target with `chrome-use tab <target>` first; approval
+refuses a mismatch with the active owned target.
+JavaScript/SPA actions still require document-origin verification. HTTP read URL
+approvals bind their original URL/args independently of browser presence.
+Explicit HTTP reads do not route/adopt browser tabs. Without a URL, read approval
+still depends on the current document. HTTP resources use read site-policy
+category and still check file domain rules when no browser exists.
+Field policy uses that target's refs/iframe sessions; unreadable context refuses.
 It never enables clipboard fallback after native model/input failure. Actual use
 emits a warning: comparison/restoration is not atomic and can overwrite concurrent
 clipboard writes. The opted-in fallback uses one trusted editor paste, reads the selected model back through the editor's
@@ -4632,7 +4663,12 @@ Configures various browser settings and emulation options.
 
 Settings:
   viewport <w> <h> [scale]   Set viewport size (scale = deviceScaleFactor, e.g. 2 for retina)
-  device <name>              Emulate device (e.g., "iPhone 12")
+  device <name|off>          Emulate device (e.g., "iPhone 13"); off/reset/none clears
+                            device metrics, UA and touch overrides; new tabs use
+                            the browser UA again (viewport reset clears only metrics)
+                            Does not restore prior --user-agent/set useragent values;
+                            existing headless UA compatibility remains enabled
+                            Relay 0.5.98+ also keeps cleared metrics out of idle replay
   geo <lat> <lng>            Set geolocation
   offline [on|off]           Toggle offline mode; off restores the new-tab default
   headers <json>             Set extra HTTP headers; use {} to clear them for new tabs
@@ -4647,7 +4683,8 @@ Global Options:
 Examples:
   chrome-use set viewport 1920 1080
   chrome-use set viewport 1920 1080 2    # 2x retina
-  chrome-use set device "iPhone 12"
+  chrome-use set device "iPhone 13"
+  chrome-use set device off
   chrome-use set geo 37.7749 -122.4194
   chrome-use set offline on
   chrome-use set headers '{"X-Custom": "value"}'
@@ -4972,7 +5009,9 @@ Usage: chrome-use window <operation>
 Manage browser windows.
 
 Operations:
-  new                  Open new browser window
+  new                  Open a new about:blank browser window (no URL argument)
+
+For a URL, use `chrome-use tab new <https-url>`. Explicit window URLs are refused.
 
 Global Options:
   --json               Output as JSON
@@ -5778,6 +5817,9 @@ cookie NAMES in the profile's on-disk cookie store (never values; no tab is
 opened). "signed in" = a cookie the site only sets for a signed-in user (known
 sites); "session cookies present" = session-like names, not proof. Where a site
 adapter <site>/me exists, the row shows the command that reports the account.
+On macOS, reads prefer PATH sqlite3 and use /usr/bin/sqlite3 only after a missing
+or unsupported-format executable cannot start. Execution permission denials and
+started-query failures stay errors; locked/corrupt databases are not retried.
 
 Pick a profile:
   --browser <name|prefix|dir|email|id>   e.g. --browser Davian, --browser d,
@@ -6020,12 +6062,14 @@ Examples:
         }
         "device" => {
             r##"
-chrome-use device - Manage iOS simulators
+chrome-use device - List iOS simulators or stop browser device emulation
 
-Usage: chrome-use device <subcommand>
+Usage: chrome-use device <list|off|reset|none>
 
 Subcommands:
   list    List available iOS simulators
+  off     Clear browser device metrics, UA and touch overrides (aliases: reset, none)
+          Same as set device off; does not resize the Chrome window
 
 Options:
   --json               Output as JSON
@@ -6106,9 +6150,12 @@ Usage: chrome-use batch [options] "<cmd1>" "<cmd2>" ...
 Runs multiple commands in sequence. Commands can be passed as quoted
 arguments or piped as JSON via stdin. Results are printed in order,
 separated by blank lines (or as a JSON array with --json).
+A pending confirmation always stops the batch, even without --bail, and exits 3.
+The last result retains the approval instructions and confirmation ID. No later
+step is sent. After approval, inspect the result and start a new batch for the rest.
 
 Options:
-  --bail               Stop on first error (default: continue all commands)
+  --bail               Stop on first error (pending confirmation always stops)
   --json               Output results as a JSON array
 
 Per-step flags:
@@ -6730,7 +6777,7 @@ Mouse:  chrome-use mouse <action> [args]
   move <x> <y>, down [btn], up [btn], wheel <dy> [dx]
 
 Browser Settings:  chrome-use set <setting> [value]
-  viewport <w> <h>, device <name>, geo <lat> <lng>
+  viewport <w> <h>, device <name|off>, geo <lat> <lng>
   offline [on|off], headers <json>, credentials <user> <pass>
   media [dark|light] [reduced-motion]
 
@@ -7116,6 +7163,9 @@ Options:
   --screenshot-dir <path>    Default screenshot output directory (or AGENT_BROWSER_SCREENSHOT_DIR)
   --screenshot-quality <n>   JPEG quality 0-100; ignored for PNG (or AGENT_BROWSER_SCREENSHOT_QUALITY)
   --screenshot-format <fmt>  Screenshot format: png, jpeg (or AGENT_BROWSER_SCREENSHOT_FORMAT)
+  --humanize <level>         off|fast|human; default fast with adaptive escalation
+                             Human regular pointer clicks settle 60-200ms before press
+                             (also AGENT_BROWSER_HUMANIZE)
   --headed                   Always on (default). Headless is forbidden (bot-detection tell);
                              display-less servers can opt back in with AGENT_BROWSER_ALLOW_HEADLESS=1
   --cdp <port>               Connect via CDP (Chrome DevTools Protocol)
@@ -7191,6 +7241,8 @@ Options:
                              settle.pendingRequests). A mutation the
                              action made while being dispatched counts as its
                              reaction, so the wait then only owes the quiet window.
+                             Only finite time-based animations block; scroll-driven
+                             percentage timelines are ignored.
   --no-settle                Capture immediately, without waiting for the page
                              to stop changing
   --with-screenshot <path>   Save the pixels alongside a structural observation

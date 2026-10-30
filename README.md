@@ -50,7 +50,6 @@ Showcase your product here and support ongoing maintenance.
 </table>
 
 
-
 ## Paid setup and project sponsorship
 
 Need help connecting your agent to your signed-in Chrome or setting up a browser workflow? Email us with your environment, the workflow and expected result, and where you are stuck. We review feasibility and agree on scope, acceptance criteria and a quote before work starts.
@@ -276,6 +275,13 @@ inherited relay override. To refresh an existing launcher, rerun `extension
 install` with the intended environment; private rigs should also pass
 `--no-open --no-profile` and set `CHROME_USE_NO_BROWSER_SCAN=1`.
 
+`browsers --who <domain>` inspects cookie names on disk, never values; presence
+is not proof that a session is still accepted. On macOS, SQLite reads use the
+PATH `sqlite3` first and fall back to `/usr/bin/sqlite3` only when it cannot
+start because it is missing or has an unsupported executable format. Execution
+permission denials and errors from an already-started SQLite query remain
+explicit errors; locked or corrupt databases are not retried with another tool.
+
 `extension install` is the one-time setup. `chrome-use extension connect` (alias `chrome-use reconnect`) re-attaches to an already-installed extension's relay without reinstalling anything. Chrome still shows its "chrome-use started debugging this browser" bar on attached agent tabs; `chrome-use extension connect --silent` removes it by restarting Chrome once with `--silent-debugger-extension-api` (tabs and logins are restored; it refuses when several Chrome instances are running). `--keep-banner` leaves Chrome alone, and without either flag it asks first in an interactive terminal.
 
 All AI sessions in a Chrome profile share one background agent window, with one tab group per session; your own window stays separate. Existing windows with verified agent ownership are reused, including fullscreen windows. Unknown ownership or failed placeholder cleanup refuses instead of creating more windows. User tabs are never moved or deleted to reclaim a window. If you open or drag your own tabs into the agent window, that window becomes yours: agent tabs already there keep working, and new agent tabs go to one fresh agent window that later sessions share.
@@ -339,16 +345,19 @@ For scoped, depth-limited, regex-filtered or budgeted snapshots, JSON `refs` con
 
 Interactive snapshots add `context` only to repeated controls with the same role and name when named parent lines do not already distinguish them. Context omits the control’s own name and punctuation, stays within about 100 characters (60 for unnamed controls), and must differ between controls. Unique controls have no context; use a scoped or full snapshot for missing details such as a unique product’s price.
 
+Scroll-driven animations use percentages instead of finite time durations, so they do not
+hold the settle wait open. Finite time-based animations, DOM changes and in-flight
+requests keep their existing checks.
+
 Prefer `snapshot -i -c` for compact controls, scoped reads for a known region, and `--diff` only when the last observation leaves a question. Use `batch` for known action sequences (a step takes its own `--observe`: `batch "fill @e1 Ada" "click @e2 --observe"`; `pick` and `hover` observe like `click`), `script` for bounded observe/decide/act/verify flows, and `form fill --map` for several fields. Verify the requested result at the end: `observed.status: complete` means the capture is complete, not the task, so wait for the page's own final signal (`wait --text`). On a small page (tree at most 4 KB and 60 lines) an observation carries the whole current tree as `observed.snapshot` plus `observed.changes` (`+`/`-` lines only); larger pages keep `delta`. `observed.text` lists visible text lines that changed in any frame (receipts, logs, page counters), never input, textarea, select or editable content, and nothing at all while any password field holds a value (`textStatus: redacted`); a frame it could not read is listed in `textFrames` and makes the observation `partial`. `observed.target` names the tab and target on every JSON reply. `observed.announced` holds the text of toasts and alert/status/aria-live regions that appeared while the action ran and the page settled, even ones gone before the reply ("video under review, not saved"). An element screenshot is `screenshot <selector> <path>` or `screenshot <path> --selector <selector>`. Add `--with-screenshot <path>` only when pixels answer a question the tree cannot.
 
 After a successful trusted insertion, contenteditable `fill` keeps focus on the editor without synthetic `change` or `focusout` events. If read-back fails, it reports the failure instead of overwriting the editor DOM. Use the page's own save or commit action when needed.
 
 `dblclick` uses two trusted pointer clicks and verifies delivery to the target. Covered, disabled, transformed-frame and unmappable cross-origin targets are refused; no synthetic fallback is used. If the target changes after the first click, the second is stopped. JSON includes `dispatch: "pointer"` and `verified`; an unverified delivery carries a warning. Inspect the page before retrying an interrupted or unverified action. `AGENT_BROWSER_CLICK_MODE=dom` is not supported for double-clicks.
 
-
 When a hidden Monaco module API can be matched to the requested editor, `fill` uses native input and verifies that exact live model (`engine: monaco-native`); `get value` reads the same model without copy or paste. This path does not use the system clipboard. The same path covers completed exports retained by the Monaco 0.52 minified AMD loader after its public globals are removed. Discovery reads a bounded module table without invoking the loader, module factories or accessors; it does not load modules or make requests. The native select-all must cover the complete live model before insertion. A changed model, lost focus, incomplete selection or mismatched readback is an error, with no clipboard retry after input. If no exact model API is found, `fill` and `get value` refuse before clipboard access. Only after the user accepts temporary system clipboard changes, add `--allow-clipboard-fallback` to that command. The flag is supported only by these two commands, is not persistent, and never permits fallback after native input or model verification fails. The opted-in fallback emits a warning: comparison/restoration is not atomic and can overwrite a concurrent clipboard write. Monaco clipboard fallback keeps transaction state in a private closure and removes temporary listeners on completion, setup errors, or a 60-second lease expiry while the document survives. The backup uses independent Blob-backed items because browser-backed ClipboardItems may expire after a write. An empty or unreadable backup is refused before staging. Contents are compared before further input and before restoration; changes or uncertain ownership stop the operation. Restoration is read back and verified. Only formats exposed by the Web Clipboard API can be backed up; native application metadata is not preserved. A restore failure is an error, even if the editor changed. Context loss can prevent restoration, and clipboard comparison/write is not atomic; avoid concurrent clipboard use.
 
-Place the opt-in after the required text/selector, as the last option; `--` ends editor option parsing, and a mandatory fill value equal to the flag remains literal text. Clipboard action-policy and confirmation rules still apply. Approval never overrides a hard deny, and extension-held site requests require the user’s actual extension decision. Confirmation is bound to the original owned target and origin. If either changes or cannot be verified, run the original command again for fresh approval; an explicit tab reference must still resolve to that exact target. Field policy checks use that same intended target, including its saved element references and iframe sessions; missing or unreadable context refuses the operation before input.
+Place the opt-in after the required text/selector, as the last option; `--` ends editor option parsing, and a mandatory fill value equal to the flag remains literal text. Clipboard action-policy and confirmation rules still apply. Approval never overrides a hard deny, and extension-held site requests require the user’s actual extension decision. Approval for document, input and clipboard operations binds the original owned target and fresh HTTP(S) renderer security origin; missing or opaque origins refuse. Explicit HTTP(S) navigation binds its original target (if any) and immutable destination, so approval works from about:blank or a cold start. The existing `tab new` API accepts HTTP(S) or its default about:blank, and `window new` creates only its declared about:blank target. These creation commands bind their action and destination and create a new owned target after approval. A nonblank window URL is refused; use `tab new <https-url>` for a URL. With no original owned target or with `--new-tab`, it creates a new owned target and preserves pages that appeared while approval was pending. For a named navigation target, first select it with `chrome-use tab <target>`; approval refuses an active-target mismatch. JavaScript URLs and in-page SPA actions require document-origin verification. `read <http(s) URL>` binds the original URL and arguments independently of browser presence. An explicit HTTP read URL uses no tab routing or forced adoption; reads without a URL still depend on the current document for approval. HTTP resources use the `read` category; file domain rules are checked even without a browser. Field policy checks use the intended target’s saved refs and iframe sessions; missing or unreadable context refuses before input.
 
 `screenshot --annotate` draws numbered labels into the captured image in the CLI, without inserting page nodes or styles. JSON annotation boxes remain capture-relative CSS pixels; labels scale to the image resolution. Explicit clips take precedence over full-page and selector captures. Frame references use their owning renderer and top-viewport geometry. Nested out-of-process frames support rotation, skew, reflection and perspective through protocol quads and isolated-world viewport measurements, including scrollbar space. Annotation boxes enclose the projected corners. Collapsed or ill-conditioned transforms, perspective-horizon crossings and missing frame geometry report errors instead of guessed positions. Cropping also happens in the CLI; an off-viewport region is cropped from a full-page capture. Regions outside the page are refused.
 
@@ -372,7 +381,6 @@ Semantic find retains the existing `--observe` unsupported warning; use one `bat
 
 Discover a scope from the page first: `find query "Beta account"` returns candidate selector anchors; choose the article/container corresponding to that heading, then use `find role button click --name Save --exact --within "<returned-selector>"`. Inspect an ambiguous scope with `snapshot -s "<selector>"` and narrow it rather than accepting the first container. Unknown semantic-find options and duplicate `--within` are refused; use `find label Email fill -- --name` to enter literal flag-looking text. `--exact false` requests substring matching.
 
-
 After three identical observed `click`, `dblclick`, or `press` attempts on the same target and screen, with no gap over 60 seconds, `observed.noProgress` advises checking state or waiting for a task-specific condition. It requires complete, settled evidence with no detected tree, request, resource, or frame activity. The hint does not change action success, prove a write failed, or retry it.
 
 Ordinary CLI/MCP connection preparation preserves this streak only on successful reuse of the same browser connection, target and session, without loading storage state. A new browser, rebind, failed preparation or storage-state load still clears the count.
@@ -383,7 +391,7 @@ Scripts pause at approval with `ok:false`, `confirmation_required:true`, the app
 
 JSON refusals after `autoConfirm` carry `approval_refused:true` through nested programs; outer optional steps and catches also stop further browser calls. Ordinary errors and initial direct denials retain explicit optional/catch handling.
 
-Ordinary CLI `--json` replies use a `success`/`data`/`timing` envelope; `--no-timing` (or `AGENT_BROWSER_TIMING=0`) leaves `timing` out for a compact reply, and `timing.jsonl` is still written. `batch --json` prints an array of `{command,success,result,error}` entries; `script --json` prints the bare program result (`ok`, `return`, `logs`, `error`, `advisories`, and other program fields). Batch and script CLI output have no top-level `timing`.
+Ordinary CLI `--json` replies use a `success`/`data`/`timing` envelope; `--no-timing` (or `AGENT_BROWSER_TIMING=0`) leaves `timing` out for a compact reply, and `timing.jsonl` is still written. `batch --json` prints an array of `{command,success,result,error}` entries; `script --json` prints the bare program result (`ok`, `return`, `logs`, `error`, `advisories`, and other program fields). Batch and script CLI output have no top-level `timing`. A pending confirmation stops the batch immediately, with or without `--bail`, and exits 3. The last result keeps the approval instructions and confirmation ID; later steps are not sent. After approval, inspect the result and start a new batch for any remaining work.
 
 MCP `chrome_use_snapshot` accepts `diff: true` for a reread of the same page with the same snapshot options, including the filter. It maps to CLI `snapshot --diff`. Without a valid baseline it returns the full tree and `diffNote`; omit `diff` or set it to false when a complete current tree is required. A diff is an excerpt, so keep its baseline and do not interpret a removed line as a current control.
 
@@ -395,12 +403,15 @@ The agent operates in your Chrome: you'll see tabs opening, pages loading, click
 
 For an authorized task, the bundled skill tells the agent to inspect and attempt ordinary CAPTCHAs before handing off: `solve-slider` for ordinary and rotating Yidun puzzles, screenshot-guided ordered clicks for readable icon challenges, then verify the site's result and continue. Load `chrome-use skills get core/captcha`. Attempts are bounded; unavailable or ambiguous challenges still need a handoff. This workflow does not guarantee every provider or challenge can be solved. Activate the target before capturing coordinates; a provider success or frozen resend countdown does not establish site acceptance.
 
+Regular Human pointer clicks now use a seeded 60–200ms settling pause after movement and before pressing. Fast and Off keep their existing timing. Human selector/ref clicks recheck the same live element at the landing point after the pause. A verified top-level `@ref` hidden by a small fixed/sticky semantic edge header/navigation bar may use one trusted wheel gesture toward a clear position. The gesture is bounded to 10 seconds, uses humanize pacing, and keeps the original live handle and document epoch. Unknown wheel points, transport failures and context changes stop without a DOM-scroll fallback or input replay; the same element must pass the final exact hit-test. The default trusted path still refuses dialogs, modal/popover blockers and unverifiable targets. `click stopped before press` means no mouse button was sent; inspect before retrying, because the pointer or viewport may have moved.
+
 | Command | Purpose |
 |---|---|
+| `--humanize off\|fast\|human` | Fast is the default; Human regular pointer clicks add a seeded 60–200ms settling gap and recheck the live target before press |
 | `chrome-use extension install --user-data-dir <path>` | macOS/Linux: register an existing custom Chrome data directory (repeatable; equals form accepted). Running custom directories are also discovered automatically. Windows uses HKCU and rejects this option. |
 | `--window user` (default) / `--window dedicated` | Extension relay: AI tabs open in your current window, each session in its own tab group starting with ✦; `dedicated` moves all AI sessions into one shared background window per profile |
 | `chrome-use open <url>` | Connect to your Chrome and navigate. If `load` has not arrived after 25s but the tab's page is clearly usable, it succeeds with a ⚠ warning; when that page can't be tied to this request (always over the extension relay) the reply carries `commit: "unverified"` and the tab's real URL. A page that isn't usable fails with `navigation_incomplete:`, saying what is known (commit, readyState, candidate resources) |
-| `chrome-use snapshot -i` | Read the page; the start of every interaction (`-u` adds each link's absolute URL) |
+| `chrome-use snapshot -i` | Read the page after settling; ignores scroll-driven animation timelines (`-u` adds absolute link URLs) |
 | `chrome-use read --links` | The page as text, plus a bounded `## Links` list of `[text](absolute URL)` (first 100, `--max-links <n>` up to 1000) |
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | Click by text, by snapshot ref, or on a raw viewport coordinate |
 | `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` replaces a whole value and `type` appends, both with trusted input events; a ⚠ warning says when the page did not react (e.g. its Save stayed disabled) |
@@ -416,6 +427,7 @@ For an authorized task, the bundled skill tells the agent to inspect and attempt
 | `chrome-use tab new [url] --activate` · `tab select t2 --activate` · `tab adopt <targetId> --activate` | Raise the target before initialization or the liveness probe; `--front` is an alias |
 | `chrome-use tab list --all [--limit <n>]` | Every tab in the connected Chrome profile, across windows, the user's own and other sessions' included: handle, window, active, title, url, owner (this session / `session <name>` / the user). Read-only even on the first call: no daemon, window, tab or page attachment is created. Urls are as Chrome reports them and may carry tokens |
 | `chrome-use --tab <handle> --force <command>` · `tab close <handle> --force` | Act on (or close) a tab the session does not own, such as the user's own, in place and in the background; only when the user asked. Results carry `forced: true` with the tab's title and url; `close` never closes a forced tab |
+| `chrome-use set device "iPhone 13"` · `set device off` | Emulate a device, or clear metrics, user-agent and touch overrides; `device off` is an alias |
 | `chrome-use dialog status` · `dialog accept\|dismiss` | Handle a native `confirm()` / `prompt()` opened by a click |
 | `chrome-use download @e2 ./video.mp4` | Download with the same cookies as the logged-in browser, without navigating the current tab |
 | `chrome-use network route "*/api/me" --body '{"vip":true}'` | Mock a response, rewrite an outgoing request, or block one |
@@ -427,6 +439,17 @@ For an authorized task, the bundled skill tells the agent to inspect and attempt
 | `chrome-use auth login --bwu --passkey` | Sign in with a vault passkey in `--launch` mode (bwu 0.9.0+) |
 | `chrome-use status` | Relay transport, recent debugger timeouts, duplicate installs, extension version skew, and session health. With ab-connect 0.5.50+, host disconnect schedules a first retry after 1s, with repeated failures backing off to 30s. Dead-socket command/event waits fail; old replies are not replayed. Failed sends/lost replies report action_outcome_unknown with retryable: false. Check the page before repeating an interrupted write |
 | `chrome-use close --forget-untracked` | Explicit recovery for stale ownership records with no tab identity. Requires two valid registry absence reads; reports ownershipDropped and does not claim those Chrome tabs were closed. Cannot be combined with a tab or --all |
+
+`set device "iPhone 13"` uses a 390 × 844 CSS viewport at 3× scale and an iOS 15 user agent.
+Use `set device off` (aliases: `reset`, `none`, or `device off`) to clear device metrics,
+user-agent and touch overrides on the current tab. Future tabs stop inheriting the emulated UA.
+The reset returns to the browser default UA, not a previous `--user-agent` or `set useragent` value.
+Explicit headless launches retain their existing UA compatibility normalization.
+The reset reads the resulting native viewport and does not resize the Chrome window.
+On the relay, extension 0.5.98+ also forgets cleared metrics after successful reset,
+so an idle reattachment cannot replay the old mobile viewport.
+A partial failure reports which overrides were cleared. `viewport reset` only clears metrics;
+it deliberately keeps any user-agent override.
 
 Upgrading installed files does not replace an already-running native host. With Chrome open during an upgrade, reload the chrome-use extension at chrome://extensions when agent sessions are idle. Reconnecting a session daemon does not replace the host. Status reports health.nativeHostVersion from the live handshake (null when unavailable), separately from the installed CLI and hostLauncherHealthy; unavailable or mismatched runtime versions produce warnings.
 
@@ -465,6 +488,18 @@ stays bound to the same Chrome tab, and one whose tab is gone is refused rather
 than given to another tab. If the tab the agent was driving is gone, commands
 on the current tab are refused until it picks one with `tab select <ref>`,
 `tab new` or `--tab <ref>`, so nothing runs in a tab it never chose.
+
+Relays without `ABExt.inspectTab` keep the renderer-based `get url` read only when Chrome reports that method unsupported; permission, protected-frame and other failures still fail. Explicit navigation of a missing encoded tab follows only existing Chrome-confirmed replacement/target recovery, rechecks tab grants and still refuses a closed tab.
+
+When an autofill extension frame blocks debugger access, `get url` can still read
+Chrome's live record for the exact pinned tab. This is an address-bar diagnostic,
+not a renderer-liveness check or proof of sign-in; internal origin checks still read the document. Explicit `open <url>` uses the
+browser tab API before attempting debugger recovery, so an old protected frame
+or a failed attachment cannot permanently trap navigation. Tab grants still
+apply; child-frame or referrer-bearing navigation still needs CDP. No input,
+form submission or login is replayed. This restores an explicit exit path; it
+does not guarantee that a third-party menu can be closed automatically under
+stealth mode. These navigation changes require relay extension 0.5.98+.
 
 ### Bitwarden login
 
@@ -545,7 +580,6 @@ which still says to confirm on the phone) is reported on every command as
 have scanned it. Auto-login and `site` login walls wait for it too.
 See [Login & Credentials](https://chrome-use.leeguoo.com/en/login-auth.html).
 `scrollintoview` bounds the entire humanized wheel phase to 10 seconds, including target lookup and CDP replies. A stalled or errored phase stops without a direct-scroll fallback. If input was attempted, the error is `action_outcome_unknown`: Chrome may still be processing it, so inspect before retrying. A completed wheel phase that cannot reach the target may still use the existing direct-scroll fallback, which has its own 15-second limit.
-
 
 ## Agent loop (experimental)
 

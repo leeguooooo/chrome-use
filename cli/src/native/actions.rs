@@ -104,26 +104,86 @@ pub struct PendingConfirmation {
     pub site: Option<SitePending>,
 }
 
-/// Daemon-captured identity, never accepted from the confirmation client.
+/// Daemon-captured authority for an immutable pending command, never supplied
+/// by the confirmation client. Navigation replaces a document; HTTP reads do
+/// not depend on one; all other commands need the original document origin.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ConfirmationTarget {
-    target_id: String,
-    origin: String,
+enum ConfirmationTarget {
+    Document {
+        target_id: String,
+        origin: String,
+    },
+    Navigation {
+        action: String,
+        target_id: Option<String>,
+        destination: String,
+        new_target: bool,
+    },
+    Resource(Value),
+}
+
+impl ConfirmationTarget {
+    fn target_id(&self) -> Option<&str> {
+        match self {
+            Self::Document { target_id, .. } => Some(target_id),
+            Self::Navigation { target_id, .. } => target_id.as_deref(),
+            Self::Resource(_) => None,
+        }
+    }
 }
 
 fn confirmation_origin(url: &str) -> Result<String, String> {
     let parsed = url::Url::parse(url).map_err(|_| "Could not verify confirmation target origin")?;
-    let origin = parsed.origin().ascii_serialization();
-    // Opaque origins cannot authorize a different file or about: document.
-    Ok(if origin == "null" {
-        format!("opaque:{url}")
-    } else {
-        origin
-    })
+    match parsed.origin() {
+        url::Origin::Tuple(ref scheme, ..) if matches!(scheme.as_str(), "http" | "https") => {
+            Ok(parsed.origin().ascii_serialization())
+        }
+        _ => Err("Cannot confirm an opaque or unverifiable page origin".into()),
+    }
+}
+
+fn http_resource_command(cmd: &Value) -> bool {
+    // handle_read returns run_read immediately for an explicit URL, for every
+    // ReadOptions mode. Without a URL even --llms needs the active page URL.
+    // Use the HTTP reader's own normalization rather than guessing by spelling.
+    cmd["action"] == "read"
+        && cmd["url"]
+            .as_str()
+            .is_some_and(|url| crate::read::normalize_url(url).is_ok())
+}
+
+fn window_creation_destination(cmd: &Value) -> Result<&'static str, String> {
+    match cmd.get("url") {
+        None => Ok("about:blank"),
+        Some(url) if url.as_str() == Some("about:blank") => Ok("about:blank"),
+        _ => Err("window new only creates about:blank; use `chrome-use tab new <https-url>` for a new target with a URL".into()),
+    }
+}
+
+fn replacing_navigation(cmd: &Value) -> Option<&str> {
+    let action = cmd["action"].as_str()?;
+    let destination = match action {
+        "navigate" if cmd["preferSpa"].as_bool() != Some(true) => cmd["url"].as_str()?,
+        "tab_new" => match cmd.get("url") {
+            None => "about:blank",
+            Some(url) => url.as_str()?,
+        },
+        "window_new" => return window_creation_destination(cmd).ok(),
+        _ => return None,
+    };
+    if action == "tab_new" && destination == "about:blank" {
+        return Some("about:blank");
+    }
+    let parsed = url::Url::parse(destination).ok()?;
+    matches!(parsed.scheme(), "http" | "https").then_some(destination)
+}
+
+fn creates_target(action: &str) -> bool {
+    matches!(action, "tab_new" | "window_new")
 }
 
 fn confirmation_tab_spec<'a>(cmd: &'a Value, action: &str) -> Option<&'a str> {
-    if TAB_ROUTING_SKIPS.contains(&action) {
+    if TAB_ROUTING_SKIPS.contains(&action) && action != "navigate" {
         None
     } else {
         cmd.get("tab")
@@ -132,16 +192,56 @@ fn confirmation_tab_spec<'a>(cmd: &'a Value, action: &str) -> Option<&'a str> {
     }
 }
 
+fn navigation_confirmation_target(
+    cmd: &Value,
+    state: &DaemonState,
+) -> Result<Option<String>, String> {
+    let active = state
+        .browser
+        .as_ref()
+        .and_then(|mgr| mgr.confirmation_page(None).ok())
+        .map(|(id, _, _)| id);
+    if let Some(spec) = confirmation_tab_spec(cmd, cmd["action"].as_str().unwrap_or("")) {
+        let named = state.browser.as_ref().ok_or("Navigation confirmation needs an owned target; select it with `chrome-use tab <target>` first")?
+            .confirmation_page(Some(spec))?.0;
+        // navigate does not use generic --tab routing. Do not quietly approve
+        // B and navigate A: require explicit selection, then retain the exact ID.
+        if active.as_deref() != Some(named.as_str()) {
+            return Err(format!("Navigation target `{spec}` is not the active owned target; run `chrome-use tab {spec}` first, then repeat the navigation for fresh approval"));
+        }
+    }
+    Ok(active)
+}
+
 fn confirmation_target(
     cmd: &Value,
     state: &DaemonState,
 ) -> Result<Option<ConfirmationTarget>, String> {
-    let Some(browser) = state.browser.as_ref() else {
-        return Ok(None);
-    };
+    if http_resource_command(cmd) {
+        return Ok(Some(ConfirmationTarget::Resource(cmd.clone())));
+    }
+    if let Some(destination) = replacing_navigation(cmd) {
+        let target_id = navigation_confirmation_target(cmd, state)?;
+        let action = cmd["action"].as_str().unwrap_or("");
+        let new_target =
+            creates_target(action) || target_id.is_none() || cmd["newTab"].as_bool() == Some(true);
+        return Ok(Some(ConfirmationTarget::Navigation {
+            action: action.to_string(),
+            target_id,
+            destination: destination.to_string(),
+            new_target,
+        }));
+    }
+    if creates_target(cmd["action"].as_str().unwrap_or("")) {
+        return Err("New-target approval supports HTTP(S) or the declared about:blank default; JavaScript and other destination schemes are refused".into());
+    }
+    let browser = state
+        .browser
+        .as_ref()
+        .ok_or("Cannot confirm a document operation without an owned target")?;
     let action = cmd["action"].as_str().unwrap_or("");
     let (target_id, _, url) = browser.confirmation_page(confirmation_tab_spec(cmd, action))?;
-    Ok(Some(ConfirmationTarget {
+    Ok(Some(ConfirmationTarget::Document {
         target_id,
         origin: confirmation_origin(&url)?,
     }))
@@ -155,20 +255,52 @@ async fn validate_confirmation_target(
         "Confirmation target or origin changed; run the original command again for fresh approval"
             .to_string()
     };
-    let current = confirmation_target(&pending.cmd, state).map_err(|_| stale())?;
-    if current != pending.target {
-        return Err(stale());
-    }
-    if let (Some(expected), Some(browser)) = (&pending.target, &state.browser) {
-        let live = browser
-            .confirmation_page_url(&expected.target_id)
-            .await
-            .map_err(|_| stale())?;
-        if confirmation_origin(&live).map_err(|_| stale())? != expected.origin {
-            return Err(stale());
+    match pending.target.as_ref().ok_or_else(stale)? {
+        ConfirmationTarget::Resource(command) => {
+            if http_resource_command(&pending.cmd) && &pending.cmd == command {
+                Ok(())
+            } else {
+                Err(stale())
+            }
+        }
+        ConfirmationTarget::Navigation {
+            action,
+            target_id,
+            destination,
+            ..
+        } => {
+            if pending.cmd["action"].as_str() != Some(action.as_str())
+                || replacing_navigation(&pending.cmd) != Some(destination.as_str())
+            {
+                return Err(stale());
+            }
+            if let Some(expected) = target_id {
+                let current =
+                    navigation_confirmation_target(&pending.cmd, state).map_err(|_| stale())?;
+                if current.as_ref() != Some(expected) {
+                    return Err(stale());
+                }
+            }
+            // No original owned target means a new target is mandatory. The
+            // approved rerun sets newTab, never overwrites a newly appearing C.
+            Ok(())
+        }
+        ConfirmationTarget::Document { target_id, origin } => {
+            let current = confirmation_target(&pending.cmd, state).map_err(|_| stale())?;
+            if current != pending.target {
+                return Err(stale());
+            }
+            let browser = state.browser.as_ref().ok_or_else(stale)?;
+            let live = browser
+                .confirmation_page_origin(target_id)
+                .await
+                .map_err(|_| stale())?;
+            if confirmation_origin(&live).map_err(|_| stale())? != *origin {
+                return Err(stale());
+            }
+            Ok(())
         }
     }
-    Ok(())
 }
 
 /// A site-gated action waiting for a person (#781).
@@ -2074,6 +2206,7 @@ async fn execute_command_noted(cmd: &Value, state: &mut DaemonState) -> Value {
 
 async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let independent_resource = http_resource_command(cmd);
     mark_refs_after_unfinished_observation(state);
 
     // Apply per-invocation overrides the client forwarded (the daemon's own env
@@ -2101,6 +2234,12 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+
+    if action == "window_new" {
+        if let Err(error) = window_creation_destination(cmd) {
+            return error_response(&id, &error);
+        }
+    }
 
     let cmd_start = std::time::Instant::now();
 
@@ -2232,6 +2371,8 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let skip_launch = matches!(
         action,
         "" | "launch"
+            | "confirm"
+            | "deny"
             | "close"
             | "upgrade_handoff"
             | "har_stop"
@@ -2438,6 +2579,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let forced_cmd: Value;
     let cmd: &Value = if cmd.get("forceTab").and_then(Value::as_bool) == Some(true)
         && !FORCE_TAB_SKIPS.contains(&action)
+        && !independent_resource
     {
         let Some(spec) = cmd
             .get("tab")
@@ -2491,6 +2633,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         .get("tab")
         .or_else(|| cmd.get("tabId"))
         .and_then(Value::as_str)
+        .filter(|_| !independent_resource)
         .and_then(|h| state.browser.as_ref()?.owned_tab_ref_for_handle(h));
     let cmd: &Value = match own_ref {
         Some(tab_ref) => {
@@ -2514,7 +2657,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         .and_then(Value::as_str)
         .filter(|h| super::browser::parse_chrome_tab_handle(h).is_some())
     {
-        if !FORCE_TAB_SKIPS.contains(&action) && action != "navigate" {
+        if !independent_resource && !FORCE_TAB_SKIPS.contains(&action) && action != "navigate" {
             let owner = match (
                 state.browser.as_ref(),
                 super::browser::parse_chrome_tab_handle(handle),
@@ -2541,6 +2684,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         .get("tab")
         .or_else(|| cmd.get("tabId"))
         .and_then(|v| v.as_str())
+        .filter(|_| !independent_resource)
     {
         if !matches!(
             action,
@@ -2625,6 +2769,17 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     // Routing may resync targets or a queued page event may have moved the
     // renderer since approval. Recheck before selectors, observation or input.
     if let Ok(expected) = CONFIRMED_TARGET.try_with(Clone::clone) {
+        if matches!(
+            &expected,
+            Some(ConfirmationTarget::Navigation {
+                new_target: true,
+                ..
+            })
+        ) && !creates_target(action)
+            && cmd["newTab"].as_bool() != Some(true)
+        {
+            return error_response(&id,"Approved navigation requires a new owned target; repeat the original command for fresh approval");
+        }
         let binding = PendingConfirmation {
             action: action.to_string(),
             cmd: cmd.clone(),
@@ -2755,7 +2910,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             "launch" => handle_launch(cmd, state).await,
             "navigate" => handle_navigate(cmd, state).await,
             "read" => handle_read(cmd, state).await,
-            "url" => handle_url(state).await,
+            "url" => handle_address_url(state).await,
             "cdp_url" => handle_cdp_url(state),
             "inspect" => handle_inspect(state).await,
             "title" => handle_title(state).await,
@@ -5208,6 +5363,18 @@ async fn handle_navigate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         return Err("Browser not launched".into());
     }
 
+    // A fresh target must exist before headers or refs can affect an unrelated
+    // page that appeared while this navigation was awaiting approval.
+    let new_tab_info = if cmd["newTab"].as_bool() == Some(true) {
+        let mut opts = json!({});
+        if let Some(label) = cmd.get("label").and_then(Value::as_str) {
+            opts["label"] = json!(label);
+        }
+        Some(handle_tab_new(&opts, state).await?)
+    } else {
+        None
+    };
+
     let wait_until = cmd
         .get("waitUntil")
         .and_then(|v| v.as_str())
@@ -5266,18 +5433,7 @@ async fn handle_navigate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     state.iframe_sessions.clear();
     state.active_frame_id = None;
 
-    let new_tab = cmd.get("newTab").and_then(|v| v.as_bool()).unwrap_or(false);
-    let label = cmd.get("label").and_then(|v| v.as_str());
-
-    if new_tab {
-        // The same path as `tab new`: its own ref context, stealth, the
-        // session's setup (with a retry marker if that fails), and only then
-        // the first request.
-        let mut opts = json!({});
-        if let Some(l) = label {
-            opts["label"] = json!(l);
-        }
-        let new_tab_info = handle_tab_new(&opts, state).await?;
+    if let Some(new_tab_info) = new_tab_info {
         let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
         let mut result = mgr.navigate(url, wait_until).await?;
         if let Some(tid) = new_tab_info.get("tabId") {
@@ -5978,6 +6134,16 @@ mod vendor_probe_tests {
             humanize::HumanizeLevel::Fast
         );
     }
+}
+
+/// Public URL diagnostics remain available even when a protected frame blocks
+/// the renderer. Internal DOM readers keep `handle_url` for origin attribution.
+async fn handle_address_url(state: &DaemonState) -> Result<Value, String> {
+    if let Some(mgr) = state.browser.as_ref() {
+        let url = mgr.get_address_bar_url().await?;
+        return Ok(json!({ "url": url }));
+    }
+    handle_url(state).await
 }
 
 async fn handle_url(state: &DaemonState) -> Result<Value, String> {
@@ -17762,8 +17928,8 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
         let mut out = first;
         if let Some(Value::String(e)) = out.get_mut("error") {
             e.push_str(
-                "\nchrome-use closed the menu (it hid the tab for a moment or took focus out of the field), so the tab works \
-                 again, but did not repeat this command: it may already have run in part. \
+                "\nChrome accepted a direct frame-tree read after menu recovery was attempted. This does not prove \
+                 that the renderer or login is ready. This command was not repeated: it may already have run in part. \
                  Check the page (`snapshot -i`), then run it again if it did not take effect. \
                  Do not close the tab or the session over this.",
             );
@@ -17800,11 +17966,11 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
     second
 }
 
-/// The warning on a command that succeeded after the menu was closed.
+/// The warning on a command that succeeded after attempted menu recovery.
 fn with_menu_warning(mut out: Value, what: &str, note: Option<String>) -> Value {
     let mut warning = format!(
-        "a password manager's inline menu (another extension's frame) blocked this tab; \
-         chrome-use closed it (it hid the tab for a moment or took focus out of the field), {what}"
+        "another extension's frame blocked debugger access to this tab; chrome-use attempted menu recovery \
+         and Chrome then accepted a direct frame-tree read, {what}"
     );
     if let Some(note) = note {
         warning.push_str(&format!(". {note}"));
@@ -17863,10 +18029,10 @@ async fn read_back_fill(
     if actual != wanted {
         return None;
     }
-    let mut warning = "a password manager's inline menu opened on this field and blocked \
-                       the fill's follow-up; chrome-use closed it (it hid the tab for a moment \
-                       or took focus out of the field) and confirmed the field holds the value. Focus has left the field, so \
-                       `press Enter` needs `--selector` to reach it."
+    let mut warning = "another extension's frame blocked the fill's follow-up. Menu recovery was \
+                       attempted and the field was read back with the requested value. This does not prove \
+                       the menu closed or login completed. Focus may have moved; use `press Enter --selector` \
+                       to address this field explicitly."
         .to_string();
     if let Some(note) = note {
         warning.push_str(&format!(" {note}."));
@@ -18825,6 +18991,67 @@ async fn handle_device(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         .and_then(|v| v.as_str())
         .ok_or("Missing 'name' parameter")?;
 
+    // A device reset is broader than `viewport reset`: keep no mobile UA
+    // queued for future tabs, and disable any touch-emulation override.
+    // Update each remembered setting only after Chrome accepted that clear,
+    // so a partially failed reset never reports success or replays stale state.
+    if matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "off" | "reset" | "none"
+    ) {
+        mgr.clear_viewport()
+            .await
+            .map_err(|e| format!("device reset incomplete: could not clear device metrics: {e}"))?;
+        state.viewport = None;
+        mgr.set_user_agent("").await.map_err(|e| format!("device reset incomplete: metrics were cleared, but the user-agent override could not be cleared: {e}"))?;
+        state.session_setup.user_agent = None;
+        let session_id = mgr.active_session_id()?;
+        mgr.client.send_command(
+            "Emulation.setTouchEmulationEnabled",
+            Some(json!({ "enabled": false })),
+            Some(session_id),
+        ).await.map_err(|e| format!("device reset incomplete: metrics and user-agent overrides were cleared, but touch emulation could not be disabled: {e}"))?;
+        // Headless opt-in launches retain their existing compatibility UA;
+        // derive it from browser metadata, never the page's own getter.
+        if stealth_enabled() && mgr.launched_headless() == Some(true) {
+            let version = mgr.client.send_command("Browser.getVersion", None, None).await
+                .map_err(|e| format!("device overrides were cleared, but the native browser user agent could not be read: {e}"))?;
+            let native_ua = version["userAgent"]
+                .as_str()
+                .filter(|ua| !ua.is_empty())
+                .ok_or(
+                "device overrides were cleared, but Chrome did not report its native user agent",
+            )?;
+            let locale = env::var("AGENT_BROWSER_LOCALE").ok();
+            let expected = stealth::apply_headless_user_agent(&mgr.client, session_id, native_ua, locale.as_deref()).await
+                .map_err(|e| format!("device overrides were cleared, but headless user-agent compatibility could not be restored: {e}"))?;
+            let actual = mgr.evaluate("navigator.userAgent", None).await
+                .map_err(|e| format!("device overrides were cleared, but the restored user agent could not be verified: {e}"))?;
+            if actual.as_str() != Some(expected.as_str()) {
+                return Err("device overrides were cleared, but the restored user agent did not match the browser default".into());
+            }
+        }
+        let metrics = mgr.client.send_command("Page.getLayoutMetrics", None, Some(session_id)).await
+            .map_err(|e| format!("device overrides were cleared, but the resulting viewport could not be read: {e}"))?;
+        let viewport = metrics
+            .get("cssLayoutViewport")
+            .or_else(|| metrics.get("layoutViewport"));
+        let width = viewport
+            .and_then(|v| v["clientWidth"].as_u64())
+            .and_then(|v| u32::try_from(v).ok())
+            .ok_or("device overrides were cleared, but Chrome did not report the viewport width")?;
+        let height = viewport
+            .and_then(|v| v["clientHeight"].as_u64())
+            .and_then(|v| u32::try_from(v).ok())
+            .ok_or(
+                "device overrides were cleared, but Chrome did not report the viewport height",
+            )?;
+        if let Some(ref server) = state.stream_server {
+            server.set_viewport(width, height).await;
+        }
+        return Ok(json!({ "device": "off", "reset": true, "width": width, "height": height }));
+    }
+
     let (width, height, scale, mobile, ua) = match name.to_lowercase().as_str() {
         "iphone 15" | "iphone15" => (393, 852, 3.0, true, "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"),
         "iphone 16" | "iphone16" => (393, 852, 3.0, true, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"),
@@ -18836,11 +19063,12 @@ async fn handle_device(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         "galaxy s25" | "galaxys25" => (360, 800, 3.0, true, "Mozilla/5.0 (Linux; Android 15; SM-S931B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36"),
         // Legacy aliases
         "iphone 12" | "iphone12" => (390, 844, 3.0, true, "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1"),
+        "iphone 13" | "iphone13" => (390, 844, 3.0, true, "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1"),
         "iphone 14" | "iphone14" => (390, 844, 3.0, true, "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"),
         "pixel 5" | "pixel5" => (393, 851, 2.75, true, "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36"),
         "pixel 7" | "pixel7" => (412, 915, 2.625, true, "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"),
         "galaxy s21" | "galaxys21" => (360, 800, 3.0, true, "Mozilla/5.0 (Linux; Android 11; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36"),
-        _ => return Err(format!("Unknown device: {}. Supported: iPhone 15, iPhone 16, iPhone 16 Pro, iPhone 17, iPad, iPad Pro, Pixel 9, Galaxy S25", name)),
+        _ => return Err(format!("Unknown device: {}. Supported: iPhone 12, iPhone 13, iPhone 14, iPhone 15, iPhone 16, iPhone 16 Pro, iPhone 17, iPad, iPad Pro, Pixel 5, Pixel 7, Pixel 9, Galaxy S21, Galaxy S25. Use off/reset/none to restore browser defaults", name)),
     };
 
     mgr.set_viewport(width, height, scale, mobile).await?;
@@ -21099,6 +21327,12 @@ async fn handle_waitfordownload(cmd: &Value, state: &DaemonState) -> Result<Valu
 }
 
 async fn handle_window_new(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    window_creation_destination(cmd)?;
+    let old_target = state
+        .browser
+        .as_ref()
+        .and_then(|mgr| mgr.active_target_id().ok())
+        .map(str::to_string);
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
 
     // Create a new browser context
@@ -21133,6 +21367,10 @@ async fn handle_window_new(cmd: &Value, state: &mut DaemonState) -> Result<Value
         )
         .await?;
 
+    // Chrome returned and attached this exact newly created target. Register
+    // ownership only now, never infer it from the old/current window.
+    let new_target = create_result.target_id.clone();
+    mgr.reown_target(&new_target)?;
     let tab_id = mgr.assign_tab_id();
     mgr.add_page(super::browser::PageInfo {
         tab_id,
@@ -21162,7 +21400,7 @@ async fn handle_window_new(cmd: &Value, state: &mut DaemonState) -> Result<Value
     }
 
     let total = mgr.page_count();
-    state.ref_map.clear();
+    state.switch_tab_context(old_target.as_deref(), &new_target);
 
     Ok(json!({
         "tabId": super::browser::format_tab_id(tab_id),
@@ -24235,7 +24473,9 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                 .to_string(),
         );
     }
-    let current = mgr.get_url().await.unwrap_or_default();
+    let current = mgr.get_url().await.map_err(|error| format!(
+        "auth login --bwu: could not verify the current document's origin before filling ({error}). Nothing was filled."
+    ))?;
     let have = url::Url::parse(&current)
         .ok()
         .map(|u| u.origin())
@@ -24243,8 +24483,8 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
         .map(|o| o.ascii_serialization());
     if have.as_deref() != Some(origin.as_str()) {
         return Err(format!(
-            "auth login --bwu: the tab moved to {} after the account was chosen for {origin}. \
-             Nothing was filled; run it again on the login page.",
+            "auth login --bwu: the current document reports origin {}, while the account was chosen for {origin}. \
+             Nothing was filled; inspect the page before trying again.",
             have.unwrap_or_else(|| "a page without an origin".to_string())
         ));
     }
@@ -25088,13 +25328,12 @@ fn auth_warning(closed: u32, left_open: Option<String>) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(". "))
 }
 
-/// The warning on a login that had to close a password manager's inline menu.
+/// The warning on a login that required password-manager menu recovery.
 fn auth_menu_warning(times: u32) -> String {
     format!(
-        "a password manager's inline menu (another extension's frame, which blocks every debugger \
-         command on the tab) opened on a login field {times} time(s); chrome-use hid the tab for a \
-         moment each time to close it, and took focus out of the field. To stop it, the user can \
-         turn off that extension's inline menu for this site."
+        "another extension's frame blocked debugger access during this login. Menu recovery was attempted \
+         {times} time(s), with a direct frame-tree read accepted afterward. The recovery may have \
+         moved focus out of the input; if its UI reopens, close it in the browser before continuing."
     )
 }
 
@@ -25750,8 +25989,20 @@ async fn handle_confirm(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
             } else {
                 "tabId"
             };
-            rerun[key] = json!(target.target_id);
+            if let Some(target_id) = target.target_id() {
+                rerun[key] = json!(target_id);
+            }
         }
+    }
+    if matches!(
+        &pending.target,
+        Some(ConfirmationTarget::Navigation {
+            new_target: true,
+            ..
+        })
+    ) && rerun["action"] == "navigate"
+    {
+        rerun["newTab"] = json!(true);
     }
     let secrets = command_secrets(&pending.cmd);
     let mut result = CONFIRMED_APPROVAL
@@ -25945,9 +26196,18 @@ async fn site_gate_kind(
     let (refs, frames) = context
         .map(|tab| (&tab.ref_map, &tab.iframe_sessions))
         .unwrap_or((&state.ref_map, &state.iframe_sessions));
-    let entry = match ref_id {
-        Some(id) => Some(refs.get(&id).ok_or_else(unavailable)?),
+    let entry = match ref_id.as_deref() {
+        Some(id) => Some(refs.get(id).ok_or_else(unavailable)?),
         None => None,
+    };
+    // A kept ref remains a non-retryable precondition refusal even when
+    // policy's earlier attribute read discovers that it cannot be inspected.
+    // Preserve the established no-recovery envelope and its original cause.
+    let unreadable = |cause: &str| match (ref_id.as_deref(), entry) {
+        (Some(id), Some(entry)) if refs.kept().is_some() => {
+            super::element::kept_ref_refusal(refs, id, entry, cause)
+        }
+        _ => unavailable(),
     };
     match category {
         "typing" => {
@@ -25966,7 +26226,9 @@ async fn site_gate_kind(
                 frames,
             );
             let node = match entry {
-                Some(e) => json!({"backendNodeId":e.backend_node_id.ok_or_else(unavailable)?}),
+                Some(e) => {
+                    json!({"backendNodeId":e.backend_node_id.ok_or_else(|| unreadable("ref has no backend node"))?})
+                }
                 None => {
                     let doc = mgr
                         .client
@@ -26001,14 +26263,18 @@ async fn site_gate_kind(
                 .client
                 .send_command("DOM.describeNode", Some(node), Some(effective_session))
                 .await
-                .map_err(|_| unavailable())?;
+                .map_err(|error| unreadable(&error))?;
             let attrs = described
                 .pointer("/node/attributes")
                 .and_then(Value::as_array)
-                .ok_or_else(unavailable)?;
+                .ok_or_else(|| unreadable("field descriptor has no readable attributes"))?;
             let attrs: Vec<String> = attrs
                 .iter()
-                .map(|v| v.as_str().map(str::to_string).ok_or_else(unavailable))
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| unreadable("field attributes are malformed"))
+                })
                 .collect::<Result<_, _>>()?;
             let by_dom = field_kind_from_attributes(&attrs);
             // Payment wins across the exact field's DOM, name and selector.
@@ -26039,10 +26305,13 @@ async fn site_gate_kind(
 /// approval).
 async fn site_gate(cmd: &Value, action: &str, id: &str, state: &mut DaemonState) -> Option<Value> {
     use super::site_policy::{self as sp, SiteGate, SitePolicy};
-    if site_gate_skips(action) || state.browser.is_none() {
+    let resource = http_resource_command(cmd);
+    if site_gate_skips(action) || (state.browser.is_none() && !resource) {
         return None;
     }
-    let category = sp::category_of(action, cmd);
+    // Explicit HTTP resources still obey known file/site domain rules when
+    // no browser exists. Reuse the same policy layers and denial precedence.
+    let category = sp::category_of(action, cmd).or(resource.then_some("read"));
     let file = state.policy.as_ref().and_then(|p| p.sites()).cloned();
     // Nothing to check without a relay, a policy file `sites` block, or a
     // categorised action: skip the round trips entirely.
@@ -26160,19 +26429,17 @@ async fn site_gate(cmd: &Value, action: &str, id: &str, state: &mut DaemonState)
         Ok(target) => target,
         Err(error) => return Some(error_response(id, &error)),
     };
-    if let (Some(expected), Some(browser)) = (&target, &state.browser) {
-        let live = browser.confirmation_page_url(&expected.target_id).await;
-        if live
-            .ok()
-            .and_then(|url| confirmation_origin(&url).ok())
-            .as_deref()
-            != Some(&expected.origin)
-        {
-            return Some(error_response(
-                id,
-                "Confirmation target origin could not be verified; run the command again",
-            ));
-        }
+    let binding = PendingConfirmation {
+        action: action.to_string(),
+        cmd: cmd.clone(),
+        target: target.clone(),
+        site: None,
+    };
+    if validate_confirmation_target(&binding, state).await.is_err() {
+        return Some(error_response(
+            id,
+            "Confirmation target origin could not be verified; run the command again",
+        ));
     }
 
     let confirmation_id = format!("s_{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
@@ -27142,7 +27409,11 @@ mod tests {
         );
         let w = out["warning"].as_str().unwrap();
         assert!(
-            w.contains("hid the tab for a moment") && w.contains("different tab"),
+            w.contains("accepted a direct frame-tree read") && w.contains("different tab"),
+            "{w}"
+        );
+        assert!(
+            !w.contains("closed it") && !w.contains("tab works again"),
             "{w}"
         );
         let kept = with_menu_warning(json!({ "success": true, "warning": "x" }), "y", None);
@@ -28909,7 +29180,7 @@ mod tests {
             CONFIRMED_APPROVAL.scope(
                 ConfirmedApproval::Site("fixture.test".into()),
                 CONFIRMED_TARGET.scope(
-                    Some(ConfirmationTarget {
+                    Some(ConfirmationTarget::Document {
                         target_id: "fixture".into(),
                         origin: "https://fixture.test".into(),
                     }),
@@ -28927,7 +29198,8 @@ mod tests {
         assert!(entered.load(std::sync::atomic::Ordering::Relaxed));
         assert!(CONFIRMED_TARGET.try_with(Clone::clone).is_err());
         assert!(!command_approved() && !site_approved("fixture.test"));
-        let mut state = DaemonState::new();
+        let (mut state, server, commands, _mode) =
+            super::clipboard_policy_tests::fixture(json!({})).await;
         state.confirm_actions = Some(super::super::policy::ConfirmActions {
             categories: ["clipboard".to_string()].into_iter().collect(),
         });
@@ -28936,7 +29208,8 @@ mod tests {
             response["data"]["confirmation_required"], true,
             "{response}"
         );
-        assert!(state.browser.is_none());
+        assert!(commands.lock().unwrap().is_empty());
+        server.abort();
     }
 
     #[tokio::test]
@@ -28944,7 +29217,8 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("policy.json");
         fs::write(&path, r#"{"confirm":["fill"]}"#).unwrap();
-        let mut state = DaemonState::new();
+        let (mut state, server, commands, _mode) =
+            super::clipboard_policy_tests::fixture(json!({})).await;
         state.policy = Some(ActionPolicy::load(path.to_str().unwrap()).unwrap());
         let cmd = json!({"id":"approved", "action":"fill", "selector":"#editor", "value":"fixture", "allowClipboardFallback":true});
         let first = execute_command(&cmd, &mut state).await;
@@ -28955,7 +29229,13 @@ mod tests {
         state.policy = Some(ActionPolicy::load(path.to_str().unwrap()).unwrap());
         let result = handle_confirm(&json!({"confirmationId":"approved"}), &mut state).await;
         assert!(result.unwrap_err().contains("clipboard"));
-        assert!(state.policy.is_some() && state.browser.is_none());
+        assert!(state.policy.is_some() && state.browser.is_some());
+        assert!(commands
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|r| r["method"] == "Page.getFrameTree"));
+        server.abort();
         assert!(!command_approved() && !site_approved("fixture.test"));
     }
 
@@ -28980,7 +29260,8 @@ mod tests {
                 .contains("clipboard"));
             assert!(denied.browser.is_none());
 
-            let mut confirm = DaemonState::new();
+            let (mut confirm, server, commands, _mode) =
+                super::clipboard_policy_tests::fixture(json!({})).await;
             confirm.confirm_actions = Some(super::super::policy::ConfirmActions {
                 categories: ["clipboard".to_string()].into_iter().collect(),
             });
@@ -28990,7 +29271,8 @@ mod tests {
                 "{response}"
             );
             assert_eq!(response["data"]["action"], "clipboard");
-            assert!(confirm.browser.is_none());
+            assert!(commands.lock().unwrap().is_empty());
+            server.abort();
         }
     }
 
@@ -30010,6 +30292,10 @@ mod site_ui_tests {
 #[cfg(test)]
 #[path = "clipboard_policy_tests.rs"]
 mod clipboard_policy_tests;
+
+#[cfg(test)]
+#[path = "device_tests.rs"]
+mod device_emulation_tests;
 
 #[cfg(test)]
 #[path = "scroll_deadline_tests.rs"]

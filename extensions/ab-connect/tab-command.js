@@ -22,6 +22,13 @@ export function createAttachmentHealth() {
   return {
     mark(tabId) { unhealthy.add(tabId) },
     isRecovering(tabId) { return recovering.has(tabId) },
+    // A requested navigation can remove the document that refused recovery.
+    // Keep its unhealthy flag: the next debugger command must still recover.
+    navigationStarted(tabId) {
+      failed.delete(tabId)
+      const token = recovering.get(tabId)
+      if (token) token.cacheFailure = false
+    },
     // Dropping an attachment also invalidates pending work for that attachment.
     clear(tabId) {
       unhealthy.delete(tabId)
@@ -34,7 +41,7 @@ export function createAttachmentHealth() {
       if (failed.has(tabId)) throw failed.get(tabId)
       if (!unhealthy.has(tabId)) return false
       if (!recovering.has(tabId)) {
-        const token = { active: true, promise: null }
+        const token = { active: true, promise: null, cacheFailure: true }
         const isCurrent = () => token.active && recovering.get(tabId) === token
         const operation = (async () => {
           try {
@@ -56,7 +63,7 @@ export function createAttachmentHealth() {
           }).catch(error => {
             const failure = new Error(`tab_reset_failed: tab ${tabId} was reset; debugger recovery could not be confirmed. ` +
               `Reopen the tab before retrying. ${error.message}`)
-            if (isCurrent()) failed.set(tabId, failure)
+            if (isCurrent() && token.cacheFailure) failed.set(tabId, failure)
             throw failure
           }).finally(() => {
             token.active = false

@@ -37,7 +37,6 @@ Semantic find retains the existing `--observe` unsupported warning; use one `bat
 
 Discover a scope from the page first: `find query "Beta account"` returns candidate selector anchors; choose the article/container corresponding to that heading, then use `find role button click --name Save --exact --within "<returned-selector>"`. Inspect an ambiguous scope with `snapshot -s "<selector>"` and narrow it rather than accepting the first container. Unknown semantic-find options and duplicate `--within` are refused; use `find label Email fill -- --name` to enter literal flag-looking text. `--exact false` requests substring matching.
 
-
 ### Pre-navigation setup (one-turn batch)
 
 ```bash
@@ -117,8 +116,7 @@ After a successful trusted insertion, contenteditable `fill` keeps focus on the 
 
 When a hidden Monaco module API can be matched to the requested editor, `fill` uses native input and verifies that exact live model (`engine: monaco-native`); `get value` reads the same model without copy or paste. This path does not use the system clipboard. The same path covers completed exports retained by the Monaco 0.52 minified AMD loader after its public globals are removed. Discovery reads a bounded module table without invoking the loader, module factories or accessors; it does not load modules or make requests. The native select-all must cover the complete live model before insertion. A changed model, lost focus, incomplete selection or mismatched readback is an error, with no clipboard retry after input. If no exact model API is found, `fill` and `get value` refuse before clipboard access. Only after the user accepts temporary system clipboard changes, add `--allow-clipboard-fallback` to that command. The flag is supported only by these two commands, is not persistent, and never permits fallback after native input or model verification fails. The opted-in fallback emits a warning: comparison/restoration is not atomic and can overwrite a concurrent clipboard write. Monaco clipboard fallback keeps transaction state in a private closure and removes temporary listeners on completion, setup errors, or a 60-second lease expiry while the document survives. The backup uses independent Blob-backed items because browser-backed ClipboardItems may expire after a write. An empty or unreadable backup is refused before staging. Contents are compared before further input and before restoration; changes or uncertain ownership stop the operation. Restoration is read back and verified. Only formats exposed by the Web Clipboard API can be backed up; native application metadata is not preserved. A restore failure is an error, even if the editor changed. Context loss can prevent restoration, and clipboard comparison/write is not atomic; avoid concurrent clipboard use.
 
-Place the opt-in after the required text/selector, as the last option; `--` ends editor option parsing, and a mandatory fill value equal to the flag remains literal text. Clipboard action-policy and confirmation rules still apply. Approval never overrides a hard deny, and extension-held site requests require the user’s actual extension decision. Confirmation is bound to the original owned target and origin. If either changes or cannot be verified, run the original command again for fresh approval; an explicit tab reference must still resolve to that exact target. Field policy checks use that same intended target, including its saved element references and iframe sessions; missing or unreadable context refuses the operation before input.
-
+Place the opt-in after the required text/selector, as the last option; `--` ends editor option parsing, and a mandatory fill value equal to the flag remains literal text. Clipboard action-policy and confirmation rules still apply. Approval never overrides a hard deny, and extension-held site requests require the user’s actual extension decision. Approval for document, input and clipboard operations binds the original owned target and fresh HTTP(S) renderer security origin; missing or opaque origins refuse. Explicit HTTP(S) navigation binds its original target (if any) and immutable destination, so approval works from about:blank or a cold start. The existing `tab new` API accepts HTTP(S) or its default about:blank, and `window new` creates only its declared about:blank target. These creation commands bind their action and destination and create a new owned target after approval. A nonblank window URL is refused; use `tab new <https-url>` for a URL. With no original owned target or with `--new-tab`, it creates a new owned target and preserves pages that appeared while approval was pending. For a named navigation target, first select it with `chrome-use tab <target>`; approval refuses an active-target mismatch. JavaScript URLs and in-page SPA actions require document-origin verification. `read <http(s) URL>` binds the original URL and arguments independently of browser presence. An explicit HTTP read URL uses no tab routing or forced adoption; reads without a URL still depend on the current document for approval. HTTP resources use the `read` category; file domain rules are checked even without a browser. Field policy checks use the intended target’s saved refs and iframe sessions; missing or unreadable context refuses before input.
 
 ```bash
 chrome-use click @e1           # Click
@@ -299,7 +297,8 @@ chrome-use find nth 2 "a" hover
 ```bash
 chrome-use set viewport 1920 1080          # Set viewport size
 chrome-use set viewport 1920 1080 2        # 2x retina (same CSS size, higher res screenshots)
-chrome-use set device "iPhone 14"          # Emulate device
+chrome-use set device "iPhone 13"          # Emulate device
+chrome-use set device off                  # Clear metrics, user-agent and touch overrides
 chrome-use set geo 37.7749 -122.4194       # Set geolocation (alias: geolocation)
 chrome-use set offline on                  # Toggle offline mode
 chrome-use set headers '{"X-Key":"v"}'     # Extra HTTP headers
@@ -307,6 +306,17 @@ chrome-use set credentials user pass       # HTTP basic auth (alias: auth)
 chrome-use set media dark                  # Emulate color scheme
 chrome-use set media light reduced-motion  # Light mode + reduced motion
 ```
+
+`set device "iPhone 13"` uses a 390 × 844 CSS viewport at 3× scale and an iOS 15 user agent.
+Use `set device off` (aliases: `reset`, `none`, or `device off`) to clear device metrics,
+user-agent and touch overrides on the current tab. Future tabs stop inheriting the emulated UA.
+The reset returns to the browser default UA, not a previous `--user-agent` or `set useragent` value.
+Explicit headless launches retain their existing UA compatibility normalization.
+The reset reads the resulting native viewport and does not resize the Chrome window.
+On the relay, extension 0.5.98+ also forgets cleared metrics after successful reset,
+so an idle reattachment cannot replay the old mobile viewport.
+A partial failure reports which overrides were cleared. `viewport reset` only clears metrics;
+it deliberately keeps any user-agent override.
 
 ## Cookies and Storage
 
@@ -834,7 +844,7 @@ EOF
 
 ### Script results
 
-Ordinary CLI `--json` replies use a `success`/`data`/`timing` envelope; `--no-timing` (or `AGENT_BROWSER_TIMING=0`) leaves `timing` out for a compact reply, and `timing.jsonl` is still written. `batch --json` prints an array of `{command,success,result,error}` entries; `script --json` prints the bare program result (`ok`, `return`, `logs`, `error`, `advisories`, and other program fields). Batch and script CLI output have no top-level `timing`. A batch step takes its own per-command flags (`--observe`, `--no-settle`, `--settle-ms`, `--with-screenshot`, `--if-present`, `--new-tab`, `--tab`): `batch "fill @e1 Ada" "click @e2 --observe"` puts `observed` in that step's `result`. Session-wide flags (`--headed`, `--profile`, ...) go before `batch`; a step carrying one is refused. An explicit `--observe false` / `--if-present false` in a step overrides the batch's flag, and a step's `--tab` never replaces a tab the command names itself (`tab close t1 --tab t2` is refused).
+Ordinary CLI `--json` replies use a `success`/`data`/`timing` envelope; `--no-timing` (or `AGENT_BROWSER_TIMING=0`) leaves `timing` out for a compact reply, and `timing.jsonl` is still written. `batch --json` prints an array of `{command,success,result,error}` entries; `script --json` prints the bare program result (`ok`, `return`, `logs`, `error`, `advisories`, and other program fields). Batch and script CLI output have no top-level `timing`. A pending confirmation stops the batch immediately, with or without `--bail`, and exits 3. The last result keeps the approval instructions and confirmation ID; later steps are not sent. After approval, inspect the result and start a new batch for any remaining work. A batch step takes its own per-command flags (`--observe`, `--no-settle`, `--settle-ms`, `--with-screenshot`, `--if-present`, `--new-tab`, `--tab`): `batch "fill @e1 Ada" "click @e2 --observe"` puts `observed` in that step's `result`. Session-wide flags (`--headed`, `--profile`, ...) go before `batch`; a step carrying one is refused. An explicit `--observe false` / `--if-present false` in a step overrides the batch's flag, and a step's `--tab` never replaces a tab the command names itself (`tab close t1 --tab t2` is refused).
 
 For `script` JSON op-lists or JS programs, inspect program outcome separately
 from transport `success`. Nested daemon-envelope `data.ok:false` fails the parent script even
@@ -1191,6 +1201,8 @@ secret command; do not retrieve them into the conversation. Pending verification
 returns `needs` and `next`; only an observed completed sign-in gets `signedIn`.
 Fields that only indicate verification, including inputs limited to fewer than six characters, stay pending (`otp: unsupported`); no TOTP is fetched or submitted automatically. This includes five-character Steam fields; inspect those before explicit `--totp`.
 See `core/authentication` for setup, authorization and custom-sequence limits.
+
+Regular Human pointer clicks now use a seeded 60–200ms settling pause after movement and before pressing. Fast and Off keep their existing timing. Human selector/ref clicks recheck the same live element at the landing point after the pause. A verified top-level `@ref` hidden by a small fixed/sticky semantic edge header/navigation bar may use one trusted wheel gesture toward a clear position. The gesture is bounded to 10 seconds, uses humanize pacing, and keeps the original live handle and document epoch. Unknown wheel points, transport failures and context changes stop without a DOM-scroll fallback or input replay; the same element must pass the final exact hit-test. The default trusted path still refuses dialogs, modal/popover blockers and unverifiable targets. `click stopped before press` means no mouse button was sent; inspect before retrying, because the pointer or viewport may have moved.
 
 ### Script approval barriers
 

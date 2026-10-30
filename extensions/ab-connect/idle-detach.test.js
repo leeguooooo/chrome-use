@@ -91,3 +91,15 @@ test('a removed binding is not replayed after re-attach', () => {
   rememberReplayable(replay, 'Runtime.removeBinding', { name: 'teach' })
   assert.deepEqual([...replay.values()].map((c) => c.params.name), ['keep'])
 })
+
+
+test('a cleared device override stays cleared after reattachment without disturbing UA and touch state', () => {
+  const replay = new Map()
+  rememberReplayable(replay, 'Emulation.setDeviceMetricsOverride', { width: 390, height: 844, mobile: true })
+  rememberReplayable(replay, 'Emulation.setUserAgentOverride', { userAgent: '' })
+  rememberReplayable(replay, 'Emulation.setTouchEmulationEnabled', { enabled: false })
+  rememberReplayable(replay, 'Emulation.clearDeviceMetricsOverride', {})
+  assert.deepEqual([...replay.values()].map(c => c.method), ['Emulation.setUserAgentOverride', 'Emulation.setTouchEmulationEnabled'])
+  rememberReplayable(replay, 'Emulation.setDeviceMetricsOverride', { width: 800, height: 600, mobile: false })
+  assert.deepEqual(replay.get('Emulation.setDeviceMetricsOverride').params, { width: 800, height: 600, mobile: false })
+})

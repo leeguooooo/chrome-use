@@ -50,7 +50,6 @@
 </table>
 
 
-
 ## 付费接入与项目赞助
 
 需要帮你把 agent 接到已登录的 Chrome，或跑通浏览器流程？ 发邮件说明设备环境、要跑通的流程和预期结果，以及目前卡在哪里。我们先评估可行性，再确认服务范围、验收方式和报价。
@@ -262,6 +261,11 @@ chrome-use status                 # 中继、profile、扩展与会话健康总�
 启动器会清除从 Chrome 继承的目录覆盖。已有启动器需要在目标环境下重跑 `extension install`
 才会更新；隔离测试安装还应加 `--no-open --no-profile`，并设置 `CHROME_USE_NO_BROWSER_SCAN=1`。
 
+`browsers --who <域名>` 只检查磁盘上的 Cookie 名称，不读取值；存在 Cookie 不代表会话仍有效。
+macOS 先使用 PATH 中的 `sqlite3`，只有工具缺失或可执行格式不支持、无法启动时，才回退到
+`/usr/bin/sqlite3`。执行权限拒绝，以及 SQLite 已启动后返回的查询错误，仍会明确报错；
+数据库锁定或损坏不会通过换一个工具重试。
+
 `extension install` 是一次性的安装步骤。`chrome-use extension connect`（别名 `chrome-use reconnect`）在扩展已装好的前提下重新连上它的中继，不重装任何东西。被 attach 的 agent 标签页上 Chrome 仍会显示「chrome-use started debugging this browser」提示条；`chrome-use extension connect --silent` 会带 `--silent-debugger-extension-api` 把 Chrome 重启一次来去掉它（标签和登录自动恢复；同时开着多个 Chrome 实例时不会重启）。`--keep-banner` 完全不碰浏览器；两个 flag 都不带时，交互终端里会先问一句。详见[静音提示条](https://chrome-use.leeguoo.com/debugger-banner-silence.html)。
 
 AI 标签默认开在你正在用的窗口里，以后台标签打开、不抢焦点；每个会话有自己的标签组，组名前面带 ✦，一眼能和你自己的标签分开。加 `--window dedicated` 则改为同一 Chrome profile 的所有 AI 会话共用一个后台专用窗口：已有窗口只要标签归属都能确认是 AI，就会复用，全屏也不另开窗口。归属不明或空白占位页清理失败时会报错，避免继续增加窗口。不会为回收窗口而搬走或删除用户页。你在 AI 窗口里开了或拖进了自己的页面，这个窗口就归你：里面已有的 AI 标签照常工作，新的 AI 标签开到一个新的 AI 窗口，之后的会话共用它。
@@ -304,8 +308,7 @@ $ chrome-use open https://github.com/my-org/repo
 
 如果能从 Monaco 模块中找到与目标编辑器对应的 API，`fill` 会使用原生输入并验证同一个实时 model（`engine: monaco-native`）；`get value` 也会直接读取该 model，不执行复制或粘贴。这条路径不使用系统剪贴板。Monaco 0.52 压缩 AMD 加载器在全局 API 被移除后保留的已完成模块导出，也可使用这条路径。发现过程只在限定范围内读取模块表，不调用加载器、模块工厂或访问器，不加载模块，也不发起请求。插入前必须验证原生全选已覆盖整个实时 model。model 被替换、焦点丢失、选区不完整或回读不匹配时会报错，输入后不会再通过剪贴板重试。无法找到精确对应的 model API 时，`fill` 和 `get value` 默认在访问剪贴板前拒绝操作。只有用户接受临时改变系统剪贴板后，才在这一次命令中加 `--allow-clipboard-fallback`。该选项仅支持这两个命令，不会持久保存，也不会在原生输入或 model 验证失败后启用回退。实际使用回退时会警告：比较与恢复不是原子操作，可能覆盖同时写入剪贴板的新内容。Monaco 剪贴板回退将事务状态保存在私有闭包中；操作结束、初始化失败或文档仍存活时的 60 秒租约到期都会移除临时监听器。备份使用独立 Blob 构造的剪贴板项，因为浏览器返回的 ClipboardItem 可能在写入后失效。备份为空或不可读时，在暂存前拒绝操作。继续输入和恢复前都会比较内容；内容改变或归属不确定时停止操作。恢复后读取验证结果。仅能备份 Web Clipboard API 暴露的格式，无法保留应用原生元数据。即使编辑器已改变，恢复失败仍报错。执行上下文丢失可能阻止恢复，比较与写入也不是原子操作；请避免同时使用剪贴板。
 
-该选项应放在必填文本或选择器之后，作为最后一个选项；`--` 结束编辑器选项解析，必填文本本身等于这个选项名时仍按原文填写。剪贴板的动作策略和确认要求仍然生效。批准不会越过拒绝规则，扩展持有的站点请求仍需用户在扩展中作出决定。 确认绑定原来由此会话持有的目标标签页和页面来源。目标或来源改变、或无法核实时，必须重新运行原命令获取确认；显式标签页引用也必须仍指向同一个目标。 字段策略检查也使用同一目标的元素引用和 iframe 会话；上下文缺失或无法读取时，在输入前拒绝操作。
-
+该选项应放在必填文本或选择器之后，作为最后一个选项；`--` 结束编辑器选项解析，必填文本本身等于这个选项名时仍按原文填写。剪贴板的动作策略和确认要求仍然生效。批准不会越过拒绝规则，扩展持有的站点请求仍需用户在扩展中作出决定。 文档、输入和剪贴板操作的批准绑定原有会话持有的目标及新核实的 HTTP(S) renderer securityOrigin；来源缺失或不透明时拒绝。显式 HTTP(S) 导航绑定原目标（若有）及不可变目的地址，可从 about:blank 或冷启动获批。 既有 `tab new` API 支持 HTTP(S) 或默认 about:blank，`window new` 仍只创建其已声明的 about:blank 目标。这两个创建命令绑定动作和目的地址，批准后创建新的会话目标。window 的非空白地址会被拒绝；打开地址请用 `tab new <https-url>`。原来没有持有目标，或带 `--new-tab` 时，始终创建新的会话目标，保留审批期间出现的页面。导航指定目标时，先用 `chrome-use tab <target>` 选中它；显式目标与实际活动目标不一致时拒绝批准。JavaScript URL 和页内 SPA 操作仍需核实文档来源。`read <http(s) URL>` 绑定原地址和参数，不受浏览器出现或消失影响。 显式 HTTP 读取地址不触发标签页路由或强制接管；没有地址的 read 仍按当前文档核实批准。 HTTP 资源使用 `read` 分类，没有浏览器时也会检查文件中的站点域规则。字段策略检查使用目标自己的引用和 iframe 会话；上下文缺失或不可读时，在输入前拒绝。
 
 跨站导航或重新连接后，页面读取使用当前文档。重建私有读取环境时，如果页面持续跳转，命令会明确失败；请重新观察页面再操作。
 
@@ -329,6 +332,8 @@ chrome-use snapshot -i --diff          # 只回传相对上一张快照变化的
 限定范围、深度、正则筛选或字节预算的快照，JSON `refs` 只返回正文摘录中出现的引用。会话仍保留完整的实时 ref 映射，缩小输出不会让先前已捕获的 ref 失效；稀疏页面检测仍使用完整映射。 有效增量快照的 JSON `refs` 只包含增量片段中的节点；无变化时为空。会话仍保留完整实时映射和先前引用；回退完整树时保持普通完整快照的行为。
 
 交互快照只给角色和名称重复、且父级命名行无法区分的控件添加 `context`。上下文去掉控件自身名称和纯标点，最多约 100 个字符（无名称控件约 60 个），且不同控件的上下文必须不同。名称唯一的控件不带上下文；缺少商品价格等信息时，读取对应区域或完整快照。
+
+滚动进度驱动的动画不会占用计时等待。普通有限时长动画仍会等待，DOM 变更和请求检查照旧。
 
 用 `snapshot -i -c` 精简控件视图，已知区域用 scoped read；只有上一次观察还留下问题时才用 `--diff`。已知动作序列用 `batch`（每一步可以带自己的 `--observe`：`batch "fill @e1 Ada" "click @e2 --observe"`；`pick`、`hover` 和 `click` 一样可以观察），有条件分支的 observe/decide/act/verify 流程用 `script`，多个字段用 `form fill --map`，最后核验任务要求的结果：`observed.status: complete` 只表示这次捕获完整，不表示任务完成，要等页面自己的最终信号（`wait --text`）。小页面（树不超过 4 KB 且不超过 60 行）的观察直接带整棵当前树 `observed.snapshot` 和只含 `+`/`-` 行的 `observed.changes`；更大的页面照旧给 `delta`。`observed.text` 列出任意帧里变化的可见文字行（回执、日志、页码），不含输入框、文本域、下拉框和可编辑区域的内容，任一密码框带值时一行都不返回（`textStatus: redacted`）；读不到的帧列在 `textFrames` 里，观察随之变成 `partial`。每个 JSON 回复都带 `observed.target`，写明标签页和 target。`observed.announced` 收录动作执行和页面稳定期间出现的 toast 以及 alert/status/aria-live 区域的文字，回复前已经消失的也在（例如“视频审核中，修改未保存”）。元素截图写成 `screenshot <selector> <path>` 或 `screenshot <path> --selector <selector>`。只有树无法回答视觉问题时才加 `--with-screenshot <path>`。
 
@@ -358,7 +363,6 @@ Ant Design / rc-picker 日期范围请先填开始时间，再填结束时间。
 
 先从页面发现范围：`find query "Beta account"` 返回候选的选择器锚点；选出对应标题的 article/容器，再执行 `find role button click --name Save --exact --within "<返回的选择器>"`。范围有歧义时用 `snapshot -s "<选择器>"` 查看并缩小范围，不取第一个。未知语义 find 参数和重复 `--within` 会被拒绝；输入像参数的文字可写 `find label Email fill -- --name`。`--exact false` 使用子串匹配。
 
-
 同一目标和页面连续三次相同的 `click`、`dblclick` 或 `press`，相邻间隔不超过 60 秒，且完整、稳定的观察没有发现树、请求、资源或 frame 活动时，`observed.noProgress` 会提示检查状态或等待任务所需的条件。它不改变动作 success，不证明写入失败，也不会重试。
 
 普通 CLI/MCP 准备连接时，只有成功复用同一浏览器连接、目标和会话，且未加载 storage state，才会保留连续计数。新浏览器、重新绑定、准备失败或加载 storage state 仍会清空计数。
@@ -369,7 +373,7 @@ Ant Design / rc-picker 日期范围请先填开始时间，再填结束时间。
 
 JSON 在 `autoConfirm` 后遇到的安全拒绝会以 `approval_refused:true` 向外层传播，外层 `optional` 或 `catch` 也会停止后续浏览器调用。普通错误和最初的直接拒绝仍按显式 `optional` / `catch` 处理。
 
-普通 CLI `--json` 返回 `success`/`data`/`timing` envelope；加 `--no-timing`（或 `AGENT_BROWSER_TIMING=0`）时回复不带 `timing`，`timing.jsonl` 照常记录。`batch --json` 打印 `{command,success,result,error}` 条目的数组；`script --json` 打印程序结果本身（`ok`、`return`、`logs`、`error`、`advisories` 等）。batch 和 script 的 CLI 输出没有顶层 `timing`。
+普通 CLI `--json` 返回 `success`/`data`/`timing` envelope；加 `--no-timing`（或 `AGENT_BROWSER_TIMING=0`）时回复不带 `timing`，`timing.jsonl` 照常记录。`batch --json` 打印 `{command,success,result,error}` 条目的数组；`script --json` 打印程序结果本身（`ok`、`return`、`logs`、`error`、`advisories` 等）。batch 和 script 的 CLI 输出没有顶层 `timing`。 遇到待确认的操作时，batch 会立即停止并以状态码 3 退出，无论是否加了 `--bail`。最后一项保留批准说明和确认 ID，后续步骤不会发送。批准后先检查结果，再为剩余操作新建 batch。
 
 MCP `chrome_use_snapshot` 可用 `diff: true` 增量重读同一页面；快照选项（包括 filter）必须与基线一致，对应 CLI `snapshot --diff`。无有效基线时返回完整树及 `diffNote`；需要当前完整树时省略 diff 或设为 false。增量是片段，须保留基线，删除行不能当作当前可操作控件。
 
@@ -381,12 +385,15 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 
 任务已获授权时，内置 skill 要求 agent 先识别并尝试普通验证码：易盾普通和旋转拼图用 `solve-slider`，能看清的图标点选用截图识别顺序并点击，核验页面结果后继续。用 `chrome-use skills get core/captcha` 加载流程。重试有次数限制；识别不清或缺少操作能力时才交接。这不代表所有厂商和题型都能解开。先激活目标标签再截图取坐标；验证码厂商返回成功或重发倒计时不走，都不能证明网站已接受验证。
 
+常规 Human 指针点击会在移动结束后、按下前加入按种子变化的 60–200ms 停顿，Fast 和 Off 保持原有时序。Human 的元素/ref 点击会在停顿后回查同一个存活元素是否仍位于落点。顶层 `@ref` 若被视口边缘较小的 fixed/sticky header 或导航栏遮住，可使用一段可信 wheel 手势滚到可点击位置。整个手势有 10 秒上限，节奏来自 humanize，并保留原元素句柄与文档 epoch。滚轮落点不明、传输失败或上下文改变时停止，不回退到 DOM 滚动，也不重放输入；按下前必须再次精确命中同一个元素。默认可信路径仍会拒绝对话框、模态/弹出层和无法核验的目标。`click stopped before press` 表示尚未发送鼠标按下，指针或视口可能已移动，重试前应先查看页面。
+
 | 命令 | 用途 |
 |---|---|
+| `--humanize off\|fast\|human` | 默认 Fast；Human 常规指针点击增加按种子变化的 60–200ms 停顿，并在按下前回查存活目标 |
 | `chrome-use extension install --user-data-dir <path>` | macOS/Linux：为已有的自定义 Chrome 数据目录注册 host，可重复指定，也接受等号形式；还会自动扫描正在运行的自定义目录。Windows 使用 HKCU，不支持此选项。 |
 | `--window user`（默认）/ `--window dedicated` | 扩展连接：AI 标签开在你当前的窗口里，每个会话一个标签组，组名前面带 ✦；`dedicated` 改为同一 profile 的所有 AI 会话共用一个后台窗口 |
 | `chrome-use open <url>` | 连接你的 Chrome 并导航。25 秒后 `load` 仍没到、但标签页里的页面明显可用时算成功，附 ⚠ 警告；如果无法确认这个页面来自这次请求（走扩展中继时总是如此），返回里带 `commit: "unverified"` 和标签页的真实 URL。页面不可用时报 `navigation_incomplete:`，写明已知的信息（是否提交、readyState、候选资源） |
-| `chrome-use snapshot -i` | 读页面；每次交互的起点（`-u` 给每个链接带上绝对 URL） |
+| `chrome-use snapshot -i` | 等页面稳定后读取，不等待滚动联动动画（`-u` 给链接带上绝对 URL） |
 | `chrome-use read --links` | 页面正文，外加一段有上限的 `## Links`：`[文字](绝对 URL)`（默认前 100 个，`--max-links <n>` 最多 1000） |
 | `chrome-use click "Post"` · `click @e3` · `click 449 320` | 按文本、按快照 ref、或按视口坐标点击 |
 | `chrome-use fill "Title" "Hello World"` · `type @e3 "text"` | `fill` 整体替换，`type` 追加，都用可信输入事件；页面没反应时（比如保存按钮一直禁用）给出 ⚠ 警告 |
@@ -402,6 +409,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use tab new [url] --activate` · `tab select t2 --activate` · `tab adopt <targetId> --activate` | 在初始化或存活探针之前激活目标；`--front` 是别名 |
 | `chrome-use tab list --all [--limit <n>]` | 列出当前 Chrome profile 所有窗口里的全部标签，包括用户自己的和其他会话的：handle、窗口、是否当前标签、标题、URL、归属（本会话 / `session <名字>` / 用户）。首次查询也只读，不启动 daemon、不开窗口或标签、不 attach 页面。首次 open 被拒绝后，仍可通过会话绑定的 profile 或已配置的 CDP 地址只读查询，不建立页面驱动连接、不绕过混合窗口保护。URL 按 Chrome 原样给出，可能带 token |
 | `chrome-use --tab <handle> --force <命令>` · `tab close <handle> --force` | 在不属于本会话的标签（比如用户自己的）上原地、后台执行命令或关闭它，只在用户要求时使用。结果带 `forced: true` 和该标签的标题、URL；`close` 不会关掉 forced 标签 |
+| `chrome-use set device "iPhone 13"` · `set device off` | 模拟设备，或清除尺寸、用户代理和触摸模拟覆盖；`device off` 是别名 |
 | `chrome-use dialog status` · `dialog accept\|dismiss` | 处理点击触发的原生 `confirm()` / `prompt()` |
 | `chrome-use download @e2 ./video.mp4` | 用已登录浏览器的同一份 cookie 下载，且不导航当前标签页 |
 | `chrome-use network route "*/api/me" --body '{"vip":true}'` | 伪造响应、改写出站请求或拦截请求 |
@@ -413,6 +421,14 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use auth login --bwu --passkey` | 在 `--launch` 浏览器中用 passkey 登录（bwu 0.9.0+） |
 | `chrome-use status` | 中继传输、近期 debugger 超时、重复扩展、版本偏差与会话健康总览。ab-connect 0.5.50+ 的 host 断线后首次重试定时为 1 秒，连续失败逐步退避到 30 秒。旧 socket 的命令与事件等待会结束，旧回复不重放；发送失败或回复丢失报告 action_outcome_unknown 和 retryable: false；中断的写操作须先检查页面再决定是否重复 |
 | `chrome-use close --forget-untracked` | 显式恢复：仅放弃没有标签身份、且两次有效 Chrome registry 查询都未列出的旧归属记录。返回 ownershipDropped，不声称原来的标签已关闭。不能与单个标签或 --all 合用 |
+
+`set device "iPhone 13"` 使用 390 × 844 CSS 视口、3× 缩放和 iOS 15 用户代理。
+`set device off`（别名 `reset`、`none`，也可写 `device off`）清除当前标签页的设备尺寸、
+用户代理和触摸模拟覆盖，新标签页也不再继承模拟的用户代理。
+用户代理恢复浏览器默认值，不恢复此前的 `--user-agent` 或 `set useragent` 值；显式无头启动会保留已有的用户代理兼容处理。
+复位后会读取真实视口尺寸，不调整 Chrome 窗口大小；中途失败会说明已清除了哪些覆盖。
+relay 需要扩展 0.5.98+，成功复位后会忘记旧尺寸覆盖，空闲重连时不会重新套用手机视口。
+`viewport reset` 只清尺寸覆盖，保留用户代理设置。
 
 升级磁盘上的程序不会替换正在运行的 native host。升级时 Chrome 已打开的，等 agent 会话空闲后，在 chrome://extensions 重新加载 chrome-use 扩展。重连会话 daemon 不会替换 host。status 的 health.nativeHostVersion 来自运行中 host 的握手，无法取得时为 null；与磁盘 CLI 版本及 hostLauncherHealthy 分开显示，无法核实或版本不一致时给出警告。
 
@@ -444,6 +460,14 @@ chrome-use 会保留该标签并报告目标 ID。保持相同 session 和连接
 选定一个标签页，因此不会在它没选过的标签页里执行任何操作。
 
 ### 用 Bitwarden 登录
+
+旧 relay 仅在明确不支持 `ABExt.inspectTab` 时，回退到原有 renderer 方式读取 `get url`；权限、受保护框架等其他错误仍报错。显式导航遇到已消失的 tab id 时，只沿已有的 Chrome replacement/target 记录恢复并复查授权，已关闭的标签仍拒绝。
+
+自动填充扩展的框架阻止调试器访问时，`get url` 仍可读取 Chrome 中当前固定标签页的实时记录。地址栏诊断不证明页面可操作或已登录；内部来源检查仍读取实际文档。
+显式 `open <url>` 会先走浏览器标签 API，再处理调试器恢复，旧页面的受保护框架或恢复失败
+不会永久拦住这次导航。标签页授权检查仍然生效；子框架导航和带 referrer 的导航仍需要 CDP。
+不会重放输入、表单提交或登录。这提供的是显式离开阻塞页的路径，不保证隐身模式下能自动关闭
+第三方扩展的弹层。导航恢复需要 relay 扩展 0.5.98+。
 
 打开网站登录页后运行 `chrome-use auth login --bwu`。多个账号匹配时，先用上次在这个主机上登录成功的那个，
 其次用名字正好是站点主机名、或是它登录 iframe 主机名的那个（App Store Connect 的登录框是 `idmsa.apple.com`

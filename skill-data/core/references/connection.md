@@ -101,6 +101,10 @@ another the personal one. Pick the profile before the task, not after a login wa
 2. `chrome-use browsers --who <domain>` shows which profiles look signed in
    to a site. It reads cookie names from disk, never values, and opens no tab.
    "signed in" is a known login cookie; "session cookies present" only suggests a login.
+   On macOS, an unavailable PATH sqlite3 executable can fall back to
+   `/usr/bin/sqlite3` (missing or unsupported-format startup errors only).
+   Execution permission denials and started-query failures remain explicit;
+   locked/corrupt stores are not retried through a different executable.
 3. Pin the session with `--browser <name>`. It accepts a display name
    (`Davian`), a unique name prefix (`d`), a directory (`"Profile 14"`), an
    email, or an id; `AGENT_BROWSER_PROFILE` takes the same values.

@@ -40,6 +40,18 @@ user says they are done. An idle-recovery warning means a launched browser may
 have been replaced; inspect state instead of assuming the previous form/login
 survived.
 
+Relays without `ABExt.inspectTab` keep the renderer-based `get url` read only when Chrome reports that method unsupported; permission, protected-frame and other failures still fail. Explicit navigation of a missing encoded tab follows only existing Chrome-confirmed replacement/target recovery, rechecks tab grants and still refuses a closed tab.
+
+When an autofill extension frame blocks debugger access, `get url` can still read
+Chrome's live record for the exact pinned tab. This is an address-bar diagnostic,
+not a renderer-liveness check or proof of sign-in; internal origin checks still read the document. Explicit `open <url>` uses the
+browser tab API before attempting debugger recovery, so an old protected frame
+or a failed attachment cannot permanently trap navigation. Tab grants still
+apply; child-frame or referrer-bearing navigation still needs CDP. No input,
+form submission or login is replayed. This restores an explicit exit path; it
+does not guarantee that a third-party menu can be closed automatically under
+stealth mode. These navigation changes require relay extension 0.5.98+.
+
 ## Import Auth from Your Browser
 
 The fastest way to authenticate is to reuse cookies from a Chrome session you are already logged into.
