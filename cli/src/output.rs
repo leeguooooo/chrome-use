@@ -2873,17 +2873,19 @@ opened twice: `open` switches to that tab in the background, without
 reloading it, and says so (`reusedTab: true`). `--new-tab` (or `-t`) opens it in a
 new tab anyway.
 
-On your own Chrome (the extension relay) the profile must have a window
-open: chrome-use never opens one itself. With no window, `open` stops with
-`profile not open` (code profile_not_open): open a window in that profile
-first, then rerun. A relay that is down because Chrome runs with that
-profile closed (its extension is not running) is recovered by opening a
-window there in the background; if the profile still shows none ~20s later,
-the command stops with the same error. `status` names the closed profile.
-If it cannot tell
-whether a window is open, it stops with
-`profile window unavailable` (code profile_window_unavailable); unknown
-means nothing is created. Neither is retried automatically. If the first
+On your own Chrome, ordinary tab setup requires an open profile window.
+With a disconnected relay and a running Chrome, recovery observes the same
+profile unlisted in Local State for 20s before requesting one window. Active
+or unknown metadata cancels the pending request. It checks again 20s after
+the request within the existing 45s relay wait; a window is not proof of a
+connected relay. This profile recovery can briefly foreground Chrome on
+macOS. Focus restoration is best effort and cannot guarantee restoring
+another Chrome window. Ordinary tab actions stay in the background.
+`status` only reads metadata. AGENT_BROWSER_NO_AUTO_RECONNECT disables auto
+recovery. Missing/malformed metadata never causes a window request.
+`profile not open` names a profile still unlisted after recovery;
+`profile window unavailable` means its window state could not be verified.
+If the first
 tab was created but its setup failed: first_tab_setup_failed means Chrome
 confirms the tab gone (rerun is safe); first_tab_cleanup_incomplete means it
 may still be open, so run `close` in the same session before opening again;

@@ -538,12 +538,7 @@ EOF</code></pre>
         判断不了就按“没开”处理：<strong>什么都不创建</strong>。这两个错误都不会自动重试。
       </p>
       <p>
-        <code>profile not open</code> 也可能出现在 relay 断开的时候：Chrome 还在运行（在 macOS 上关掉最后一个窗口并不会退出
-        Chrome），但装扩展的那个 profile 已经没有窗口了。这时 profile 已被卸载，扩展也跟着停了，没有东西能重连，所以单纯等待和
-        重新加载扩展都没用。chrome-use 会在后台给那个 profile 开一个窗口（和 Chrome 没运行时在后台启动 Chrome 的做法一样），
-        扩展随之启动，relay 就会恢复。在 macOS 上，窗口打开时 Chrome 会短暂切到前台，chrome-use 随即把前台交还给你原来用的应用。如果约二十秒后那个 profile 仍然没有窗口，它才报这个错误并写出 profile 名；这时在那个
-        profile 里手动打开一个窗口再重跑即可，不需要重启 Chrome。<code>chrome-use status</code> 也会提示是哪个 profile 没开。
-        设置 <code>AGENT_BROWSER_NO_AUTO_RECONNECT</code> 可以关闭这项自动恢复。
+        浏览器命令通常要求所选 Chrome profile 已有打开的窗口。如果 Chrome 正在运行、relay 未连接，且 Local State 未把该 profile 列为 active，恢复流程会先等同一个 profile 持续未列出满 20 秒，给刚打开的窗口或 relay 留出启动时间；状态变为 active 或无法判断时，会取消待发出的开窗请求。之后最多请求打开一个 profile 窗口，并在请求后 20 秒再次检查，总等待仍不超过原有的 45 秒。打开窗口不代表 relay 已连接。这项恢复在 macOS 上可能短暂把 Chrome 提到前台；焦点恢复只是尽力而为，不保证回到原来的另一个 Chrome 窗口。这个例外仅限 profile 恢复，普通标签页操作仍留在后台。<code>status</code> 只读元数据，不会打开窗口。<code>AGENT_BROWSER_NO_AUTO_RECONNECT</code> 可关闭自动恢复。元数据缺失或格式错误时不会请求开窗。进程参数有歧义时，仍按用户浏览器正在运行处理；只有能明确识别为其他数据目录下的自动化实例才会排除。恢复后仍未连接时，按错误中给出的 profile 或 relay 状态处理，不要只因 relay 断开就重启 Chrome。
       </p>
       <p>
         如果第一个标签页已经建了但没设置成功，错误会说明清理的结果。<code>first_tab_setup_failed</code> 表示 Chrome
