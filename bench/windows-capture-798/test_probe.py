@@ -329,6 +329,13 @@ class ProbeTests(unittest.TestCase):
             bad=copy.deepcopy(good);mutate(bad)
             self.assertNotEqual(probe.case_verdict(bad), "PASS")
 
+    def test_only_known_refusal_allows_the_followup_cli_read(self):
+        good = {"exit":1,"killedAtDeadline":False,"response":{"success":False,"error":"screenshot_window_minimized: no capture"}}
+        self.assertTrue(probe.known_window_refusal(good,[]))
+        self.assertFalse(probe.known_window_refusal(dict(good,response={"success":False,"error":"relay timeout"}),[]))
+        self.assertFalse(probe.known_window_refusal(good,[{"type":"capture-operation-start","fixturePath":"/report"}]))
+        self.assertFalse(probe.known_window_refusal(dict(good,killedAtDeadline=True),[]))
+
     def test_window_policy_refusal_is_not_a_successful_image_capture(self):
         import copy
         good = self.window_policy_record(False)

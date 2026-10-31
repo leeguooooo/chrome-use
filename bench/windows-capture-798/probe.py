@@ -714,6 +714,14 @@ def experiment_evidence_valid(record):
     return True
 
 
+def known_window_refusal(capture, events):
+    response = capture.get("response") or {}
+    return (capture.get("exit") == 1 and capture.get("killedAtDeadline") is False
+        and response.get("success") is False
+        and "screenshot_window_minimized:" in str(response.get("error", ""))
+        and not report_operations(events))
+
+
 def policy_monitor_samples(record):
     monitor = record.get("nativeMonitor") or {}
     if (monitor.get("calibrated") is not True or monitor.get("installed") != 4
@@ -979,7 +987,10 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
             record["capture"] = capture
             record["windowAfter"] = snapshot()
             if args.experiment == "window-policy" and candidate == "refuse":
-                record["pageAfterRefusal"] = checked(invoke("page-after-refusal", "eval", "fixtureSnapshot()"))["result"]
+                if known_window_refusal(capture, fixture.events(case_id)):
+                    record["pageAfterRefusal"] = checked(invoke("page-after-refusal", "eval", "fixtureSnapshot()"))["result"]
+                else:
+                    record["refusalReadSkipped"] = "capture outcome is not a known preflight refusal; preserve its attachment"
             if monitor:
                 record["domAfter"] = {"source": "same-attachment worker page-after trace; no CLI health recovery"}
             elif capture["exit"] == 0 and (capture.get("response") or {}).get("success"):
