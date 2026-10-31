@@ -16,7 +16,7 @@ function fixture(revokeDuringRead = false) {
     loadOwnedTabs: async () => {}, sessionToTab: new Map(), childSessionToTab: new Map(),
     resolveSessionTab: sid => sid === 'inner' ? 8 : 7,
     tabForTarget: () => 7,
-    guardTab: id => { calls.push(['guard', id]); if (id === 8 && revoked) throw new Error('taken back'); },
+    guardTab: (id, session) => { calls.push(['guard', id, session]); if (session !== 'agent') throw new Error('lent to another agent'); if (id === 8 && revoked) throw new Error('taken back'); },
     cursorSettings: { ab_stealth: true }, isSiteAccessError: () => false,
     chrome: {
       webNavigation: { getAllFrames: async () => { calls.push(['frames']); revoked = true; return [{frameId: 0, url: 'https://fixture.invalid'}]; } },
@@ -24,7 +24,7 @@ function fixture(revokeDuringRead = false) {
     },
   };
   vm.createContext(context);
-  vm.runInContext("async function invoke(params){const method='ABExt.blurFocusedField',sessionId='outer',agentSession='agent';\n" + source.slice(start, end) + '\n}', context);
+  vm.runInContext("async function invoke(params,agentSession='agent'){const method='ABExt.blurFocusedField',sessionId='outer';\n" + source.slice(start, end) + '\n}', context);
   return context;
 }
 
@@ -49,4 +49,11 @@ test('an authorized agent tab still blurs in stealth mode without a visibility n
   assert.equal(result.nudged, 0);
   assert.equal(result.stealth, true);
   assert.equal(f.calls.filter(c => c[0] === 'script').length, 1);
+});
+
+
+test('a different borrower cannot blur an otherwise owned tab', async () => {
+  const f = fixture();
+  await assert.rejects(f.invoke({}, 'other-agent'), /lent to another agent/);
+  assert.equal(f.calls.some(c => c[0] === 'frames' || c[0] === 'script'), false);
 });
