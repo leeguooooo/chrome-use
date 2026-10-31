@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { startRig, cleanup, openTab, activate } from './rig.mjs';
+import { startRig, cleanup, openTab, activate, EXT_ID } from './rig.mjs';
 import { waitFor } from './lib.mjs';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
@@ -14,18 +14,12 @@ const out = process.env.OUT || path.join(work, 'out');
 fs.mkdirSync(out, { recursive: true });
 const rig = await startRig({ dir, work, hostBin: process.env.HOST_BIN, chrome: process.env.CHROME, extDir: process.env.EXT_DIR, sitePort: 8945, cdpPort: 9405 });
 const A = rig.cdp, b = rig.browser;
-const panelTargets = async () => (await b.send('Target.getTargets')).targetInfos.filter(t => /\/sidepanel\.html(\?|$)/.test(t.url));
+// Headless Chrome 156 stalls in the side panel container, so the same page is
+// opened as an extension page: same code, same chrome.* APIs.
 async function openPanelFor(tab) {
-  const win = await rig.ev(`chrome.windows.create({ url: chrome.runtime.getURL('popup.html'), focused: true })`);
-  const opener = await waitFor(async () => (await b.send('Target.getTargets')).targetInfos.find(t => t.url.endsWith('/popup.html') && t.type === 'page'), { label: 'opener' });
-  const sid = await A.attach(opener.targetId);
-  await waitFor(() => A.evaluate(sid, 'document.readyState === "complete"'), { label: 'opener load' });
-  await A.evaluate(sid, `(() => { const b = document.createElement('button'); b.style = 'position:fixed;left:0;top:0;width:200px;height:80px;z-index:2147483647'; b.onclick = () => { chrome.sidePanel.setOptions({ tabId: ${tab.tabId}, path: 'sidepanel.html?tab=${tab.tabId}', enabled: true }); chrome.sidePanel.open({ tabId: ${tab.tabId} }); }; document.body.append(b); return true; })()`);
-  await A.click(sid, 50, 40);
-  const target = await waitFor(async () => (await panelTargets()).find(t => t.url.endsWith(`?tab=${tab.tabId}`)), { timeout: 15000, label: 'panel' });
-  await rig.ev(`chrome.windows.remove(${win.id})`);
-  const psid = await A.attach(target.targetId);
-  await waitFor(() => A.evaluate(psid, `document.getElementById('connection').classList.contains('ok')`), { timeout: 30000, label: 'panel connected' });
+  const { targetId } = await b.send('Target.createTarget', { url: `chrome-extension://${EXT_ID}/sidepanel.html?tab=${tab.tabId}` });
+  const psid = await A.attach(targetId);
+  await waitFor(() => A.evaluate(psid, `document.getElementById('connection')?.classList.contains('ok')`), { timeout: 30000, label: 'panel connected' });
   return { sid: psid, run: expression => A.evaluate(psid, expression) };
 }
 try {
