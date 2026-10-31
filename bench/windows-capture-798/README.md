@@ -184,3 +184,12 @@ parent exit and process snapshots before/after. Observed survivors or an error
 stop further samples. These snapshots are diagnostic evidence, not a replacement
 for the matrix's complete-cleanup gate. No maintainer browser, real site or
 account is used. Raw taskkill stdout/stderr is also retained by the full matrix.
+
+The first cleanup-only run (`41236444248`) had an invalid aggregate success:
+its last sample retained observed survivors but the initial exit calculation
+checked only sample count and taskkill codes. Keep that historical result
+unchanged and do not cite it as verified cleanup. The corrected summary checks
+every sample for errors, raw output and empty observed-survivor/post-tree lists.
+Process ancestry also requires a child creation time no earlier than its parent,
+so a reused numeric parent PID cannot link an older system process to Chrome.
+These bounded snapshots still do not prove complete descendant cleanup.

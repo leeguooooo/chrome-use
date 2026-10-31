@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -21,13 +22,38 @@ def processes():
     return data if isinstance(data, list) else [data]
 
 
-def descendants(snapshot, root):
+def creation_time(process):
+    match = re.fullmatch(r"/Date\((-?\d+)(?:[+-]\d{4})?\)/", str(process.get("CreationDate")))
+    if not match:
+        raise ValueError("process creation time was not confirmed")
+    return int(match[1])
+
+
+def descendants(snapshot, root, ancestors=()):
+    # Windows retains a numeric parent PID after that parent exits. A newer
+    # process reusing the PID cannot be the parent of an older process.
+    parents = {p["ProcessId"]: p for p in [*ancestors, *snapshot]}
+    if root not in parents:
+        raise ValueError("owned Chrome parent identity is absent from the snapshot")
+    creation_time(parents[root])
     selected = {root}
     while True:
-        expanded = selected | {p["ProcessId"] for p in snapshot if p["ParentProcessId"] in selected}
+        expanded = selected | {p["ProcessId"] for p in snapshot
+            if p["ParentProcessId"] in selected
+            and creation_time(p) >= creation_time(parents[p["ParentProcessId"]])}
         if expanded == selected:
             return [p for p in snapshot if p["ProcessId"] in selected]
         selected = expanded
+
+
+def diagnostic_pass(records):
+    return len(records) == 3 and all(
+        not r.get("error") and not any(key.endswith("CleanupError") for key in r)
+        and type(r.get("parentExit")) is int
+        and type(r.get("taskkill", {}).get("exit")) is int and r["taskkill"]["exit"] == 0
+        and isinstance(r["taskkill"].get("stdout"), str) and isinstance(r["taskkill"].get("stderr"), str)
+        and r.get("observedSurvivors") == [] and r.get("postTree") == []
+        for r in records)
 
 
 def main():
@@ -63,7 +89,7 @@ def main():
                 after = processes()
                 identities = {(p["ProcessId"], p["CreationDate"]) for p in before}
                 record["observedSurvivors"] = [p for p in after if (p["ProcessId"], p["CreationDate"]) in identities]
-                record["postTree"] = descendants(after, chrome.pid)
+                record["postTree"] = descendants(after, chrome.pid, before)
             except Exception as error:
                 record["error"] = str(error)
             finally:
@@ -77,7 +103,7 @@ def main():
             (args.output / "result.json").write_text(json.dumps({"metadata": metadata, "records": records}, indent=2))
             if record.get("error") or record.get("observedSurvivors") or record.get("postTree"):
                 break
-    return 0 if len(records) == 3 and all(r.get("taskkill", {}).get("exit") == 0 for r in records) else 1
+    return 0 if diagnostic_pass(records) else 1
 
 
 if __name__ == "__main__":

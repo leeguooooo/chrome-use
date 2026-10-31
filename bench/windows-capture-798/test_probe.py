@@ -367,6 +367,34 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(kwargs["env"]["PROBE_VERSION_EXE"], str(binary))
         self.assertNotIn(str(binary), args[0][-1])
 
+    def test_cleanup_summary_refuses_a_last_sample_error_or_survivor(self):
+        import copy
+        from cleanup_probe import diagnostic_pass
+        good = {"parentExit": 1, "taskkill": {"exit": 0, "stdout": "ack", "stderr": ""},
+            "observedSurvivors": [], "postTree": []}
+        records = [copy.deepcopy(good) for _ in range(3)]
+        self.assertTrue(diagnostic_pass(records))
+        for update in [{"error": "failed"}, {"fallbackCleanupError": "failed"},
+                {"observedSurvivors": [{"ProcessId": 2}]}, {"postTree": [{"ProcessId": 2}]},
+                {"parentExit": None}, {"taskkill": {"exit": 255}}]:
+            broken = copy.deepcopy(records)
+            broken[-1].update(update)
+            self.assertFalse(diagnostic_pass(broken), update)
+        self.assertFalse(diagnostic_pass(records[:2]))
+        broken = copy.deepcopy(records)
+        broken[-1].pop("observedSurvivors")
+        self.assertFalse(diagnostic_pass(broken))
+
+    def test_cleanup_process_tree_ignores_reused_parent_pids(self):
+        from cleanup_probe import descendants
+        def process(pid, parent, created):
+            return {"ProcessId": pid, "ParentProcessId": parent, "CreationDate": f"/Date({created})/"}
+        root, child, older, grandchild = process(7, 1, 100), process(8, 7, 110), process(9, 8, 50), process(10, 8, 120)
+        self.assertEqual(descendants([root, child, older, grandchild], 7), [root, child, grandchild])
+        self.assertEqual(descendants([grandchild], 7, [root, child]), [grandchild])
+        with self.assertRaises(ValueError):
+            descendants([dict(root, CreationDate=None)], 7)
+
     def test_cleanup_diagnostic_cannot_launch_a_local_browser(self):
         result = subprocess.run([sys.executable, str(Path(__file__).with_name("cleanup_probe.py")),
             "--chrome", "/does-not-exist", "--output", "/does-not-exist"],
