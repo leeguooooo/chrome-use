@@ -64,7 +64,7 @@ def instrument(extension, target, base_url, case_id, pending_dom_control=True, c
     ? await fixtureCaptureContext(tabId, childSessionId) : null;
   const operation = observeDebuggerCommand(
     method,
-    sendTabCommand(tabId, method, params, childSessionId, tabCommandDependencies(captureContext)),
+    fixtureCommand(tabId, method, () => sendTabCommand(tabId, method, params, childSessionId, tabCommandDependencies(captureContext))),
   );
   if (captureContext) fixtureObserveWrapper(captureContext, operation);
   return await operation;"""
@@ -74,6 +74,10 @@ def instrument(extension, target, base_url, case_id, pending_dom_control=True, c
     generated = original.replace("chrome.debugger.attach(", "fixtureDebuggerAttach(").replace("chrome.debugger.detach(", "fixtureDebuggerDetach(")
     generated = generated.replace("function tabCommandDependencies() {", "function tabCommandDependencies(captureContext = null) {")
     generated = generated.replace(dependency, "sendCommand: (target, command, args) => fixtureSendCommand(captureContext, target, command, args),")
+    health_anchor = "const attachmentHealth = createAttachmentHealth();"
+    if original.count(health_anchor) != 1:
+        raise RuntimeError("attachment health boundary changed; review the instrumentation")
+    generated = generated.replace(health_anchor, "const attachmentHealth = fixtureHealth(createAttachmentHealth());")
     generated = generated.replace(RETURN_ANCHOR, replacement)
     generated = generated.replace("const HOST_NAME =", observer + "\nconst HOST_NAME =", 1)
     path.write_text(generated, encoding="utf-8")
@@ -536,6 +540,10 @@ def capture_trace_complete(events):
 
 
 def capture_context(events, record):
+    # Teardown detach is expected, and must not rewrite capture-time validity.
+    cleanup = [e["receivedMonotonic"] for e in events if e.get("type") == "host-cleanup-start"]
+    if cleanup:
+        events = [e for e in events if e.get("receivedMonotonic", float("inf")) < min(cleanup)]
     starts = report_operations(events)
     if len(starts) != 1:
         return None
@@ -722,7 +730,7 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
             env=env, stdout=chrome_log, stderr=chrome_log)
         record = {"caseId": case_id, "state": state, "kind": kind, "repeat": repeat,
                   "protocol": "extension-relay-instrumented", "pendingDomControl": args.pending_dom_control,
-                  "candidateExperiment": args.experiment == "candidates", "candidate": candidate, "instrumentedBackgroundSha256": instrumented_hash,
+                  "candidateExperiment": args.experiment in ("candidates", "baseline"), "candidate": candidate, "instrumentedBackgroundSha256": instrumented_hash,
                   "instrumentedExtensionSha256": tree_digest(work / "extension"),
                   "instrumentationDiff": str(artifact / "instrumentation.diff"), "setupVerified": False,
                   "stage": "relay-start", "traceVerified": False, "chromePid": chrome.pid, "probePid": os.getpid()}
@@ -738,7 +746,9 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
             invoke = lambda name, *words: execute(common + list(words), env, artifact / name)
             checked(invoke("warm-open", "open", fixture.base + "/warmup?" + case_id))
             warm_hwnd = wait_for(lambda: windows.find(chrome.pid, "CaptureProbe " + case_id), lambda x: x is not None, 5)
-            record["warmWindow"] = windows.restore(warm_hwnd)
+            record["warmWindow"] = windows.state(warm_hwnd)
+            if record["warmWindow"]["minimized"]:
+                raise RuntimeError("fresh warmup window was minimized; refusing a restore/focus intervention")
             fixture.set_control(case_id, lambda: {"valid": True, "snapshot": {"window": windows.state(warm_hwnd)}})
             checked(invoke("warm-capture", "screenshot", str(artifact / "warm.png"), "--full-res"))
             from PIL import Image
@@ -755,7 +765,7 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
             record["stage"] = "window-state"
             hwnd = wait_for(lambda: windows.find(chrome.pid, "CaptureProbe " + case_id), lambda x: x is not None, 5)
             record["expectedHwnd"] = int(hwnd)
-            if args.experiment == "candidates":
+            if args.experiment in ("candidates", "baseline"):
                 from native_monitor import NativeWindowMonitor
                 monitor = NativeWindowMonitor(windows, int(hwnd), chrome.pid, case_id)
                 monitor.start()
@@ -836,12 +846,17 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
             if monitor:
                 try:
                     def diagnostics_complete(events):
-                        context = capture_context(events, record)
-                        if context is None:
+                        # Trace completion is separate from attachment validity:
+                        # a recorded recovery is evidence, not a reason to discard it.
+                        starts = report_operations(events)
+                        if len(starts) != 1:
                             return False
-                        own = context[2]
+                        own = [e for e in events if e.get("operationId") == starts[0].get("operationId")]
+                        ends = [e for e in own if e.get("type") in ("capture-wrapper-answer", "capture-wrapper-error")]
+                        if len(ends) != 1 or len(ends[0].get("attempts", [])) != 1:
+                            return False
+                        end = ends[0]
                         page_done = any(e.get("type") in ("page-after-answer", "page-after-error") for e in own)
-                        sent, end, _ = context
                         attempt = end["attempts"][0]
                         native_answer = any(e.get("type") == "capture-native-answer" for e in own)
                         known_answer = end["type"] == "capture-wrapper-answer" or attempt.get("nativeOutcome") == "answer" or native_answer
@@ -864,6 +879,9 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
                     close_cover()
                 except Exception as exc:
                     record["coverCleanupError"] = str(exc)
+            with fixture.lock:
+                fixture.traces.append({"caseId": case_id, "type": "host-cleanup-start",
+                                       "receivedMonotonic": time.perf_counter()})
             # Session teardown is explicit cleanup, not another capture/fallback.
             # Keep the relay alive until that closure has answered.
             if common:
@@ -921,7 +939,7 @@ def file_version(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--experiment", choices=("original", "candidates"), default="original")
+    parser.add_argument("--experiment", choices=("original", "candidates", "baseline"), default="original")
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--chrome", type=Path, required=True)
     parser.add_argument("--extension", type=Path, required=True)
@@ -962,15 +980,15 @@ def main():
         for repeat in range(args.samples):
             candidates = ["baseline", "view", "focus"] if args.experiment == "candidates" else ["baseline"]
             candidates = candidates[repeat % len(candidates):] + candidates[:repeat % len(candidates)]
-            states = ["minimized"] if args.experiment == "candidates" else ["normal", "covered", "minimized"]
+            states = ["minimized"] if args.experiment in ("candidates", "baseline") else ["normal", "covered", "minimized"]
             for candidate in candidates:
               for state in states:
-                for kind in ("viewport", "full", "selector"):
+                for kind in (("viewport",) if args.experiment == "baseline" else ("viewport", "full", "selector")):
                     if time.monotonic() >= deadline:
                         raise ProbeSetupFailure("matrix stopped at its 30-minute experiment budget")
                     record = run_case(args, fixture, windows, root, args.output, state, kind, repeat, candidate)
                     records.append(record)
-                    (args.output / "progress.json").write_text(json.dumps({"expectedCases": args.samples * 9, "records": records}, indent=2), encoding="utf-8")
+                    (args.output / "progress.json").write_text(json.dumps({"expectedCases": args.samples * (1 if args.experiment == "baseline" else 9), "records": records}, indent=2), encoding="utf-8")
                     print(json.dumps({"case": record["caseId"], "setup": record["setupVerified"],
                                       "signature": record["matchesReportSignature"], "verdict": record["verdict"], "error": record.get("error")}), flush=True)
                     if record.get("verdict") == "INCONCLUSIVE":
@@ -986,12 +1004,12 @@ def main():
     invalid = [r for r in records if r.get("verdict") == "INCONCLUSIVE"]
     reproduced = [r for r in records if r["matchesReportSignature"]]
     failed = [r for r in records if r.get("verdict") == "ISSUES"]
-    incomplete = len(records) != args.samples * 9
+    incomplete = len(records) != args.samples * (1 if args.experiment == "baseline" else 9)
     verdict = "ISSUES" if failed else "INCONCLUSIVE" if invalid or incomplete or setup_error else "PASS"
     cleanup_failed = any(any(key.endswith("CleanupError") for key in r) for r in records)
     if cleanup_failed:
         verdict = "INCONCLUSIVE"
-    summary = {"verdict": verdict, "expectedCases": args.samples * 9, "cases": len(records), "inconclusiveCases": len(invalid),
+    summary = {"verdict": verdict, "expectedCases": args.samples * (1 if args.experiment == "baseline" else 9), "cases": len(records), "inconclusiveCases": len(invalid),
         "captureFailures": len(failed), "matchingReportSignature": len(reproduced), "records": records,
         "setupError": setup_error, "matrixComplete": not invalid and not incomplete,
         "interpretation": "PASS means this matrix did not reproduce the report; it does not prove customer Windows acceptance."}

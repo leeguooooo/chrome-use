@@ -78,6 +78,17 @@ class ProbeTests(unittest.TestCase):
                 subprocess.run(["node",str(Path(__file__).with_name("test-candidates.cjs"))],env=candidate_env,check=True)
 
 
+    def test_teardown_detach_does_not_erase_measurement_but_earlier_detach_does(self):
+        record = self.good_record()
+        for event in record["trace"]:
+            event["receivedMonotonic"] = 1
+        record["trace"].append({"type": "host-cleanup-start", "receivedMonotonic": 2})
+        detach = {"type": "attachment-change", "operationId": "op", "receivedMonotonic": 3}
+        record["trace"].append(detach)
+        self.assertIsNotNone(probe.capture_context(record["trace"], record))
+        detach["receivedMonotonic"] = 1.5
+        self.assertIsNone(probe.capture_context(record["trace"], record))
+
     def good_record(self):
         import copy
         target = {"tabId": 7, "sessionId": None}

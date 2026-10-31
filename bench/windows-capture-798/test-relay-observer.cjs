@@ -45,6 +45,20 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   waiting.resolve();await pending;
   const end=waiting.emitted.find(e=>e.type==='capture-wrapper-answer');
   assert.equal(end.attempts.length,1);assert.deepEqual(Array.from(end.invalidations),[]);
+  waiting.onDetach({tabId:7},'canceled_by_user');
+  await tick();
+  assert.ok(waiting.emitted.some(e=>e.type==='attachment-change'&&e.reason==='onDetach:canceled_by_user'),
+    'detach after wrapper settlement must still be attributed');
+  assert.ok(waiting.emitted.some(e=>e.type==='page-after-send'));
+  const healthCalls=[];
+  const recovery=Promise.resolve(false);
+  const health=waiting.c.fixtureHealth({mark(id){healthCalls.push(id)},recover(){return recovery}});
+  health.mark(7);
+  assert.equal(health.recover(7),recovery,'health instrumentation must preserve promise identity');
+  await tick();
+  assert.deepEqual(healthCalls,[7]);
+  assert.ok(waiting.emitted.some(e=>e.type==='health-mark-call'));
+  assert.ok(waiting.emitted.some(e=>e.type==='health-recover-answer'&&e.recovered===false));
 
   const recovered=await setup({blocked:true});
   const old=recovered.c.sendCdpToTab(7,'Page.captureScreenshot',{},undefined);await tick();
@@ -67,7 +81,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
     const answer=changed.emitted.find(e=>e.type==='dom-native-answer');
     const start=changed.emitted.find(e=>e.type==='capture-native-send');
     assert.notEqual(answer.epoch,start.epoch);
-    assert.ok(changed.emitted.find(e=>e.type==='capture-wrapper-answer').invalidations.includes('onDetach'));
+    assert.ok(changed.emitted.find(e=>e.type==='capture-wrapper-answer').invalidations.includes('onDetach:undefined'));
   }
 
   for(const options of [{owned:false},{url:'http://127.0.0.1:12345/report?other'},{url:'http://127.0.0.1:12345.evil.test/report?case'}]) {
