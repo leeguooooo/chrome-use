@@ -892,19 +892,44 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
                         record["sessionCleanupError"] = "CLI session closure was not confirmed"
                 except Exception as exc:
                     record["sessionCleanupError"] = str(exc)
+            from owned_processes import OwnedProcessHandles, cleanup_acknowledged, descendants, processes
+            bound = None
+            proof = {}
+            record["browserCleanup"] = proof
             try:
                 if chrome.poll() is not None:
                     raise RuntimeError("Chrome parent already exited; descendant teardown was not acknowledged")
-                killed = subprocess.run(["taskkill", "/PID", str(chrome.pid), "/T", "/F"], capture_output=True, timeout=20)
+                owned = descendants(processes(), chrome.pid)
+                proof["before"] = owned
+                bound = OwnedProcessHandles(owned)
+                killed = subprocess.run(["taskkill", "/PID", str(chrome.pid), "/T", "/F"], capture_output=True, text=True, timeout=20)
                 record["browserTreeKillExit"] = killed.returncode
-                record["browserTreeKillStdout"] = killed.stdout.decode(errors="replace")
-                record["browserTreeKillStderr"] = killed.stderr.decode(errors="replace")
+                record["browserTreeKillStdout"] = killed.stdout
+                record["browserTreeKillStderr"] = killed.stderr
+                proof["taskkill"] = {"exit": killed.returncode, "stdout": killed.stdout, "stderr": killed.stderr}
                 record["browserExitCode"] = chrome.wait(timeout=20)
-                if killed.returncode != 0:
-                    raise RuntimeError("owned Chrome process-tree termination was not acknowledged")
+                proof["parentExit"] = record["browserExitCode"]
+                proof["ownedHandleExits"] = bound.observe()
+                bound.close()
+                after = processes()
+                identities = {(p["ProcessId"], p["CreationDate"]) for p in owned}
+                proof["observedSurvivors"] = [p for p in after if (p["ProcessId"], p["CreationDate"]) in identities]
+                proof["postTree"] = descendants(after, chrome.pid, owned)
+                if proof["observedSurvivors"] or not cleanup_acknowledged(proof["taskkill"], owned,
+                        proof["ownedHandleExits"], proof["parentExit"], proof["postTree"]):
+                    raise RuntimeError("owned Chrome process-tree termination was not verified")
                 record["browserTreeTerminated"] = True
             except Exception as exc:
                 record["browserCleanupError"] = str(exc)
+                if chrome.poll() is None:
+                    try:
+                        chrome.kill()
+                        chrome.wait(timeout=10)
+                    except Exception as fallback:
+                        record["browserFallbackCleanupError"] = str(fallback)
+            finally:
+                if bound:
+                    bound.close()
             events = fixture.events(case_id)
             record["trace"] = events
             record["matchesReportSignature"] = False
@@ -945,13 +970,20 @@ def file_version(path):
 
 
 def confirmed_case_cleanup(record):
+    from owned_processes import cleanup_acknowledged
     close = record.get("sessionCleanup") or {}
+    proof = record.get("browserCleanup") or {}
     return (not any(key.endswith("CleanupError") for key in record)
         and type(close.get("exit")) is int and close["exit"] == 0 and close.get("killedAtDeadline") is False
         and (close.get("response") or {}).get("success") is True
         and record.get("browserTreeTerminated") is True
-        and type(record.get("browserTreeKillExit")) is int and record["browserTreeKillExit"] == 0
-        and type(record.get("browserExitCode")) is int)
+        and type(record.get("browserTreeKillExit")) is int
+        and record["browserTreeKillExit"] == proof.get("taskkill", {}).get("exit")
+        and type(record.get("browserExitCode")) is int
+        and record["browserExitCode"] == proof.get("parentExit")
+        and proof.get("observedSurvivors") == []
+        and cleanup_acknowledged(proof.get("taskkill", {}), proof.get("before", []),
+            proof.get("ownedHandleExits", []), proof.get("parentExit"), proof.get("postTree")))
 
 
 def can_start_next_case(record):

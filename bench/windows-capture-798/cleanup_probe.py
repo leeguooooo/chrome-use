@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import platform
-import re
 import shutil
 import subprocess
 import sys
@@ -16,39 +15,7 @@ import tempfile
 import time
 
 from probe import Registry, digest, file_version, tree_digest, wait_for
-from owned_processes import OwnedProcessHandles, cleanup_acknowledged
-
-
-def processes():
-    command = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CreationDate | ConvertTo-Json -Compress"
-    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
-        capture_output=True, text=True, timeout=15, check=True)
-    data = json.loads(result.stdout)
-    return data if isinstance(data, list) else [data]
-
-
-def creation_time(process):
-    match = re.fullmatch(r"/Date\((-?\d+)(?:[+-]\d{4})?\)/", str(process.get("CreationDate")))
-    if not match:
-        raise ValueError("process creation time was not confirmed")
-    return int(match[1])
-
-
-def descendants(snapshot, root, ancestors=()):
-    # Windows retains a numeric parent PID after that parent exits. A newer
-    # process reusing the PID cannot be the parent of an older process.
-    parents = {p["ProcessId"]: p for p in [*ancestors, *snapshot]}
-    if root not in parents:
-        raise ValueError("owned Chrome parent identity is absent from the snapshot")
-    creation_time(parents[root])
-    selected = {root}
-    while True:
-        expanded = selected | {p["ProcessId"] for p in parents.values()
-            if p["ParentProcessId"] in selected
-            and creation_time(p) >= creation_time(parents[p["ParentProcessId"]])}
-        if expanded == selected:
-            return [p for p in snapshot if p["ProcessId"] in selected]
-        selected = expanded
+from owned_processes import OwnedProcessHandles, cleanup_acknowledged, descendants, processes
 
 
 def diagnostic_pass(records, relay=False):
@@ -150,7 +117,7 @@ def main():
                         record["fallbackCleanupError"] = str(error)
             records.append(record)
             (args.output / "result.json").write_text(json.dumps({"metadata": metadata, "records": records}, indent=2))
-            if record.get("error") or record.get("observedSurvivors") or record.get("postTree"):
+            if record.get("error") or record.get("cleanupAcknowledged") is not True or record.get("observedSurvivors") or record.get("postTree"):
                 break
     return 0 if diagnostic_pass(records, relay=bool(args.binary)) else 1
 

@@ -180,7 +180,7 @@ in force.
 The `cleanup` workflow option downloads pinned Chrome for Testing
 156.0.8078.80 from Google's public archive and skips Rust, Node and the screenshot
 matrix. Three fresh about:blank profiles capture taskkill exit/stdout/stderr,
-parent exit and process snapshots before/after. Observed survivors or an error
+parent exit and process snapshots before/after. Observed survivors, an error or missing kernel proof
 stop further samples. These snapshots are diagnostic evidence, not a replacement
 for the matrix's complete-cleanup gate. No maintainer browser, real site or
 account is used. Raw taskkill stdout/stderr is also retained by the full matrix.
@@ -214,5 +214,13 @@ errors, unknown targets, missing bindings, live processes or additional text
 remain failures. Snapshot absence alone never authorizes this exception.
 See Microsoft's [wait contract](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject)
 and [process times](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocesstimes).
-This proof is being validated in the short control before changing the full
-matrix's raw-exit cleanup gate.
+The relay short control at source `aa697cd0` (run `41238950318`) confirmed all
+retained identities exited across three cases, including one taskkill 255 exit
+for an already-exited owned shell. The full matrix now uses the same proof and
+keeps the raw command status visible. This is cleanup evidence, not screenshot
+acceptance; uncertain measurements still prevent a matrix PASS.
+
+The pinned rust-cache action preserves dependency caches even when a diagnostic
+case makes the job fail. Every matrix run still executes the exact-source
+Release build and records its executable hash. Cache reuse is not acceptance of
+an earlier binary. The cleanup-only controls continue to skip Cargo.

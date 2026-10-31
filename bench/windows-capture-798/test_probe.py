@@ -92,7 +92,21 @@ class ProbeTests(unittest.TestCase):
     def isolated_record(self, verdict="PASS"):
         return {"verdict": verdict, "setupVerified": True, "captureAttempted": True,
             "sessionCleanup": {"exit": 0, "killedAtDeadline": False, "response": {"success": True}},
-            "browserTreeTerminated": True, "browserTreeKillExit": 0, "browserExitCode": 1}
+            "browserTreeTerminated": True, "browserTreeKillExit": 0, "browserExitCode": 1,
+            "browserCleanup": {"taskkill": {"exit": 0, "stderr": ""}, "parentExit": 1,
+                "observedSurvivors": [], "postTree": [],
+                "before": [{"ProcessId": 7, "ParentProcessId": 1, "CreationDate": "/Date(100)/"}],
+                "ownedHandleExits": [{"pid": 7, "parentPid": 1, "bindingConfirmed": True, "signaled": True,
+                    "handleClosed": True, "expectedCreatedMs": 100, "actualCreatedMs": 100, "waitCode": 0, "exitFileTime": 200}]}}
+
+    def test_matrix_continuation_accepts_only_kernel_verified_already_exited_error(self):
+        record = self.isolated_record("INCONCLUSIVE")
+        record["browserTreeKillExit"] = 255
+        record["browserCleanup"]["taskkill"] = {"exit": 255, "stderr":
+            "ERROR: The process with PID 7 (child process of PID 1) could not be terminated.\nReason: There is no running instance of the task.\n"}
+        self.assertTrue(probe.can_start_next_case(record))
+        record["browserCleanup"]["ownedHandleExits"][0]["signaled"] = False
+        self.assertFalse(probe.can_start_next_case(record))
 
     def test_uncertain_measurement_can_continue_only_after_confirmed_isolation(self):
         import copy
