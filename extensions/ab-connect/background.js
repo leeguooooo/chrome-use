@@ -1728,7 +1728,12 @@ async function handleForwardCdpCommand(msg) {
     const tabId = (sid ? resolveSessionTab(sid, sessionToTab, childSessionToTab) : null) ?? (tid ? tabForTarget(tid) : null);
     try {
       return await blurFocusedField(tabId, {
-        isOwned: (id) => ownedTabs.has(id),
+        isOwned: (id) => {
+          // Legacy callers carry their session inside params. Authorize the
+          // resolved target, including again after frame enumeration yields.
+          guardTab(id, agentSession);
+          return ownedTabs.has(id);
+        },
         getAllFrames: (id) => chrome.webNavigation.getAllFrames({ tabId: id }),
         executeScript: (injection) => chrome.scripting.executeScript(injection),
         // The visibilitychange nudge is visible to the page: stealth mode off only.
