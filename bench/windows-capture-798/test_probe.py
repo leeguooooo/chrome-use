@@ -374,6 +374,13 @@ class ProbeTests(unittest.TestCase):
             "observedSurvivors": [], "postTree": []}
         records = [copy.deepcopy(good) for _ in range(3)]
         self.assertTrue(diagnostic_pass(records))
+        self.assertFalse(diagnostic_pass(records, relay=True))
+        for record in records:
+            record["relayReady"] = True
+        self.assertTrue(diagnostic_pass(records, relay=True))
+        records[-1]["relayReady"] = False
+        self.assertFalse(diagnostic_pass(records, relay=True))
+        records[-1]["relayReady"] = True
         for update in [{"error": "failed"}, {"fallbackCleanupError": "failed"},
                 {"observedSurvivors": [{"ProcessId": 2}]}, {"postTree": [{"ProcessId": 2}]},
                 {"parentExit": None}, {"taskkill": {"exit": 255}}]:

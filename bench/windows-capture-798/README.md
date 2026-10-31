@@ -193,3 +193,12 @@ every sample for errors, raw output and empty observed-survivor/post-tree lists.
 Process ancestry also requires a child creation time no earlier than its parent,
 so a reused numeric parent PID cannot link an older system process to Chrome.
 These bounded snapshots still do not prove complete descendant cleanup.
+
+The `cleanup-relay` control adds the source extension and native host to those
+blank profiles. It downloads reference CLI v1.5.276 from GitHub Releases, checks
+the archive checksum, and records the executable hash/version. Per-case native
+host registrations and relay/socket directories are isolated and restored.
+Relay readiness must be observed before cleanup. No page commands or screenshots
+are issued by this control. Its released binary is a process-lifecycle reference,
+not source feature/performance acceptance. The screenshot matrix continues to
+build its own exact-source CLI.
