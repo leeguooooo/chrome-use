@@ -63,6 +63,27 @@ def fixture_storage_status(endpoint):
     return worker(endpoint, expression)
 
 
+
+def official_runtime_status(endpoint):
+    expression = """(async()=>{
+      const main=self.bitwardenMain;
+      if(!main?.authService||!main?.accountService)return {servicesReady:false};
+      const first=observable=>new Promise(resolve=>{
+        let subscription;
+        const timer=setTimeout(()=>{subscription?.unsubscribe();resolve({timedOut:true});},1500);
+        subscription=observable.subscribe({next:value=>{clearTimeout(timer);resolve({value});queueMicrotask(()=>subscription?.unsubscribe());},
+          error:error=>{clearTimeout(timer);resolve({error:String(error?.message||error).slice(0,200)});}});
+      });
+      const [active,auth]=await Promise.all([first(main.accountService.activeAccount$),first(main.authService.activeAccountStatus$)]);
+      const monitoring=main.autofillLifecycleService?.monitoringState?.value;
+      return {servicesReady:true,activeFixture:active.value?.id==='78000000-0000-4000-8000-000000000780',
+        activeTimedOut:active.timedOut===true,authStatus:auth.value??null,authError:auth.error??null,authTimedOut:auth.timedOut===true,
+        monitoringFrames:monitoring instanceof Map?monitoring.size:null,
+        activeMonitoringFrames:monitoring instanceof Map?[...monitoring.values()].filter(Boolean).length:null};
+    })()"""
+    return worker(endpoint, expression)
+
+
 def official_content_status(endpoint, tab_id):
     # Read only Bitwarden's own isolated realm in our disposable web fixture.
     # No main-world property, DOM node, listener, or event is added.
@@ -236,6 +257,7 @@ def main():
                     record['extensions']={'bitwarden':bw_identity,'chromeUse':our_identity}
                     record['seed']=seed_locked_fixture(bw_endpoint)
                     record['storageAfterSeed']=fixture_storage_status(bw_endpoint)
+                    record['runtimeAfterSeed']=official_runtime_status(bw_endpoint)
                     record['stealth']=worker(our_endpoint,'(async()=>{await chrome.storage.local.set({ab_stealth:true});return (await chrome.storage.local.get("ab_stealth")).ab_stealth;})()')
                     files=wait_for(lambda:list(relay.glob('relay-cdp-url-*')),lambda f:len(f)==1,30)
                     browser=files[0].name.removeprefix('relay-cdp-url-')
@@ -247,10 +269,11 @@ def main():
                     hwnd=wait_for(lambda:windows.find(chrome.pid,'BitwardenFixture '+case),lambda x:x is not None,5)
                     record['windowBefore']=windows.state(hwnd)
                     record['storageBeforeFocus']=fixture_storage_status(bw_endpoint)
+                    record['runtimeBeforeFocus']=official_runtime_status(bw_endpoint)
                     fixture_tab=menu_frames(our_endpoint,fixture.url,bw_identity['id'])
                     record['contentBeforeFocus']=official_content_status(bw_endpoint,fixture_tab['tabId'])
                     record['contentReady']=wait_for(lambda:official_content_status(bw_endpoint,fixture_tab['tabId']),
-                        lambda items:any(item.get('result',{}).get('initialized') is True for item in items),8)
+                        lambda items:any(item.get('result',{}).get('initialized') is True and item.get('result',{}).get('overlayMonitoring') is True for item in items),8)
                     # One focus action only. A failure may mean focus took effect:
                     # never replay it in search of a successful acknowledgement.
                     record['focus']=invoke('focus','click','#email')
