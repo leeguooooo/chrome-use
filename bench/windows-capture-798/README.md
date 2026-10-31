@@ -155,3 +155,86 @@ recovery, errors and teardown order unchanged. These extra loopback trace reques
 are diagnostic intervention, not a timing-neutral observation. Missing trace
 still prevents a verified conclusion; no detach event alone proves absence of
 recovery or explains why Chrome stopped producing frames.
+
+## Independent case continuation
+
+A case with confirmed setup and an attempted capture may remain INCONCLUSIVE
+(for example, the original full-page capture emitted trusted resize events).
+The matrix retains that verdict and continues only after explicit session-close
+acknowledgment, successful termination of that case's owned Chrome process tree,
+and an observed parent exit. Missing evidence or any cleanup error stops the
+matrix. An already exited parent without a tree-termination acknowledgment is
+uncertain, rather than assumed to prove descendant cleanup. Each later case
+still gets a fresh profile, relay directory and Chrome process.
+
+`allCasesExecuted` reports that every planned case ran; `matrixComplete` also
+requires no uncertain cases, setup errors or cleanup gaps. An uncertain or
+incomplete matrix has verdict INCONCLUSIVE and exits 2, even when other cases
+have verified failures. Individual ISSUES counts and evidence are retained.
+Neither continuing independent cases nor finishing the schedule can turn an
+unknown case into PASS. All pixel, freshness, page-state and window checks stay
+in force.
+
+## Cleanup-only diagnosis
+
+The `cleanup` workflow option downloads pinned Chrome for Testing
+156.0.8078.80 from Google's public archive and skips Rust, Node and the screenshot
+matrix. Three fresh about:blank profiles capture taskkill exit/stdout/stderr,
+parent exit and process snapshots before/after. Observed survivors, an error or missing kernel proof
+stop further samples. These snapshots are diagnostic evidence, not a replacement
+for the matrix's complete-cleanup gate. No maintainer browser, real site or
+account is used. Raw taskkill stdout/stderr is also retained by the full matrix.
+
+The first cleanup-only run (`41236444248`) had an invalid aggregate success:
+its last sample retained observed survivors but the initial exit calculation
+checked only sample count and taskkill codes. Keep that historical result
+unchanged and do not cite it as verified cleanup. The corrected summary checks
+every sample for errors, raw output and empty observed-survivor/post-tree lists.
+Process ancestry also requires a child creation time no earlier than its parent,
+so a reused numeric parent PID cannot link an older system process to Chrome.
+These bounded snapshots still do not prove complete descendant cleanup.
+
+The `cleanup-relay` control adds the source extension and native host to those
+blank profiles. It downloads reference CLI v1.5.276 from GitHub Releases, checks
+the archive checksum, and records the executable hash/version. Per-case native
+host registrations and relay/socket directories are isolated and restored.
+Relay readiness must be observed before cleanup. No page commands or screenshots
+are issued by this control. Its released binary is a process-lifecycle reference,
+not source feature/performance acceptance. The screenshot matrix continues to
+build its own exact-source CLI.
+
+Before cleanup, the control retains read-only process handles with SYNCHRONIZE
+and QUERY_LIMITED_INFORMATION rights and matches their creation times against
+owned snapshot identities. After the one taskkill call it records signaled
+process handles, nonzero exit times and successful handle closes. Summary
+validation rechecks this evidence for every owned process. Code 255 is accepted
+only if every error is the exact already-not-running message for a known owned
+PID/parent pair and all retained identities are confirmed exited. Permission
+errors, unknown targets, missing bindings, live processes or additional text
+remain failures. Snapshot absence alone never authorizes this exception.
+See Microsoft's [wait contract](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject)
+and [process times](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocesstimes).
+The relay short control at source `aa697cd0` (run `41238950318`) confirmed all
+retained identities exited across three cases, including one taskkill 255 exit
+for an already-exited owned shell. The full matrix now uses the same proof and
+keeps the raw command status visible. This is cleanup evidence, not screenshot
+acceptance; uncertain measurements still prevent a matrix PASS.
+
+The pinned rust-cache action preserves dependency caches even when a diagnostic
+case makes the job fail. Every matrix run still executes the exact-source
+Release build and records its executable hash. Cache reuse is not acceptance of
+an earlier binary. The cleanup-only controls continue to skip Cargo.
+
+## Worker-observed teardown boundary
+
+HTTP delivery order cannot determine when a worker observed a detach. The
+generated worker drains acknowledgments for its earlier trace requests, with
+bounded timeouts, then emits a worker-clock fence before Target.closeTarget.
+The fence lists retained capture operation IDs. The verifier requires that
+complete fence and classifies trace events using worker timestamps. A detach
+observed before the fence remains invalidating even when delivered after host
+cleanup started. Close-time events stay in the raw trace as teardown evidence.
+Missing/failed acknowledgments, mismatched retained IDs or invalid timestamps
+remain INCONCLUSIVE. This is bounded observation of the worker's events, not a
+claim about events it never observed. The handshake adds loopback requests only
+during disposable-fixture cleanup and leaves shipped extension code unchanged.

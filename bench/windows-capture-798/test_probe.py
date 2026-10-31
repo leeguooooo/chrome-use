@@ -78,16 +78,80 @@ class ProbeTests(unittest.TestCase):
                 subprocess.run(["node",str(Path(__file__).with_name("test-candidates.cjs"))],env=candidate_env,check=True)
 
 
-    def test_teardown_detach_does_not_erase_measurement_but_earlier_detach_does(self):
+    def test_late_delivery_cannot_hide_a_pre_teardown_detach(self):
         record = self.good_record()
         for event in record["trace"]:
             event["receivedMonotonic"] = 1
         record["trace"].append({"type": "host-cleanup-start", "receivedMonotonic": 2})
-        detach = {"type": "attachment-change", "operationId": "op", "receivedMonotonic": 3}
+        detach = {"type": "attachment-change", "operationId": "op", "atMs": 101, "receivedMonotonic": 3}
         record["trace"].append(detach)
         self.assertIsNotNone(probe.capture_context(record["trace"], record))
-        detach["receivedMonotonic"] = 1.5
+        detach["atMs"] = 99
         self.assertIsNone(probe.capture_context(record["trace"], record))
+
+    def test_missing_or_unacknowledged_worker_fence_is_unverified(self):
+        import copy
+        good = self.good_record()
+        for change in ["missing", "unacked", "wrong-worker", "wrong-time", "duplicate-operation", "nonarray"]:
+            record = copy.deepcopy(good)
+            fence = next(e for e in record["trace"] if e.get("type") == "worker-teardown-start")
+            if change == "missing": record["trace"].remove(fence)
+            elif change == "unacked": fence["traceComplete"] = False
+            elif change == "wrong-time": fence["atMs"] = False
+            elif change == "duplicate-operation": fence["operations"].append("op")
+            elif change == "nonarray": fence["operations"] = "op warm"
+            else: fence["operations"] = ["different-operation"]
+            self.assertIsNone(probe.capture_context(record["trace"], record), change)
+
+    def isolated_record(self, verdict="PASS"):
+        return {"verdict": verdict, "setupVerified": True, "captureAttempted": True,
+            "sessionCleanup": {"exit": 0, "killedAtDeadline": False, "response": {"success": True}},
+            "browserTreeTerminated": True, "browserTreeKillExit": 0, "browserExitCode": 1,
+            "browserCleanup": {"taskkill": {"exit": 0, "stderr": ""}, "parentExit": 1,
+                "observedSurvivors": [], "postTree": [],
+                "before": [{"ProcessId": 7, "ParentProcessId": 1, "CreationDate": "/Date(100)/"}],
+                "ownedHandleExits": [{"pid": 7, "parentPid": 1, "bindingConfirmed": True, "signaled": True,
+                    "handleClosed": True, "expectedCreatedMs": 100, "actualCreatedMs": 100, "waitCode": 0, "exitFileTime": 200}]}}
+
+    def test_matrix_continuation_accepts_only_kernel_verified_already_exited_error(self):
+        record = self.isolated_record("INCONCLUSIVE")
+        record["browserTreeKillExit"] = 255
+        record["browserCleanup"]["taskkill"] = {"exit": 255, "stderr":
+            "ERROR: The process with PID 7 (child process of PID 1) could not be terminated.\nReason: There is no running instance of the task.\n"}
+        self.assertTrue(probe.can_start_next_case(record))
+        record["browserCleanup"]["ownedHandleExits"][0]["signaled"] = False
+        self.assertFalse(probe.can_start_next_case(record))
+
+    def test_uncertain_measurement_can_continue_only_after_confirmed_isolation(self):
+        import copy
+        record = self.isolated_record("INCONCLUSIVE")
+        self.assertTrue(probe.can_start_next_case(record))
+        for field in ["setupVerified", "captureAttempted", "browserTreeTerminated", "browserTreeKillExit", "browserExitCode"]:
+            broken = copy.deepcopy(record)
+            broken.pop(field)
+            self.assertFalse(probe.can_start_next_case(broken), field)
+        for update in [{"browserCleanupError": "unknown"}, {"browserTreeKillExit": 1}, {"browserTreeKillExit": False}, {"browserExitCode": None}, {"browserExitCode": False}]:
+            self.assertFalse(probe.can_start_next_case(dict(record, **update)))
+        for update in [{"exit": 1}, {"exit": False}, {"killedAtDeadline": True}, {"response": {"success": False}}]:
+            broken = copy.deepcopy(record)
+            broken["sessionCleanup"].update(update)
+            self.assertFalse(probe.can_start_next_case(broken))
+
+    def test_completed_matrix_retains_unknowns_and_never_promotes_them_to_pass(self):
+        records = [self.isolated_record(v) for v in ["PASS", "ISSUES", "INCONCLUSIVE"]]
+        summary = probe.matrix_summary(records, 3, None)
+        self.assertEqual(summary["verdict"], "INCONCLUSIVE")
+        self.assertTrue(summary["allCasesExecuted"])
+        self.assertFalse(summary["matrixComplete"])
+        self.assertEqual(summary["inconclusiveCases"], 1)
+        self.assertEqual(summary["captureFailures"], 1)
+        self.assertEqual(probe.matrix_summary([self.isolated_record()], 1, None)["verdict"], "PASS")
+        self.assertEqual(probe.matrix_summary([self.isolated_record("ISSUES")], 1, None)["verdict"], "ISSUES")
+        self.assertEqual(probe.matrix_summary([self.isolated_record()], 2, None)["verdict"], "INCONCLUSIVE")
+        broken = self.isolated_record()
+        broken.pop("browserTreeTerminated")
+        self.assertEqual(probe.matrix_summary([broken], 1, None)["verdict"], "INCONCLUSIVE")
+        self.assertEqual(probe.matrix_summary([self.isolated_record()], 1, "setup failed")["verdict"], "INCONCLUSIVE")
 
     def good_record(self):
         import copy
@@ -95,9 +159,9 @@ class ProbeTests(unittest.TestCase):
         window = {"hwnd": 99, "pid": 1, "title": "CaptureProbe case", "minimized": False,
                   "visible": True, "centerOwned": True, "centerWindow": 99, "rect": [0, 0, 100, 100]}
         snapshot = {"window": window, "cover": None}
-        start = {"type": "capture-operation-start", "operationId": "op", "fixturePath": "/report", "epoch": 3, "requested": copy.deepcopy(target)}
+        start = {"type": "capture-operation-start", "operationId": "op", "fixturePath": "/report", "epoch": 3, "atMs": 10, "requested": copy.deepcopy(target)}
         native = {"type": "capture-native-send", "operationId": "op", "captureId": "capture", "target": copy.deepcopy(target),
-                  "epoch": 3, "windowControl": {"valid": True, "snapshot": copy.deepcopy(snapshot)}, "controlElapsedMs": 2,
+                  "epoch": 3, "atMs": 20, "windowControl": {"valid": True, "snapshot": copy.deepcopy(snapshot)}, "controlElapsedMs": 2,
                   "historyLost": False, "attachmentHistory": [{"atMs":0,"reason":"attach-acknowledged","epoch":3}]}
         end = {"type": "capture-wrapper-answer", "operationId": "op", "epoch": 3, "invalidations": [],
                "atMs": 30, "attempts": [{"captureId": "capture", "target": copy.deepcopy(target), "epoch": 3, "nativePending": False, "elapsedMs": 10}]}
@@ -106,7 +170,8 @@ class ProbeTests(unittest.TestCase):
         warm_end = dict(copy.deepcopy(end), operationId="warm", atMs=3)
         return {"caseId": "case", "state": "normal", "chromePid": 1, "probePid": 2, "expectedHwnd": 99,
                 "setupVerified": True, "traceVerified": True, "windowBefore": copy.deepcopy(snapshot), "windowAfter": copy.deepcopy(snapshot),
-                "trace": [start, native, end, warm_start, warm_native, warm_end], "capture": {"exit": 0, "killedAtDeadline": False, "response": {"success": True}},
+                "trace": [start, native, end, warm_start, warm_native, warm_end,
+                    {"type": "worker-teardown-start", "atMs": 100, "traceComplete": True, "operations": ["op", "warm"]}], "capture": {"exit": 0, "killedAtDeadline": False, "response": {"success": True}},
                 "image": {"pixelValid": True, "dimensionsValid": True}}
 
     def test_case_verdict_rejects_changed_state_exit_kill_exception_and_unknown_trace(self):
@@ -168,7 +233,7 @@ class ProbeTests(unittest.TestCase):
         end.update(type="capture-wrapper-error", error="relay timeout after 25000ms: chrome.debugger.sendCommand(Page.captureScreenshot)")
         end["attempts"][0].update(nativePending=True, elapsedMs=25001)
         dom = {"type": "dom-native-answer", "operationId": "op", "captureId": "capture", "target": record["trace"][1]["target"],
-               "epoch": 3, "nativeStillPending": True, "wrapperStillPending": True, "result": {"rows":123,"ready":"complete"}}
+               "epoch": 3, "atMs": 40, "nativeStillPending": True, "wrapperStillPending": True, "result": {"rows":123,"ready":"complete"}}
         record["trace"].append(dom)
         self.assertTrue(probe.report_signature_matches(record["trace"], 123, record))
         for field, value in [("epoch",4),("nativeStillPending",False),("wrapperStillPending",False)]:
@@ -207,12 +272,12 @@ class ProbeTests(unittest.TestCase):
         page = {"generation":"5aa55aa5", "events":[], "globals":["fixtureState"], "mutations":100, "requests":[]}
         record["pageBefore"] = page
         record["trace"].append({"type":"page-after-answer", "operationId":"op", "captureId":"capture",
-            "target":copy.deepcopy(sent["target"]), "epoch":3, "result":copy.deepcopy(page)})
+            "target":copy.deepcopy(sent["target"]), "epoch":3, "atMs":40, "result":copy.deepcopy(page)})
         record["trace"][2]["attempts"][0]["nativeOutcome"] = "answer"
         record["trace"].extend([{"type":"capture-native-answer","operationId":"op","captureId":"capture",
             "target":copy.deepcopy(sent["target"]),"epoch":3,"responseOwned":True,"nativeReceivedMs":20,"ownershipVerifiedMs":21,"atMs":22},
             {"type":"native-image-ack","operationId":"op","captureId":"capture",
-            "target":copy.deepcopy(sent["target"]),"epoch":3,"saved":{"sha256":"f"*64}}])
+            "target":copy.deepcopy(sent["target"]),"epoch":3,"atMs":35,"saved":{"sha256":"f"*64}}])
         record["nativeImage"]={"sha256":"f"*64,"freshnessValid":True}
         record["nativeMonitor"] = {"calibrated":True,"installed":4,"unhooked":[True]*4,
             "pumpStoppedExpected":True,"overflow":False,"errors":[],"startTick":1000,"endTick":1100,"events":[],
@@ -330,6 +395,75 @@ class ProbeTests(unittest.TestCase):
         self.assertNotEqual(args[0][0], str(binary))
         self.assertEqual(kwargs["env"]["PROBE_VERSION_EXE"], str(binary))
         self.assertNotIn(str(binary), args[0][-1])
+
+    def test_taskkill_missing_shell_requires_retained_identity_and_exit_proof(self):
+        import copy
+        from owned_processes import cleanup_acknowledged
+        owned = [{"ProcessId": 7, "ParentProcessId": 1, "CreationDate": "/Date(100)/"},
+            {"ProcessId": 8, "ParentProcessId": 7, "CreationDate": "/Date(100)/"}]
+        handles = [{"pid": p["ProcessId"], "parentPid": p["ParentProcessId"], "bindingConfirmed": True,
+            "signaled": True, "handleClosed": True, "expectedCreatedMs": 100, "actualCreatedMs": 100,
+            "waitCode": 0, "exitFileTime": 200} for p in owned]
+        result = {"exit": 255, "stderr": "ERROR: The process with PID 8 (child process of PID 7) could not be terminated.\nReason: There is no running instance of the task.\n\n"}
+        self.assertTrue(cleanup_acknowledged(result, owned, handles, 1, []))
+        self.assertTrue(cleanup_acknowledged({"exit": 0, "stderr": ""}, owned, handles, 1, []))
+        for field in ["bindingConfirmed", "signaled", "handleClosed", "actualCreatedMs", "exitFileTime"]:
+            broken = copy.deepcopy(handles)
+            broken[-1][field] = False
+            self.assertFalse(cleanup_acknowledged(result, owned, broken, 1, []), field)
+        for stderr in [result["stderr"].replace("PID 8", "PID 99"),
+                result["stderr"].replace("child process of PID 7", "child process of PID 99"),
+                result["stderr"].replace("There is no running instance of the task.", "Access is denied."),
+                result["stderr"] + "another error"]:
+            self.assertFalse(cleanup_acknowledged(dict(result, stderr=stderr), owned, handles, 1, []))
+        self.assertFalse(cleanup_acknowledged(result, owned, handles[:-1], 1, []))
+        self.assertFalse(cleanup_acknowledged(result, owned, handles, None, []))
+        self.assertFalse(cleanup_acknowledged(result, owned, handles, 1, [owned[-1]]))
+
+    def test_cleanup_summary_refuses_a_last_sample_error_or_survivor(self):
+        import copy
+        from cleanup_probe import diagnostic_pass
+        good = {"parentExit": 1, "taskkill": {"exit": 0, "stdout": "ack", "stderr": ""},
+            "observedSurvivors": [], "postTree": [], "cleanupAcknowledged": True}
+        good["before"] = [{"ProcessId": 7, "ParentProcessId": 1, "CreationDate": "/Date(100)/"}]
+        good["ownedHandleExits"] = [{"pid": 7, "parentPid": 1, "bindingConfirmed": True, "signaled": True,
+            "handleClosed": True, "expectedCreatedMs": 100, "actualCreatedMs": 100, "waitCode": 0, "exitFileTime": 200}]
+        records = [copy.deepcopy(good) for _ in range(3)]
+        self.assertTrue(diagnostic_pass(records))
+        self.assertFalse(diagnostic_pass(records, relay=True))
+        for record in records:
+            record["relayReady"] = True
+        self.assertTrue(diagnostic_pass(records, relay=True))
+        records[-1]["relayReady"] = False
+        self.assertFalse(diagnostic_pass(records, relay=True))
+        records[-1]["relayReady"] = True
+        for update in [{"error": "failed"}, {"fallbackCleanupError": "failed"},
+                {"observedSurvivors": [{"ProcessId": 2}]}, {"postTree": [{"ProcessId": 2}]},
+                {"parentExit": None}, {"cleanupAcknowledged": False}]:
+            broken = copy.deepcopy(records)
+            broken[-1].update(update)
+            self.assertFalse(diagnostic_pass(broken), update)
+        self.assertFalse(diagnostic_pass(records[:2]))
+        broken = copy.deepcopy(records)
+        broken[-1].pop("observedSurvivors")
+        self.assertFalse(diagnostic_pass(broken))
+
+    def test_cleanup_process_tree_ignores_reused_parent_pids(self):
+        from cleanup_probe import descendants
+        def process(pid, parent, created):
+            return {"ProcessId": pid, "ParentProcessId": parent, "CreationDate": f"/Date({created})/"}
+        root, child, older, grandchild = process(7, 1, 100), process(8, 7, 110), process(9, 8, 50), process(10, 8, 120)
+        self.assertEqual(descendants([root, child, older, grandchild], 7), [root, child, grandchild])
+        self.assertEqual(descendants([grandchild], 7, [root, child]), [grandchild])
+        with self.assertRaises(ValueError):
+            descendants([dict(root, CreationDate=None)], 7)
+
+    def test_cleanup_diagnostic_cannot_launch_a_local_browser(self):
+        result = subprocess.run([sys.executable, str(Path(__file__).with_name("cleanup_probe.py")),
+            "--chrome", "/does-not-exist", "--output", "/does-not-exist"],
+            capture_output=True, text=True, env=dict(os.environ, GITHUB_ACTIONS="false"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ephemeral Windows GitHub Actions", result.stderr)
 
     def test_host_environment_guard_prevents_local_browser_execution(self):
         result = subprocess.run([sys.executable, str(Path(__file__).with_name("probe.py")),

@@ -3,6 +3,7 @@ const fixtureAttachmentEpochs = new Map();
 const fixtureCaptureOperations = new Set();
 const fixtureAttachmentHistory = new Map();
 const fixtureHistoryLost = new Set();
+const fixtureTraceAcks = [];
 const fixtureEpoch = tabId => fixtureAttachmentEpochs.get(tabId) || 0;
 const fixtureTarget = target => ({ tabId: target?.tabId ?? null, sessionId: target?.sessionId ?? null });
 function fixtureOwnPage(tab) {
@@ -12,9 +13,31 @@ function fixtureOwnPage(tab) {
   } catch { return false; }
 }
 function fixtureEmit(context, event) {
-  return fetch(__SINK__, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ caseId: __CASE__, operationId: context.id, atMs: performance.now(), ...event }),
-  }).then(reply => reply.ok).catch(() => false);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1500);
+  const acknowledgment = fetch(__SINK__, { method: 'POST', signal: controller.signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ caseId: __CASE__, operationId: context.id, ...event, atMs: performance.now() }),
+  }).then(reply => reply.ok).catch(() => false).finally(() => clearTimeout(timeout));
+  fixtureTraceAcks.push(acknowledgment);
+  return acknowledgment;
+}
+async function fixtureBeforeTeardown(targetId) {
+  const tabId = tabForTarget(targetId);
+  const contexts = [...fixtureCaptureOperations].filter(c => c.requested.tabId === tabId);
+  if (!contexts.length) return;
+  let drained = 0, complete = true;
+  const deadline = performance.now() + 3000;
+  while (drained < fixtureTraceAcks.length && performance.now() < deadline) {
+    const pending = fixtureTraceAcks.slice(drained);
+    drained = fixtureTraceAcks.length;
+    const acknowledged = await Promise.all(pending);
+    if (!acknowledged.every(value => value === true)) complete = false;
+  }
+  if (drained !== fixtureTraceAcks.length) complete = false;
+  // No page or debugger command: this fence precedes the actual tab close.
+  await fixtureEmit({id:'teardown'}, {type:'worker-teardown-start', traceComplete:complete,
+    operations:contexts.map(c => c.id)});
 }
 function fixtureInvalidate(context, reason) {
   if (!context.invalidations.includes(reason)) context.invalidations.push(reason);

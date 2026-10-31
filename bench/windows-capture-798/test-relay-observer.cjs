@@ -6,12 +6,16 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   async function setup({blocked=false,retry=false,pendingDOM=false,owned=true,url='http://127.0.0.1:12345/report?case'}={}) {
     const emitted=[], calls=[], timers=[]; let onDetach, releaseHealth, resolveCapture, resolveDOM;
     const health = blocked ? new Promise(resolve=>{releaseHealth=resolve}) : Promise.resolve(false);
-    let captureCalls=0, ids=0;
+    let captureCalls=0, ids=0, traceFailure=false, holdTrace=false, releaseTrace;
     const c = {performance:{now:()=>10}, crypto:{randomUUID:()=>String(++ids)}, URL, AbortController,
-      ownedTabs:new Set(owned?[7,42]:[]), cursorSettings:{}, stealthBlockReason:()=>null,
+      tabForTarget:()=>7, ownedTabs:new Set(owned?[7,42]:[]), cursorSettings:{}, stealthBlockReason:()=>null,
       observeDebuggerCommand:(_,promise)=>promise, sendTabCommand,
-      setTimeout:fn=>{timers.push(fn);return timers.length}, clearTimeout(){},
-      fetch:async (url,options)=>{if(url.endsWith('/trace')) emitted.push(JSON.parse(options.body));
+      setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length}, clearTimeout(){},
+      fetch:async (url,options)=>{if(url.endsWith('/trace')) {
+        emitted.push(JSON.parse(options.body));
+        if(holdTrace){holdTrace=false;await new Promise(resolve=>{releaseTrace=resolve});}
+        return {ok:!traceFailure,json:async()=>({})};
+        }
         return {ok:true,json:async()=>({valid:true,snapshot:{},saved:true})};},
       chrome:{tabs:{get:async()=>({url})},debugger:{
         onDetach:{addListener:fn=>{onDetach=fn}}, attach:async()=>({}),detach:async()=>({}),
@@ -30,7 +34,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
     });
     vm.runInContext(process.env.PROBE_SENDER,c);
     await c.fixtureDebuggerAttach({tabId:7},'1.3');
-    return {c,emitted,calls,timers,releaseHealth:()=>releaseHealth(false),resolve:()=>resolveCapture({data:'fixture'}),resolveDOM:()=>resolveDOM({result:{value:{rows:123,ready:'complete'}}}),onDetach};
+    return {c,emitted,calls,timers,setTraceFailure:value=>{traceFailure=value},holdTrace:()=>{holdTrace=true},releaseTrace:()=>releaseTrace(),releaseHealth:()=>releaseHealth(false),resolve:()=>resolveCapture({data:'fixture'}),resolveDOM:()=>resolveDOM({result:{value:{rows:123,ready:'complete'}}}),onDetach};
   }
   const waiting=await setup({blocked:true});
   const pending=waiting.c.sendCdpToTab(7,'Page.captureScreenshot',{},undefined);
@@ -39,7 +43,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   waiting.releaseHealth();await tick();assert.equal(waiting.calls[0].method,'Page.captureScreenshot');
   assert.equal(waiting.emitted.filter(e=>e.type==='capture-native-send').length,1);
   const domEnabled = process.env.PROBE_EXPECT_DOM !== 'false';
-  if(domEnabled) await waiting.timers[1]?.();
+  if(domEnabled) await waiting.timers.find(t=>t.ms===2000)?.fn();
   await tick();
   assert.equal(waiting.calls.filter(e=>e.method==='Runtime.evaluate').length,domEnabled?1:0);
   waiting.resolve();await pending;
@@ -59,6 +63,27 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(healthCalls,[7]);
   assert.ok(waiting.emitted.some(e=>e.type==='health-mark-call'));
   assert.ok(waiting.emitted.some(e=>e.type==='health-recover-answer'&&e.recovered===false));
+  await waiting.c.fixtureBeforeTeardown('owned-target');
+  const fence=waiting.emitted.find(e=>e.type==='worker-teardown-start');
+  assert.equal(fence.traceComplete,true);
+  assert.ok(fence.operations.includes(waiting.emitted.find(e=>e.type==='capture-operation-start').operationId));
+  const incomplete=await setup();
+  const incompleteContext=await incomplete.c.fixtureCaptureContext(7);
+  incomplete.setTraceFailure(true);
+  await incomplete.c.fixtureEmit(incompleteContext,{type:'fixture-test'});
+  incomplete.setTraceFailure(false);
+  await incomplete.c.fixtureBeforeTeardown('owned-target');
+  assert.equal(incomplete.emitted.find(e=>e.type==='worker-teardown-start').traceComplete,false);
+
+  const held=await setup();
+  const heldContext=await held.c.fixtureCaptureContext(7);
+  held.holdTrace();
+  const pendingTrace=held.c.fixtureEmit(heldContext,{type:'fixture-test'});
+  const draining=held.c.fixtureBeforeTeardown('owned-target');
+  await tick();
+  assert.equal(held.emitted.some(e=>e.type==='worker-teardown-start'),false,'fence waits for earlier trace acknowledgments');
+  held.releaseTrace();await pendingTrace;await draining;
+  assert.equal(held.emitted.find(e=>e.type==='worker-teardown-start').traceComplete,true);
 
   const recovered=await setup({blocked:true});
   const old=recovered.c.sendCdpToTab(7,'Page.captureScreenshot',{},undefined);await tick();
@@ -76,7 +101,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   if(domEnabled) {
     const changed=await setup({pendingDOM:true});
     const work=changed.c.sendCdpToTab(7,'Page.captureScreenshot',{},undefined);await tick();
-    const read=changed.timers[1]();await tick();changed.onDetach({tabId:7});changed.resolveDOM();await read;
+    const read=changed.timers.find(t=>t.ms===2000).fn();await tick();changed.onDetach({tabId:7});changed.resolveDOM();await read;
     changed.resolve();await work;
     const answer=changed.emitted.find(e=>e.type==='dom-native-answer');
     const start=changed.emitted.find(e=>e.type==='capture-native-send');
