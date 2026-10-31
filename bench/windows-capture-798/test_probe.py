@@ -367,11 +367,38 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(kwargs["env"]["PROBE_VERSION_EXE"], str(binary))
         self.assertNotIn(str(binary), args[0][-1])
 
+    def test_taskkill_missing_shell_requires_retained_identity_and_exit_proof(self):
+        import copy
+        from owned_processes import cleanup_acknowledged
+        owned = [{"ProcessId": 7, "ParentProcessId": 1, "CreationDate": "/Date(100)/"},
+            {"ProcessId": 8, "ParentProcessId": 7, "CreationDate": "/Date(100)/"}]
+        handles = [{"pid": p["ProcessId"], "parentPid": p["ParentProcessId"], "bindingConfirmed": True,
+            "signaled": True, "handleClosed": True, "expectedCreatedMs": 100, "actualCreatedMs": 100,
+            "waitCode": 0, "exitFileTime": 200} for p in owned]
+        result = {"exit": 255, "stderr": "ERROR: The process with PID 8 (child process of PID 7) could not be terminated.\nReason: There is no running instance of the task.\n\n"}
+        self.assertTrue(cleanup_acknowledged(result, owned, handles, 1, []))
+        self.assertTrue(cleanup_acknowledged({"exit": 0, "stderr": ""}, owned, handles, 1, []))
+        for field in ["bindingConfirmed", "signaled", "handleClosed", "actualCreatedMs", "exitFileTime"]:
+            broken = copy.deepcopy(handles)
+            broken[-1][field] = False
+            self.assertFalse(cleanup_acknowledged(result, owned, broken, 1, []), field)
+        for stderr in [result["stderr"].replace("PID 8", "PID 99"),
+                result["stderr"].replace("child process of PID 7", "child process of PID 99"),
+                result["stderr"].replace("There is no running instance of the task.", "Access is denied."),
+                result["stderr"] + "another error"]:
+            self.assertFalse(cleanup_acknowledged(dict(result, stderr=stderr), owned, handles, 1, []))
+        self.assertFalse(cleanup_acknowledged(result, owned, handles[:-1], 1, []))
+        self.assertFalse(cleanup_acknowledged(result, owned, handles, None, []))
+        self.assertFalse(cleanup_acknowledged(result, owned, handles, 1, [owned[-1]]))
+
     def test_cleanup_summary_refuses_a_last_sample_error_or_survivor(self):
         import copy
         from cleanup_probe import diagnostic_pass
         good = {"parentExit": 1, "taskkill": {"exit": 0, "stdout": "ack", "stderr": ""},
-            "observedSurvivors": [], "postTree": []}
+            "observedSurvivors": [], "postTree": [], "cleanupAcknowledged": True}
+        good["before"] = [{"ProcessId": 7, "ParentProcessId": 1, "CreationDate": "/Date(100)/"}]
+        good["ownedHandleExits"] = [{"pid": 7, "parentPid": 1, "bindingConfirmed": True, "signaled": True,
+            "handleClosed": True, "expectedCreatedMs": 100, "actualCreatedMs": 100, "waitCode": 0, "exitFileTime": 200}]
         records = [copy.deepcopy(good) for _ in range(3)]
         self.assertTrue(diagnostic_pass(records))
         self.assertFalse(diagnostic_pass(records, relay=True))
@@ -383,7 +410,7 @@ class ProbeTests(unittest.TestCase):
         records[-1]["relayReady"] = True
         for update in [{"error": "failed"}, {"fallbackCleanupError": "failed"},
                 {"observedSurvivors": [{"ProcessId": 2}]}, {"postTree": [{"ProcessId": 2}]},
-                {"parentExit": None}, {"taskkill": {"exit": 255}}]:
+                {"parentExit": None}, {"cleanupAcknowledged": False}]:
             broken = copy.deepcopy(records)
             broken[-1].update(update)
             self.assertFalse(diagnostic_pass(broken), update)

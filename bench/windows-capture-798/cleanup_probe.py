@@ -16,6 +16,7 @@ import tempfile
 import time
 
 from probe import Registry, digest, file_version, tree_digest, wait_for
+from owned_processes import OwnedProcessHandles, cleanup_acknowledged
 
 
 def processes():
@@ -55,7 +56,8 @@ def diagnostic_pass(records, relay=False):
         not r.get("error") and not any(key.endswith("CleanupError") for key in r)
         and (not relay or r.get("relayReady") is True)
         and type(r.get("parentExit")) is int
-        and type(r.get("taskkill", {}).get("exit")) is int and r["taskkill"]["exit"] == 0
+        and r.get("cleanupAcknowledged") is True
+        and cleanup_acknowledged(r.get("taskkill", {}), r.get("before", []), r.get("ownedHandleExits", []), r.get("parentExit"), r.get("postTree"))
         and isinstance(r["taskkill"].get("stdout"), str) and isinstance(r["taskkill"].get("stderr"), str)
         and r.get("observedSurvivors") == [] and r.get("postTree") == []
         for r in records)
@@ -115,6 +117,7 @@ def main():
                 argv += ["--load-extension=" + str(extension), "--disable-extensions-except=" + str(extension)]
             chrome = subprocess.Popen(argv + ["about:blank"], env=env, stdout=log, stderr=log)
             record["chromePid"] = chrome.pid
+            bound = None
             try:
                 if args.binary:
                     wait_for(lambda: list(relay.glob("relay-cdp-url-*")), lambda files: len(files) == 1, 30)
@@ -122,17 +125,23 @@ def main():
                 time.sleep(2)  # Fixture startup only; no website or production automation.
                 before = descendants(processes(), chrome.pid)
                 record["before"] = before
+                bound = OwnedProcessHandles(before)
                 result = subprocess.run(["taskkill", "/PID", str(chrome.pid), "/T", "/F"],
                     capture_output=True, text=True, timeout=20)
                 record["taskkill"] = {"exit": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
                 record["parentExit"] = chrome.wait(timeout=20)
+                record["ownedHandleExits"] = bound.observe()
+                bound.close()
                 after = processes()
                 identities = {(p["ProcessId"], p["CreationDate"]) for p in before}
                 record["observedSurvivors"] = [p for p in after if (p["ProcessId"], p["CreationDate"]) in identities]
                 record["postTree"] = descendants(after, chrome.pid, before)
+                record["cleanupAcknowledged"] = cleanup_acknowledged(record["taskkill"], before, record["ownedHandleExits"], record["parentExit"], record["postTree"])
             except Exception as error:
                 record["error"] = str(error)
             finally:
+                if bound:
+                    bound.close()
                 if chrome.poll() is None:
                     try:
                         chrome.kill()  # Exact owned handle, never a global Chrome kill.

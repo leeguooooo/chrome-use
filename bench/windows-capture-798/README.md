@@ -202,3 +202,17 @@ Relay readiness must be observed before cleanup. No page commands or screenshots
 are issued by this control. Its released binary is a process-lifecycle reference,
 not source feature/performance acceptance. The screenshot matrix continues to
 build its own exact-source CLI.
+
+Before cleanup, the control retains read-only process handles with SYNCHRONIZE
+and QUERY_LIMITED_INFORMATION rights and matches their creation times against
+owned snapshot identities. After the one taskkill call it records signaled
+process handles, nonzero exit times and successful handle closes. Summary
+validation rechecks this evidence for every owned process. Code 255 is accepted
+only if every error is the exact already-not-running message for a known owned
+PID/parent pair and all retained identities are confirmed exited. Permission
+errors, unknown targets, missing bindings, live processes or additional text
+remain failures. Snapshot absence alone never authorizes this exception.
+See Microsoft's [wait contract](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject)
+and [process times](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocesstimes).
+This proof is being validated in the short control before changing the full
+matrix's raw-exit cleanup gate.
