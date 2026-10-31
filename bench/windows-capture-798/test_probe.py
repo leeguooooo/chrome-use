@@ -78,16 +78,30 @@ class ProbeTests(unittest.TestCase):
                 subprocess.run(["node",str(Path(__file__).with_name("test-candidates.cjs"))],env=candidate_env,check=True)
 
 
-    def test_teardown_detach_does_not_erase_measurement_but_earlier_detach_does(self):
+    def test_late_delivery_cannot_hide_a_pre_teardown_detach(self):
         record = self.good_record()
         for event in record["trace"]:
             event["receivedMonotonic"] = 1
         record["trace"].append({"type": "host-cleanup-start", "receivedMonotonic": 2})
-        detach = {"type": "attachment-change", "operationId": "op", "receivedMonotonic": 3}
+        detach = {"type": "attachment-change", "operationId": "op", "atMs": 101, "receivedMonotonic": 3}
         record["trace"].append(detach)
         self.assertIsNotNone(probe.capture_context(record["trace"], record))
-        detach["receivedMonotonic"] = 1.5
+        detach["atMs"] = 99
         self.assertIsNone(probe.capture_context(record["trace"], record))
+
+    def test_missing_or_unacknowledged_worker_fence_is_unverified(self):
+        import copy
+        good = self.good_record()
+        for change in ["missing", "unacked", "wrong-worker", "wrong-time", "duplicate-operation", "nonarray"]:
+            record = copy.deepcopy(good)
+            fence = next(e for e in record["trace"] if e.get("type") == "worker-teardown-start")
+            if change == "missing": record["trace"].remove(fence)
+            elif change == "unacked": fence["traceComplete"] = False
+            elif change == "wrong-time": fence["atMs"] = False
+            elif change == "duplicate-operation": fence["operations"].append("op")
+            elif change == "nonarray": fence["operations"] = "op warm"
+            else: fence["operations"] = ["different-operation"]
+            self.assertIsNone(probe.capture_context(record["trace"], record), change)
 
     def isolated_record(self, verdict="PASS"):
         return {"verdict": verdict, "setupVerified": True, "captureAttempted": True,
@@ -145,9 +159,9 @@ class ProbeTests(unittest.TestCase):
         window = {"hwnd": 99, "pid": 1, "title": "CaptureProbe case", "minimized": False,
                   "visible": True, "centerOwned": True, "centerWindow": 99, "rect": [0, 0, 100, 100]}
         snapshot = {"window": window, "cover": None}
-        start = {"type": "capture-operation-start", "operationId": "op", "fixturePath": "/report", "epoch": 3, "requested": copy.deepcopy(target)}
+        start = {"type": "capture-operation-start", "operationId": "op", "fixturePath": "/report", "epoch": 3, "atMs": 10, "requested": copy.deepcopy(target)}
         native = {"type": "capture-native-send", "operationId": "op", "captureId": "capture", "target": copy.deepcopy(target),
-                  "epoch": 3, "windowControl": {"valid": True, "snapshot": copy.deepcopy(snapshot)}, "controlElapsedMs": 2,
+                  "epoch": 3, "atMs": 20, "windowControl": {"valid": True, "snapshot": copy.deepcopy(snapshot)}, "controlElapsedMs": 2,
                   "historyLost": False, "attachmentHistory": [{"atMs":0,"reason":"attach-acknowledged","epoch":3}]}
         end = {"type": "capture-wrapper-answer", "operationId": "op", "epoch": 3, "invalidations": [],
                "atMs": 30, "attempts": [{"captureId": "capture", "target": copy.deepcopy(target), "epoch": 3, "nativePending": False, "elapsedMs": 10}]}
@@ -156,7 +170,8 @@ class ProbeTests(unittest.TestCase):
         warm_end = dict(copy.deepcopy(end), operationId="warm", atMs=3)
         return {"caseId": "case", "state": "normal", "chromePid": 1, "probePid": 2, "expectedHwnd": 99,
                 "setupVerified": True, "traceVerified": True, "windowBefore": copy.deepcopy(snapshot), "windowAfter": copy.deepcopy(snapshot),
-                "trace": [start, native, end, warm_start, warm_native, warm_end], "capture": {"exit": 0, "killedAtDeadline": False, "response": {"success": True}},
+                "trace": [start, native, end, warm_start, warm_native, warm_end,
+                    {"type": "worker-teardown-start", "atMs": 100, "traceComplete": True, "operations": ["op", "warm"]}], "capture": {"exit": 0, "killedAtDeadline": False, "response": {"success": True}},
                 "image": {"pixelValid": True, "dimensionsValid": True}}
 
     def test_case_verdict_rejects_changed_state_exit_kill_exception_and_unknown_trace(self):
@@ -218,7 +233,7 @@ class ProbeTests(unittest.TestCase):
         end.update(type="capture-wrapper-error", error="relay timeout after 25000ms: chrome.debugger.sendCommand(Page.captureScreenshot)")
         end["attempts"][0].update(nativePending=True, elapsedMs=25001)
         dom = {"type": "dom-native-answer", "operationId": "op", "captureId": "capture", "target": record["trace"][1]["target"],
-               "epoch": 3, "nativeStillPending": True, "wrapperStillPending": True, "result": {"rows":123,"ready":"complete"}}
+               "epoch": 3, "atMs": 40, "nativeStillPending": True, "wrapperStillPending": True, "result": {"rows":123,"ready":"complete"}}
         record["trace"].append(dom)
         self.assertTrue(probe.report_signature_matches(record["trace"], 123, record))
         for field, value in [("epoch",4),("nativeStillPending",False),("wrapperStillPending",False)]:
@@ -257,12 +272,12 @@ class ProbeTests(unittest.TestCase):
         page = {"generation":"5aa55aa5", "events":[], "globals":["fixtureState"], "mutations":100, "requests":[]}
         record["pageBefore"] = page
         record["trace"].append({"type":"page-after-answer", "operationId":"op", "captureId":"capture",
-            "target":copy.deepcopy(sent["target"]), "epoch":3, "result":copy.deepcopy(page)})
+            "target":copy.deepcopy(sent["target"]), "epoch":3, "atMs":40, "result":copy.deepcopy(page)})
         record["trace"][2]["attempts"][0]["nativeOutcome"] = "answer"
         record["trace"].extend([{"type":"capture-native-answer","operationId":"op","captureId":"capture",
             "target":copy.deepcopy(sent["target"]),"epoch":3,"responseOwned":True,"nativeReceivedMs":20,"ownershipVerifiedMs":21,"atMs":22},
             {"type":"native-image-ack","operationId":"op","captureId":"capture",
-            "target":copy.deepcopy(sent["target"]),"epoch":3,"saved":{"sha256":"f"*64}}])
+            "target":copy.deepcopy(sent["target"]),"epoch":3,"atMs":35,"saved":{"sha256":"f"*64}}])
         record["nativeImage"]={"sha256":"f"*64,"freshnessValid":True}
         record["nativeMonitor"] = {"calibrated":True,"installed":4,"unhooked":[True]*4,
             "pumpStoppedExpected":True,"overflow":False,"errors":[],"startTick":1000,"endTick":1100,"events":[],

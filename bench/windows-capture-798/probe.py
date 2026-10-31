@@ -79,6 +79,10 @@ def instrument(extension, target, base_url, case_id, pending_dom_control=True, c
         raise RuntimeError("attachment health boundary changed; review the instrumentation")
     generated = generated.replace(health_anchor, "const attachmentHealth = fixtureHealth(createAttachmentHealth());")
     generated = generated.replace(RETURN_ANCHOR, replacement)
+    close_anchor = "  if (method === 'Target.closeTarget') {"
+    if original.count(close_anchor) != 1:
+        raise RuntimeError("target close boundary changed; review the instrumentation")
+    generated = generated.replace(close_anchor, close_anchor + "\n    await fixtureBeforeTeardown(params?.targetId);", 1)
     generated = generated.replace("const HOST_NAME =", observer + "\nconst HOST_NAME =", 1)
     path.write_text(generated, encoding="utf-8")
     diff = "".join(difflib.unified_diff(manifest_source.splitlines(True),
@@ -540,10 +544,27 @@ def capture_trace_complete(events):
 
 
 def capture_context(events, record):
-    # Teardown detach is expected, and must not rewrite capture-time validity.
-    cleanup = [e["receivedMonotonic"] for e in events if e.get("type") == "host-cleanup-start"]
-    if cleanup:
-        events = [e for e in events if e.get("receivedMonotonic", float("inf")) < min(cleanup)]
+    # Delivery can reorder across HTTP requests. Use a drained worker-clock
+    # fence, not the server's receipt order, to separate capture from teardown.
+    fences = [e for e in events if e.get("type") == "worker-teardown-start"]
+    if len(fences) != 1 or fences[0].get("traceComplete") is not True:
+        return None
+    fence = fences[0]
+    cutoff = fence.get("atMs")
+    if type(cutoff) not in (int, float) or not math.isfinite(cutoff):
+        return None
+    operations = fence.get("operations")
+    if not isinstance(operations, list) or not all(isinstance(op, str) and op for op in operations):
+        return None
+    if len(operations) != len(set(operations)):
+        return None
+    announced = {e.get("operationId") for e in events if e.get("type") == "capture-operation-start"}
+    if announced != set(operations):
+        return None
+    relevant = [e for e in events if e.get("operationId") in operations]
+    if any(type(e.get("atMs")) not in (int, float) or not math.isfinite(e["atMs"]) for e in relevant):
+        return None
+    events = sorted((e for e in relevant if e["atMs"] < cutoff), key=lambda e: e["atMs"])
     starts = report_operations(events)
     if len(starts) != 1:
         return None

@@ -224,3 +224,17 @@ The pinned rust-cache action preserves dependency caches even when a diagnostic
 case makes the job fail. Every matrix run still executes the exact-source
 Release build and records its executable hash. Cache reuse is not acceptance of
 an earlier binary. The cleanup-only controls continue to skip Cargo.
+
+## Worker-observed teardown boundary
+
+HTTP delivery order cannot determine when a worker observed a detach. The
+generated worker drains acknowledgments for its earlier trace requests, with
+bounded timeouts, then emits a worker-clock fence before Target.closeTarget.
+The fence lists retained capture operation IDs. The verifier requires that
+complete fence and classifies trace events using worker timestamps. A detach
+observed before the fence remains invalidating even when delivered after host
+cleanup started. Close-time events stay in the raw trace as teardown evidence.
+Missing/failed acknowledgments, mismatched retained IDs or invalid timestamps
+remain INCONCLUSIVE. This is bounded observation of the worker's events, not a
+claim about events it never observed. The handshake adds loopback requests only
+during disposable-fixture cleanup and leaves shipped extension code unchanged.
