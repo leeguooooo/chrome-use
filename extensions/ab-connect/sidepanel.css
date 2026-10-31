@@ -567,3 +567,11 @@ html[data-mode="tab"] .conversation-menu { left:auto; right:auto; width:min(calc
 .teach-source { width:100%; box-sizing:border-box; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .teach-actions { display:flex; gap:6px; margin-top:6px; }
 .teach-run { user-select:all; overflow-wrap:anywhere; }
+
+.operator-card { margin:6px 12px; padding:8px 10px; border-radius:8px; background:var(--surface); font-size:12px; color:var(--ink); }
+.operator-head { display:flex; justify-content:space-between; align-items:center; gap:8px; font-weight:600; }
+.operator-head button { flex:none; border:0; background:transparent; color:var(--muted); cursor:pointer; font-size:12px; }
+.operator-detail { margin-top:2px; color:var(--muted); overflow-wrap:anywhere; }
+.operator-transcript { margin-top:6px; max-height:40vh; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }
+.operator-turn { margin-top:6px; }
+.operator-turn b { display:block; color:var(--muted); font-weight:600; }

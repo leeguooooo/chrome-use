@@ -194,6 +194,12 @@ pub async fn run_daemon(session: &str) {
     let pid_path = socket_dir.join(format!("{}.pid", session));
     let _ = fs::write(&pid_path, process::id().to_string());
 
+    // Kept after exit: the only link from this session's tabs to its agent.
+    let _ = fs::write(
+        socket_dir.join(format!("{}.origin.json", session)),
+        crate::flags::session_origin().to_string(),
+    );
+
     let version_path = socket_dir.join(format!("{}.version", session));
     let _ = fs::write(&version_path, crate::upgrade_handoff::build_version());
     // Tell a future CLI of another version that this daemon can hand its tab

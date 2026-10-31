@@ -3795,5 +3795,12 @@
   "panel_teach_save": {"message": "保存脚本"},
   "panel_teach_discard": {"message": "放弃"},
   "panel_teach_close": {"message": "关闭"},
-  "panel_teach_saved": {"message": "已保存到 $PATH$。运行命令：", "placeholders": {"path": {"content": "$1"}}}
+  "panel_teach_saved": {"message": "已保存到 $PATH$。运行命令：", "placeholders": {"path": {"content": "$1"}}},
+  "panel_operator_context": {"message": "查看上下文"},
+  "panel_operator_live": {"message": "$VALUE$ 正在操作", "placeholders": {"value": {"content": "$1"}}},
+  "panel_operator_ended": {"message": "由 $VALUE$ 打开（会话已结束）", "placeholders": {"value": {"content": "$1"}}},
+  "panel_operator_unknown_agent": {"message": "某个智能体"},
+  "panel_operator_last": {"message": "最近：$VALUE$", "placeholders": {"value": {"content": "$1"}}},
+  "panel_operator_loading": {"message": "读取中…"},
+  "panel_operator_no_context": {"message": "这个对话没有可读取的上下文。"}
 }

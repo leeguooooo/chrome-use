@@ -26,6 +26,7 @@ mod heic;
 mod injection_guard;
 mod inspect;
 mod inspection;
+mod operator;
 mod options;
 mod progress;
 mod project_hosts;
@@ -659,6 +660,7 @@ pub fn handle_for_profile(
             configuration::handle(operation, params, profile)
         }
         "conversationList"
+        | "tabOperator"
         | "agentInspect"
         | "conversationCreate"
         | "conversationSessionList"

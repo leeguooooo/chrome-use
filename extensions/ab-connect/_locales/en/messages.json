@@ -3795,5 +3795,12 @@
   "panel_teach_save": {"message": "Save script"},
   "panel_teach_discard": {"message": "Discard"},
   "panel_teach_close": {"message": "Close"},
-  "panel_teach_saved": {"message": "Saved to $PATH$. Run it with:", "placeholders": {"path": {"content": "$1"}}}
+  "panel_teach_saved": {"message": "Saved to $PATH$. Run it with:", "placeholders": {"path": {"content": "$1"}}},
+  "panel_operator_context": {"message": "View context"},
+  "panel_operator_live": {"message": "Operated by $VALUE$", "placeholders": {"value": {"content": "$1"}}},
+  "panel_operator_ended": {"message": "Opened by $VALUE$ (session ended)", "placeholders": {"value": {"content": "$1"}}},
+  "panel_operator_unknown_agent": {"message": "an agent"},
+  "panel_operator_last": {"message": "last: $VALUE$", "placeholders": {"value": {"content": "$1"}}},
+  "panel_operator_loading": {"message": "Loading…"},
+  "panel_operator_no_context": {"message": "No readable context for this conversation."}
 }

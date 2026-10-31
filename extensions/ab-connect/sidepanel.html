@@ -70,6 +70,11 @@
       <button id="retryPending" class="quiet" type="button" data-i18n="sidepanel_retry_same_message">Retry same message</button>
       <button id="clearPending" class="quiet" type="button" data-i18n="sidepanel_clear_send_warning">Clear send warning</button>
     </section>
+    <section id="operatorCard" class="operator-card" hidden>
+      <div class="operator-head"><span id="operatorTitle"></span><button id="operatorContext" type="button" data-i18n="panel_operator_context">View context</button></div>
+      <div id="operatorDetail" class="operator-detail"></div>
+      <div id="operatorTranscript" class="operator-transcript" hidden></div>
+    </section>
     <form id="composer" class="composer">
       <div class="input-box">
         <div id="pickHint" class="pick-hint" role="status" hidden><span data-i18n="sidepanel_pick_hint">Click an element on the page · Shift+click for several · Esc cancels</span><button id="pickCancel" class="quiet" type="button" data-i18n="sidepanel_pick_cancel">Cancel</button></div>
