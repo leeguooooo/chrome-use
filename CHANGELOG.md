@@ -20,7 +20,6 @@ Works with extension ab-connect 0.5.100.
 
 ## 1.5.275
 
-<!-- release:start -->
 Works with extension ab-connect 0.5.97.
 
 ### Fixes
@@ -36,7 +35,6 @@ Works with extension ab-connect 0.5.97.
 - @leeguooooo
 - @euvoor
 - @Jerryx333
-<!-- release:end -->
 
 ## 1.5.274
 
