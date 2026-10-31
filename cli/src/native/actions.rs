@@ -9190,11 +9190,10 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     }
 
     let window_preparation = mgr.prepare_screenshot_window(allow_window_restore).await?;
-    if let Some(info) = window_preparation
+    if window_preparation
         .as_ref()
-        .filter(|info| info["restored"] == true)
+        .is_some_and(|info| info["restored"] == true)
     {
-        eprintln!("{} Chrome reports window {} restored from minimized to normal; chrome-use leaves it restored.", crate::color::warning_indicator(), info["windowId"]);
         let after_restore_url = mgr.get_url().await?;
         if after_restore_url != live_url {
             return Err("screenshot_target_changed_after_restore: Chrome reports the window restored, but its document changed; inspect the page before capturing".into());

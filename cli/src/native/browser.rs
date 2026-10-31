@@ -5632,8 +5632,11 @@ impl BrowserManager {
                 if allow_restore {
                     return Err("screenshot_window_restore_unavailable: update the extension to 0.5.101 or later".into());
                 }
-                eprintln!("{} Screenshot window preflight is unavailable on this extension; legacy capture behavior applies. Update the extension for minimized-window detection.", crate::color::warning_indicator());
-                Ok(None)
+                Ok(Some(serde_json::json!({
+                    "available": false,
+                    "restored": false,
+                    "warning": "Screenshot window preflight is unavailable on this extension; legacy capture behavior applies. Update the extension for minimized-window detection."
+                })))
             }
             Err(error) => Err(screenshot_window_preparation_error(error, allow_restore)),
         }

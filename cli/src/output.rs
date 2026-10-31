@@ -2118,6 +2118,14 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                         color::success_indicator()
                     };
                     println!("{} Screenshot saved to {}", indicator, color::green(path));
+                    if let Some(info) = data.get("windowPreparation") {
+                        if info["restored"] == true {
+                            eprintln!("{} Chrome reports window {} restored from minimized to normal; chrome-use leaves it restored and focus may have changed.", color::warning_indicator(), info["windowId"]);
+                        }
+                        if let Some(note) = info.get("warning").and_then(|v| v.as_str()) {
+                            eprintln!("{} {}", color::warning_indicator(), note);
+                        }
+                    }
                     if let Some(b64) = data.get("base64").and_then(|v| v.as_str()) {
                         println!("{b64}");
                     }
