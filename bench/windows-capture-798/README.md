@@ -238,3 +238,26 @@ Missing/failed acknowledgments, mismatched retained IDs or invalid timestamps
 remain INCONCLUSIVE. This is bounded observation of the worker's events, not a
 claim about events it never observed. The handshake adds loopback requests only
 during disposable-fixture cleanup and leaves shipped extension code unchanged.
+
+## Windows screenshot window policy acceptance
+
+Dispatch `experiment: window-policy`, `samples: 1`, `rows: 1000`, `dpr: 1` and
+`pending_dom_control: false`. Three capture kinds each run once with default
+refusal and once with `--allow-window-restore`, using six fresh profiles and the
+exact-source CLI. Generation is changed after minimization in every case.
+
+Default refusal must return the named minimized-window error, retain the exact
+minimized HWND/foreground/rectangle, send no report native capture, leave no
+requested image and preserve the fixture snapshot. A safe DOM read after this
+known refusal checks the fixture; no timed-out native capture exists to reset.
+Explicit restoration must return an actual fresh correctly sized/sentinel PNG,
+with one stable native capture/raw-image acknowledgment and the same now-normal
+window. Focus, visibility and trusted resize effects are recorded as authorized
+restoration effects. Globals, mutations, resource requests and unrelated input
+remain checked. The active tab is never changed by the controller.
+
+Policy PASS distinguishes `refused_without_capture` from `captured` and reports
+verified refusal/image counts plus every CLI exit code. A correct refusal is not
+a successful requested image. Missing lifecycle/teardown/cleanup proof remains
+INCONCLUSIVE. The original diagnostic modes and their strict minimized-state
+contracts remain separate.

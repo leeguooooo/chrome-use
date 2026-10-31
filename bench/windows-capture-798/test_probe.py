@@ -104,7 +104,7 @@ class ProbeTests(unittest.TestCase):
             self.assertIsNone(probe.capture_context(record["trace"], record), change)
 
     def isolated_record(self, verdict="PASS"):
-        return {"verdict": verdict, "setupVerified": True, "captureAttempted": True,
+        return {"verdict": verdict, "setupVerified": True, "captureAttempted": True, "chromePid": 7,
             "sessionCleanup": {"exit": 0, "killedAtDeadline": False, "response": {"success": True}},
             "browserTreeTerminated": True, "browserTreeKillExit": 0, "browserExitCode": 1,
             "browserCleanup": {"taskkill": {"exit": 0, "stderr": ""}, "parentExit": 1,
@@ -121,6 +121,9 @@ class ProbeTests(unittest.TestCase):
         self.assertTrue(probe.can_start_next_case(record))
         record["browserCleanup"]["ownedHandleExits"][0]["signaled"] = False
         self.assertFalse(probe.can_start_next_case(record))
+        wrong_root = self.isolated_record()
+        wrong_root["chromePid"] = 99
+        self.assertFalse(probe.confirmed_case_cleanup(wrong_root))
 
     def test_uncertain_measurement_can_continue_only_after_confirmed_isolation(self):
         import copy
@@ -284,6 +287,71 @@ class ProbeTests(unittest.TestCase):
             "samples":[{"tick":t,"identityValid":True,"window":copy.deepcopy(record["windowBefore"]["window"])} for t in (1000,1020,1040,1060,1080,1100)]}
         record["image"]["freshnessValid"] = True
         return record
+
+    def window_policy_record(self, allow=True):
+        import copy
+        record = self.candidate_record()
+        cleanup = self.isolated_record()
+        for key in ["sessionCleanup","browserTreeTerminated","browserTreeKillExit","browserExitCode","browserCleanup","captureAttempted"]:
+            record[key] = copy.deepcopy(cleanup[key])
+        proof = record["browserCleanup"]
+        proof["before"][0].update(ProcessId=record["chromePid"], ParentProcessId=0)
+        proof["ownedHandleExits"][0].update(pid=record["chromePid"], parentPid=0)
+        record.update(windowPolicyExperiment=True, candidateExperiment=False, policyAllowRestore=allow)
+        if allow:
+            record["captureState"] = "restored"
+            record["windowAfter"]["window"]["minimized"] = False
+            record["trace"][1]["windowControl"]["snapshot"]["window"]["minimized"] = False
+            record["capture"]["response"]["data"] = {"windowPreparation": {
+                "platform":"win","applicable":True,"restored":True,"before":"minimized","state":"normal","windowId":9}}
+            record["nativeImage"].update(pixelValid=True, dimensionsValid=True)
+        else:
+            record["capture"].update(exit=1,response={"success":False,"error":"screenshot_window_minimized: no capture was sent"})
+            record["trace"] = [e for e in record["trace"] if e.get("operationId") != "op"]
+            next(e for e in record["trace"] if e.get("type") == "worker-teardown-start")["operations"] = ["warm"]
+            record.pop("image");record.pop("nativeImage")
+            record["pageAfterRefusal"] = copy.deepcopy(record["pageBefore"])
+        return record
+
+    def test_window_policy_requires_actual_fresh_restored_pixels(self):
+        import copy
+        good = self.window_policy_record()
+        self.assertEqual(probe.case_verdict(good), "PASS")
+        for mutate in [lambda r:r["image"].update(freshnessValid=False),
+                lambda r:r.pop("nativeImage"),
+                lambda r:r["capture"].update(exit=1,response={"success":False,"data":None}),
+                lambda r:r["capture"]["response"]["data"]["windowPreparation"].update(restored=False),
+                lambda r:r["capture"]["response"]["data"]["windowPreparation"].update(windowId=-1),
+                lambda r:r["trace"][2]["attempts"][0].update(nativePending=True),
+                lambda r:next(e for e in r["trace"] if e.get("type")=="capture-native-answer").update(nativeReceivedMs=99),
+                lambda r:r["windowAfter"]["window"].update(minimized=True),
+                lambda r:r["browserCleanup"]["ownedHandleExits"][0].update(signaled=False)]:
+            bad=copy.deepcopy(good);mutate(bad)
+            self.assertNotEqual(probe.case_verdict(bad), "PASS")
+
+    def test_window_policy_refusal_is_not_a_successful_image_capture(self):
+        import copy
+        good = self.window_policy_record(False)
+        self.assertEqual(probe.case_verdict(good), "PASS")
+        self.assertEqual(good["capture"]["exit"], 1)
+        for mutate in [lambda r:r["capture"].update(exit=0,response={"success":True}),
+                lambda r:r["windowAfter"]["window"].update(minimized=False),
+                lambda r:r.update(pageAfterRefusal={}),lambda r:r.update(image={"pixelValid":True})]:
+            bad=copy.deepcopy(good);mutate(bad)
+            self.assertNotEqual(probe.case_verdict(bad), "PASS")
+
+    def test_window_policy_allows_reported_focus_effects_but_refuses_input_or_page_mutation(self):
+        import copy
+        good = self.window_policy_record()
+        page = next(e for e in good["trace"] if e.get("type") == "page-after-answer")["result"]
+        page["events"].append({"type":"resize","trusted":True})
+        self.assertEqual(probe.case_verdict(good), "PASS")
+        bad=copy.deepcopy(good)
+        next(e for e in bad["trace"] if e.get("type") == "page-after-answer")["result"]["events"].append({"type":"keydown","trusted":True})
+        self.assertNotEqual(probe.case_verdict(bad), "PASS")
+        bad=copy.deepcopy(good)
+        next(e for e in bad["trace"] if e.get("type") == "page-after-answer")["result"]["mutations"] += 1
+        self.assertNotEqual(probe.case_verdict(bad), "PASS")
 
     def test_native_monitor_rejects_zero_scope_before_loading_windows_apis(self):
         from native_monitor import NativeWindowMonitor
