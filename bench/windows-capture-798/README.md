@@ -174,3 +174,13 @@ have verified failures. Individual ISSUES counts and evidence are retained.
 Neither continuing independent cases nor finishing the schedule can turn an
 unknown case into PASS. All pixel, freshness, page-state and window checks stay
 in force.
+
+## Cleanup-only diagnosis
+
+The `cleanup` workflow option downloads pinned Chrome for Testing
+156.0.8078.80 from Google's public archive and skips Rust, Node and the screenshot
+matrix. Three fresh about:blank profiles capture taskkill exit/stdout/stderr,
+parent exit and process snapshots before/after. Observed survivors or an error
+stop further samples. These snapshots are diagnostic evidence, not a replacement
+for the matrix's complete-cleanup gate. No maintainer browser, real site or
+account is used. Raw taskkill stdout/stderr is also retained by the full matrix.

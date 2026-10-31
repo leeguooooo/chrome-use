@@ -897,6 +897,8 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
                     raise RuntimeError("Chrome parent already exited; descendant teardown was not acknowledged")
                 killed = subprocess.run(["taskkill", "/PID", str(chrome.pid), "/T", "/F"], capture_output=True, timeout=20)
                 record["browserTreeKillExit"] = killed.returncode
+                record["browserTreeKillStdout"] = killed.stdout.decode(errors="replace")
+                record["browserTreeKillStderr"] = killed.stderr.decode(errors="replace")
                 record["browserExitCode"] = chrome.wait(timeout=20)
                 if killed.returncode != 0:
                     raise RuntimeError("owned Chrome process-tree termination was not acknowledged")

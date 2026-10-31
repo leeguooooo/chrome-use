@@ -10,6 +10,7 @@ on:
           - original
           - candidates
           - baseline
+          - cleanup
         default: candidates
         required: true
       samples:
@@ -52,25 +53,31 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+      - if: inputs.experiment != 'cleanup'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
           targets: x86_64-pc-windows-msvc
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - if: inputs.experiment != 'cleanup'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .node-version
       - name: Install decoder for pure image checks
+        if: inputs.experiment != 'cleanup'
         run: python -m pip install --disable-pip-version-check Pillow
       - name: Check fixture and diagnostic generator without a browser
+        if: inputs.experiment != 'cleanup'
         run: python bench/windows-capture-798/test_probe.py
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - if: inputs.experiment != 'cleanup'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: cli
           key: x86_64-pc-windows-msvc-release
       - name: Validate inputs and build the exact Release CLI
+        if: inputs.experiment != 'cleanup'
         shell: pwsh
         run: |
           if ($env:PROBE_EXPERIMENT -notmatch '^(original|candidates|baseline)$') { throw 'invalid experiment' }
@@ -87,6 +94,7 @@ jobs:
           cargo --version | Out-File probe-artifacts/toolchain.txt
           rustc --version | Out-File probe-artifacts/toolchain.txt -Append
       - name: Install isolated Chrome for Testing and image decoder
+        if: inputs.experiment != 'cleanup'
         shell: pwsh
         run: |
           & $env:PROBE_BINARY install 2>&1 | Tee-Object probe-artifacts/chrome-install.log
@@ -99,11 +107,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Image decoder install failed' }
           python -m pip freeze | Out-File probe-artifacts/python-packages.txt
       - name: Run the Windows relay capture matrix
+        if: inputs.experiment != 'cleanup'
         shell: pwsh
         run: |
           $control = if ($env:PROBE_PENDING_DOM -eq 'true') { '--pending-dom-control' } else { '--no-pending-dom-control' }
           python bench/windows-capture-798/probe.py $control --experiment $env:PROBE_EXPERIMENT --binary "$env:PROBE_BINARY" --chrome "$env:PROBE_CHROME" --extension extensions/ab-connect --output probe-artifacts/results --samples $env:PROBE_SAMPLES --rows $env:PROBE_ROWS --dpr $env:PROBE_DPR
           if ($LASTEXITCODE -ne 0) { throw "Probe verdict is not PASS (exit $LASTEXITCODE); inspect summary and raw evidence" }
+      - name: Diagnose owned Chrome process-tree cleanup without a CLI build
+        if: inputs.experiment == 'cleanup'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path probe-artifacts -Force | Out-Null
+          $archive = Join-Path $env:RUNNER_TEMP 'cleanup-chrome.zip'
+          $destination = Join-Path $env:RUNNER_TEMP 'cleanup-chrome'
+          curl.exe --fail --location --max-time 120 'https://storage.googleapis.com/chrome-for-testing-public/156.0.8078.80/win64/chrome-win64.zip' --output $archive
+          if ($LASTEXITCODE -ne 0) { throw 'Chrome for Testing download failed' }
+          Expand-Archive -Path $archive -DestinationPath $destination
+          $chrome = Join-Path $destination 'chrome-win64/chrome.exe'
+          python bench/windows-capture-798/cleanup_probe.py --chrome $chrome --output probe-artifacts/cleanup
+          if ($LASTEXITCODE -ne 0) { throw 'Cleanup diagnostic is not PASS; inspect raw taskkill output' }
       - name: Retain diagnostic evidence even on failure
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

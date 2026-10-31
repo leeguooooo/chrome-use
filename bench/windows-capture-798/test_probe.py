@@ -367,6 +367,13 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(kwargs["env"]["PROBE_VERSION_EXE"], str(binary))
         self.assertNotIn(str(binary), args[0][-1])
 
+    def test_cleanup_diagnostic_cannot_launch_a_local_browser(self):
+        result = subprocess.run([sys.executable, str(Path(__file__).with_name("cleanup_probe.py")),
+            "--chrome", "/does-not-exist", "--output", "/does-not-exist"],
+            capture_output=True, text=True, env=dict(os.environ, GITHUB_ACTIONS="false"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ephemeral Windows GitHub Actions", result.stderr)
+
     def test_host_environment_guard_prevents_local_browser_execution(self):
         result = subprocess.run([sys.executable, str(Path(__file__).with_name("probe.py")),
             "--binary", "/does-not-exist", "--chrome", "/does-not-exist", "--extension", ".", "--output", "/does-not-exist"],
