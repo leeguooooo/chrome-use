@@ -70,11 +70,15 @@ class FormFixture:
         <label>Password<input id="password" name="password" type="password" autocomplete="current-password"></label>
         <button type="submit">Do not submit</button></form>
         <script>
+        const recordedEvents=[];
+        window.fixtureState=()=>({caseId:'CASE',events:recordedEvents.slice()});
         for(const type of ['focus','blur','keydown','keyup','visibilitychange','submit'])
           document.addEventListener(type,event=>{
             if(type==='submit')event.preventDefault();
-            fetch('/event',{method:'POST',body:JSON.stringify({type,trusted:event.isTrusted,key:event.key||null,
-              visibility:document.visibilityState,atMs:performance.now()})});
+            const observed={type,trusted:event.isTrusted,key:event.key||null,
+              visibility:document.visibilityState,atMs:performance.now()};
+            recordedEvents.push(observed);
+            fetch('/event',{method:'POST',body:JSON.stringify(observed)});
           },true);
         </script>'''.replace('CASE', case).encode()
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -112,6 +116,7 @@ def native_focus(windows, hwnd, pid, title):
     user32.SetForegroundWindow.argtypes=[wintypes.HWND];user32.SetForegroundWindow.restype=wintypes.BOOL
     user32.SetForegroundWindow(hwnd)
     focused = wait_for(lambda: windows.state(hwnd), lambda w:w['foreground']==hwnd, 2)
+    if focused['visible'] is not True:raise RuntimeError('foreground fixture window is not visible')
     return before, focused
 
 
@@ -129,6 +134,9 @@ def send_escape(hwnd):
     user32=ctypes.WinDLL('user32',use_last_error=True)
     user32.GetForegroundWindow.restype=wintypes.HWND
     if user32.GetForegroundWindow()!=hwnd: raise RuntimeError('foreground changed; no input sent')
+    user32.GetAsyncKeyState.argtypes=[ctypes.c_int];user32.GetAsyncKeyState.restype=wintypes.SHORT
+    if any(user32.GetAsyncKeyState(key)&0x8000 for key in [16,17,18,91,92]):
+        raise RuntimeError('modifier key is held; no native Escape sent')
     user32.SendInput.argtypes=[wintypes.UINT,ctypes.POINTER(Input),ctypes.c_int];user32.SendInput.restype=wintypes.UINT
     inputs=(Input*2)(Input(1,Payload(key=Key(27,1,0,0,0))),Input(1,Payload(key=Key(27,1,2,0,0))))
     count=user32.SendInput(2,inputs,ctypes.sizeof(Input))
@@ -184,7 +192,7 @@ def main():
                     '--user-data-dir='+str(profile),'--remote-debugging-port=0',
                     '--load-extension='+str(extension)+','+str(args.bitwarden),
                     '--disable-extensions-except='+str(extension)+','+str(args.bitwarden),
-                    '--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost',
+                    '--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1',
                     '--window-size=1280,800','about:blank'],env=env,stdout=log,stderr=log)
                 record['chromePid']=chrome.pid;common=None
                 try:
@@ -199,7 +207,9 @@ def main():
                     browser=files[0].name.removeprefix('relay-cdp-url-')
                     common=[str(args.binary),'--session',case,'--browser',browser,'--window','dedicated','--json']
                     invoke=lambda name,*words:execute(common+list(words),env,args.output/name,timeout=40)
-                    record['open']=invoke('open','open',fixture.url);checked(record['open'])
+                    record['open']=invoke('open','open',fixture.url)
+                    opened=checked(record['open'])
+                    if opened.get('url')!=fixture.url:raise RuntimeError('fixture URL not reached: '+str(opened.get('url')))
                     hwnd=wait_for(lambda:windows.find(chrome.pid,'BitwardenFixture '+case),lambda x:x is not None,5)
                     record['windowBefore']=windows.state(hwnd)
                     # One focus action only. A failure may mean focus took effect:
@@ -224,11 +234,15 @@ def main():
                         else:record['mechanism']='menu-absent-after-native-focus'
                         record['menuAfterNative']=wait_for(lambda:menu_frames(our_endpoint,fixture.url,bw_identity['id']),
                             lambda x:not x['bitwardenFrames'],4)
-                    record['accessAfter']=invoke('access-after','eval','document.title')
+                    record['accessAfter']=invoke('access-after','eval','({title:document.title,fixture:window.fixtureState()})')
                     after_data=checked(record['accessAfter'])
-                    if after_data.get('result') != 'BitwardenFixture '+case:raise RuntimeError('recovery read answered from a different page')
+                    observed=after_data.get('result') or {}
+                    if observed.get('title') != 'BitwardenFixture '+case or (observed.get('fixture') or {}).get('caseId')!=case:
+                        raise RuntimeError('recovery read answered from a different page')
                     record['finalMenu']=menu_frames(our_endpoint,fixture.url,bw_identity['id'])
-                    with fixture.lock:record['fixtureEvents']=list(fixture.events)
+                    with fixture.lock:record['receivedFixtureEvents']=list(fixture.events)
+                    record['fixtureEvents']=observed['fixture'].get('events')
+                    if not isinstance(record['fixtureEvents'],list):raise RuntimeError('fixture history missing')
                     if record['finalMenu']['bitwardenFrames']:raise RuntimeError('menu reopened after recovery read')
                     if any(e['type']=='submit' or (e['type']=='visibilitychange' and e['trusted'] is not True) for e in record['fixtureEvents']):
                         raise RuntimeError('unexpected submission or synthetic visibility event')
