@@ -38,7 +38,7 @@ def descendants(snapshot, root, ancestors=()):
     creation_time(parents[root])
     selected = {root}
     while True:
-        expanded = selected | {p["ProcessId"] for p in snapshot
+        expanded = selected | {p["ProcessId"] for p in parents.values()
             if p["ParentProcessId"] in selected
             and creation_time(p) >= creation_time(parents[p["ParentProcessId"]])}
         if expanded == selected:
