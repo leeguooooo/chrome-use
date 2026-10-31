@@ -3,6 +3,7 @@ import { createPanelOnboarding } from './onboarding.js';
 import { PanelTimeline, phaseLabels, assessmentLabel, outcomeLabel, stepVerdict, verdictLabels, stepActions, actingPages, notStarted } from './panel-state.js';
 import { heifConverter, isHeif, prepareImage } from './image-attachment.js';
 import { renderMarkdown } from './markdown.js';
+import { operatorSummary, targetIdOfTab } from './tab-operator.js';
 import { oldBuildBlocking } from './panel-errors.js';
 import { t, messageMap, applyI18n, i18nReady } from './i18n.js';
 import { renderReplies, validReplies } from './inspect-replies.js';
@@ -2004,6 +2005,46 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
   grantRevoke?.addEventListener('click', () => void takeBack().catch(error));
   openInTab?.addEventListener('click', () => void tabs.create({ url: runtime.getURL(`sidepanel.html?mode=tab${selected ? `&conversation=${encodeURIComponent(selected)}` : ''}`) }).catch(error));
   if (tabs?.onRemoved) tabs.onRemoved.addListener(() => { if (tabMode) void refreshPage().catch(() => {}); });
+  // Who drives the tab this panel looks at; extension UI only, stealth-safe.
+  const operatorNode = id => document.getElementById?.(id);
+  let operatorTarget = null, operatorEpoch = 0;
+  async function refreshOperator() {
+    const card = operatorNode('operatorCard');
+    if (!card) return;
+    const epoch = ++operatorEpoch;
+    let tabId = tabBound ? panelTab : null;
+    if (tabId === null) tabId = (await tabs?.query?.({ active: true, currentWindow: true }))?.[0]?.id ?? null;
+    operatorTarget = await targetIdOfTab(tabId, globalThis.chrome?.debugger);
+    const info = operatorTarget ? await api('tabOperator', { targetId: operatorTarget }) : null;
+    if (epoch !== operatorEpoch) return;
+    const summary = operatorSummary(info, t);
+    card.hidden = !summary;
+    if (!summary) return;
+    operatorNode('operatorTitle').textContent = summary.title;
+    operatorNode('operatorDetail').textContent = summary.detail;
+    operatorNode('operatorContext').hidden = !summary.hasContext;
+    operatorNode('operatorTranscript').hidden = true;
+  }
+  async function showOperatorContext() {
+    const box = operatorNode('operatorTranscript');
+    if (!box.hidden) { box.hidden = true; return; }
+    box.hidden = false; box.textContent = t('panel_operator_loading');
+    try {
+      const { transcript } = await api('tabOperator', { targetId: operatorTarget, transcript: true });
+      box.replaceChildren(...(transcript?.turns || []).map(turn => {
+        const row = document.createElement('div'), who = document.createElement('b');
+        row.className = 'operator-turn'; who.textContent = turn.role;
+        row.append(who, String(turn.text ?? ''));
+        return row;
+      }));
+      if (!box.childNodes.length) box.textContent = t('panel_operator_no_context');
+      box.scrollTop = box.scrollHeight;
+    } catch (error) { box.textContent = String(error.message || error); }
+  }
+  operatorNode('operatorContext')?.addEventListener('click', () => void showOperatorContext());
+  void refreshOperator().catch(() => {});
+  if (tabs?.onActivated) tabs.onActivated.addListener(() => void refreshOperator().catch(() => {}));
+  if (tabs?.onUpdated) tabs.onUpdated.addListener((id, change) => { if (change.status === 'complete') void refreshOperator().catch(() => {}); });
   if (tabs?.onActivated) tabs.onActivated.addListener(() => void refreshPage().catch(() => {}));
   if (tabs?.onUpdated) tabs.onUpdated.addListener((id, change) => { if (change.title || change.url || change.status === 'complete') void refreshPage().catch(() => {}); });
   function readTurnOptions() {

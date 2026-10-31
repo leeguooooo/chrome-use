@@ -715,6 +715,57 @@ fn session_tag(agent_id: &str) -> String {
     format!("{:06x}", session_hash(agent_id) & 0x00ff_ffff)
 }
 
+/// The agent conversation in this environment: `(agent, id)`. Claude Code
+/// exports only its pid; `read_claude` maps a pid to the session it runs.
+fn agent_conversation(
+    vars: &[(String, String)],
+    read_claude: impl Fn(&str) -> Option<String>,
+) -> Option<(&'static str, String)> {
+    let get = |name: &str| {
+        vars.iter()
+            .find(|(k, v)| k == name && !v.is_empty())
+            .map(|(_, v)| v.clone())
+    };
+    get("OPENCODE_SESSION_ID")
+        .or_else(|| get("OCS_OPENCODE_SESSION_ID"))
+        .map(|id| ("opencode", id))
+        .or_else(|| get("CODEX_THREAD_ID").map(|id| ("codex", id)))
+        .or_else(|| {
+            get("CLAUDE_CODE_SESSION_ID")
+                .or_else(|| {
+                    ["CLAUDE_PID", "CMUX_CLAUDE_PID"]
+                        .iter()
+                        .find_map(|k| get(k).and_then(|pid| read_claude(&pid)))
+                })
+                .map(|id| ("claude", id))
+        })
+}
+
+/// What a daemon records about who started it (`<session>.origin.json`).
+pub fn session_origin() -> serde_json::Value {
+    let vars: Vec<(String, String)> = env::vars().collect();
+    let claude = |pid: &str| {
+        if !pid.bytes().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        let root = env::var_os("CLAUDE_CONFIG_DIR")
+            .map(std::path::PathBuf::from)
+            .or_else(|| dirs::home_dir().map(|h| h.join(".claude")))?;
+        let text = std::fs::read(root.join("sessions").join(format!("{pid}.json"))).ok()?;
+        let value: serde_json::Value = serde_json::from_slice(&text).ok()?;
+        value["sessionId"].as_str().map(str::to_string)
+    };
+    let conversation = agent_conversation(&vars, claude);
+    let (agent, id) = conversation.map_or((None, None), |(a, i)| (Some(a), Some(i)));
+    serde_json::json!({
+        "agent": agent,
+        "conversationId": id,
+        "keyedOn": pick_agent_id_with_source(&vars).map(|(key, _)| key),
+        "cwd": env::current_dir().ok(),
+        "startedAt": chrono::Utc::now().timestamp_millis(),
+    })
+}
+
 /// Choose the id to key the session on, in tier order: an explicit/known agent
 /// id, then any var following the `<PRODUCT>_SESSION_ID` convention, then a
 /// terminal id.
@@ -2313,6 +2364,20 @@ mod tests {
         ];
         let clean = clean_args(&input);
         assert_eq!(clean, vec!["open", "example.com"]);
+    }
+
+    #[test]
+    fn the_conversation_comes_from_the_agents_own_variable() {
+        let vars = |k: &str, v: &str| vec![(k.to_string(), v.to_string())];
+        assert_eq!(
+            agent_conversation(&vars("OCS_OPENCODE_SESSION_ID", "ses_a"), |_| None),
+            Some(("opencode", "ses_a".to_string()))
+        );
+        assert_eq!(
+            agent_conversation(&vars("CLAUDE_PID", "7"), |p| Some(format!("id-{p}"))),
+            Some(("claude", "id-7".to_string()))
+        );
+        assert_eq!(agent_conversation(&vars("TERM", "x"), |_| None), None);
     }
 
     #[test]

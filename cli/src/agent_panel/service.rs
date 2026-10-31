@@ -168,6 +168,8 @@ fn operation_seconds(operation: &str) -> u64 {
         "conversationProjectChoose" => 300,
         "conversationProjectList" => 20,
         "conversationResume" => 45,
+        // Reading an OpenCode transcript starts OpenCode.
+        "tabOperator" => 45,
         // `ocs dm` (30 s) after a roster read; the roster alone is two ocs
         // runs of up to 8 s each.
         "inspectDeliver" => 50,
@@ -705,6 +707,53 @@ async fn external_session(
     tokio::task::spawn_blocking(move || sessions::find_file(&agent, &roots, &id))
         .await
         .map_err(|_| "The session could not be read".to_string())?
+}
+
+/// Who drives a tab and, on request, the end of that conversation. Session
+/// text is redacted before it leaves the service.
+async fn tab_operator(params: &Value) -> Result<Value, String> {
+    let target = params["targetId"].as_str().unwrap_or_default();
+    let live: Vec<String> = crate::connection::walk_daemons()
+        .sessions
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    let mut result = super::operator::lookup(&super::operator::socket_dir(), target, &live)?;
+    result["schemaVersion"] = 1.into();
+    if params["transcript"] != json!(true) {
+        return Ok(result);
+    }
+    let origin = result["origin"].clone();
+    let (Some(agent), Some(id)) = (origin["agent"].as_str(), origin["conversationId"].as_str())
+    else {
+        return Ok(result);
+    };
+    if !sessions::supported(agent) || !sessions::valid_id(agent, id) {
+        return Err("The operator's conversation id is not valid".into());
+    }
+    let directory = PathBuf::from(origin["cwd"].as_str().unwrap_or("/"));
+    let history = if agent == "opencode" {
+        let executable = agent_executable(agent, None)?;
+        sessions::opencode_history(&sessions::opencode_export(&executable, &directory, id).await?)
+    } else {
+        let session = external_session(agent, id, None, &directory, None).await?;
+        tokio::task::spawn_blocking(move || sessions::file_history(&session))
+            .await
+            .map_err(|_| "The session history could not be read")?
+    };
+    let mut secrets = redact::Secrets::default();
+    let turns: Vec<Value> = history
+        .turns
+        .iter()
+        .filter_map(|turn| {
+            let data = redact::event("sessionTitle", json!({"title": turn.text}), &mut secrets)?
+                .into_value();
+            Some(json!({"role": turn.role, "text": data["title"]}))
+        })
+        .collect();
+    result["transcript"] =
+        json!({"turns": turns, "partial": history.partial, "omitted": history.omitted});
+    Ok(result)
 }
 
 /// The first line of session text with secrets masked, for a title.
@@ -2033,6 +2082,7 @@ async fn dispatch(
             .map_err(|_| "Inspect & Ask operation did not finish".to_string())?;
             result
         }
+        "tabOperator" => tab_operator(params).await,
         "agentInspect" => {
             let root = engine.lock().await.store.directory.clone();
             super::inspection::inspect(params, &root).await
