@@ -110,7 +110,10 @@ def seed_locked_fixture(endpoint):
     seed = {'global_account_accounts':{user:{'email':'fixture@example.invalid','emailVerified':True,'name':'Disposable fixture'}},
         'global_account_activeAccountId':user, 'global_autofillSettingsLocal_inlineMenuVisibility':2,
         f'user_{user}_token_accessToken':token}
-    expression = '(async()=>{await chrome.storage.local.set(' + json.dumps(seed) + ');return {syntheticAccount:true,version:chrome.runtime.getManifest().version};})()'
+    # The official storage adapter intentionally ignores multi-key change
+    # notifications. Match its per-key serialized writes so derived account
+    # observables adopt the fixture state, then verify adoption separately.
+    expression = '(async()=>{for(const [key,value] of Object.entries(' + json.dumps(seed) + ')){await chrome.storage.local.set({[key]:{__json__:true,value:JSON.stringify(value)}});}return {syntheticAccount:true,version:chrome.runtime.getManifest().version};})()'
     return worker(endpoint, expression)
 
 
@@ -257,7 +260,8 @@ def main():
                     record['extensions']={'bitwarden':bw_identity,'chromeUse':our_identity}
                     record['seed']=seed_locked_fixture(bw_endpoint)
                     record['storageAfterSeed']=fixture_storage_status(bw_endpoint)
-                    record['runtimeAfterSeed']=official_runtime_status(bw_endpoint)
+                    record['runtimeAfterSeed']=wait_for(lambda:official_runtime_status(bw_endpoint),
+                        lambda state:state.get('activeFixture') is True and state.get('authStatus')==1,5)
                     record['stealth']=worker(our_endpoint,'(async()=>{await chrome.storage.local.set({ab_stealth:true});return (await chrome.storage.local.get("ab_stealth")).ab_stealth;})()')
                     files=wait_for(lambda:list(relay.glob('relay-cdp-url-*')),lambda f:len(f)==1,30)
                     browser=files[0].name.removeprefix('relay-cdp-url-')
