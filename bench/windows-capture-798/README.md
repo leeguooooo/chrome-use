@@ -261,3 +261,7 @@ verified refusal/image counts plus every CLI exit code. A correct refusal is not
 a successful requested image. Missing lifecycle/teardown/cleanup proof remains
 INCONCLUSIVE. The original diagnostic modes and their strict minimized-state
 contracts remain separate.
+
+The loopback fixture uses an accept backlog of 128 to accommodate concurrent
+trace deliveries. The per-request timeout and complete-acknowledgment gate
+remain unchanged; a lost trace still prevents a PASS.

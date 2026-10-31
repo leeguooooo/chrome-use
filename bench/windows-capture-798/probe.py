@@ -183,7 +183,13 @@ class Fixture:
                 self.end_headers()
                 self.wfile.write(body.encode())
 
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        class FixtureHTTPServer(http.server.ThreadingHTTPServer):
+            # One CDP call emits several concurrent loopback trace requests.
+            # Python 3.13's default accept backlog is only five; a dropped
+            # request must fail evidence, so accommodate the observer's bursts.
+            request_queue_size = 128
+
+        self.server = FixtureHTTPServer(("127.0.0.1", 0), Handler)
         self.base = "http://127.0.0.1:" + str(self.server.server_port)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
