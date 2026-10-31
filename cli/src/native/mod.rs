@@ -88,3 +88,6 @@ pub mod webdriver;
 mod e2e_tests;
 #[cfg(test)]
 mod parity_tests;
+
+#[cfg(windows)]
+mod windows_stdio;

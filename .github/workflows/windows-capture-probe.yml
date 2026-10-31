@@ -60,6 +60,15 @@ jobs:
         with:
           toolchain: stable
           targets: x86_64-pc-windows-msvc
+      - name: Verify detached Windows stderr handles without a browser
+        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path probe-artifacts -Force | Out-Null
+          rustc --edition 2024 bench/windows-capture-798/stdio_probe.rs -o probe-artifacts/stdio-probe.exe
+          if ($LASTEXITCODE -ne 0) { throw 'stderr regression probe failed to compile' }
+          & ./probe-artifacts/stdio-probe.exe 2>&1 | Tee-Object probe-artifacts/stdio-probe.log
+          if ($LASTEXITCODE -ne 0) { throw 'stderr regression probe failed' }
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
