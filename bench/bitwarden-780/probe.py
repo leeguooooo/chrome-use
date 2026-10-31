@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CI-only real Bitwarden locked-menu diagnostic. Never uses a real vault."""
+"""CI-only Bitwarden UI diagnostic. Synthetic metadata is not a real vault."""
 import argparse
 import base64
 import ctypes
@@ -47,7 +47,40 @@ def discover_workers(port):
     return result
 
 
+
+def fixture_storage_status(endpoint):
+    expression = """(async()=>{
+      const user='78000000-0000-4000-8000-000000000780';
+      const keys=['global_account_accounts','global_account_activeAccountId',
+        'global_autofillSettingsLocal_inlineMenuVisibility','user_'+user+'_token_accessToken'];
+      const raw=await chrome.storage.local.get(keys);
+      const read=key=>raw[key]?.__json__===true?JSON.parse(raw[key].value):raw[key];
+      const accounts=read(keys[0])||{};
+      return {accountCount:Object.keys(accounts).length,fixtureAccountPresent:!!accounts[user],
+        activeFixture:read(keys[1])===user,inlineMenuVisibility:read(keys[2])??null,
+        fixtureTokenPresent:!!read(keys[3])};
+    })()"""
+    return worker(endpoint, expression)
+
+
+def official_content_status(endpoint, tab_id):
+    # Read only Bitwarden's own isolated realm in our disposable web fixture.
+    # No main-world property, DOM node, listener, or event is added.
+    expression = """(async()=>{return await chrome.scripting.executeScript({
+      target:{tabId:__TAB__,frameIds:[0]},world:'ISOLATED',func:()=>{
+        const init=globalThis.bitwardenAutofillInit;
+        return {initialized:!!init,initKeys:init?Object.keys(init):[],
+          overlayKeys:init?.autofillOverlayContentService?Object.keys(init.autofillOverlayContentService):[],
+          overlayMonitoring:init?.autofillOverlayContentService?.isMonitoring??null,
+          visibility:document.visibilityState,focused:document.hasFocus(),
+          activeElement:document.activeElement?.id||null,ready:document.readyState};
+      }});})()""".replace('__TAB__', str(tab_id))
+    return worker(endpoint, expression)
+
+
 def seed_locked_fixture(endpoint):
+    if fixture_storage_status(endpoint)['accountCount'] != 0:
+        raise RuntimeError('fixture profile already has account metadata; refusing to overwrite it')
     user = '78000000-0000-4000-8000-000000000780'
     # A local UI fixture token, never accepted by any server. DNS for external
     # services is disabled for this entire disposable Chrome process.
@@ -167,7 +200,7 @@ def main():
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=True)
     case='bw780-'+uuid.uuid4().hex[:10]
     fixture=FormFixture(case);windows=Windows();record={'caseId':case,'verdict':'INCONCLUSIVE',
-        'scope':'Windows CI + official Bitwarden 2026.10.1, seeded locked UI fixture; no real account or vault',
+        'scope':'Windows CI + official Bitwarden 2026.10.1 and synthetic account metadata; auth/UI state requires observation, no real account or vault',
         'binarySha256':digest(args.binary),'chromeSha256':digest(args.chrome),
         'bitwardenBackgroundSha256':digest(args.bitwarden/'background.js'),
         'sourceExtensionBackgroundSha256':digest(args.extension/'background.js'),
@@ -202,6 +235,7 @@ def main():
                     bw_endpoint,bw_identity=controls['bitwarden'];our_endpoint,our_identity=controls['chromeUse']
                     record['extensions']={'bitwarden':bw_identity,'chromeUse':our_identity}
                     record['seed']=seed_locked_fixture(bw_endpoint)
+                    record['storageAfterSeed']=fixture_storage_status(bw_endpoint)
                     record['stealth']=worker(our_endpoint,'(async()=>{await chrome.storage.local.set({ab_stealth:true});return (await chrome.storage.local.get("ab_stealth")).ab_stealth;})()')
                     files=wait_for(lambda:list(relay.glob('relay-cdp-url-*')),lambda f:len(f)==1,30)
                     browser=files[0].name.removeprefix('relay-cdp-url-')
@@ -212,9 +246,16 @@ def main():
                     if opened.get('url')!=fixture.url:raise RuntimeError('fixture URL not reached: '+str(opened.get('url')))
                     hwnd=wait_for(lambda:windows.find(chrome.pid,'BitwardenFixture '+case),lambda x:x is not None,5)
                     record['windowBefore']=windows.state(hwnd)
+                    record['storageBeforeFocus']=fixture_storage_status(bw_endpoint)
+                    fixture_tab=menu_frames(our_endpoint,fixture.url,bw_identity['id'])
+                    record['contentBeforeFocus']=official_content_status(bw_endpoint,fixture_tab['tabId'])
+                    record['contentReady']=wait_for(lambda:official_content_status(bw_endpoint,fixture_tab['tabId']),
+                        lambda items:any(item.get('result',{}).get('initialized') is True for item in items),8)
                     # One focus action only. A failure may mean focus took effect:
                     # never replay it in search of a successful acknowledgement.
                     record['focus']=invoke('focus','click','#email')
+                    record['contentAfterFocus']=official_content_status(bw_endpoint,fixture_tab['tabId'])
+                    record['storageAfterFocus']=fixture_storage_status(bw_endpoint)
                     record['initialMenu']=wait_for(lambda:menu_frames(our_endpoint,fixture.url,bw_identity['id']),
                         lambda x:len(x['bitwardenFrames'])>0,8)
                     record['accessBefore']=invoke('access-before','eval','document.title')
