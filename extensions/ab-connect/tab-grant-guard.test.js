@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { isAttachmentCleanup } from './tab-command.js';
 import { createTabGrants, TAKEN_BACK, LENT_ELSEWHERE } from './tab-grant.js';
 import { canUseBrowserNavigationFallback, navigateTabWithBrowserFallback } from './tab-navigation.js';
 
@@ -17,7 +18,8 @@ const tab = id => ({ id, url: `https://shop.example/${id}`, title: `Tab ${id}` }
 function worker(tabGrants, { onSend = async () => ({}) } = {}) {
   const sent = [], updated = [];
   const context = {
-    tabGrants, sent, updated, console,
+    tabGrants, sent, updated, console, isAttachmentCleanup,
+    tabs: new Map([[7, { attached: true }], [8, { attached: true }]]),
     conversationWindows: { observe: async () => {} },
     canUseBrowserNavigationFallback, navigateTabWithBrowserFallback,
     withRelayTimeout: p => p,
@@ -65,4 +67,43 @@ test('a take-back during a batch stops its later steps, the chrome.tabs navigati
   assert.equal(result.results[1].success, false);
   assert.equal(result.results[1].error, TAKEN_BACK);
   assert.equal(result.results[2].error, TAKEN_BACK);
+});
+
+
+test('a batch with background cleanup refuses sessionless selection before any step', async () => {
+  const w = worker(createTabGrants({ storage: memory() }));
+  w.resolveSessionTab = () => null;
+  w.anyConnectedTab = () => 7;
+  await assert.rejects(w.batch(undefined, { commands: [
+    { method: 'Runtime.evaluate' },
+    { method: 'Emulation.setDefaultBackgroundColorOverride', params: {} },
+  ] }, 'default'), /requires an explicit attached session/);
+  assert.deepEqual(w.sent, []);
+});
+
+for (const state of ['stale', 'detached']) {
+  test(`a batch with background cleanup refuses ${state} session before any step`, async () => {
+    const w = worker(createTabGrants({ storage: memory() }));
+    if (state === 'stale') w.resolveSessionTab = () => null;
+    else w.tabs.get(7).attached = false;
+    w.anyConnectedTab = () => 8;
+    await assert.rejects(w.batch('cb-tab-7', { commands: [
+      { method: 'Runtime.evaluate' },
+      { method: 'Emulation.setDefaultBackgroundColorOverride', params: {} },
+    ] }, 'default'), /existing attachment|no attached tab/);
+    assert.deepEqual(w.sent, []);
+  });
+}
+
+test('a bound batch clears the background once but refuses cleanup after attachment loss', async () => {
+  const w = worker(createTabGrants({ storage: memory() }));
+  const reset = { method: 'Emulation.setDefaultBackgroundColorOverride', params: {} };
+  const ok = await w.batch('cb-tab-7', { commands: [reset] }, 'default');
+  assert.equal(ok.results[0].success, true);
+  assert.deepEqual(w.sent, [reset.method]);
+  w.sendCdpToTab = async (_id, method) => { w.sent.push(method); w.tabs.get(7).attached = false; return {}; };
+  const lost = await w.batch('cb-tab-7', { commands: [{ method: 'Runtime.evaluate' }, reset] }, 'default');
+  assert.equal(lost.results[1].success, false);
+  assert.match(lost.results[1].error, /existing attachment/);
+  assert.deepEqual(w.sent, [reset.method, 'Runtime.evaluate']);
 });
