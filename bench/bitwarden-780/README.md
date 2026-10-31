@@ -29,5 +29,10 @@ or the entire stealth benchmark. No production default is changed.
 
 Both the Python entrypoint and extension-worker controller refuse ordinary
 local execution. Do not run this on the maintainer's Chrome or copy their
-profile. The extension-worker CDP helper is used only to configure the isolated
-fixture and inspect browser metadata; it never evaluates a web page.
+profile. The extension-worker CDP helper configures only the disposable fixture and
+reads browser metadata. For initialization diagnostics it also reads
+Bitwarden's own isolated content-script realm on the local fixture through
+the official extension's scripting API. Those probes add no main-world
+property, DOM node, event listener or event, and return no token contents.
+Stored account metadata alone is not proof that Bitwarden adopted that state
+or that a locked/unlocked menu was rendered.
