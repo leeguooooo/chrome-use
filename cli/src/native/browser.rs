@@ -5635,7 +5635,7 @@ impl BrowserManager {
                 eprintln!("{} Screenshot window preflight is unavailable on this extension; legacy capture behavior applies. Update the extension for minimized-window detection.", crate::color::warning_indicator());
                 Ok(None)
             }
-            Err(error) => Err(error),
+            Err(error) => Err(screenshot_window_preparation_error(error, allow_restore)),
         }
     }
 
@@ -15441,6 +15441,16 @@ fn extension_method_unsupported(error: &str, method: &str) -> bool {
         || message == format!("Method not found: {method}")
 }
 
+// A lost preparation reply may follow an issued native window update. Keep
+// explicit restoration out of the generic retryable transport-error contract.
+fn screenshot_window_preparation_error(error: String, allow_restore: bool) -> String {
+    if allow_restore && crate::error_envelope::classify_error(&error).retryable {
+        format!("action_outcome_unknown: authorized window preparation has no verified outcome; inspect the target window before retrying. {error}")
+    } else {
+        error
+    }
+}
+
 fn validate_screenshot_window_preparation(
     value: Value,
     allow_restore: bool,
@@ -15801,6 +15811,25 @@ mod screenshot_window_preparation_tests {
             false
         )
         .is_ok());
+    }
+
+    #[test]
+    fn lost_authorized_window_reply_is_not_a_retryable_transport_failure() {
+        let timeout = "relay timeout after 8000ms: screenshot window restoration";
+        assert!(crate::error_envelope::classify_error(timeout).retryable);
+        let guarded = screenshot_window_preparation_error(timeout.into(), true);
+        let metadata = crate::error_envelope::classify_error(&guarded);
+        assert_eq!(metadata.code, "action_outcome_unknown");
+        assert!(!metadata.retryable);
+        assert_eq!(
+            screenshot_window_preparation_error(timeout.into(), false),
+            timeout
+        );
+        let refusal = "screenshot_window_restore_unavailable: Windows relay only";
+        assert_eq!(
+            screenshot_window_preparation_error(refusal.into(), true),
+            refusal
+        );
     }
 
     #[test]
