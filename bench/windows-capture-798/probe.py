@@ -893,9 +893,14 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
                 except Exception as exc:
                     record["sessionCleanupError"] = str(exc)
             try:
-                if chrome.poll() is None:
-                    subprocess.run(["taskkill", "/PID", str(chrome.pid), "/T", "/F"], capture_output=True, timeout=20)
-                chrome.wait(timeout=20)
+                if chrome.poll() is not None:
+                    raise RuntimeError("Chrome parent already exited; descendant teardown was not acknowledged")
+                killed = subprocess.run(["taskkill", "/PID", str(chrome.pid), "/T", "/F"], capture_output=True, timeout=20)
+                record["browserTreeKillExit"] = killed.returncode
+                record["browserExitCode"] = chrome.wait(timeout=20)
+                if killed.returncode != 0:
+                    raise RuntimeError("owned Chrome process-tree termination was not acknowledged")
+                record["browserTreeTerminated"] = True
             except Exception as exc:
                 record["browserCleanupError"] = str(exc)
             events = fixture.events(case_id)
@@ -935,6 +940,37 @@ def file_version(path):
     return subprocess.check_output([command, "-NoProfile", "-Command",
         "[Diagnostics.FileVersionInfo]::GetVersionInfo($env:PROBE_VERSION_EXE).ProductVersion"],
         env=env, text=True).strip()
+
+
+def confirmed_case_cleanup(record):
+    close = record.get("sessionCleanup") or {}
+    return (not any(key.endswith("CleanupError") for key in record)
+        and type(close.get("exit")) is int and close["exit"] == 0 and close.get("killedAtDeadline") is False
+        and (close.get("response") or {}).get("success") is True
+        and record.get("browserTreeTerminated") is True
+        and type(record.get("browserTreeKillExit")) is int and record["browserTreeKillExit"] == 0
+        and type(record.get("browserExitCode")) is int)
+
+
+def can_start_next_case(record):
+    # An uncertain measurement remains uncertain, but cannot affect the next
+    # fresh profile once its session and complete process tree are gone.
+    return (record.get("setupVerified") is True and record.get("captureAttempted") is True
+        and confirmed_case_cleanup(record))
+
+
+def matrix_summary(records, expected, setup_error):
+    invalid = [r for r in records if r.get("verdict") not in ("PASS", "ISSUES")]
+    failed = [r for r in records if r.get("verdict") == "ISSUES"]
+    incomplete = len(records) != expected
+    cleanup_failed = any(not confirmed_case_cleanup(r) for r in records)
+    uncertain = bool(invalid or incomplete or setup_error or cleanup_failed)
+    return {"verdict": "INCONCLUSIVE" if uncertain else "ISSUES" if failed else "PASS",
+        "expectedCases": expected, "cases": len(records), "inconclusiveCases": len(invalid),
+        "captureFailures": len(failed), "matchingReportSignature": sum(r.get("matchesReportSignature") is True for r in records),
+        "records": records, "setupError": setup_error, "allCasesExecuted": not incomplete,
+        "matrixComplete": not uncertain,
+        "interpretation": "PASS means this matrix did not reproduce the report; it does not prove customer Windows acceptance."}
 
 
 def main():
@@ -991,31 +1027,18 @@ def main():
                     (args.output / "progress.json").write_text(json.dumps({"expectedCases": args.samples * (1 if args.experiment == "baseline" else 9), "records": records}, indent=2), encoding="utf-8")
                     print(json.dumps({"case": record["caseId"], "setup": record["setupVerified"],
                                       "signature": record["matchesReportSignature"], "verdict": record["verdict"], "error": record.get("error")}), flush=True)
-                    if record.get("verdict") == "INCONCLUSIVE":
-                        raise ProbeSetupFailure("matrix stopped after unverified setup or capture dispatch")
-                    if any(key.endswith("CleanupError") for key in record):
-                        raise ProbeSetupFailure("matrix stopped after unconfirmed cleanup")
+                    if not can_start_next_case(record):
+                        raise ProbeSetupFailure("matrix stopped after unverified setup or unconfirmed cleanup")
     except ProbeSetupFailure as exc:
         setup_error = str(exc)
     except Exception as exc:
         setup_error = type(exc).__name__ + ": " + str(exc)
     finally:
         fixture.close()
-    invalid = [r for r in records if r.get("verdict") == "INCONCLUSIVE"]
-    reproduced = [r for r in records if r["matchesReportSignature"]]
-    failed = [r for r in records if r.get("verdict") == "ISSUES"]
-    incomplete = len(records) != args.samples * (1 if args.experiment == "baseline" else 9)
-    verdict = "ISSUES" if failed else "INCONCLUSIVE" if invalid or incomplete or setup_error else "PASS"
-    cleanup_failed = any(any(key.endswith("CleanupError") for key in r) for r in records)
-    if cleanup_failed:
-        verdict = "INCONCLUSIVE"
-    summary = {"verdict": verdict, "expectedCases": args.samples * (1 if args.experiment == "baseline" else 9), "cases": len(records), "inconclusiveCases": len(invalid),
-        "captureFailures": len(failed), "matchingReportSignature": len(reproduced), "records": records,
-        "setupError": setup_error, "matrixComplete": not invalid and not incomplete,
-        "interpretation": "PASS means this matrix did not reproduce the report; it does not prove customer Windows acceptance."}
+    summary = matrix_summary(records, args.samples * (1 if args.experiment == "baseline" else 9), setup_error)
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps({k: v for k, v in summary.items() if k != "records"}), flush=True)
-    return 2 if invalid or cleanup_failed or setup_error or incomplete else 1 if failed else 0
+    return {"PASS": 0, "ISSUES": 1, "INCONCLUSIVE": 2}[summary["verdict"]]
 
 
 if __name__ == "__main__":

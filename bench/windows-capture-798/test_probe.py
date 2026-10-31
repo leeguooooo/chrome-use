@@ -89,6 +89,42 @@ class ProbeTests(unittest.TestCase):
         detach["receivedMonotonic"] = 1.5
         self.assertIsNone(probe.capture_context(record["trace"], record))
 
+    def isolated_record(self, verdict="PASS"):
+        return {"verdict": verdict, "setupVerified": True, "captureAttempted": True,
+            "sessionCleanup": {"exit": 0, "killedAtDeadline": False, "response": {"success": True}},
+            "browserTreeTerminated": True, "browserTreeKillExit": 0, "browserExitCode": 1}
+
+    def test_uncertain_measurement_can_continue_only_after_confirmed_isolation(self):
+        import copy
+        record = self.isolated_record("INCONCLUSIVE")
+        self.assertTrue(probe.can_start_next_case(record))
+        for field in ["setupVerified", "captureAttempted", "browserTreeTerminated", "browserTreeKillExit", "browserExitCode"]:
+            broken = copy.deepcopy(record)
+            broken.pop(field)
+            self.assertFalse(probe.can_start_next_case(broken), field)
+        for update in [{"browserCleanupError": "unknown"}, {"browserTreeKillExit": 1}, {"browserTreeKillExit": False}, {"browserExitCode": None}, {"browserExitCode": False}]:
+            self.assertFalse(probe.can_start_next_case(dict(record, **update)))
+        for update in [{"exit": 1}, {"exit": False}, {"killedAtDeadline": True}, {"response": {"success": False}}]:
+            broken = copy.deepcopy(record)
+            broken["sessionCleanup"].update(update)
+            self.assertFalse(probe.can_start_next_case(broken))
+
+    def test_completed_matrix_retains_unknowns_and_never_promotes_them_to_pass(self):
+        records = [self.isolated_record(v) for v in ["PASS", "ISSUES", "INCONCLUSIVE"]]
+        summary = probe.matrix_summary(records, 3, None)
+        self.assertEqual(summary["verdict"], "INCONCLUSIVE")
+        self.assertTrue(summary["allCasesExecuted"])
+        self.assertFalse(summary["matrixComplete"])
+        self.assertEqual(summary["inconclusiveCases"], 1)
+        self.assertEqual(summary["captureFailures"], 1)
+        self.assertEqual(probe.matrix_summary([self.isolated_record()], 1, None)["verdict"], "PASS")
+        self.assertEqual(probe.matrix_summary([self.isolated_record("ISSUES")], 1, None)["verdict"], "ISSUES")
+        self.assertEqual(probe.matrix_summary([self.isolated_record()], 2, None)["verdict"], "INCONCLUSIVE")
+        broken = self.isolated_record()
+        broken.pop("browserTreeTerminated")
+        self.assertEqual(probe.matrix_summary([broken], 1, None)["verdict"], "INCONCLUSIVE")
+        self.assertEqual(probe.matrix_summary([self.isolated_record()], 1, "setup failed")["verdict"], "INCONCLUSIVE")
+
     def good_record(self):
         import copy
         target = {"tabId": 7, "sessionId": None}

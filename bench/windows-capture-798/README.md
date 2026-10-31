@@ -155,3 +155,22 @@ recovery, errors and teardown order unchanged. These extra loopback trace reques
 are diagnostic intervention, not a timing-neutral observation. Missing trace
 still prevents a verified conclusion; no detach event alone proves absence of
 recovery or explains why Chrome stopped producing frames.
+
+## Independent case continuation
+
+A case with confirmed setup and an attempted capture may remain INCONCLUSIVE
+(for example, the original full-page capture emitted trusted resize events).
+The matrix retains that verdict and continues only after explicit session-close
+acknowledgment, successful termination of that case's owned Chrome process tree,
+and an observed parent exit. Missing evidence or any cleanup error stops the
+matrix. An already exited parent without a tree-termination acknowledgment is
+uncertain, rather than assumed to prove descendant cleanup. Each later case
+still gets a fresh profile, relay directory and Chrome process.
+
+`allCasesExecuted` reports that every planned case ran; `matrixComplete` also
+requires no uncertain cases, setup errors or cleanup gaps. An uncertain or
+incomplete matrix has verdict INCONCLUSIVE and exits 2, even when other cases
+have verified failures. Individual ISSUES counts and evidence are retained.
+Neither continuing independent cases nor finishing the schedule can turn an
+unknown case into PASS. All pixel, freshness, page-state and window checks stay
+in force.
