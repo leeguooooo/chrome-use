@@ -378,3 +378,29 @@ for (const mode of ['reject', 'throw']) {
     assert.deepEqual(f.recovered, [])
   })
 }
+
+test('screenshot cleanup preserves pending capture and unhealthy state until an ordinary command', async () => {
+  const { createAttachmentHealth } = await import('./tab-command.js')
+  const calls = []
+  let settleCapture
+  const pending = new Promise(resolve => { settleCapture = resolve })
+  const deps = {
+    health: createAttachmentHealth(), commandTimeoutMs: 5,
+    sendCommand(_target, method) { calls.push(method); return method === 'Page.captureScreenshot' ? pending : Promise.resolve({ ok: true }) },
+    async detachDebugger() { calls.push('detach') }, detachTab() {}, async attachTab() { calls.push('attach') },
+  }
+  await assert.rejects(sendTabCommand(7, 'Page.captureScreenshot', {}, undefined, deps), /relay timeout/)
+  await sendTabCommand(7, 'Emulation.setDefaultBackgroundColorOverride', {}, undefined, deps)
+  assert.deepEqual(calls, ['Page.captureScreenshot', 'Emulation.setDefaultBackgroundColorOverride'])
+  await sendTabCommand(7, 'DOM.getDocument', {}, undefined, deps)
+  assert.deepEqual(calls.slice(-3), ['detach', 'attach', 'DOM.getDocument'])
+  settleCapture({ data: 'late' })
+})
+
+test('background reset on a detached target fails once without replacement recovery', async () => {
+  const f = fixture(new Error('Debugger is not attached to the tab with id: 7.'))
+  await assert.rejects(sendTabCommand(7, 'Emulation.setDefaultBackgroundColorOverride', {}, undefined, f.deps), /not attached/)
+  assert.equal(f.sent.length, 1)
+  assert.deepEqual(f.detached, [])
+  assert.deepEqual(f.recovered, [])
+})

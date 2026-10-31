@@ -74,7 +74,7 @@ import {
   tabGoneEvent,
 } from './relay-records.js';
 import { createAgentTabQueue } from './agent-tab-queue.js';
-import { createAttachmentHealth, sendTabCommand } from './tab-command.js';
+import { createAttachmentHealth, isAttachmentCleanup, sendTabCommand } from './tab-command.js';
 import { HostConnectionState, HostReconnectScheduler } from './host-connection.js';
 import { isDebuggerAccessDenied, debuggerAccessError, foreignFrameExtensions } from './debugger-access.js';
 import {
@@ -1926,17 +1926,21 @@ async function handleForwardCdpCommand(msg) {
 
   // Atomic batch command execution: dispatches multiple commands in a single IPC roundtrip.
   if (method === 'ABExt.batchCommands') {
-    const tabId =
-      resolveSessionTab(sessionId, sessionToTab, childSessionToTab) ??
+    const commands = Array.isArray(params?.commands) ? params.commands : [];
+    const cleanup = commands.some(cmd => cmd && isAttachmentCleanup(cmd.method, cmd.params));
+    if (cleanup && !sessionId) throw new Error('background cleanup requires an explicit attached session');
+    const resolved = resolveSessionTab(sessionId, sessionToTab, childSessionToTab);
+    const tabId = cleanup ? resolved : resolved ??
       (typeof params?.targetId === 'string' ? tabForTarget(params.targetId) : null) ??
       anyConnectedTab();
     if (tabId == null) throw new Error('no attached tab for ABExt.batchCommands');
     guardTab(tabId, agentSession);
+    if (cleanup && tabs.get(tabId)?.attached !== true)
+      throw new Error('background cleanup requires the existing attachment; it was not reattached');
     const childSid =
       sessionId && tabIdFromSession(sessionId) == null && childSessionToTab.has(sessionId)
         ? sessionId
         : undefined;
-    const commands = Array.isArray(params?.commands) ? params.commands : [];
     const results = [];
     const stopOnError = params?.stopOnError !== false;
     for (let i = 0; i < commands.length; i++) {
@@ -2027,6 +2031,9 @@ async function handleForwardCdpCommand(msg) {
   // exactly the "ran on the wrong page with no warning" failure in issue #8.1,
   // and the blank-screenshot symptom after a service-worker restart (#8.2).
   // Fail loudly instead so the agent sees an actionable error, not bad data.
+  const cleanup = isAttachmentCleanup(method, params);
+  if (cleanup && !sessionId) throw new Error('background cleanup requires an explicit attached session');
+
   const childSid =
     sessionId && tabIdFromSession(sessionId) == null && childSessionToTab.has(sessionId)
       ? sessionId
@@ -2044,6 +2051,8 @@ async function handleForwardCdpCommand(msg) {
       throw new Error(`unknown sessionId ${sessionId} for ${method}`);
     }
     guardTab(tabId, agentSession);
+    if (cleanup && tabs.get(tabId)?.attached !== true)
+      throw new Error('background cleanup requires the existing attachment; it was not reattached');
     let browserNavigationReady = false;
     if (!tabs.has(tabId) && canUseBrowserNavigationFallback(method, params, childSid)) {
       let missing = false;
@@ -2118,7 +2127,9 @@ async function handleForwardCdpCommand(msg) {
     }
     return result;
   }
-  const reset = await attachmentHealth.recover(tabId, tabCommandDependencies());
+  // A timed-out capture may still be running. Its compositor reset is sent
+  // once on this existing attachment, without consuming the unhealthy marker.
+  const reset = cleanup ? false : await attachmentHealth.recover(tabId, tabCommandDependencies());
   if (reset && childSid)
     throw new Error('tab_reset: child session invalidated; rediscover frames before retrying');
   if (reset) entry = tabs.get(tabId);
@@ -2148,6 +2159,8 @@ async function dispatchToTab(tabId, method, params, childSid, agentSession = '')
   // Again here: recovery and earlier steps awaited Chrome, and the tab may
   // have been taken back meanwhile.
   guardTab(tabId, agentSession);
+  if (isAttachmentCleanup(method, params) && tabs.get(tabId)?.attached !== true)
+    throw new Error('background cleanup requires the existing attachment; it was not reattached');
   void conversationWindows.observe(agentSession, tabId).catch(() => {});
   // Re-enabling Runtime can leave a stale state; bounce it (matches upstream).
   if (method === 'Runtime.enable') {

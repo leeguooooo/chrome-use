@@ -363,7 +363,7 @@ Place the opt-in after the required text/selector, as the last option; `--` ends
 
 Ordinary selector and `--clip` screenshots use the same CLI pixel-cropping path, including after page scroll. Viewport regions capture the existing surface; off-screen regions capture the full page before cropping. Neither path scrolls or activates the tab.
 
-The extension relay allows up to 25 seconds for each screenshot capture, below the CLI's 30-second CDP deadline. Native captures after viewport or DPR changes can take longer than ordinary commands. This waits for the same capture; it does not replay it or activate the tab. A timeout still fails and does not cancel Chrome's pending capture, so avoid overlapping capture retries.
+The extension relay allows up to 25 seconds for each screenshot capture, below the CLI's 30-second CDP deadline. Native captures after viewport or DPR changes can take longer than ordinary commands. This waits for the same capture; it does not replay it or activate the tab. A timeout still fails and does not cancel Chrome's pending capture, so avoid overlapping capture retries. Background-color cleanup uses the existing attachment once, without resetting it or retrying on another target. Ordinary commands retain their normal recovery behavior.
 
 The extension relay attaches to nested out-of-process iframe targets recursively, so snapshots can resolve their contents up to the existing three-level expansion limit. Chrome must allow debugger access to each target. If a frame or ref is missing, inspect `frames` and take a fresh snapshot; do not guess another target.
 
