@@ -45,7 +45,38 @@ async function fixtureDebuggerDetach(target) {
   fixtureAttachmentChange(target, 'detach-acknowledged', true);
   return result;
 }
-chrome.debugger.onDetach.addListener(target => fixtureAttachmentChange(target, 'onDetach', true));
+chrome.debugger.onDetach.addListener((target, reason) => fixtureAttachmentChange(target, 'onDetach:' + String(reason), true));
+function fixtureRelated(tabId) {
+  return [...fixtureCaptureOperations].filter(c => c.requested.tabId === tabId);
+}
+function fixtureLifecycle(tabId, event) {
+  for (const context of fixtureRelated(tabId)) fixtureEmit(context, event);
+}
+function fixtureHealth(health) {
+  for (const name of ['mark', 'recover']) {
+    const original = health[name];
+    health[name] = function(tabId, ...args) {
+      const callId = crypto.randomUUID();
+      fixtureLifecycle(tabId, {type:'health-' + name + '-call', callId});
+      // Preserve the exact return value, including promise identity.
+      const result = original.call(this, tabId, ...args);
+      if (name === 'recover') result.then(
+        recovered => fixtureLifecycle(tabId, {type:'health-recover-answer',callId,recovered}),
+        error => fixtureLifecycle(tabId, {type:'health-recover-error',callId,error:String(error?.message || error)}));
+      return result;
+    };
+  }
+  return health;
+}
+function fixtureCommand(tabId, method, operation) {
+  const callId = crypto.randomUUID();
+  fixtureLifecycle(tabId, {type:'command-call',callId,method});
+  const result = operation();
+  result.then(
+    () => fixtureLifecycle(tabId, {type:'command-answer',callId,method}),
+    error => fixtureLifecycle(tabId, {type:'command-error',callId,method,error:String(error?.message || error)}));
+  return result;
+}
 async function fixtureCaptureContext(tabId, childSessionId) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!ownedTabs.has(tabId) || !fixtureOwnPage(tab)) return null;
@@ -61,7 +92,8 @@ async function fixtureCaptureContext(tabId, childSessionId) {
 function fixtureObserveWrapper(context, operation) {
   const finish = (type, error) => {
     context.wrapperPending = false;
-    fixtureCaptureOperations.delete(context);
+    // One disposable worker per case: retain its two capture contexts through teardown.
+    // Wrapper timeout is not native completion; recovery can detach immediately afterward.
     for (const attempt of context.attempts) clearTimeout(attempt.timer);
     fixtureEmit(context, { type, fixturePath: context.fixturePath,
       error: error ? String(error?.message || error) : null,
@@ -78,6 +110,7 @@ async function fixturePageAfter(context) {
   const tab = await chrome.tabs.get(attempt.target.tabId).catch(()=>null);
   if (!ownedTabs.has(attempt.target.tabId) || !fixtureOwnPage(tab) || fixtureEpoch(attempt.target.tabId)!==attempt.epoch) return;
   let timer;
+  fixtureEmit(context,{type:'page-after-send',captureId:attempt.id,target:attempt.target,epoch:fixtureEpoch(attempt.target.tabId)});
   try {
     const result = await Promise.race([chrome.debugger.sendCommand({tabId:attempt.target.tabId,
       ...(typeof attempt.target.sessionId==='string'?{sessionId:attempt.target.sessionId}:{})},'Runtime.evaluate',

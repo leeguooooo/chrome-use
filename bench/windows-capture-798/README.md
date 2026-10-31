@@ -36,8 +36,9 @@ off-screen selector cases, yielding 45 fresh profiles:
   primitive on the same attachment, then send one fromSurface:true screenshot.
   A failed or unacknowledged two-second control stops before capture.
 
-Warmup first decodes a green fixture sentinel in the disposable window. Setup
-may restore that owned window for warmup and intentionally minimize it once.
+Warmup first decodes a green fixture sentinel in an already normal disposable
+window. A minimized warmup window refuses setup instead of restoring or focusing
+it. Setup intentionally minimizes the owned report window once.
 No restore, activation, bring-to-front, window update, synthetic input, animation
 clock change or capture fallback occurs during measurement. A timed-out original
 native promise is never followed by another screenshot in that profile.
@@ -139,3 +140,18 @@ actionlint .github/workflows/windows-capture-probe.yml
 These check generator/native-edge guards, candidate single-send behavior,
 unacknowledged focus control, nonce pixels, dimension checks, bounded image
 transport, and verdict failure paths. They are not Windows runtime acceptance.
+
+## Single-baseline timeout diagnosis
+
+Dispatch `experiment: baseline`, `samples: 1`, `rows: 1000`, `dpr: 1` and
+`pending_dom_control: false` to run only one minimized viewport case. This is a
+trace investigation; it does not establish either candidate's effectiveness.
+The unshipped worker retains the case's warmup/report capture contexts through
+teardown, so wrapper settlement no longer discards later detach evidence.
+Health mark/recover calls and command call/answer/error pairs carry correlation
+IDs; onDetach includes Chrome's reason, and the direct page-after read has a
+send event. Instrumentation returns the original promises and leaves production
+recovery, errors and teardown order unchanged. These extra loopback trace requests
+are diagnostic intervention, not a timing-neutral observation. Missing trace
+still prevents a verified conclusion; no detach event alone proves absence of
+recovery or explains why Chrome stopped producing frames.
