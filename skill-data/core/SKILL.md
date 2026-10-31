@@ -64,7 +64,8 @@ for `<select>`, `pick @e --option "…"` for comboboxes, `check`/`uncheck`,
 `press Enter`, `upload @e file`. Fewer calls: `batch "fill @e1 Ada" "click
 @e2 --observe"`, `form fill --map`, `script` for bounded logic; still verify
 the final signal. Screenshots only for visual questions
-(`--with-screenshot <path>`). Full rules and observation fields
+(`--with-screenshot <path>`). A screenshot timeout can leave its native capture pending;
+avoid overlapping retries. Background-color cleanup does not reset its attachment. Full rules and observation fields
 (`openedTab`, `--follow`, `noProgress`, settle warnings): `core/loop`.
 
 ## Tabs and ending the task

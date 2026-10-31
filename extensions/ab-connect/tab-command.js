@@ -78,13 +78,22 @@ export function createAttachmentHealth() {
   }
 }
 
+// Screenshot teardown must not reset a timed-out capture's attachment. Only
+// clearing the compositor background is cleanup; setting a color is ordinary work.
+export function isAttachmentCleanup(method, params) {
+  return method === 'Emulation.setDefaultBackgroundColorOverride' &&
+    params !== null && typeof params === 'object' && !Array.isArray(params) &&
+    Object.keys(params).length === 0
+}
+
 /**
  * Dispatch to one debugger target. A child-frame failure must not tear down its
  * parent: a restricted OOPIF can fail while the top-level page is healthy, and
  * child session ids cannot be reused after a parent reattachment.
  */
 export async function sendTabCommand(tabId, method, params, childSessionId, deps) {
-  const reset = await deps.health?.recover(tabId, deps)
+  const cleanup = isAttachmentCleanup(method, params)
+  const reset = cleanup ? false : await deps.health?.recover(tabId, deps)
   if (reset && childSessionId) {
     throw new Error('tab_reset: child session invalidated; rediscover frames before retrying')
   }
@@ -107,7 +116,8 @@ export async function sendTabCommand(tabId, method, params, childSessionId, deps
       try { candidates = await deps.foreignFrameExtensions?.() ?? [] } catch {}
       throw debuggerAccessError(e, candidates)
     }
-    if (childSessionId) throw e
+    // A cleanup error cannot justify moving or resetting the target.
+    if (cleanup || childSessionId) throw e
     const msg = String((e && e.message) || e)
     if (!/detached|not attached|target.*(closed|gone)|no target|cannot access|frame.*detached/i.test(msg)) {
       throw e

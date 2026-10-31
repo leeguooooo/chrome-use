@@ -1,3 +1,4 @@
+import { isAttachmentCleanup } from './tab-command.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
@@ -17,6 +18,7 @@ function worker(dispatch) {
   rememberReplayable(entry.replay, 'Emulation.setUserAgentOverride', { userAgent: 'MobileFixture/1.0' })
   rememberReplayable(entry.replay, 'Emulation.setTouchEmulationEnabled', { enabled: true })
   const context = {
+    isAttachmentCleanup,
     tabs: new Map([[7, entry]]), sessionToTab: new Map([['cb-tab-7', 7]]), childSessionToTab: new Map([['frame-7', 7]]),
     resolveSessionTab, canUseBrowserNavigationFallback, tabIdFromSession: sid => sid === 'cb-tab-7' ? 7 : null,
     guardTab() {}, activeReloadLoop: () => null,

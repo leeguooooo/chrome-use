@@ -1,3 +1,4 @@
+import { isAttachmentCleanup } from './tab-command.js'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
@@ -13,6 +14,7 @@ function fixture(failure, takenBack = false) {
   const calls = []
   const entry = { attached: failure !== 'detached', inflight: 0, lastActivity: 0 }
   const context = {
+    isAttachmentCleanup,
     calls, console, canUseBrowserNavigationFallback, navigateTabWithBrowserFallback,
     tabs: new Map(failure === 'missing' ? [] : [[7, entry]]), sessionToTab: new Map(), childSessionToTab: new Map(),
     resolveSessionTab: () => 7, tabIdFromSession: () => 7,
@@ -195,4 +197,36 @@ test('Chrome-confirmed stable target recovery checks ownership before attachment
       assert.ok(f.calls.some(c => Array.isArray(c) && c[0] === 'navigate' && c[1] === 8))
     }
   }
+})
+
+test('background cleanup bypasses unhealthy preflight without consuming later recovery', async () => {
+  const f = fixture('health')
+  f.sendCdpToTab = async (_id, method) => { f.calls.push(method); return { cleared: true } }
+  assert.equal((await f.forward('Emulation.setDefaultBackgroundColorOverride', {}, 'cb-tab-7', 'session')).cleared, true)
+  assert.deepEqual(f.calls, ['Emulation.setDefaultBackgroundColorOverride'])
+  await assert.rejects(f.forward('DOM.getDocument', {}, 'cb-tab-7', 'session'), /tab_reset_failed/)
+  assert.deepEqual(f.calls, ['Emulation.setDefaultBackgroundColorOverride', 'recover'])
+})
+
+for (const state of ['missing', 'detached']) {
+  test(`background cleanup refuses ${state} attachment without recovery or rebinding`, async () => {
+    const f = fixture(state)
+    await assert.rejects(f.forward('Emulation.setDefaultBackgroundColorOverride', {}, 'cb-tab-7', 'session'), /requires the existing attachment/)
+    assert.deepEqual(f.calls, [])
+  })
+}
+
+test('background cleanup still enforces ownership and color writes still recover', async () => {
+  const taken = fixture('health', true)
+  await assert.rejects(taken.forward('Emulation.setDefaultBackgroundColorOverride', {}, 'cb-tab-7', 'session'), /taken back/)
+  assert.deepEqual(taken.calls, [])
+  const f = fixture('health')
+  await assert.rejects(f.forward('Emulation.setDefaultBackgroundColorOverride', { color: { r: 255 } }, 'cb-tab-7', 'session'), /tab_reset_failed/)
+  assert.deepEqual(f.calls, ['recover'])
+})
+
+test('background cleanup never selects an arbitrary attachment without a session', async () => {
+  const f = fixture('health')
+  await assert.rejects(f.forward('Emulation.setDefaultBackgroundColorOverride', {}, undefined, 'session'), /requires an explicit attached session/)
+  assert.deepEqual(f.calls, [])
 })

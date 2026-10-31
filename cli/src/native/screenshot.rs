@@ -338,6 +338,8 @@ async fn capture_screenshot_base64(
         .await;
 
     // Clear the override regardless of capture success (empty params = reset).
+    // The relay sends this cleanup once on the existing attachment, without
+    // health recovery that would detach a capture still pending after timeout.
     let _ = client
         .send_command(
             "Emulation.setDefaultBackgroundColorOverride",

@@ -4128,7 +4128,9 @@ The updated extension relay allows 25s for each native screenshot capture,
 below the CLI's 30s CDP deadline. Viewport or DPR changes can make captures
 slower than ordinary commands. It waits for the same capture without replay
 or tab activation. A timeout still fails and does not cancel Chrome's pending
-capture; avoid overlapping capture retries.
+capture; avoid overlapping capture retries. Background-color cleanup uses the
+existing attachment once, without resetting it or retrying on another target.
+Ordinary commands retain their normal recovery behavior.
 
 Global Options:
   --json               Output as JSON
