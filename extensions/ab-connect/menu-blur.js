@@ -55,14 +55,19 @@ export function blurEditableField(nudge) {
  */
 export async function blurFocusedField(tabId, deps) {
   if (!Number.isInteger(tabId)) throw new Error('blurFocusedField: no tab for this session')
-  if (!deps.isOwned(tabId)) {
-    throw new Error('blurFocusedField: only a tab chrome-use created; the user\'s own tabs are left alone')
+  const requireOwned = () => {
+    if (!deps.isOwned(tabId)) {
+      throw new Error('blurFocusedField: only a tab chrome-use created; the user\'s own tabs are left alone')
+    }
   }
+  requireOwned()
   const frames = (await deps.getAllFrames(tabId)) || []
   // The password manager's own frames are chrome-extension:// pages, which
   // the extension may not script; asking for them fails the whole call.
   const frameIds = frames.filter((f) => /^https?:/.test(f.url || '')).map((f) => f.frameId)
   if (frameIds.length === 0) throw new Error('blurFocusedField: the tab has no web frame to script')
+  // Frame enumeration yields: the user may have taken the tab back meanwhile.
+  requireOwned()
   let results
   try {
     results = await deps.executeScript({
