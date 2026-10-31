@@ -105,6 +105,8 @@ impl Serialize for ScreenshotAnnotation {
 /// Captures a viewport/full-page surface, then crops requested regions and
 /// draws optional labels in the CLI. Region capture never scrolls the page or
 /// asks Chrome to resize its compositor to a small/off-screen clip.
+// This renderer capture does not restore desktop windows. The manager prepares
+// Windows relay windows before the explicit screenshot command.
 pub async fn take_screenshot(
     client: &CdpClient,
     session_id: &str,

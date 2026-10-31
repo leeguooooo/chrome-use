@@ -75,6 +75,7 @@ import {
 } from './relay-records.js';
 import { createAgentTabQueue } from './agent-tab-queue.js';
 import { createAttachmentHealth, isAttachmentCleanup, sendTabCommand } from './tab-command.js';
+import { prepareScreenshotWindow } from './screenshot-window.js';
 import { HostConnectionState, HostReconnectScheduler } from './host-connection.js';
 import { isDebuggerAccessDenied, debuggerAccessError, foreignFrameExtensions } from './debugger-access.js';
 import {
@@ -1738,6 +1739,30 @@ async function handleForwardCdpCommand(msg) {
       if (isSiteAccessError(e)) void notifySiteAccessNeeded({ storage: chrome.storage.local, notifications: chrome.notifications, t }).catch(() => {});
       throw e;
     }
+  }
+
+  if (method === 'ABExt.prepareScreenshot') {
+    if (!sessionId || childSessionToTab.has(sessionId))
+      throw new Error('screenshot_window_unverified: an explicit top-level session is required');
+    await Promise.all([loadOwnedTabs(), loadAgentPopups()]);
+    const tabId = resolveSessionTab(sessionId, sessionToTab, childSessionToTab);
+    if (!Number.isInteger(tabId) || (!tabs.has(tabId) && !ownedTabs.has(tabId) && !agentPopups.has(tabId) && !tabGrants.get(tabId)))
+      throw new Error('screenshot_window_unverified: the bound tab authority is unavailable');
+    if (params && (typeof params !== 'object' || Array.isArray(params) || Object.keys(params).some(key => key !== 'allowWindowRestore') ||
+        ('allowWindowRestore' in params && typeof params.allowWindowRestore !== 'boolean')))
+      throw new Error('screenshot_window_unverified: only a boolean allowWindowRestore is supported');
+    return await prepareScreenshotWindow(tabId, params?.allowWindowRestore === true, {
+      guard: () => guardTab(tabId, agentSession),
+      getPlatformInfo: () => withRelayTimeout(new Promise((resolve, reject) => {
+        chrome.runtime.getPlatformInfo(info => {
+          const error = chrome.runtime.lastError;
+          if (error) reject(new Error(error.message)); else resolve(info);
+        });
+      }), 'screenshot platform metadata'),
+      getTab: id => withRelayTimeout(chrome.tabs.get(id), 'screenshot tab metadata'),
+      getWindow: id => withRelayTimeout(chrome.windows.get(id), 'screenshot window metadata'),
+      updateWindow: (id, update) => withRelayTimeout(chrome.windows.update(id, update), 'screenshot window restoration'),
+    });
   }
 
   if (method === 'ABExt.inspectTab') {

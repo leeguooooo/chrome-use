@@ -208,6 +208,8 @@ chrome-use is checked @e1      # Check if checked
 
 The extension relay allows up to 25 seconds for each screenshot capture, below the CLI's 30-second CDP deadline. Native captures after viewport or DPR changes can take longer than ordinary commands. This waits for the same capture; it does not replay it or activate the tab. A timeout still fails and does not cancel Chrome's pending capture, so avoid overlapping capture retries. Background-color cleanup uses the existing attachment once, without resetting it or retrying on another target. Ordinary commands retain their normal recovery behavior.
 
+Windows relay `screenshot` requires extension 0.5.101 or later for minimized-window detection. A minimized target window is refused before capture. `--allow-window-restore` explicitly permits restoring only the bound tab’s existing window to normal; it requests `focused: false`, leaves the window restored, and may change focus. It never activates a tab or creates a window. A changed target or unverified restoration fails instead of retrying. JSON includes `windowPreparation`. This option is unavailable outside Windows relay; older extensions retain legacy default capture behavior with a warning. Use restoration only within the user’s authorization. A preflight refusal sends no capture; a timed-out capture may still be running and must not be blindly repeated.
+
 ```bash
 chrome-use screenshot          # Save to temporary directory
 chrome-use screenshot path.png # Save to specific path

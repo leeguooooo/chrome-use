@@ -8968,6 +8968,19 @@ const UNIFORM_CAPTURE_MIN_HEIGHT: u64 = 400;
 const UNIFORM_CAPTURE_MIN_TEXT: u64 = 20;
 
 async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let allow_window_restore = cmd
+        .get("allowWindowRestore")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if allow_window_restore
+        && !state
+            .browser
+            .as_ref()
+            .map(|mgr| mgr.on_relay())
+            .unwrap_or(false)
+    {
+        return Err("screenshot_window_restore_unavailable: Windows extension relay only".into());
+    }
     let annotate = cmd
         .get("annotate")
         .and_then(|v| v.as_bool())
@@ -9082,8 +9095,8 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // Never on the extension relay: there `Page.bringToFront` raises the
     // user's own Chrome window and switches the tab they are looking at, so a
     // `screenshot --tab` popped the browser over whatever the user was doing.
-    // Relay captures do not need it: background-tab screenshots are taken
-    // `fromSurface` and return in ~50-250ms on the relay (timing.jsonl).
+    // Non-minimized relay windows capture in the background from the surface.
+    // Windows minimized-window restoration is a separate explicit option.
     if switched_to_inactive_tab {
         if let Some(mgr) = state.browser.as_mut() {
             if !mgr.on_relay() {
@@ -9174,6 +9187,18 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
                 live_url.as_str()
             }
         ));
+    }
+
+    let window_preparation = mgr.prepare_screenshot_window(allow_window_restore).await?;
+    if let Some(info) = window_preparation
+        .as_ref()
+        .filter(|info| info["restored"] == true)
+    {
+        eprintln!("{} Chrome reports window {} restored from minimized to normal; chrome-use leaves it restored.", color::warning_indicator(), info["windowId"]);
+        let after_restore_url = mgr.get_url().await?;
+        if after_restore_url != live_url {
+            return Err("screenshot_target_changed_after_restore: Chrome reports the window restored, but its document changed; inspect the page before capturing".into());
+        }
     }
 
     if annotate {
@@ -9281,6 +9306,9 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     }
 
     let mut response = json!({ "path": absolutize_saved_path(&result.path) });
+    if let Some(info) = window_preparation {
+        response["windowPreparation"] = info;
+    }
     if let Some((w, h)) = resized {
         response["width"] = json!(w);
         response["height"] = json!(h);

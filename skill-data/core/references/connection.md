@@ -62,7 +62,7 @@ cross-process redirects are followed automatically.
 
 **Anti-detection ranking: real logged-in Chrome (extension connect) > headed launched
 browser > headless (forbidden).** **Silent by default** — new tabs open un-focused and
-the agent never force-fronts a tab (emulated focus keeps the page rendering).
+ordinary actions do not force-front a tab. Emulated focus does not ensure frames from minimized Windows windows. `screenshot --allow-window-restore` is an explicit Windows relay exception: it restores the bound window to normal and leaves it restored, with possible focus changes; use it only within the user’s authorization.
 `--humanize` adds human-like input; `chrome-use cf-status` checks/reuses Cloudflare
 clearance.
 

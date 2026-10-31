@@ -1835,6 +1835,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             let mut max_height: Option<u32> = None;
             let mut scale: Option<f64> = None;
             let mut full_res = false;
+            let mut allow_window_restore = false;
             let mut tab: Option<String> = None;
             let mut positional: Vec<&str> = Vec::new();
             let mut selector_flag: Option<&str> = None;
@@ -1856,6 +1857,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     "--base64" | "-b" => base64 = true,
                     // Keep the captured size: skip the default 1200px cap.
                     "--full-res" => full_res = true,
+                    "--allow-window-restore" => allow_window_restore = true,
                     // Downscale the saved image so retina/full-page shots fit an
                     // agent's image reader and screenshot px line up with click px (#42).
                     "--max-width" => {
@@ -2015,6 +2017,9 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 "path": path, "selector": selector,
                 "fullPage": full_page, "annotate": flags.annotate
             });
+            if allow_window_restore {
+                cmd["allowWindowRestore"] = json!(true);
+            }
             if full_res {
                 cmd["fullRes"] = json!(true);
             }
@@ -8319,6 +8324,22 @@ mod tests {
         let cmd = parse_command(&args("screenshot out.png"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "screenshot");
         assert_eq!(cmd["path"], "out.png");
+    }
+
+    #[test]
+    fn test_screenshot_window_restore_is_explicit_and_preserves_the_path() {
+        let flags = default_flags();
+        let plain = parse_command(&args("screenshot out.png"), &flags).unwrap();
+        assert!(plain.get("allowWindowRestore").is_none());
+        let allowed = parse_command(
+            &args("screenshot --allow-window-restore out.png --full"),
+            &flags,
+        )
+        .unwrap();
+        assert_eq!(allowed["allowWindowRestore"], true);
+        assert_eq!(allowed["path"], "out.png");
+        assert_eq!(allowed["fullPage"], true);
+        assert!(parse_command(&args("screenshot --allow-window-restore=true"), &flags).is_err());
     }
 
     #[test]

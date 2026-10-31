@@ -5604,6 +5604,41 @@ impl BrowserManager {
         self.agent_group().is_some()
     }
 
+    /// Inspect Windows relay window state before any screenshot capture. An
+    /// explicit restoration is limited to the bound tab's existing window.
+    pub async fn prepare_screenshot_window(
+        &self,
+        allow_restore: bool,
+    ) -> Result<Option<Value>, String> {
+        if !self.on_relay() {
+            if allow_restore {
+                return Err(
+                    "screenshot_window_restore_unavailable: Windows extension relay only".into(),
+                );
+            }
+            return Ok(None);
+        }
+        let result = self
+            .client
+            .send_command(
+                "ABExt.prepareScreenshot",
+                Some(serde_json::json!({ "allowWindowRestore": allow_restore })),
+                Some(self.active_session_id()?),
+            )
+            .await;
+        match result {
+            Ok(value) => validate_screenshot_window_preparation(value, allow_restore).map(Some),
+            Err(error) if extension_method_unsupported(&error, "ABExt.prepareScreenshot") => {
+                if allow_restore {
+                    return Err("screenshot_window_restore_unavailable: update the extension to 0.5.101 or later".into());
+                }
+                eprintln!("{} Screenshot window preflight is unavailable on this extension; legacy capture behavior applies. Update the extension for minimized-window detection.", crate::color::warning_indicator());
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// How a click's focus watch (#468) tells that the browser has a tab the
     /// click opened, and the pid of a browser this daemon launched. `None`
     /// where Chrome cannot be on this machine's screen or a new tab cannot be
@@ -15389,21 +15424,52 @@ const PENDING_MENU_WAIT: std::time::Duration = std::time::Duration::from_millis(
 // Legacy workers forward this unknown extension method to Chrome. Match only
 // its unsupported-method reply; permissions, missing tabs and timeouts remain errors.
 fn inspect_tab_method_unsupported(error: &str) -> bool {
-    let detail = error
-        .strip_prefix("CDP error (ABExt.inspectTab): ")
-        .unwrap_or(error);
+    extension_method_unsupported(error, "ABExt.inspectTab")
+}
+
+fn extension_method_unsupported(error: &str, method: &str) -> bool {
+    let prefix = format!("CDP error ({method}): ");
+    let detail = error.strip_prefix(prefix.as_str()).unwrap_or(error);
     let parsed = serde_json::from_str::<Value>(detail).ok();
     let message = match parsed.as_ref() {
         Some(value) if value["code"] == -32601 => value["message"].as_str().unwrap_or(""),
         Some(_) => return false,
         None => detail,
     };
-    matches!(
-        message,
-        "'ABExt.inspectTab' wasn't found"
-            | "Unknown method: ABExt.inspectTab"
-            | "Method not found: ABExt.inspectTab"
-    )
+    message == format!("'{method}' wasn't found")
+        || message == format!("Unknown method: {method}")
+        || message == format!("Method not found: {method}")
+}
+
+fn validate_screenshot_window_preparation(
+    value: Value,
+    allow_restore: bool,
+) -> Result<Value, String> {
+    let invalid = || {
+        "screenshot_window_unverified: extension window preparation was not verified".to_string()
+    };
+    let restored = value["restored"].as_bool().ok_or_else(invalid)?;
+    let platform = value["platform"].as_str().ok_or_else(invalid)?;
+    if platform != "win" {
+        if allow_restore || restored || value["applicable"] != false {
+            return Err(invalid());
+        }
+        return Ok(value);
+    }
+    let state = value["state"].as_str().ok_or_else(invalid)?;
+    let before = value["before"].as_str().ok_or_else(invalid)?;
+    if value["applicable"] != true
+        || value["windowId"].as_i64().filter(|id| *id >= 0).is_none()
+        || !matches!(
+            state,
+            "normal" | "maximized" | "fullscreen" | "locked-fullscreen"
+        )
+        || (restored && (!allow_restore || before != "minimized" || state != "normal"))
+        || (!restored && before != state)
+    {
+        return Err(invalid());
+    }
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -15708,6 +15774,50 @@ mod protected_url_tests {
                 assert_eq!(requests.len(), 1);
                 assert_eq!(requests[0]["method"], "Page.getFrameTree");
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod screenshot_window_preparation_tests {
+    use super::*;
+
+    #[test]
+    fn window_restoration_requires_permission_and_observed_normal_state() {
+        let restored = serde_json::json!({"platform":"win","applicable":true,"windowId":9,
+            "before":"minimized","state":"normal","restored":true});
+        assert!(validate_screenshot_window_preparation(restored.clone(), true).is_ok());
+        assert!(validate_screenshot_window_preparation(restored.clone(), false).is_err());
+        let mut unknown = restored.clone();
+        unknown["state"] = serde_json::json!("minimized");
+        assert!(validate_screenshot_window_preparation(unknown, true).is_err());
+        let mut missing = restored;
+        missing.as_object_mut().unwrap().remove("windowId");
+        assert!(validate_screenshot_window_preparation(missing, true).is_err());
+        assert!(validate_screenshot_window_preparation(serde_json::json!({}), false).is_err());
+        assert!(validate_screenshot_window_preparation(
+            serde_json::json!({
+            "platform":"mac","applicable":false,"restored":false}),
+            false
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn legacy_window_preflight_fallback_matches_only_its_exact_unsupported_method() {
+        assert!(extension_method_unsupported(
+            r#"CDP error (ABExt.prepareScreenshot): {"code":-32601,"message":"'ABExt.prepareScreenshot' wasn't found"}"#,
+            "ABExt.prepareScreenshot"
+        ));
+        for error in [
+            "permission denied",
+            "relay timeout",
+            "Unknown method: ABExt.inspectTab",
+        ] {
+            assert!(!extension_method_unsupported(
+                error,
+                "ABExt.prepareScreenshot"
+            ));
         }
     }
 }
