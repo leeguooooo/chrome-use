@@ -11,7 +11,11 @@ Works with extension ab-connect 0.5.100.
 
 ### Fixes
 
-- **Relay recovery.** Includes the relay and configuration-window recovery fixes merged since 1.5.275.
+- **Relay:** recovers closed configuration windows, keeps address reads and explicit navigation working behind protected overlays, and keeps old-extension queries and tab-replacement recovery working.
+- **Input and scrolling:** Human clicks settle, fixed headers clear safely, and wheel scrolling refuses uncertain repeats.
+- **Monaco and scripts:** clipboard fallback is explicit and keeps approval policy; scripts stop when approval is pending or refused.
+- **Auth, device, profiles:** TOTP by verification step, device emulation can be turned off cleanly, and unusable SQLite falls back to macOS tools.
+- **Capture and connect:** selector screenshots crop from document surfaces, snapshots no longer wait on scroll-linked animation, and native host install uses a fixed environment.
 
 ### Contributors
 
