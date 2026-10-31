@@ -112,46 +112,41 @@ pub async fn run_daemon(session: &str) {
         let _ = fs::create_dir_all(&socket_dir);
     }
 
-    // When debug mode is on, redirect stderr to a log file so daemon
-    // output can be inspected (the daemon normally has stderr piped to its
-    // parent which drops the read end after startup).
-    //
-    // Windows got nothing here until #327: the whole block was `cfg(unix)`, so
-    // `AGENT_BROWSER_DEBUG=1` on Windows produced no daemon log at all — and a
-    // Windows-only hang is exactly the report that needs one. Same file name,
-    // same message, so the instruction "set AGENT_BROWSER_DEBUG=1 and send
-    // <session>.log" is now true on every platform.
+    // The parent drops its startup stderr pipe once the daemon is ready.
+    // Rust's Windows stderr uses GetStdHandle, independently of CRT fd 2.
+    // Retain the replacement handle for the entire daemon lifetime.
     #[cfg(windows)]
-    if env::var("AGENT_BROWSER_DEBUG").is_ok() {
-        let log_path = socket_dir.join(format!("{}.log", session));
-        if let Ok(file) = fs::File::create(&log_path) {
-            use std::os::windows::io::IntoRawHandle;
-            // `eprintln!` writes through CRT fd 2, so pointing the Win32 stderr
-            // HANDLE at the file is not enough on its own — the fd has to be
-            // re-pointed too, which is what `_dup2` over `_open_osfhandle` does.
-            // These are CRT entry points (linked by default on both the msvc and
-            // gnu targets); `libc` is a unix-only dependency here and
-            // `windows-sys` binds Win32, not the CRT, so neither offers them.
-            unsafe extern "C" {
-                fn _open_osfhandle(osfhandle: isize, flags: i32) -> i32;
-                fn _dup2(fd1: i32, fd2: i32) -> i32;
-                fn _close(fd: i32) -> i32;
-            }
-            unsafe {
-                let handle = file.into_raw_handle() as isize;
-                let fd = _open_osfhandle(handle, 0);
-                if fd >= 0 {
-                    _dup2(fd, 2);
-                    _close(fd);
+    let _stderr_destination = {
+        let debug = env::var("AGENT_BROWSER_DEBUG").is_ok();
+        let destination = if debug {
+            fs::File::create(socket_dir.join(format!("{}.log", session)))
+                .or_else(|_| fs::OpenOptions::new().write(true).open("NUL"))
+        } else {
+            fs::OpenOptions::new().write(true).open("NUL")
+        };
+        match destination.and_then(super::windows_stdio::redirect_stderr) {
+            Ok(file) => {
+                if debug {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "[daemon] Debug logging started for session: {}",
+                        session
+                    );
                 }
+                file
             }
-            let _ = writeln!(
-                std::io::stderr(),
-                "[daemon] Debug logging started for session: {}",
-                session
-            );
+            Err(error) => {
+                // Still attached to the startup pipe: refuse readiness rather
+                // than leave a daemon that can panic on its next diagnostic.
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "Cannot redirect daemon stderr: {}",
+                    error
+                );
+                return;
+            }
         }
-    }
+    };
 
     #[cfg(unix)]
     if env::var("AGENT_BROWSER_DEBUG").is_ok() {

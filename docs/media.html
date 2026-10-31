@@ -39,7 +39,7 @@
   <meta name="twitter:description" content="让 agent 把浏览器里看到的存成文件：截图、录操作视频、把页面缩到手机宽度查布局，并处理挡路的弹窗。下文附 screenshot、record、viewport、dialog 等底层命令。" />
   <meta name="twitter:image" content="https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg" />
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"chrome-use","item":"https://chrome-use.leeguoo.com/"},{"@type":"ListItem","position":2,"name":"让 agent 做事","item":"https://chrome-use.leeguoo.com/reading.html"},{"@type":"ListItem","position":3,"name":"截图·录像·视口","item":"https://chrome-use.leeguoo.com/media.html"}]}</script>
-  <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"截图·录像·视口","description":"让 agent 把浏览器里看到的存成文件：截图、录操作视频、把页面缩到手机宽度查布局，并处理挡路的弹窗。下文附 screenshot、record、viewport、dialog 等底层命令。","inLanguage":"zh-Hans","url":"https://chrome-use.leeguoo.com/media.html","mainEntityOfPage":"https://chrome-use.leeguoo.com/media.html","image":"https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg","dateModified":"2026-10-27","author":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"publisher":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"isPartOf":{"@type":"WebSite","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"},"about":{"@type":"SoftwareApplication","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"}}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"截图·录像·视口","description":"让 agent 把浏览器里看到的存成文件：截图、录操作视频、把页面缩到手机宽度查布局，并处理挡路的弹窗。下文附 screenshot、record、viewport、dialog 等底层命令。","inLanguage":"zh-Hans","url":"https://chrome-use.leeguoo.com/media.html","mainEntityOfPage":"https://chrome-use.leeguoo.com/media.html","image":"https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg","dateModified":"2026-11-01","author":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"publisher":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"isPartOf":{"@type":"WebSite","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"},"about":{"@type":"SoftwareApplication","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"}}</script>
   <!-- /seo:head -->
 </head>
 
@@ -140,6 +140,8 @@
       <p>普通元素截图和 <code>--clip</code> 区域截图也在 CLI 中裁剪像素，页面滚动后仍按文档坐标取图。视口内区域从现有表面裁出，视口外区域先截全页再裁出；不会滚动或激活标签页。</p>
 
       <p>扩展中继为每次截图捕获保留最多 25 秒，低于 CLI 的 30 秒 CDP 期限。视口或 DPR 改变后，Chrome 原生截图可能比普通命令更慢。这里等待的是同一次捕获，不会重放命令或激活标签。超时仍会报错，也不会取消 Chrome 中尚未完成的捕获，因此应避免重叠重试截图。清除截图背景色时只使用现有连接发送一次，不会为此重置连接或换到其他目标重试。后续普通命令仍按原有流程恢复连接。</p>
+      <p>Windows 中继的 <code>screenshot</code> 从扩展 0.5.101 起会检测最小化窗口，并在捕获前明确拒绝。<code>--allow-window-restore</code> 显式允许把当前绑定标签所在的既有窗口恢复到正常状态；请求不聚焦，但焦点仍可能受系统影响。窗口会保持恢复后的状态，不会激活标签或创建窗口。目标改变或无法核验恢复结果时会报错，不会自动重试。JSON 返回 <code>windowPreparation</code>。该选项仅支持 Windows 中继；旧扩展的默认截图继续使用原有行为并给出警告。</p>
+      <pre><code>chrome-use screenshot report.png --full --allow-window-restore</code></pre>
       <p>
         <code>screenshot</code> 把当前页面渲染成 PNG。不带路径时存到临时文件并把路径打到
         stdout；带路径就写到指定位置。

@@ -365,6 +365,16 @@ Ordinary selector and `--clip` screenshots use the same CLI pixel-cropping path,
 
 The extension relay allows up to 25 seconds for each screenshot capture, below the CLI's 30-second CDP deadline. Native captures after viewport or DPR changes can take longer than ordinary commands. This waits for the same capture; it does not replay it or activate the tab. A timeout still fails and does not cancel Chrome's pending capture, so avoid overlapping capture retries. Background-color cleanup uses the existing attachment once, without resetting it or retrying on another target. Ordinary commands retain their normal recovery behavior.
 
+Windows relay `screenshot` requires extension 0.5.101 or later for minimized-window detection. A minimized target window is refused before capture. `--allow-window-restore` explicitly permits restoring only the bound tab’s existing window to normal; it requests `focused: false`, leaves the window restored, and may change focus. It never activates a tab or creates a window. A changed target or unverified restoration fails instead of retrying. JSON includes `windowPreparation`. This option is unavailable outside Windows relay; older extensions retain legacy default capture behavior with a warning.
+
+| Screenshot option | Effect |
+| --- | --- |
+| `--allow-window-restore` | Permit Windows relay window restoration for this screenshot |
+
+```sh
+chrome-use screenshot report.png --full --allow-window-restore
+```
+
 The extension relay attaches to nested out-of-process iframe targets recursively, so snapshots can resolve their contents up to the existing three-level expansion limit. Chrome must allow debugger access to each target. If a frame or ref is missing, inspect `frames` and take a fresh snapshot; do not guess another target.
 
 For Ant Design / rc-picker date ranges, fill the start bound and then the end bound. `fill` confirms each bound through the component's trusted keyboard or visible confirmation control and reads it back, instead of blurring and refocusing a draft. Focus follows the picker. Invalid, read-only or disabled controls fail without a synthetic overwrite; an unverified popup requires explicit picker interaction. Verify the final range before running the query.

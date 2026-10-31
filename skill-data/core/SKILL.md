@@ -1,6 +1,6 @@
 ---
 name: core
-description: Core chrome-use usage guide. Read this before running any chrome-use commands. Covers the snapshot-and-ref workflow, navigating pages, interacting with elements (click, fill, type, select), extracting text and data, taking screenshots, managing tabs, handling forms and auth, waiting for content, running multiple browser sessions in parallel, and troubleshooting common failures. Use when the user asks to interact with a website, fill a form, click something, extract data, take a screenshot, log into a site, test a web app, or automate any browser task.
+description: Read before any chrome-use command. Workflow for live pages, snapshot refs, forms and logins, extraction, screenshots, tabs and isolated sessions. Load topic references for commands and troubleshooting.
 allowed-tools: Bash(chrome-use:*), Bash(npx chrome-use:*)
 ---
 
@@ -65,7 +65,7 @@ for `<select>`, `pick @e --option "…"` for comboboxes, `check`/`uncheck`,
 @e2 --observe"`, `form fill --map`, `script` for bounded logic; still verify
 the final signal. Screenshots only for visual questions
 (`--with-screenshot <path>`). A screenshot timeout can leave its native capture pending;
-avoid overlapping retries. Background-color cleanup does not reset its attachment. Full rules and observation fields
+avoid overlapping retries. Background-color cleanup does not reset its attachment. Windows relay refuses known minimized-window captures before dispatch (extension 0.5.101+). Use `screenshot --allow-window-restore` only when window restoration is authorized; the window stays restored and focus may change. Full rules and observation fields
 (`openedTab`, `--follow`, `noProgress`, settle warnings): `core/loop`.
 
 ## Tabs and ending the task

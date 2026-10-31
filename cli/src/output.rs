@@ -2118,6 +2118,14 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                         color::success_indicator()
                     };
                     println!("{} Screenshot saved to {}", indicator, color::green(path));
+                    if let Some(info) = data.get("windowPreparation") {
+                        if info["restored"] == true {
+                            eprintln!("{} Chrome reports window {} restored from minimized to normal; chrome-use leaves it restored and focus may have changed.", color::warning_indicator(), info["windowId"]);
+                        }
+                        if let Some(note) = info.get("warning").and_then(|v| v.as_str()) {
+                            eprintln!("{} {}", color::warning_indicator(), note);
+                        }
+                    }
                     if let Some(b64) = data.get("base64").and_then(|v| v.as_str()) {
                         println!("{b64}");
                     }
@@ -4081,6 +4089,10 @@ pixels did not come from the page you think they did. Confirm the target with
 
 Options:
   --full, -f           Capture full page (not just viewport)
+  --allow-window-restore  Windows extension relay only (extension 0.5.101+).
+                       Permit restoring the bound minimized window to normal.
+                       It stays restored and may change focus; tabs are not activated.
+                       Default: refuse known minimized windows before capture.
   -b, --base64         Include base64-encoded image directly in output (ideal for agents)
   [selector]           Capture just an element (CSS or @ref), e.g. `screenshot ".header" h.png`
   --selector, -s <sel> Name the element explicitly; the remaining positional is
@@ -4131,6 +4143,9 @@ or tab activation. A timeout still fails and does not cancel Chrome's pending
 capture; avoid overlapping capture retries. Background-color cleanup uses the
 existing attachment once, without resetting it or retrying on another target.
 Ordinary commands retain their normal recovery behavior.
+Windows relay minimized-window detection requires extension 0.5.101+. Older
+extensions retain legacy default capture behavior with a warning. Restoration
+uncertainty fails without replay. JSON includes windowPreparation.
 
 Global Options:
   --json               Output as JSON

@@ -183,7 +183,13 @@ class Fixture:
                 self.end_headers()
                 self.wfile.write(body.encode())
 
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        class FixtureHTTPServer(http.server.ThreadingHTTPServer):
+            # One CDP call emits several concurrent loopback trace requests.
+            # Python 3.13's default accept backlog is only five; a dropped
+            # request must fail evidence, so accommodate the observer's bursts.
+            request_queue_size = 128
+
+        self.server = FixtureHTTPServer(("127.0.0.1", 0), Handler)
         self.base = "http://127.0.0.1:" + str(self.server.server_port)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -521,6 +527,8 @@ def window_valid(snapshot, state, case_id, pid, expected_hwnd, probe_pid):
         return window.get("minimized") is True
     if window.get("minimized") or not window.get("visible"):
         return False
+    if state == "restored":
+        return True  # May remain behind another window; identity/visibility still required.
     if state == "normal":
         return window.get("centerOwned") is True
     cover = snapshot.get("cover") or {}
@@ -543,7 +551,7 @@ def capture_trace_complete(events):
     return bool(started) and None not in started and started.issubset(settled)
 
 
-def capture_context(events, record):
+def fenced_events(events):
     # Delivery can reorder across HTTP requests. Use a drained worker-clock
     # fence, not the server's receipt order, to separate capture from teardown.
     fences = [e for e in events if e.get("type") == "worker-teardown-start"]
@@ -564,7 +572,13 @@ def capture_context(events, record):
     relevant = [e for e in events if e.get("operationId") in operations]
     if any(type(e.get("atMs")) not in (int, float) or not math.isfinite(e["atMs"]) for e in relevant):
         return None
-    events = sorted((e for e in relevant if e["atMs"] < cutoff), key=lambda e: e["atMs"])
+    return sorted((e for e in relevant if e["atMs"] < cutoff), key=lambda e: e["atMs"])
+
+
+def capture_context(events, record):
+    events = fenced_events(events)
+    if events is None:
+        return None
     starts = report_operations(events)
     if len(starts) != 1:
         return None
@@ -589,7 +603,7 @@ def capture_context(events, record):
     control = sent.get("windowControl") or {}
     if not control.get("valid") or not 0 <= sent.get("controlElapsedMs", -1) <= 250:
         return None
-    if not window_valid(control.get("snapshot") or {}, record["state"], record["caseId"], record["chromePid"], record["expectedHwnd"], record["probePid"]):
+    if not window_valid(control.get("snapshot") or {}, record.get("captureState", record["state"]), record["caseId"], record["chromePid"], record["expectedHwnd"], record["probePid"]):
         return None
     warm_starts = [e for e in events if e.get("type") == "capture-operation-start" and e.get("fixturePath") == "/warmup"]
     if len(warm_starts) != 1 or sent.get("historyLost") is not False:
@@ -706,7 +720,131 @@ def experiment_evidence_valid(record):
     return True
 
 
+def known_window_refusal(capture, events):
+    response = capture.get("response") or {}
+    return (capture.get("exit") == 1 and capture.get("killedAtDeadline") is False
+        and response.get("success") is False
+        and "screenshot_window_minimized:" in str(response.get("error", ""))
+        and not report_operations(events))
+
+
+def policy_monitor_samples(record):
+    monitor = record.get("nativeMonitor") or {}
+    if (monitor.get("calibrated") is not True or monitor.get("installed") != 4
+        or monitor.get("unhooked") != [True] * 4 or monitor.get("pumpStoppedExpected") is not True
+        or monitor.get("overflow") is not False or monitor.get("errors")):
+        return None
+    start, end = monitor.get("startTick"), monitor.get("endTick")
+    if type(start) is not int or type(end) is not int or end < start:
+        return None
+    gs, ge = record.get("generationStartedTick"), record.get("generationConfirmedTick")
+    if type(gs) is not int or type(ge) is not int or not start <= gs <= ge <= end:
+        return None
+    samples = [v for v in monitor.get("samples", []) if start <= v["tick"] <= end]
+    if len(samples) < 2 or samples[0]["tick"]-start > 100 or end-samples[-1]["tick"] > 100:
+        return None
+    if any(b["tick"]-a["tick"] > 250 for a,b in zip(samples,samples[1:])):
+        return None
+    if any(not v.get("identityValid") or v.get("window",{}).get("hwnd") != record["expectedHwnd"]
+           or v.get("window",{}).get("pid") != record["chromePid"] for v in samples):
+        return None
+    return samples
+
+
+def window_policy_verdict(record):
+    if (record.get("setupVerified") is not True or record.get("traceVerified") is not True
+        or any(key in record for key in ("error","traceError","diagnosticError","nativeImageError"))
+        or not confirmed_case_cleanup(record)):
+        return "INCONCLUSIVE"
+    allow = record.get("policyAllowRestore")
+    if type(allow) is not bool:
+        return "INCONCLUSIVE"
+    events = fenced_events(record.get("trace", []))
+    samples = policy_monitor_samples(record)
+    if events is None or samples is None:
+        return "INCONCLUSIVE"
+    if any(e.get("type") == "attachment-change" for e in events):
+        return "INCONCLUSIVE"
+    if not window_valid(record.get("windowBefore",{}),"minimized",record["caseId"],record["chromePid"],record["expectedHwnd"],record["probePid"]):
+        return "INCONCLUSIVE"
+    before = record.get("pageBefore") or {}
+    if not before or before.get("generation") != record.get("generation"):
+        return "INCONCLUSIVE"
+    capture = record.get("capture") or {}
+    response = capture.get("response") or {}
+    if capture.get("killedAtDeadline") is not False:
+        return "INCONCLUSIVE"
+    if not allow:
+        if report_operations(events) or record.get("image") or record.get("nativeImage"):
+            return "ISSUES"
+        if capture.get("exit") != 1 or response.get("success") is not False or "screenshot_window_minimized:" not in str(response.get("error","")):
+            return "ISSUES"
+        starts = [e for e in events if e.get("type") == "capture-operation-start" and e.get("fixturePath") == "/warmup"]
+        if len(starts) != 1:
+            return "INCONCLUSIVE"
+        warm = [e for e in events if e.get("operationId") == starts[0].get("operationId")]
+        ends = [e for e in warm if e.get("type") == "capture-wrapper-answer"]
+        sends = [e for e in warm if e.get("type") == "capture-native-send"]
+        if (len(ends) != 1 or len(sends) != 1 or ends[0].get("invalidations")
+            or starts[0].get("epoch",0) <= 0 or starts[0].get("epoch") != sends[0].get("epoch")
+            or starts[0].get("epoch") != ends[0].get("epoch")
+            or len(ends[0].get("attempts",[])) != 1
+            or ends[0]["attempts"][0].get("target") != sends[0].get("target")
+            or ends[0]["attempts"][0].get("epoch") != sends[0].get("epoch")
+            or starts[0].get("requested") != sends[0].get("target")
+            or before != record.get("pageAfterRefusal")):
+            return "INCONCLUSIVE"
+        original = record["windowBefore"]["window"]
+        if any(v["window"].get("minimized") is not True or v["window"].get("rect") != original.get("rect")
+               or v["window"].get("foreground") != original.get("foreground") for v in samples):
+            return "ISSUES"
+        mon = record["nativeMonitor"]
+        if any(mon["startTick"] <= e["tick"] <= mon["endTick"] for e in mon.get("events",[])):
+            return "ISSUES"
+        return "PASS" if window_valid(record.get("windowAfter",{}),"minimized",record["caseId"],record["chromePid"],record["expectedHwnd"],record["probePid"]) else "ISSUES"
+    if record.get("captureState") != "restored":
+        return "INCONCLUSIVE"
+    context = capture_context(record.get("trace",[]),record)
+    if context is None:
+        return "INCONCLUSIVE"
+    sent, end, own = context
+    prep = (response.get("data") or {}).get("windowPreparation") or {}
+    if (capture.get("exit") != 0 or response.get("success") is not True
+        or prep.get("restored") is not True or prep.get("before") != "minimized" or prep.get("state") != "normal"
+        or prep.get("platform") != "win" or prep.get("applicable") is not True
+        or type(prep.get("windowId")) is not int or prep["windowId"] < 0
+        or not window_valid(record.get("windowAfter",{}),"restored",record["caseId"],record["chromePid"],record["expectedHwnd"],record["probePid"])):
+        return "ISSUES"
+    image, native = record.get("image") or {}, record.get("nativeImage") or {}
+    if not all(p.get(k) is True for p in [image,native] for k in ["pixelValid","dimensionsValid","freshnessValid"]):
+        return "ISSUES"
+    answers = [e for e in own if e.get("type") == "capture-native-answer"]
+    acks = [e for e in own if e.get("type") == "native-image-ack"]
+    after = [e for e in own if e.get("type") == "page-after-answer"]
+    if (end["type"] != "capture-wrapper-answer" or len(answers) != 1 or len(acks) != 1 or len(after) != 1
+        or answers[0].get("responseOwned") is not True or acks[0].get("saved",{}).get("sha256") != native.get("sha256")
+        or any(e.get("captureId") != sent["captureId"] or e.get("target") != sent["target"] or e.get("epoch") != sent["epoch"] for e in answers+acks+after)
+        or any(e.get("type") in ("capture-native-error","native-image-error","page-after-error") for e in own)):
+        return "INCONCLUSIVE"
+    attempt = end["attempts"][0]
+    if attempt.get("nativeOutcome") != "answer" or attempt.get("nativePending") is not False:
+        return "INCONCLUSIVE"
+    times = [sent.get("sentMs"),answers[0].get("nativeReceivedMs"),answers[0].get("ownershipVerifiedMs"),answers[0].get("atMs")]
+    if not all(type(t) in (int,float) and math.isfinite(t) for t in times) or times != sorted(times):
+        return "INCONCLUSIVE"
+    page = after[0].get("result") or {}
+    if set(page) != set(before) or any(page[k] != before[k] for k in before if k not in {"events","visibility","focused"}):
+        return "INCONCLUSIVE"
+    previous = before.get("events",[]); observed = page.get("events",[])
+    if observed[:len(previous)] != previous or any(e.get("type") not in {"focus","blur","visibilitychange","resize"}
+            or e.get("trusted") is not True for e in observed[len(previous):]):
+        return "ISSUES"
+    return "PASS"
+
+
 def case_verdict(record):
+    if record.get("windowPolicyExperiment"):
+        return window_policy_verdict(record)
     if not experiment_evidence_valid(record):
         return "INCONCLUSIVE"
     if record.get("setupVerified") is not True or record.get("traceVerified") is not True or "error" in record:
@@ -751,7 +889,8 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
             env=env, stdout=chrome_log, stderr=chrome_log)
         record = {"caseId": case_id, "state": state, "kind": kind, "repeat": repeat,
                   "protocol": "extension-relay-instrumented", "pendingDomControl": args.pending_dom_control,
-                  "candidateExperiment": args.experiment in ("candidates", "baseline"), "candidate": candidate, "instrumentedBackgroundSha256": instrumented_hash,
+                  "candidateExperiment": args.experiment in ("candidates", "baseline"), "windowPolicyExperiment": args.experiment == "window-policy",
+                  "policyAllowRestore": candidate == "restore", "candidate": candidate, "instrumentedBackgroundSha256": instrumented_hash,
                   "instrumentedExtensionSha256": tree_digest(work / "extension"),
                   "instrumentationDiff": str(artifact / "instrumentation.diff"), "setupVerified": False,
                   "stage": "relay-start", "traceVerified": False, "chromePid": chrome.pid, "probePid": os.getpid()}
@@ -786,7 +925,7 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
             record["stage"] = "window-state"
             hwnd = wait_for(lambda: windows.find(chrome.pid, "CaptureProbe " + case_id), lambda x: x is not None, 5)
             record["expectedHwnd"] = int(hwnd)
-            if args.experiment in ("candidates", "baseline"):
+            if args.experiment in ("candidates", "baseline", "window-policy"):
                 from native_monitor import NativeWindowMonitor
                 monitor = NativeWindowMonitor(windows, int(hwnd), chrome.pid, case_id)
                 monitor.start()
@@ -830,7 +969,8 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
                 return {"window": windows.state(hwnd), "cover": windows.state(cover_hwnd) if cover_hwnd else None}
             def control():
                 current = snapshot()
-                return {"valid": window_valid(current, state, case_id, chrome.pid, int(hwnd), os.getpid()), "snapshot": current}
+                expected = "restored" if args.experiment == "window-policy" and candidate == "restore" else state
+                return {"valid": window_valid(current, expected, case_id, chrome.pid, int(hwnd), os.getpid()), "snapshot": current}
             fixture.set_control(case_id, control)
             placement = snapshot()
             if not window_valid(placement, state, case_id, chrome.pid, int(hwnd), os.getpid()):
@@ -838,6 +978,9 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
             record.update(setupVerified=True, geometry=geometry, windowBefore=placement, domBefore=before, stage="capture")
             image = artifact / "capture.png"
             command = ["screenshot", str(image), "--full-res"]
+            if args.experiment == "window-policy" and candidate == "restore":
+                command.append("--allow-window-restore")
+                record["captureState"] = "restored"
             if kind == "full":
                 command.append("--full")
             elif kind == "selector":
@@ -849,6 +992,11 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
             record["cpuBusyPercentDuringCapture"] = cpu_busy(record["systemBeforeCapture"], record["systemAfterCapture"])
             record["capture"] = capture
             record["windowAfter"] = snapshot()
+            if args.experiment == "window-policy" and candidate == "refuse":
+                if known_window_refusal(capture, fixture.events(case_id)):
+                    record["pageAfterRefusal"] = checked(invoke("page-after-refusal", "eval", "fixtureSnapshot()"))["result"]
+                else:
+                    record["refusalReadSkipped"] = "capture outcome is not a known preflight refusal; preserve its attachment"
             if monitor:
                 record["domAfter"] = {"source": "same-attachment worker page-after trace; no CLI health recovery"}
             elif capture["exit"] == 0 and (capture.get("response") or {}).get("success"):
@@ -860,7 +1008,8 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
         finally:
             if record.get("captureAttempted"):
                 try:
-                    wait_for(lambda: fixture.events(case_id), capture_trace_complete, 5)
+                    if not (args.experiment == "window-policy" and candidate == "refuse"):
+                        wait_for(lambda: fixture.events(case_id), capture_trace_complete, 5)
                     record["traceVerified"] = True
                 except Exception as exc:
                     record["traceError"] = str(exc)
@@ -888,7 +1037,8 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
                         if attempt.get("nativeOutcome") == "error":
                             return page_done and native_error
                         return page_done and attempt.get("nativePending") is True and attempt.get("nativeOutcome") is None
-                    wait_for(lambda: fixture.events(case_id), diagnostics_complete, 7)
+                    if not (args.experiment == "window-policy" and candidate == "refuse"):
+                        wait_for(lambda: fixture.events(case_id), diagnostics_complete, 7)
                 except Exception as exc:
                     record["diagnosticError"] = str(exc)
                 try:
@@ -963,7 +1113,7 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
             record["image"] = inspect_image(artifact / "capture.png", kind, geometry, context[0].get("request") or {}, record.get("generation"))
         except Exception as exc:
             record["error"] = type(exc).__name__ + ": " + str(exc)
-    if record.get("candidateExperiment") and (artifact / "native.png").exists():
+    if (record.get("candidateExperiment") or record.get("windowPolicyExperiment")) and (artifact / "native.png").exists():
         try:
             from PIL import Image
             with Image.open(artifact / "native.png") as raw:
@@ -973,6 +1123,9 @@ def run_case(args, fixture, windows, root, output, state, kind, repeat, candidat
         except Exception as exc:
             record["nativeImageError"] = str(exc)
     record["verdict"] = case_verdict(record)
+    if record.get("windowPolicyExperiment"):
+        record["verifiedImageCapture"] = record["verdict"] == "PASS" and record["policyAllowRestore"] is True
+        record["policyOutcome"] = ("captured" if record["policyAllowRestore"] else "refused_without_capture") if record["verdict"] == "PASS" else "unverified_or_mismatch"
     record["matchesReportSignature"] = record["verdict"] == "ISSUES" and report_signature_matches(record["trace"], args.rows, record)
     (artifact / "result.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
     return record
@@ -1002,6 +1155,8 @@ def confirmed_case_cleanup(record):
         and record["browserTreeKillExit"] == proof.get("taskkill", {}).get("exit")
         and type(record.get("browserExitCode")) is int
         and record["browserExitCode"] == proof.get("parentExit")
+        and type(record.get("chromePid")) is int
+        and any(p.get("ProcessId") == record["chromePid"] for p in proof.get("before", []))
         and proof.get("observedSurvivors") == []
         and cleanup_acknowledged(proof.get("taskkill", {}), proof.get("before", []),
             proof.get("ownedHandleExits", []), proof.get("parentExit"), proof.get("postTree")))
@@ -1030,7 +1185,7 @@ def matrix_summary(records, expected, setup_error):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--experiment", choices=("original", "candidates", "baseline"), default="original")
+    parser.add_argument("--experiment", choices=("original", "candidates", "baseline", "window-policy"), default="original")
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--chrome", type=Path, required=True)
     parser.add_argument("--extension", type=Path, required=True)
@@ -1059,6 +1214,7 @@ def main():
         "samples": args.samples, "dpr": args.dpr, "experiment": args.experiment, "instrumented": True, "pendingDomControl": args.pending_dom_control,
         "scope": "Windows CI desktop + fresh source relay; no existing user session or other extensions"}
     (args.output / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    expected_cases = args.samples * (6 if args.experiment == "window-policy" else 1 if args.experiment == "baseline" else 9)
     root = Path(tempfile.mkdtemp(prefix="cu-capture-"))
     fixture = Fixture(args.rows)
     records = []
@@ -1069,9 +1225,9 @@ def main():
         (args.output / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         deadline = time.monotonic() + 1800
         for repeat in range(args.samples):
-            candidates = ["baseline", "view", "focus"] if args.experiment == "candidates" else ["baseline"]
+            candidates = ["refuse", "restore"] if args.experiment == "window-policy" else ["baseline", "view", "focus"] if args.experiment == "candidates" else ["baseline"]
             candidates = candidates[repeat % len(candidates):] + candidates[:repeat % len(candidates)]
-            states = ["minimized"] if args.experiment in ("candidates", "baseline") else ["normal", "covered", "minimized"]
+            states = ["minimized"] if args.experiment in ("candidates", "baseline", "window-policy") else ["normal", "covered", "minimized"]
             for candidate in candidates:
               for state in states:
                 for kind in (("viewport",) if args.experiment == "baseline" else ("viewport", "full", "selector")):
@@ -1079,7 +1235,7 @@ def main():
                         raise ProbeSetupFailure("matrix stopped at its 30-minute experiment budget")
                     record = run_case(args, fixture, windows, root, args.output, state, kind, repeat, candidate)
                     records.append(record)
-                    (args.output / "progress.json").write_text(json.dumps({"expectedCases": args.samples * (1 if args.experiment == "baseline" else 9), "records": records}, indent=2), encoding="utf-8")
+                    (args.output / "progress.json").write_text(json.dumps({"expectedCases": expected_cases, "records": records}, indent=2), encoding="utf-8")
                     print(json.dumps({"case": record["caseId"], "setup": record["setupVerified"],
                                       "signature": record["matchesReportSignature"], "verdict": record["verdict"], "error": record.get("error")}), flush=True)
                     if not can_start_next_case(record):
@@ -1090,7 +1246,12 @@ def main():
         setup_error = type(exc).__name__ + ": " + str(exc)
     finally:
         fixture.close()
-    summary = matrix_summary(records, args.samples * (1 if args.experiment == "baseline" else 9), setup_error)
+    summary = matrix_summary(records, expected_cases, setup_error)
+    if args.experiment == "window-policy":
+        summary["expectedRefusalsVerified"] = sum(r.get("verdict") == "PASS" and not r.get("policyAllowRestore") for r in records)
+        summary["restoredCapturesVerified"] = sum(r.get("verdict") == "PASS" and r.get("policyAllowRestore") is True for r in records)
+        summary["cliCaptureExitCodes"] = [r.get("capture",{}).get("exit") for r in records]
+        summary["interpretation"] = "PASS means expected default refusal and explicit restored-image contracts passed; refusals are not successful image captures."
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps({k: v for k, v in summary.items() if k != "records"}), flush=True)
     return {"PASS": 0, "ISSUES": 1, "INCONCLUSIVE": 2}[summary["verdict"]]
