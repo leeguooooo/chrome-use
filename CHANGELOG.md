@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.5.276
+
+<!-- release:start -->
+Works with extension ab-connect 0.5.100.
+
+### Features
+
+- **See which conversation drives a tab.** Open the side panel on a tab an agent created: a card names the agent, project and conversation, and "View context" shows the redacted transcript. Sessions now record their origin in `<session>.origin.json`, kept after the daemon exits. Nothing is added to the page.
+
+### Fixes
+
+- **Relay recovery.** Includes the relay and configuration-window recovery fixes merged since 1.5.275.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
 ## 1.5.275
 
 <!-- release:start -->
