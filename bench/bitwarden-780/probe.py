@@ -166,12 +166,26 @@ class FormFixture:
 
 
 def menu_frames(endpoint, fixture_url, bitwarden_id):
-    expression = '''(async()=>{const matches=(await chrome.tabs.query({})).filter(t=>t.url===URL);
+    expression = """(async()=>{const matches=(await chrome.tabs.query({})).filter(t=>t.url===URL);
     if(matches.length!==1)throw new Error('fixture tab is not unique');
     const tab=matches[0],frames=await chrome.webNavigation.getAllFrames({tabId:tab.id});
+    const owner=chrome.runtime.id===BW;
+    const paths=['/overlay/menu-button.html','/overlay/menu-list.html','/overlay/menu.html'];
+    const expected=owner?paths.map(path=>chrome.runtime.getURL(path.slice(1))):[];
+    const contexts=owner?await chrome.runtime.getContexts({tabIds:[tab.id]}):[];
+    const sameResource=(raw,allowed)=>{try{const u=new globalThis.URL(raw),e=new globalThis.URL(allowed);
+      return u.protocol===e.protocol&&u.host===e.host&&u.pathname===e.pathname;}catch{return false;}};
+    const ownedContext=context=>{try{const u=new globalThis.URL(context.documentUrl);
+      return context.tabId===tab.id&&u.protocol==='chrome-extension:'&&paths.includes(u.pathname);}catch{return false;}};
+    const found=frames.filter(frame=>expected.some(url=>sameResource(frame.url,url)))
+      .map(frame=>({frameId:frame.frameId,url:frame.url,proof:'owner-runtime-url'}));
+    for(const context of contexts.filter(ownedContext))if(!found.some(frame=>frame.frameId===context.frameId&&frame.url===context.documentUrl))
+      found.push({frameId:context.frameId,url:context.documentUrl,documentId:context.documentId,proof:'owner-runtime-context'});
     return {observerExtensionId:chrome.runtime.id,tabId:tab.id,windowId:tab.windowId,active:tab.active,
-      bitwardenFrames:frames.filter(f=>f.url.startsWith('chrome-extension://'+BW+'/')).map(f=>({frameId:f.frameId,url:f.url}))};})()'''
-    return worker(endpoint, expression.replace('URL',json.dumps(fixture_url)).replace('BW',json.dumps(bitwarden_id)))
+      expectedMenuUrls:expected,observedFrames:frames.map(frame=>({frameId:frame.frameId,url:frame.url})),
+      ownerContexts:contexts.map(context=>({contextType:context.contextType,frameId:context.frameId,tabId:context.tabId,documentUrl:context.documentUrl})),
+      bitwardenFrames:found};})()"""
+    return worker(endpoint, expression.replace('===URL','==='+json.dumps(fixture_url)).replace('===BW','==='+json.dumps(bitwarden_id)))
 
 
 def native_focus(windows, hwnd, pid, title):
