@@ -56,13 +56,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.experiment != 'bitwarden'
+      - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
           targets: x86_64-pc-windows-msvc
       - name: Verify detached Windows stderr handles without a browser
-        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.experiment != 'bitwarden'
+        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path probe-artifacts -Force | Out-Null
@@ -81,22 +81,22 @@ jobs:
         if: inputs.experiment == 'bitwarden'
         run: python bench/bitwarden-780/test_probe.py
       - name: Install decoder for pure image checks
-        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.experiment != 'bitwarden'
+        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
         run: python -m pip install --disable-pip-version-check Pillow
       - name: Check fixture and diagnostic generator without a browser
-        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.experiment != 'bitwarden'
+        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
         run: python bench/windows-capture-798/test_probe.py
-      - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.experiment != 'bitwarden'
+      - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: cli
           key: x86_64-pc-windows-msvc-release
           cache-on-failure: true
       - name: Validate inputs and build the exact Release CLI
-        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.experiment != 'bitwarden'
+        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
         shell: pwsh
         run: |
-          if ($env:PROBE_EXPERIMENT -notmatch '^(original|candidates|baseline|window-policy)$') { throw 'invalid experiment' }
+          if ($env:PROBE_EXPERIMENT -notmatch '^(original|candidates|baseline|window-policy|bitwarden)$') { throw 'invalid experiment' }
           if ($env:PROBE_SAMPLES -notmatch '^[1-5]$') { throw 'samples must be 1-5' }
           if ($env:PROBE_ROWS -notmatch '^[0-9]+$' -or [int]$env:PROBE_ROWS -lt 100 -or [int]$env:PROBE_ROWS -gt 3000) { throw 'rows must be 100-3000' }
           if ($env:PROBE_DPR -notmatch '^[12]$') { throw 'dpr must be 1 or 2' }
@@ -107,10 +107,11 @@ jobs:
           $binary = (Resolve-Path cli/target/x86_64-pc-windows-msvc/release/chrome-use.exe).Path
           "PROBE_BINARY=$binary" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Get-FileHash $binary -Algorithm SHA256 | Format-List | Out-File probe-artifacts/binary-sha256.txt
+          Copy-Item $binary probe-artifacts/source-cli.exe
           cargo --version | Out-File probe-artifacts/toolchain.txt
           rustc --version | Out-File probe-artifacts/toolchain.txt -Append
       - name: Install isolated Chrome for Testing and image decoder
-        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.experiment != 'bitwarden'
+        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
         shell: pwsh
         run: |
           & $env:PROBE_BINARY install 2>&1 | Tee-Object probe-artifacts/chrome-install.log
@@ -129,32 +130,13 @@ jobs:
           $control = if ($env:PROBE_PENDING_DOM -eq 'true') { '--pending-dom-control' } else { '--no-pending-dom-control' }
           python bench/windows-capture-798/probe.py $control --experiment $env:PROBE_EXPERIMENT --binary "$env:PROBE_BINARY" --chrome "$env:PROBE_CHROME" --extension extensions/ab-connect --output probe-artifacts/results --samples $env:PROBE_SAMPLES --rows $env:PROBE_ROWS --dpr $env:PROBE_DPR
           if ($LASTEXITCODE -ne 0) { throw "Probe verdict is not PASS (exit $LASTEXITCODE); inspect summary and raw evidence" }
-      - name: Probe the official Bitwarden menu in a disposable profile
+      - name: Probe the official Bitwarden menu in disposable source-CLI profiles
         if: inputs.experiment == 'bitwarden'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path probe-artifacts -Force | Out-Null
-          $archive = Join-Path $env:RUNNER_TEMP 'bw780-cli.tar.gz'
-          $checksum = "$archive.sha256"
-          $cliDir = Join-Path $env:RUNNER_TEMP 'bw780-cli'
-          $base = 'https://github.com/leeguooooo/chrome-use/releases/download/v1.5.276/chrome-use-win32-x64.tar.gz'
-          curl.exe --fail --location --max-time 120 $base --output $archive
-          if ($LASTEXITCODE -ne 0) { throw 'Reference CLI download failed' }
-          curl.exe --fail --location --max-time 60 "$base.sha256" --output $checksum
-          if ($LASTEXITCODE -ne 0) { throw 'Reference CLI checksum download failed' }
-          $expected = ((Get-Content $checksum -Raw).Trim() -split '\s+')[0]
-          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Reference CLI checksum mismatch' }
-          New-Item -ItemType Directory -Path $cliDir -Force | Out-Null
-          tar -xzf $archive -C $cliDir
-          if ($LASTEXITCODE -ne 0) { throw 'Reference CLI extraction failed' }
-          $executables = @(Get-ChildItem $cliDir -Filter chrome-use.exe -Recurse)
-          if ($executables.Count -ne 1) { throw 'Reference CLI is ambiguous or absent' }
-          $binary = $executables[0].FullName
-          & $binary install 2>&1 | Tee-Object probe-artifacts/chrome-install.log
-          if ($LASTEXITCODE -ne 0) { throw 'Chrome for Testing install failed' }
-          $chrome = Get-ChildItem -Path (Join-Path $env:USERPROFILE '.chrome-use/browsers') -Filter chrome.exe -Recurse |
-            Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $chrome) { throw 'Chrome for Testing executable not found' }
+          $binary = $env:PROBE_BINARY
+          $chrome = $env:PROBE_CHROME
+          if (-not (Test-Path $binary) -or -not (Test-Path $chrome)) { throw 'Exact source CLI or Chrome is absent' }
           $bwArchive = Join-Path $env:RUNNER_TEMP 'bw780-official.zip'
           $bwDir = Join-Path $env:RUNNER_TEMP 'bw780-official'
           curl.exe --fail --location --max-time 120 'https://github.com/bitwarden/clients/releases/download/browser-v2026.10.1/dist-chrome-2026.10.1.zip' --output $bwArchive
@@ -162,8 +144,15 @@ jobs:
           if ((Get-FileHash $bwArchive -Algorithm SHA256).Hash -ne 'd7c2d924f0d21ccb36f57e39bdaf732732644e94db95d5dd967629d8b878b93a') { throw 'Official Bitwarden archive hash mismatch' }
           Expand-Archive -Path $bwArchive -DestinationPath $bwDir
           Get-FileHash $binary,$bwArchive -Algorithm SHA256 | Format-List | Out-File probe-artifacts/input-hashes.txt
-          python bench/bitwarden-780/probe.py --binary $binary --chrome $chrome.FullName --extension extensions/ab-connect --bitwarden $bwDir --output probe-artifacts/bitwarden
-          if ($LASTEXITCODE -ne 0) { throw 'Real-extension diagnostic is not PASS; inspect its evidence and scope' }
+          $verdicts = @()
+          foreach ($mode in @('default', 'foreground', 'background')) {
+            $output = "probe-artifacts/bitwarden-$mode"
+            python bench/bitwarden-780/probe.py --binary $binary --chrome $chrome --extension extensions/ab-connect --bitwarden $bwDir --output $output --setup-mode $mode
+            $verdicts += $LASTEXITCODE
+            $summary = Get-Content "$output/summary.json" -Raw | ConvertFrom-Json
+            if ($summary.browserCleanup.verified -ne $true -or $summary.coverCleanupError) { throw 'Cleanup unknown; refusing another fixture profile' }
+          }
+          if (@($verdicts | Where-Object { $_ -ne 0 }).Count -ne 0) { throw 'Real-extension diagnostic is not PASS; inspect evidence and scope' }
       - name: Diagnose owned Chrome process-tree cleanup without a CLI build
         if: inputs.experiment == 'cleanup' || inputs.experiment == 'cleanup-relay'
         shell: pwsh

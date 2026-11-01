@@ -134,11 +134,13 @@ class FormFixture:
         html = '''<!doctype html><title>BitwardenFixture CASE</title>
         <form id="fixture"><label>Email<input id="email" name="email" type="email" autocomplete="username"></label>
         <label>Password<input id="password" name="password" type="password" autocomplete="current-password"></label>
+        <button id="continue" type="button">Continue locally</button>
         <button type="submit">Do not submit</button></form>
         <script>
-        const recordedEvents=[];
-        window.fixtureState=()=>({caseId:'CASE',events:recordedEvents.slice()});
-        for(const type of ['focus','blur','keydown','keyup','visibilitychange','submit'])
+        const recordedEvents=[];let continuations=0;
+        document.getElementById('continue').addEventListener('click',()=>continuations++);
+        window.fixtureState=()=>({caseId:'CASE',events:recordedEvents.slice(),continuations});
+        for(const type of ['focus','blur','keydown','keyup','click','visibilitychange','submit'])
           document.addEventListener(type,event=>{
             if(type==='submit')event.preventDefault();
             const observed={type,trusted:event.isTrusted,key:event.key||null,
@@ -195,9 +197,23 @@ def native_focus(windows, hwnd, pid, title):
     user32 = ctypes.WinDLL('user32',use_last_error=True)
     user32.SetForegroundWindow.argtypes=[wintypes.HWND];user32.SetForegroundWindow.restype=wintypes.BOOL
     user32.SetForegroundWindow(hwnd)
-    focused = wait_for(lambda: windows.state(hwnd), lambda w:w['foreground']==hwnd, 2)
+    focused = wait_for(lambda: windows.state(hwnd), lambda w:w['foreground']==hwnd and w['centerOwned'] is True, 2)
     if focused['visible'] is not True:raise RuntimeError('foreground fixture window is not visible')
     return before, focused
+
+
+def native_menu_image(windows, hwnd, pid, case, path):
+    from PIL import ImageGrab
+    observed=windows.state(hwnd)
+    if (observed['pid']!=pid or case not in observed['title'] or observed['foreground']!=hwnd
+            or observed['centerOwned'] is not True):
+        raise RuntimeError('native image target is not the foreground CI fixture')
+    rectangle=observed['rect']
+    image=ImageGrab.grab(bbox=tuple(rectangle),all_screens=True)
+    expected=(rectangle[2]-rectangle[0],rectangle[3]-rectangle[1])
+    if image.size!=expected:raise RuntimeError('native image crop dimensions changed')
+    image.save(path)
+    return {'sha256':digest(path),'width':image.width,'height':image.height,'window':observed}
 
 
 def send_escape(hwnd):
@@ -244,6 +260,7 @@ def main():
         raise SystemExit('Only a disposable Windows GitHub runner is allowed')
     parser=argparse.ArgumentParser()
     for name in ['binary','chrome','extension','bitwarden','output']:parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--setup-mode',choices=['default','foreground','background'],default='default')
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=True)
     case='bw780-'+uuid.uuid4().hex[:10]
     fixture=FormFixture(case);windows=Windows();record={'caseId':case,'verdict':'INCONCLUSIVE',
@@ -252,7 +269,7 @@ def main():
         'bitwardenBackgroundSha256':digest(args.bitwarden/'background.js'),
         'sourceExtensionBackgroundSha256':digest(args.extension/'background.js'),
         'sourceGitSha':os.environ.get('GITHUB_SHA'),
-        'realVaultTested':False,'productionRecoveryImplemented':False}
+        'realVaultTested':False,'productionRecoveryImplemented':False,'setupMode':args.setup_mode}
     try:
         with tempfile.TemporaryDirectory(prefix='chrome780-') as tmp:
             root=Path(tmp);extension=root/'chrome-use';shutil.copytree(args.extension,extension)
@@ -274,7 +291,7 @@ def main():
                     '--disable-extensions-except='+str(extension)+','+str(args.bitwarden),
                     '--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1',
                     '--window-size=1280,800','about:blank'],env=env,stdout=log,stderr=log)
-                record['chromePid']=chrome.pid;common=None
+                record['chromePid']=chrome.pid;common=None;close_cover=None
                 try:
                     active_port=wait_for(lambda: profile/'DevToolsActivePort',lambda p:p.exists(),15)
                     port=int(active_port.read_text().splitlines()[0])
@@ -295,6 +312,12 @@ def main():
                     if opened.get('url')!=fixture.url:raise RuntimeError('fixture URL not reached: '+str(opened.get('url')))
                     hwnd=wait_for(lambda:windows.find(chrome.pid,'BitwardenFixture '+case),lambda x:x is not None,5)
                     record['windowBefore']=windows.state(hwnd)
+                    if args.setup_mode=='foreground':
+                        before,after=native_focus(windows,hwnd,chrome.pid,'BitwardenFixture '+case)
+                        record['setupNativeFocus']={'before':before,'after':after}
+                    elif args.setup_mode=='background':
+                        close_cover,cover_hwnd=windows.cover(hwnd,'Bitwarden fixture cover '+case,topmost=False)
+                        record['setupCover']={'window':windows.state(cover_hwnd),'coveredChrome':windows.state(hwnd)}
                     record['storageBeforeFocus']=fixture_storage_status(bw_endpoint)
                     record['runtimeBeforeFocus']=official_runtime_status(bw_endpoint)
                     fixture_tab=menu_frames(bw_endpoint,fixture.url,bw_identity['id'])
@@ -322,15 +345,23 @@ def main():
                         record['nativeFocus']={'before':before,'after':focused}
                         record['menuAfterNativeFocus']=menu_frames(bw_endpoint,fixture.url,bw_identity['id'])
                         if record['menuAfterNativeFocus']['bitwardenFrames']:
+                            record['nativeMenuImage']=native_menu_image(windows,hwnd,chrome.pid,case,args.output/'native-menu.png')
                             record['nativeEscape']=send_escape(hwnd);record['mechanism']='menu-absent-after-native-escape'
                         else:record['mechanism']='menu-absent-after-native-focus'
                         record['menuAfterNative']=wait_for(lambda:menu_frames(bw_endpoint,fixture.url,bw_identity['id']),
                             lambda x:not x['bitwardenFrames'],4)
                     record['accessAfter']=invoke('access-after','eval','({title:document.title,fixture:window.fixtureState()})')
                     after_data=checked(record['accessAfter'])
+                    if ((after_data.get('result') or {}).get('fixture') or {}).get('continuations')!=0:
+                        raise RuntimeError('continuation happened before its authorized click')
+                    record['continuation']=invoke('continuation','click','#continue')
+                    checked(record['continuation'])
+                    record['continuationRead']=invoke('continuation-read','eval','({title:document.title,fixture:window.fixtureState()})')
+                    after_data=checked(record['continuationRead'])
                     observed=after_data.get('result') or {}
                     if observed.get('title') != 'BitwardenFixture '+case or (observed.get('fixture') or {}).get('caseId')!=case:
                         raise RuntimeError('recovery read answered from a different page')
+                    if observed['fixture'].get('continuations')!=1:raise RuntimeError('continuation was not performed exactly once')
                     record['finalMenu']=menu_frames(bw_endpoint,fixture.url,bw_identity['id'])
                     with fixture.lock:record['receivedFixtureEvents']=list(fixture.events)
                     record['fixtureEvents']=observed['fixture'].get('events')
@@ -342,6 +373,9 @@ def main():
                 except Exception as exc:
                     record['error']=type(exc).__name__+': '+str(exc)[:1200]
                 finally:
+                    if close_cover:
+                        try:close_cover();record['coverClosed']=True
+                        except Exception as exc:record['coverCleanupError']=str(exc)[:300];record['verdict']='INCONCLUSIVE'
                     if common:
                         try:record['sessionCleanup']=execute(common+['close'],env,args.output/'close',timeout=20)
                         except Exception as exc:record['sessionCleanupError']=str(exc)[:300]
