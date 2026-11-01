@@ -30,9 +30,10 @@ impl Drop for Handle {
 pub(super) struct ChromeParent {
     process: Handle,
     pid: u32,
+    _launcher: Option<Handle>,
 }
 
-fn parent_pid() -> Result<u32, &'static str> {
+fn parent_pid(child_pid: u32) -> Result<u32, &'static str> {
     // SAFETY: snapshot acquisition has no pointer parameters.
     let raw = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if raw == INVALID_HANDLE_VALUE || raw == 0 {
@@ -45,10 +46,8 @@ fn parent_pid() -> Result<u32, &'static str> {
     entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
     // SAFETY: both handles and the sized, writable record remain live.
     let mut available = unsafe { Process32FirstW(snapshot.0, &mut entry) } != 0;
-    // SAFETY: GetCurrentProcessId takes no arguments.
-    let current = unsafe { GetCurrentProcessId() };
     while available {
-        if entry.th32ProcessID == current {
+        if entry.th32ProcessID == child_pid {
             return (entry.th32ParentProcessID != 0)
                 .then_some(entry.th32ParentProcessID)
                 .ok_or("native host has no identifiable Chrome parent");
@@ -72,47 +71,89 @@ fn created(handle: HANDLE) -> Result<u64, &'static str> {
     Ok(((creation.dwHighDateTime as u64) << 32) | creation.dwLowDateTime as u64)
 }
 
+fn held_process(pid: u32, child_created: u64) -> Result<(Handle, u64, String), &'static str> {
+    // SAFETY: requests only read/synchronization access to an observed parent.
+    let raw = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            0,
+            pid,
+        )
+    };
+    if raw == 0 {
+        return Err("could not bind the native host parent");
+    }
+    let process = Handle(raw);
+    let birth = created(process.0)?;
+    if birth > child_created {
+        return Err("the native host parent pid was reused");
+    }
+    let mut name = vec![0u16; 32768];
+    let mut length = name.len() as u32;
+    // SAFETY: the owned process handle has query rights and the buffer is live.
+    if unsafe { QueryFullProcessImageNameW(process.0, 0, name.as_mut_ptr(), &mut length) } == 0 {
+        return Err("could not identify the native host parent executable");
+    }
+    let path = String::from_utf16(&name[..length as usize])
+        .map_err(|_| "invalid parent executable path")?;
+    Ok((process, birth, path))
+}
+
+fn executable_name(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+fn system_command_intermediary(path: &str) -> bool {
+    let mut directory = vec![0u16; 32768];
+    // SAFETY: the UTF-16 buffer is writable for the supplied length.
+    let length = unsafe {
+        windows_sys::Win32::System::SystemInformation::GetWindowsDirectoryW(
+            directory.as_mut_ptr(),
+            directory.len() as u32,
+        )
+    } as usize;
+    if length == 0 || length >= directory.len() {
+        return false;
+    }
+    let directory = std::path::PathBuf::from(String::from_utf16_lossy(&directory[..length]));
+    ["System32", "SysWOW64"].iter().any(|folder| {
+        directory
+            .join(folder)
+            .join("cmd.exe")
+            .to_string_lossy()
+            .eq_ignore_ascii_case(path)
+    })
+}
+
 impl ChromeParent {
-    /// Called only in the Chrome native-messaging host. Standalone CLI and test
-    /// wrappers do not gain desktop authority by providing a pid or origin.
+    /// Attest either Chrome's direct launch or its documented Windows system
+    /// cmd.exe intermediary. Do not search arbitrary shell/agent ancestry.
     pub(super) fn attest() -> Result<Self, &'static str> {
-        let pid = parent_pid()?;
-        // SAFETY: requests read-only information about the observed OS parent.
-        let raw = unsafe {
-            OpenProcess(
-                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
-                0,
-                pid,
-            )
-        };
-        if raw == 0 {
-            return Err("could not bind the native host parent");
-        }
-        let process = Handle(raw);
-        // A parent pid from the snapshot may have exited before OpenProcess.
-        // Reject a replacement process created after this native host.
-        // SAFETY: the pseudo-handle is read-only and must not be closed.
+        // SAFETY: these process identity APIs take no pointer arguments.
+        let host_pid = unsafe { GetCurrentProcessId() };
         let host_created = created(unsafe { GetCurrentProcess() })?;
-        if created(process.0)? > host_created {
-            return Err("the native host parent pid was reused");
+        let mut pid = parent_pid(host_pid)?;
+        let (mut process, birth, mut path) = held_process(pid, host_created)?;
+        let mut launcher = None;
+        if executable_name(&path) == "cmd.exe" {
+            if !system_command_intermediary(&path) {
+                return Err(
+                    "native host command intermediary is not the Windows system executable",
+                );
+            }
+            let chrome_pid = parent_pid(pid)?;
+            let (chrome, _, chrome_path) = held_process(chrome_pid, birth)?;
+            launcher = Some(process);
+            process = chrome;
+            path = chrome_path;
+            pid = chrome_pid;
         }
-        let mut name = vec![0u16; 32768];
-        let mut length = name.len() as u32;
-        // SAFETY: the buffer is writable for length UTF-16 units, and the held
-        // process handle has PROCESS_QUERY_LIMITED_INFORMATION access.
-        if unsafe { QueryFullProcessImageNameW(process.0, 0, name.as_mut_ptr(), &mut length) } == 0
-        {
-            return Err("could not identify the native host parent executable");
-        }
-        let path = String::from_utf16(&name[..length as usize])
-            .map_err(|_| "invalid native host parent executable path")?;
-        let file = std::path::Path::new(&path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
         if !matches!(
-            file.as_str(),
+            executable_name(&path).as_str(),
             "chrome.exe"
                 | "chromium.exe"
                 | "msedge.exe"
@@ -123,7 +164,11 @@ impl ChromeParent {
         ) {
             return Err("native focus recovery requires a Chrome-launched native host");
         }
-        let parent = Self { process, pid };
+        let parent = Self {
+            process,
+            pid,
+            _launcher: launcher,
+        };
         parent.require_alive()?;
         Ok(parent)
     }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { NativeFocusBridge, beginNativeFocusRecovery } from './native-focus.js';
+import { NativeFocusBridge, beginNativeFocusRecovery, prepareNativeFocusRecovery } from './native-focus.js';
 
 const token = 'a'.repeat(32);
 const params = { allowFocusRecovery: true, url: 'https://example.invalid/login' };
@@ -16,6 +16,7 @@ function fixture() {
     request: async operation => {
       calls.push([operation]);
       if (operation === 'prepare') return { schemaVersion: 1, token, leaseMs: 120000 };
+      if (operation === 'inspect') return { token, verified: true };
       if (operation === 'escape') return { input: { keyDownAdmitted: 1, keyUpAdmitted: 1, delivery: 'unverified', replayed: false } };
       return { schemaVersion: 1, expired: false, restore: { attempted: true, restored: true } };
     },
@@ -48,7 +49,7 @@ test('one successful attempt leaves its lease open until the authorized command 
   assert.equal(result.started, true);
   assert.equal(result.token, token);
   assert.equal(result.input.delivery, 'unverified');
-  assert.deepEqual(f.calls, [['prepare'], ['focus', 7], ['escape']]);
+  assert.deepEqual(f.calls, [['prepare'], ['focus', 7], ['inspect'], ['escape']]);
 });
 
 test('revocation during native preparation closes the lease without focusing or sending Escape', async () => {
@@ -69,7 +70,7 @@ test('failed native admission is never repeated and performs one cleanup request
   };
   const result = await beginNativeFocusRecovery(params, f.deps);
   assert.equal(result.started, false);
-  assert.deepEqual(f.calls, [['prepare'], ['focus', 7], ['escape'], ['finish']]);
+  assert.deepEqual(f.calls, [['prepare'], ['focus', 7], ['inspect'], ['escape'], ['finish']]);
 });
 
 test('a page change during window activation refuses Escape and restores through the host', async () => {
@@ -78,6 +79,49 @@ test('a page change during window activation refuses Escape and restores through
   const result = await beginNativeFocusRecovery(params, f.deps);
   assert.equal(result.started, false);
   assert.deepEqual(f.calls, [['prepare'], ['focus', 7], ['finish']]);
+});
+
+test('a tab switch during native inspection cannot receive Escape', async () => {
+  const f = fixture(), original = f.deps.request;
+  f.deps.request = async op => {
+    const result = await original(op);
+    if (op === 'inspect') f.state.tab.active = false;
+    return result;
+  };
+  const result = await beginNativeFocusRecovery(params, f.deps);
+  assert.equal(result.started, false);
+  assert.deepEqual(f.calls, [['prepare'], ['focus', 7], ['inspect'], ['finish']]);
+});
+
+test('preparation returns cleanup authority before any focus or key request', async () => {
+  const f = fixture();
+  const lease = await prepareNativeFocusRecovery(params, f.deps);
+  assert.equal(lease.token, token);
+  assert.deepEqual(f.calls, [['prepare']]);
+  await lease.finish();
+  const result = await lease.begin();
+  assert.equal(result.started, false);
+  assert.deepEqual(f.calls, [['prepare'], ['finish']]);
+});
+
+test('cancellation during native inspection prevents the later key request', async () => {
+  const f = fixture(), original = f.deps.request;
+  let reached, resume;
+  const inspecting = new Promise(resolve => { reached = resolve; });
+  const pending = new Promise(resolve => { resume = resolve; });
+  f.deps.request = async op => {
+    const result = await original(op);
+    if (op === 'inspect') { reached(); await pending; }
+    return result;
+  };
+  const lease = await prepareNativeFocusRecovery(params, f.deps);
+  const running = lease.begin();
+  await inspecting;
+  await lease.finish();
+  resume();
+  const result = await running;
+  assert.equal(result.started, false);
+  assert.deepEqual(f.calls, [['prepare'], ['focus', 7], ['inspect'], ['finish']]);
 });
 
 test('native timeout and late replies never resend a request or enter CDP', async () => {

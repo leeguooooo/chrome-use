@@ -34,7 +34,7 @@ impl State {
             .is_some_and(|lease| std::time::Instant::now() >= lease.expires)
         {
             let mut lease = self.active.take().unwrap();
-            let result = serde_json::json!({"schemaVersion":1,"expired":true,"restore":lease.desktop.finish()});
+            let result = serde_json::json!({"schemaVersion":1,"expired":true,"restore":lease.desktop.finish(false)});
             self.finished = Some((lease.token.clone(), result));
         }
     }
@@ -115,11 +115,11 @@ impl NativeFocusHost {
             state.active = Some(Lease {
                 token: token.clone(),
                 page_url: page_url.to_string(),
-                expires: Instant::now() + Duration::from_secs(120),
+                expires: Instant::now() + Duration::from_secs(20),
                 desktop,
                 _desktop_lock: lock,
             });
-            return Ok(json!({"schemaVersion":1,"token":token,"leaseMs":120000}));
+            return Ok(json!({"schemaVersion":1,"token":token,"leaseMs":20000}));
         }
         let token = params["token"]
             .as_str()
@@ -138,14 +138,27 @@ impl NativeFocusHost {
             .filter(|lease| lease.token == token)
             .ok_or("Native focus lease is absent or expired; no key was repeated")?;
         match operation {
+            "inspect" => {
+                // Preparation without activation should release desktop
+                // ownership promptly; an active operation gets its own cap.
+                lease.expires = Instant::now() + Duration::from_secs(120);
+                let verified = lease
+                    .desktop
+                    .inspect(&lease.page_url, lease.expires)
+                    .await?;
+                Ok(json!({"schemaVersion":1,"token":token,"verified":verified["verified"]}))
+            }
             "escape" => {
-                let receipt = lease.desktop.escape(&lease.page_url, lease.expires).await?;
+                let receipt = lease.desktop.escape(lease.expires).await?;
                 Ok(json!({"schemaVersion":1,"token":token,"input":receipt}))
             }
             "finish" => {
                 let mut lease = state.active.take().unwrap();
-                let receipt =
-                    json!({"schemaVersion":1,"expired":false,"restore":lease.desktop.finish()});
+                let restore = match params["restoreAllowed"].as_bool() {
+                    Some(false) => lease.desktop.abandon_restore(),
+                    allowed => lease.desktop.finish(allowed == Some(true)),
+                };
+                let receipt = json!({"schemaVersion":1,"expired":false,"restore":restore});
                 state.finished = Some((lease.token.clone(), receipt.clone()));
                 Ok(receipt)
             }

@@ -58,13 +58,14 @@ namespace FixtureUia {
         const int ProcessId = 30002, ControlType = 30003, Name = 30005;
         const int ClassName = 30012, IsOffscreen = 30022;
         const int LegacyValue = 30093, Document = 50030, Limit = 2048;
-        public static object Read(long handle, int pid, string title) {
+        public static object Read(long handle, int pid) {
             var com = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("ff48dba4-60ef-4201-aa87-54103eef594e")));
             try {
                 var automation = (Automation)com;
                 var root = automation.ElementFromHandle(new IntPtr(handle));
-                if (Convert.ToInt32(root.GetCurrentPropertyValue(ProcessId)) != pid ||
-                    !Convert.ToString(root.GetCurrentPropertyValue(Name)).StartsWith(title, StringComparison.Ordinal))
+                // The native caller binds HWND/process ownership; document URLs
+                // below bind its page. Accessible names are presentation text.
+                if (Convert.ToInt32(root.GetCurrentPropertyValue(ProcessId)) != pid)
                     throw new InvalidOperationException("The native window identity changed");
                 var walker = automation.GetRawViewWalker();
                 var pending = new Stack<Node>();
@@ -119,7 +120,7 @@ $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
 # Document. Keep each re-read bounded and retain the empty attempts as facts.
 $attempts = @()
 for ($attempt = 0; $attempt -lt 8; $attempt++) {
-    $snapshot = [FixtureUia.Inspector]::Read([long]$request.hwnd, [int]$request.pid, [string]$request.title)
+    $snapshot = [FixtureUia.Inspector]::Read([long]$request.hwnd, [int]$request.pid)
     $attempts += @{documentCount=$snapshot.documentCount;visitedNodes=$snapshot.visitedNodes;
         failedDocuments=$snapshot.failedDocuments;truncated=$snapshot.truncated}
     $pageDocuments = @($snapshot.documents | Where-Object {

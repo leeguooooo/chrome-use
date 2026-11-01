@@ -7299,16 +7299,31 @@ impl BrowserManager {
     /// Recover before dispatch, after the command layer has checked policy and
     /// routed to its actual target. A no-op renderer read can trigger recovery;
     /// the original operation has not run and is never replayed here.
-    pub(crate) async fn prepare_native_focus_recovery(&self) -> Result<(), String> {
+    pub(crate) async fn prepare_native_focus_recovery(
+        &self,
+        before_policy_url: Option<&str>,
+    ) -> Result<(), String> {
         if !super::focus_recovery::enabled() || !self.on_relay() {
             return Ok(());
         }
         let session = self.active_session_id()?.to_string();
         let target = self.active_target_id()?.to_string();
-        let url = self
-            .pinned_tab_url_from_browser()
-            .await
-            .ok_or("native recovery could not read the bound tab")?;
+        let live = self.pinned_tab_browser_record().await?;
+        let url = live["url"]
+            .as_str()
+            .ok_or("native recovery could not read the bound tab URL")?
+            .to_string();
+        let live_target = live["targetId"]
+            .as_str()
+            .filter(|target| !target.is_empty())
+            .ok_or("native recovery could not read the live target binding")?
+            .to_string();
+        let chrome_tab = live["chromeTabId"]
+            .as_i64()
+            .ok_or("native recovery could not read the Chrome tab binding")?;
+        if Some(url.as_str()) != before_policy_url {
+            return Err("native recovery page changed during policy checks; the current page operation was not run".into());
+        }
         let probe = || {
             self.client.send_command(
                 "Runtime.evaluate",
@@ -7331,42 +7346,52 @@ impl BrowserManager {
             Err(error) if !is_debugger_access_denied(&error) => return Ok(()),
             Err(_) => {}
         }
+        if !self.created_targets.contains(&target) {
+            return Err(
+                "native focus recovery refuses a tab this session did not create; no focus changed"
+                    .into(),
+            );
+        }
         let _permit = super::focus_recovery::take_permit().ok_or(
             "native recovery was already attempted in this invocation; the command was not run",
         )?;
-        let begun = self
+        let prepared = self
             .client
             .send_command(
-                "ABExt.nativeFocusBegin",
+                "ABExt.nativeFocusPrepare",
                 Some(json!({
-                    "allowFocusRecovery":true, "targetId":target, "sessionId":session, "url":url,
+                    "allowFocusRecovery":true, "targetId":live_target, "sessionId":session, "chromeTabId":chrome_tab, "url":url,
                 })),
                 None,
             )
             .await?;
-        if begun["started"].as_bool() != Some(true) {
-            let message = begun["error"]
-                .as_str()
-                .unwrap_or("native focus recovery was not confirmed");
-            return Err(format!(
-                "{message}; original command was not run. Foreground restoration: {}",
-                if begun
-                    .pointer("/restore/restore/restored")
-                    .and_then(Value::as_bool)
-                    == Some(true)
-                {
-                    "verified"
-                } else {
-                    "unconfirmed"
-                }
-            ));
+        if prepared["prepared"].as_bool() != Some(true) {
+            return Err(
+                "native preparation was not confirmed; the current page operation was not run"
+                    .into(),
+            );
         }
-        let token = begun["token"]
+        let token = prepared["token"]
             .as_str()
             .filter(|token| token.len() == 32 && token.bytes().all(|b| b.is_ascii_hexdigit()))
-            .ok_or("malformed native recovery lease; original command was not run")?
+            .ok_or("malformed native recovery lease; the current page operation was not run")?
             .to_string();
-        super::focus_recovery::register(self.client.clone(), token, begun["input"].clone())?;
+        // Own the cleanup capability before the extension may request focus.
+        // A canceled command can now revoke the remaining native sequence.
+        super::focus_recovery::register(self.client.clone(), token.clone(), Value::Null)?;
+        let begun = self
+            .client
+            .send_command("ABExt.nativeFocusBegin", Some(json!({"token":token})), None)
+            .await?;
+        super::focus_recovery::record_input(begun["input"].clone())?;
+        if begun["started"].as_bool() != Some(true) {
+            return Err(format!(
+                "{}; the current page operation was not run",
+                begun["error"]
+                    .as_str()
+                    .unwrap_or("native focus recovery was not confirmed")
+            ));
+        }
         if begun
             .pointer("/input/keyDownAdmitted")
             .and_then(Value::as_u64)

@@ -40,7 +40,7 @@ import { attachTabById } from './attach-by-id.js';
 import { attachCreatedTab, createTabAttachmentQueue } from './tab-attachment.js';
 import { releaseTab } from './release-tab.js';
 import { blurFocusedField } from './menu-blur.js';
-import { NativeFocusBridge, beginNativeFocusRecovery } from './native-focus.js';
+import { NativeFocusBridge, prepareNativeFocusRecovery } from './native-focus.js';
 import { SITE_ACCESS_NOTIFICATION, SITE_ACCESS_OPTIONS_PAGE, hasSiteAccess, isSiteAccessError, notifySiteAccessNeeded } from './site-access.js';
 import { DWELL_MS, UserTouchedTabs } from './user-touched.js';
 import { removeAgentTab } from './remove-agent-tab.js';
@@ -141,6 +141,7 @@ if (chrome.runtime.getManifest().key) {
 const HOST_NAME = 'com.agent_browser.connect';
 let agentPanelEntry = { ready: false, error: 'Side panel entry is being configured.' };
 void configureAgentPanel(chrome).then(result => { agentPanelEntry = result; });
+const nativeFocusContexts = new Map();
 const nativeFocusBridge = new NativeFocusBridge({
   send(message) {
     if (!port) throw new Error('Native host is not connected');
@@ -1218,6 +1219,8 @@ function hostGone(connectedPort, error) {
   const wasConnected = hostConnection.snapshot().connected;
   hostConnection.end(connectedPort, error);
   nativeFocusBridge.disconnect();
+  for (const context of nativeFocusContexts.values()) context.cancel();
+  nativeFocusContexts.clear();
   agentPanelBridge.disconnect(error);
   port = null;
   hostReconnect.failed();
@@ -1731,20 +1734,35 @@ async function handleForwardCdpCommand(msg) {
   // flip cannot close it (Chrome is not the frontmost app): take focus out of
   // the field it belongs to. See menu-blur.js.
   if (method === 'ABExt.nativeFocusFinish') {
-    return nativeFocusBridge.request('finish', { token: params?.token });
+    const context = nativeFocusContexts.get(params?.token);
+    nativeFocusContexts.delete(params?.token);
+    return context ? context.finish() : nativeFocusBridge.request('finish', { token: params?.token });
   }
   if (method === 'ABExt.nativeFocusBegin') {
+    const context = nativeFocusContexts.get(params?.token);
+    if (!context) throw new Error('Native focus preparation is absent or expired');
+    return context.begin();
+  }
+  if (method === 'ABExt.nativeFocusPrepare') {
     await loadOwnedTabs();
     const tid = typeof params?.targetId === 'string' ? params.targetId : '';
     const sid = typeof params?.sessionId === 'string' ? params.sessionId : sessionId;
     const boundTab = () => {
-      if (!tid || !sid || childSessionToTab.has(sid)) return null;
+      if (!tid || !sid) throw new Error('Native focus requires both target and session identities');
+      if (childSessionToTab.has(sid)) throw new Error('Native focus refuses a child-frame session');
       const fromSession = resolveSessionTab(sid, sessionToTab, childSessionToTab);
       const fromTarget = tabForTarget(tid);
-      return Number.isInteger(fromSession) && fromSession === fromTarget ? fromSession : null;
+      if (!Number.isInteger(fromSession)) throw new Error('Native focus session has no browser tab binding');
+      // Attachment records are not Chrome's liveness authority.
+      // A missing cache entry is checked against Chrome's target registry
+      // below; a conflicting entry is always refused.
+      if ((Number.isInteger(fromTarget) && fromSession !== fromTarget) || fromSession !== params?.chromeTabId) throw new Error('Native focus target and session name different Chrome tabs');
+      return fromSession;
     };
-    return beginNativeFocusRecovery(params, {
+    const context = await prepareNativeFocusRecovery(params, {
       boundTab,
+      validateBinding: async () => (await withRelayTimeout(chrome.debugger.getTargets(), 'native focus target registry'))
+        .some(target => target.id === tid && target.tabId === params.chromeTabId && target.type === 'page'),
       guard: id => guardTab(id, agentSession),
       isOwned: id => ownedTabs.has(id),
       getTab: id => chrome.tabs.get(id),
@@ -1753,6 +1771,9 @@ async function handleForwardCdpCommand(msg) {
       focusWindow: id => chrome.windows.update(id, { focused: true }),
       request: (operation, args) => nativeFocusBridge.request(operation, args),
     });
+    nativeFocusContexts.set(context.token, context);
+    setTimeout(() => nativeFocusContexts.delete(context.token), 145000);
+    return { prepared: true, token: context.token };
   }
   if (method === 'ABExt.blurFocusedField') {
     await loadOwnedTabs();

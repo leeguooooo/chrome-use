@@ -65,7 +65,9 @@ pub(super) async fn scope(cmd: &Value, operation: impl Future<Output = Value>) -
             let input = lease.input.clone();
             let finished = lease.finish().await;
             let restored = finished.as_ref().ok().and_then(|value| value.pointer("/restore/restored")).and_then(Value::as_bool) == Some(true);
-            let note = if restored { "Native focus recovery was attempted; the original foreground was verified restored." }
+            let note = if finished.as_ref().ok().and_then(|value| value.get("focusRequested")).and_then(Value::as_bool) == Some(false) {
+                "Native recovery stopped before requesting focus."
+            } else if restored { "Native focus recovery was attempted; the original foreground was verified restored." }
                 else { "Native focus recovery was attempted; original foreground restoration is unconfirmed. No native input was repeated." };
             if let Some(object) = reply.as_object_mut() {
                 let warning = object.get("warning").and_then(Value::as_str)
@@ -159,6 +161,19 @@ pub(super) fn register(
                 input,
                 armed: true,
             });
+            Ok(())
+        })
+        .map_err(|_| "native focus recovery has no invocation scope".to_string())?
+}
+
+pub(super) fn record_input(input: Value) -> Result<(), String> {
+    LEASE
+        .try_with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let lease = slot
+                .as_mut()
+                .ok_or("native focus lease is absent".to_string())?;
+            lease.input = input;
             Ok(())
         })
         .map_err(|_| "native focus recovery has no invocation scope".to_string())?

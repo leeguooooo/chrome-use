@@ -14,13 +14,8 @@ const MAX_OUTPUT: u64 = 256 * 1024;
 /// Inspect only Document metadata. Static encoded code and a JSON stdin record
 /// keep page titles and URLs out of shell syntax and process command lines.
 /// The proof is an observation, never permission to send a later key.
-pub(super) async fn inspect(
-    hwnd: u64,
-    pid: u32,
-    native_title: &str,
-    page_url: &str,
-) -> Result<DocumentProof, String> {
-    if hwnd == 0 || pid == 0 || native_title.len() > 4096 || page_url.len() > 8192 {
+pub(super) async fn inspect(hwnd: u64, pid: u32, page_url: &str) -> Result<DocumentProof, String> {
+    if hwnd == 0 || pid == 0 || page_url.len() > 8192 {
         return Err("invalid native document binding".into());
     }
     let code: Vec<u8> = SCRIPT.encode_utf16().flat_map(u16::to_le_bytes).collect();
@@ -37,7 +32,7 @@ pub(super) async fn inspect(
         .spawn()
         .map_err(|_| "native document reader could not start")?;
     let request = serde_json::to_vec(&serde_json::json!({
-        "hwnd": hwnd, "pid": pid, "title": native_title, "url": page_url,
+        "hwnd": hwnd, "pid": pid, "url": page_url,
     }))
     .map_err(|_| "invalid native document request")?;
     let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {

@@ -2815,13 +2815,19 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     // policy, target routing and kept-ref verification, before any observation
     // or input. Recovery does not bypass the selector checks below.
     if (acts_on_page(action) || safe_to_repeat(action)) && super::focus_recovery::enabled() {
+        let before_policy_url = match state.browser.as_ref() {
+            Some(manager) if manager.on_relay() => manager.pinned_tab_url_from_browser().await,
+            _ => None,
+        };
         // Site policy must name the routed page, not the tab that happened to
         // be pinned when this command entered the dispatcher.
         if let Some(response) = site_gate(cmd, action, &id, state).await {
             return response;
         }
         if let Some(manager) = state.browser.as_ref() {
-            if let Err(error) = Box::pin(manager.prepare_native_focus_recovery()).await {
+            if let Err(error) =
+                Box::pin(manager.prepare_native_focus_recovery(before_policy_url.as_deref())).await
+            {
                 return error_response(&id, &error);
             }
         }

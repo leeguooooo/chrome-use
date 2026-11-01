@@ -5222,8 +5222,21 @@ async fn nm_host_main() {
             };
             let host = native_focus.clone();
             let tx = to_ext.clone();
-            let slot = native_focus_jobs.clone().try_acquire_owned();
+            let jobs = native_focus_jobs.clone();
             tokio::spawn(async move {
+                let slot = if v["operation"].as_str() == Some("finish") {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(12),
+                        jobs.acquire_owned(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(slot)) => Ok(slot),
+                        _ => Err(()),
+                    }
+                } else {
+                    jobs.try_acquire_owned().map_err(|_| ())
+                };
                 let result = match slot {
                     Ok(_slot) => {
                         host.request(v["operation"].as_str().unwrap_or(""), &v["params"])

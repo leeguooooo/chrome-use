@@ -122,8 +122,11 @@ pub(super) struct DesktopLease {
     chrome: Arc<ChromeParent>,
     original: OriginalWindow,
     target: Option<Window>,
+    inspection_target: Option<Window>,
     input_after: Option<u32>,
     input_before: u32,
+    inspection_started: bool,
+    armed_until: Option<Instant>,
     attempted: bool,
 }
 
@@ -143,23 +146,26 @@ impl DesktopLease {
             chrome,
             original,
             target: None,
+            inspection_target: None,
             input_after: None,
             input_before,
+            inspection_started: false,
+            armed_until: None,
             attempted: false,
         })
     }
 
     /// The permit is consumed even when inspection/input acknowledgement fails.
     /// No original browser operation is dispatched or repeated here.
-    pub(super) async fn escape(
+    pub(super) async fn inspect(
         &mut self,
         page_url: &str,
         deadline: Instant,
     ) -> Result<Value, String> {
-        if self.attempted {
-            return Err("native Escape was already attempted".into());
+        if self.inspection_started {
+            return Err("native inspection was already attempted".into());
         }
-        self.attempted = true;
+        self.inspection_started = true;
         let pid = self.chrome.require_alive()?;
         let target = Window::foreground()?;
         if target.pid != pid
@@ -175,13 +181,7 @@ impl DesktopLease {
         if stamp != self.input_before {
             return Err("User input changed after preparation; no Escape was sent".into());
         }
-        let _proof = super::windows::inspect(
-            target.hwnd as u64,
-            pid,
-            &String::from_utf16_lossy(&target.title),
-            page_url,
-        )
-        .await?;
+        let _proof = super::windows::inspect(target.hwnd as u64, pid, page_url).await?;
         let settle = crate::native::humanize::settle_before_press(
             crate::native::humanize::active_level(),
             crate::native::humanize::next_seed(),
@@ -195,12 +195,38 @@ impl DesktopLease {
         {
             return Err("native target or user input changed before Escape; no key sent".into());
         }
-        self.target = Some(target.clone());
+        self.inspection_target = Some(target.clone());
         self.input_after = Some(stamp);
+        self.armed_until = Some(deadline.min(Instant::now() + std::time::Duration::from_secs(2)));
+        Ok(json!({"verified":true}))
+    }
+
+    /// Called only after the extension rechecks the exact active tab following
+    /// the asynchronous native inspection. Consume the arm before any input.
+    pub(super) async fn escape(&mut self, lease_deadline: Instant) -> Result<Value, String> {
+        if self.attempted {
+            return Err("native Escape was already attempted".into());
+        }
+        self.attempted = true;
+        let deadline = self
+            .armed_until
+            .take()
+            .filter(|deadline| Instant::now() < *deadline)
+            .ok_or("native inspection arm expired; no key was sent")?
+            .min(lease_deadline);
+        let target = self
+            .inspection_target
+            .clone()
+            .ok_or("native target was not inspected")?;
+        let stamp = self
+            .input_after
+            .ok_or("native input state was not inspected")?;
+        let pid = self.chrome.require_alive()?;
         // Keep key release in one blocking task: cancelling an async request
         // during the humanized dwell must not leave Escape logically held.
         let chrome = self.chrome.clone();
         let native_hwnd = target.hwnd as u64;
+        let admitted_target = target.clone();
         let outcome = tokio::task::spawn_blocking(move || {
             chrome.require_alive()?;
             if Instant::now() >= deadline
@@ -238,6 +264,7 @@ impl DesktopLease {
         })
         .await
         .map_err(|_| "native key outcome is unconfirmed; it was not repeated")??;
+        self.target = Some(admitted_target);
         self.input_after = Some(outcome.2);
         Ok(
             json!({"keyDownAdmitted":outcome.0, "keyUpAdmitted":outcome.1,
@@ -248,8 +275,15 @@ impl DesktopLease {
 
     /// Restore only while the exact original window and our foreground binding
     /// survive, and no new OS input occurred. Never chase a user's new focus.
-    pub(super) fn finish(&mut self) -> Value {
-        let Some(target) = self.target.take() else {
+    pub(super) fn finish(&mut self, allow_inspected: bool) -> Value {
+        let target = self.target.take().or_else(|| {
+            if allow_inspected {
+                self.inspection_target.take()
+            } else {
+                None
+            }
+        });
+        let Some(target) = target else {
             return json!({"attempted":false,"restored":false,"reason":"no-verified-native-target"});
         };
         let same_target = Window::foreground().is_ok_and(|window| {
@@ -268,8 +302,34 @@ impl DesktopLease {
         }
         // SAFETY: both window identities and held process handles were checked.
         let admitted = unsafe { SetForegroundWindow(self.original.window.hwnd) } != 0;
-        let restored = self.original.window.unchanged_foreground();
+        let deadline = Instant::now() + std::time::Duration::from_millis(250);
+        let mut restored = self.original.window.unchanged_foreground();
+        while !restored && Instant::now() < deadline {
+            // Observation only: a delayed foreground transition is not a
+            // reason to activate again or to chase a user's intervening input.
+            if input_stamp().ok() != self.input_after
+                || !self.original.still_same()
+                || !Window::foreground()
+                    .is_ok_and(|window| window.hwnd == target.hwnd && window.pid == target.pid)
+            {
+                break;
+            }
+            let pause = crate::native::humanize::key_dwell(
+                crate::native::humanize::HumanizeLevel::Fast,
+                crate::native::humanize::next_seed(),
+            );
+            std::thread::sleep(pause.min(deadline.saturating_duration_since(Instant::now())));
+            restored = self.original.window.unchanged_foreground();
+        }
         json!({"attempted":true,"admitted":admitted,"restored":restored})
+    }
+}
+
+impl DesktopLease {
+    pub(super) fn abandon_restore(&mut self) -> Value {
+        self.target = None;
+        self.inspection_target = None;
+        json!({"attempted":false,"restored":false,"reason":"extension-target-binding-changed"})
     }
 }
 
@@ -277,6 +337,6 @@ impl Drop for DesktopLease {
     fn drop(&mut self) {
         // Host disconnect/cancellation must not silently keep a verified window
         // in front. The same no-interference checks apply to this fallback.
-        let _ = self.finish();
+        let _ = self.finish(false);
     }
 }
