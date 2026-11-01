@@ -138,7 +138,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends mingw-w64
-          cargo fetch --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-gnu
+          cargo fetch --locked --manifest-path cli/Cargo.toml
           cargo metadata --manifest-path cli/Cargo.toml --locked --offline --format-version 1 --filter-platform x86_64-pc-windows-gnu --features windows-build-identity-prototype > "$RUNNER_TEMP/identity-dependencies.json"
           echo "CHROME_USE_MARKER_DEPENDENCIES=$RUNNER_TEMP/identity-dependencies.json" >> "$GITHUB_ENV"
           python3 -c 'import secrets; print("CHROME_USE_BUILD_GENERATION=" + secrets.token_hex(16))' >> "$GITHUB_ENV"
@@ -206,14 +206,17 @@ jobs:
           $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if (!$installation) { throw 'MSVC installation missing' }
           $setup = Join-Path $installation 'Common7\Tools\VsDevCmd.bat'
-          $command = '""' + $setup + '" -no_logo -arch=x64 >nul && set"'
-          cmd.exe /s /c $command | ForEach-Object {
+          $environment = cmd.exe /d /c "call `"$setup`" -no_logo -arch=x64 >nul && set"
+          if ($LASTEXITCODE -ne 0) { throw 'MSVC environment setup failed' }
+          $environment | ForEach-Object {
             if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process') }
           }
-          $linker = (Get-Command link.exe -ErrorAction Stop).Source
+          if (!$env:VCToolsInstallDir) { throw 'MSVC environment did not identify its tool directory' }
+          $linker = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/link.exe'
+          if (!(Test-Path $linker)) { throw 'Actual Microsoft linker missing' }
           "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           foreach ($name in @('PATH', 'LIB', 'LIBPATH', 'INCLUDE')) { "$name=$([Environment]::GetEnvironmentVariable($name, 'Process'))" | Out-File $env:GITHUB_ENV -Append -Encoding utf8 }
-          cargo fetch --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc
+          cargo fetch --locked --manifest-path cli/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw 'Dependency fetch failed' }
           cargo metadata --manifest-path cli/Cargo.toml --locked --offline --format-version 1 --filter-platform x86_64-pc-windows-msvc --features windows-build-identity-prototype > "$env:RUNNER_TEMP/identity-dependencies.json"
           if ($LASTEXITCODE -ne 0) { throw 'Metadata preparation failed' }
