@@ -2925,12 +2925,9 @@ impl FocusReplySource {
                 }
                 let deadline =
                     line_deadline.min(std::time::Instant::now() + Duration::from_secs(3));
-                let reply = crate::native::focus_recovery::authorize(
-                    self.reader.get_ref(),
-                    request,
-                    deadline,
-                )
-                .map_err(Self::failure)?;
+                let Connection::Tcp(socket) = self.reader.get_ref();
+                let reply = crate::native::focus_recovery::authorize(socket, request, deadline)
+                    .map_err(Self::failure)?;
                 let remaining = deadline.saturating_duration_since(std::time::Instant::now());
                 if remaining.is_zero() {
                     return Err(Self::failure(
@@ -4983,7 +4980,7 @@ mod private_focus_reply_tests {
                 .unwrap();
         (
             FocusReplySource {
-                reader: BufReader::new(client),
+                reader: BufReader::new(Connection::Tcp(client)),
                 client: client_state,
             },
             server,
