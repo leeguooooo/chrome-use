@@ -77,6 +77,9 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .node-version
+      - name: Check Bitwarden controller without a browser
+        if: inputs.experiment == 'bitwarden'
+        run: python bench/bitwarden-780/test_probe.py
       - name: Install decoder for pure image checks
         if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.experiment != 'bitwarden'
         run: python -m pip install --disable-pip-version-check Pillow
