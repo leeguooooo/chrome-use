@@ -132,6 +132,32 @@ fn overlaps(a: &(u64, u64), b: &(u64, u64)) -> bool {
     a.0 < b.1 && b.0 < a.1
 }
 
+/// GNU and MSVC fixtures both expose the actual module base in the loaded
+/// PE32+ ImageBase field, replacing the artifact's preferred address. Accept
+/// only that exact observed value (or the unchanged preferred address); every
+/// other header byte, including all section RVAs and sizes, must still match.
+fn matching_headers(expected: &[u8], observed: &[u8], actual_base: u64) -> bool {
+    if expected.len() != observed.len() {
+        return false;
+    }
+    let Ok(pe) = le32(expected, 0x3c) else {
+        return false;
+    };
+    let Some(start) = (pe as usize).checked_add(48) else {
+        return false;
+    };
+    let Some(end) = start.checked_add(8) else {
+        return false;
+    };
+    let (Some(preferred), Some(loaded)) = (expected.get(start..end), observed.get(start..end))
+    else {
+        return false;
+    };
+    (loaded == preferred || loaded == actual_base.to_le_bytes())
+        && expected[..start] == observed[..start]
+        && expected[end..] == observed[end..]
+}
+
 /// Pure parser: no pointer dereference and no Windows calls. The complete file is
 /// capped before allocation by PinnedFile; unit tests can supply arbitrary bytes.
 fn parse_image(data: &[u8]) -> Result<Layout> {
@@ -712,7 +738,7 @@ mod windows {
         let (base, length) = main_module(process, peer_file)?;
         let layout = &peer_file.layout;
         let headers = bounded_remote_read(process, base, length, 0, layout.headers.len(), false)?;
-        if headers != layout.headers {
+        if !matching_headers(&layout.headers, &headers, base as u64) {
             #[cfg(test)]
             header_mismatch(&layout.headers, &headers, base);
             return Err(Error::LoadedLayoutMismatch);
@@ -842,7 +868,7 @@ mod windows {
                     self.layout.headers.len(),
                     false,
                 )?;
-                if headers != self.layout.headers {
+                if !matching_headers(&self.layout.headers, &headers, self.base as u64) {
                     header_mismatch(&self.layout.headers, &headers, self.base);
                     return Err(Error::LoadedLayoutMismatch);
                 }
@@ -960,6 +986,23 @@ mod parser_tests {
         for length in 0..data.len() {
             assert!(parse_image(&data[..length]).is_err(), "truncation {length}");
         }
+    }
+    #[test]
+    fn loaded_headers_allow_only_the_exact_module_base_field_change() {
+        let mut data = fixture();
+        let field = 128 + 48;
+        data[field..field + 8].copy_from_slice(&0x1_4000_0000u64.to_le_bytes());
+        let expected = parse_image(&data).unwrap().headers;
+        let base = 0x7ff7_920c_0000u64;
+        assert!(matching_headers(&expected, &expected, base));
+        let mut observed = expected.clone();
+        observed[field..field + 8].copy_from_slice(&base.to_le_bytes());
+        assert!(matching_headers(&expected, &observed, base));
+        assert!(!matching_headers(&expected, &observed, base + 65536));
+        observed[404] ^= 1; // a section RVA remains identity-bearing
+        assert!(!matching_headers(&expected, &observed, base));
+        assert!(!matching_headers(&expected, &observed[..field + 7], base));
+        assert!(!matching_headers(&[], &[], base));
     }
     #[test]
     fn rejects_mutable_missing_duplicate_overflow_and_unknown_schema() {

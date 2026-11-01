@@ -21,6 +21,14 @@ content and an observed loaded generation, not mapped-code integrity,
 Authenticode, unique installation identity, or a defense against compromised
 same-user processes.
 
+Observed GNU and MSVC loaded headers replace the PE32+ ImageBase field with the
+actual module base. Header comparison accepts only the unchanged preferred
+address or that exact actual base for this one field; all other header bytes
+remain exact. Section layout, marker bytes and memory protections are checked
+independently. The initial strict comparison refused three positive cases under
+each toolchain; bounded fixture diagnostics identified the field before changing
+its comparison rule.
+
 The controlled build requires a fresh nonzero 16-byte hex
 `CHROME_USE_BUILD_GENERATION` for every Cargo invocation and exact locked/offline
 dependency metadata at `CHROME_USE_MARKER_DEPENDENCIES`. The helper hashes source,
