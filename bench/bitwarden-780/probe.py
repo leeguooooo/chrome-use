@@ -369,6 +369,27 @@ def native_menu_image(windows, hwnd, pid, case, path):
     }
 
 
+def inspect_native_fixture(hwnd, pid, case):
+    script = Path(__file__).with_name("native-ui-inspect.ps1").read_text()
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+        input=json.dumps(
+            {"hwnd": hwnd, "pid": pid, "title": "BitwardenFixture " + case}
+        ),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
+        creationflags=0x08000000,
+    )
+    if result.returncode:
+        raise RuntimeError(
+            "native UI inspection failed: " + result.stderr.strip()[:600]
+        )
+    return json.loads(result.stdout)
+
+
 def send_escape(hwnd):
     extra = ctypes.c_size_t
 
@@ -582,6 +603,7 @@ def main():
         choices=["default", "foreground", "background"],
         default="default",
     )
+    parser.add_argument("--inspect-native-ui", action="store_true")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     case = "bw780-" + uuid.uuid4().hex[:10]
@@ -838,6 +860,19 @@ def main():
                                 case,
                                 args.output / "native-menu.png",
                             )
+                            if args.inspect_native_ui:
+                                record["nativeUiInspection"] = inspect_native_fixture(
+                                    hwnd, chrome.pid, case
+                                )
+                                record["menuAfterNativeInspection"] = menu_frames(
+                                    bw_endpoint, fixture.url, bw_identity["id"]
+                                )
+                                if not record["menuAfterNativeInspection"][
+                                    "bitwardenFrames"
+                                ]:
+                                    raise RuntimeError(
+                                        "native inspection changed the menu before Escape; observation is not an uninstrumented recovery"
+                                    )
                             record["nativeEscape"] = send_escape(hwnd)
                             record["mechanism"] = "native-input-attempted"
                         else:
