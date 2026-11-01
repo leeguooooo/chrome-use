@@ -39,6 +39,7 @@ namespace FixtureUia {
         IntPtr FindAllBuildCache(int scope, IntPtr condition, IntPtr request);
         Element BuildUpdatedCache(IntPtr request);
         [return: MarshalAs(UnmanagedType.Struct)] object GetCurrentPropertyValue(int id);
+        [return: MarshalAs(UnmanagedType.Struct)] object GetCurrentPropertyValueEx(int id, [MarshalAs(UnmanagedType.Bool)] bool ignoreDefaultValue);
     }
     [ComImport, Guid("4042c624-389c-4afc-a630-9df854a541fc"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface Walker {
@@ -82,7 +83,7 @@ namespace FixtureUia {
                             };
                             documents.Add(document);
                             stage = "document-url-property";
-                            var value = element.GetCurrentPropertyValue(LegacyValue);
+                            var value = element.GetCurrentPropertyValueEx(LegacyValue, true);
                             document["urlSupported"] = value is string;
                             document["url"] = value as string;
                         }

@@ -922,20 +922,6 @@ def main():
                             lambda x: not x["bitwardenFrames"],
                             4,
                         )
-                    if args.setup_mode == "background" and record.get("nativeFocus"):
-                        record["stage"] = "restore-native-focus"
-                        record["nativeFocusRestore"] = restore_fixture_cover(
-                            windows,
-                            hwnd,
-                            chrome.pid,
-                            case,
-                            cover_hwnd,
-                            record["nativeFocus"]["before"],
-                        )
-                        if not record["nativeFocusRestore"]["restored"]:
-                            raise RuntimeError(
-                                "native focus restore could not be verified"
-                            )
                     record["accessAfter"] = invoke(
                         "access-after",
                         "eval",
@@ -971,6 +957,39 @@ def main():
                         raise RuntimeError(
                             "continuation was not performed exactly once"
                         )
+                    if args.setup_mode == "background" and record.get("nativeFocus"):
+                        record["stage"] = "restore-native-focus"
+                        record["nativeFocusRestore"] = restore_fixture_cover(
+                            windows,
+                            hwnd,
+                            chrome.pid,
+                            case,
+                            cover_hwnd,
+                            record["nativeFocus"]["before"],
+                        )
+                        if not record["nativeFocusRestore"]["restored"]:
+                            raise RuntimeError(
+                                "native focus restore could not be verified"
+                            )
+                    if record.get("nativeFocusRestore"):
+                        record["postRestoreRead"] = invoke(
+                            "post-restore-read",
+                            "eval",
+                            "({title:document.title,fixture:window.fixtureState()})",
+                        )
+                        restored_data = (
+                            checked(record["postRestoreRead"]).get("result") or {}
+                        )
+                        if (
+                            restored_data.get("title") != "BitwardenFixture " + case
+                            or (restored_data.get("fixture") or {}).get("caseId")
+                            != case
+                            or (restored_data.get("fixture") or {}).get("continuations")
+                            != 1
+                        ):
+                            raise RuntimeError(
+                                "restored foreground changed the verified page result"
+                            )
                     record["finalMenu"] = menu_frames(
                         bw_endpoint, fixture.url, bw_identity["id"]
                     )
