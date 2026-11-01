@@ -10,8 +10,8 @@ use windows_sys::Win32::System::Threading::{
     OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, GetLastInputInfo, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-    KEYEVENTF_KEYUP, LASTINPUTINFO, VK_ESCAPE,
+    GetAsyncKeyState, GetLastInputInfo, MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD,
+    KEYBDINPUT, KEYEVENTF_KEYUP, LASTINPUTINFO, MAPVK_VK_TO_VSC, VK_ESCAPE,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
@@ -253,13 +253,20 @@ impl DesktopLease {
             {
                 return Err("native target changed before key admission");
             }
+            // Bitwarden checks KeyboardEvent.code, not only key. Preserve the
+            // hardware scan code as well as the logical VK_ESCAPE value.
+            // SAFETY: this maps one fixed virtual key and performs no input.
+            let scan = unsafe { MapVirtualKeyW(VK_ESCAPE as u32, MAPVK_VK_TO_VSC) };
+            if scan == 0 || scan > u16::MAX as u32 {
+                return Err("native Escape scan code is unavailable");
+            }
             let _dispatch = fence.begin()?;
             let input = |flags| INPUT {
                 r#type: INPUT_KEYBOARD,
                 Anonymous: INPUT_0 {
                     ki: KEYBDINPUT {
                         wVk: VK_ESCAPE,
-                        wScan: 0,
+                        wScan: scan as u16,
                         dwFlags: flags,
                         time: 0,
                         dwExtraInfo: 0,

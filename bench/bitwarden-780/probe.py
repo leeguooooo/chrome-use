@@ -273,7 +273,7 @@ class FormFixture:
           document.addEventListener(type,event=>{
             if(type==='submit')event.preventDefault();
             const observed={type,trusted:event.isTrusted,key:event.key||null,
-              visibility:document.visibilityState,atMs:performance.now()};
+              code:event.code||null,visibility:document.visibilityState,atMs:performance.now()};
             recordedEvents.push(observed);
             fetch('/event',{method:'POST',body:JSON.stringify(observed)});
           },true);
@@ -561,7 +561,10 @@ def protected_access_refusal(result):
 def native_escape_delivered(events):
     keys = [event for event in events if event.get("type") in ["keydown", "keyup"]]
     return [event.get("type") for event in keys] == ["keydown", "keyup"] and all(
-        event.get("key") == "Escape" and event.get("trusted") is True for event in keys
+        event.get("key") == "Escape"
+        and event.get("code") == "Escape"
+        and event.get("trusted") is True
+        for event in keys
     )
 
 
