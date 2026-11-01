@@ -16,7 +16,7 @@ function fixture() {
     resolveSessionTab, tabForTarget: id => id === 'live-target' ? 7 : null,
     guardTab: () => {}, prepareNativeFocusRecovery, withRelayTimeout: promise => promise,
     nativeFocusContexts: new Map(), setTimeout: () => {},
-    nativeFocusBridge: { request: async operation => {
+    nativeFocusBridge: { revoke: value => { assert.equal(value, token); calls.push('revoke'); return true; }, request: async operation => {
       calls.push(operation);
       if (operation === 'prepare') return { token, leaseMs: 120000 };
       if (operation === 'inspect') return { token, verified: true };
@@ -45,7 +45,7 @@ test('real native handlers reserve authority before activation and close exactly
   assert.deepEqual(f.calls, ['prepare', 'focus', 'inspect', 'escape']);
   await f.handler('ABExt.nativeFocusFinish', { token: prepared.token });
   assert.equal(f.state.nativeFocusContexts.size, 0);
-  assert.equal(f.calls.at(-1), 'finish');
+  assert.deepEqual(f.calls.slice(-2), ['revoke', 'finish']);
 });
 
 test('a missing attachment cache still requires an exact browser-registry target', async () => {

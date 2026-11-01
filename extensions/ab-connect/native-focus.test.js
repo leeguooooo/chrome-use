@@ -165,3 +165,15 @@ test('default timers keep the WorkerGlobalScope receiver required by browser API
     globalThis.clearTimeout = savedClear;
   }
 });
+
+test('revocation control does not wait for an outstanding native inspection', async () => {
+  const sent = [];
+  const bridge = new NativeFocusBridge({ identity: 'revoke-fixture', send: message => sent.push(message), schedule: () => 1, cancel: () => {} });
+  const waiting = bridge.request('inspect', { token });
+  assert.equal(bridge.revoke(token), true);
+  assert.equal(sent[1].method, 'nativeFocusRevoke');
+  assert.equal(bridge.pending.size, 1);
+  bridge.receive({ method: 'nativeFocusReply', requestId: sent[0].requestId, result: { schemaVersion: 1, token, verified: true } });
+  await waiting;
+  assert.equal(sent.length, 2);
+});

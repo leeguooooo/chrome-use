@@ -120,6 +120,7 @@ impl OriginalWindow {
 
 pub(super) struct DesktopLease {
     chrome: Arc<ChromeParent>,
+    fence: Arc<super::authority::DispatchFence>,
     original: OriginalWindow,
     target: Option<Window>,
     inspection_target: Option<Window>,
@@ -132,7 +133,9 @@ pub(super) struct DesktopLease {
 
 impl DesktopLease {
     /// Capture before the extension focuses its exact owned Chrome window.
-    pub(super) fn prepare() -> Result<Self, &'static str> {
+    pub(super) fn prepare(
+        fence: Arc<super::authority::DispatchFence>,
+    ) -> Result<Self, &'static str> {
         let chrome = Arc::new(ChromeParent::attest()?);
         if keys_or_buttons_held() {
             return Err("User input is held; native recovery declined before focus");
@@ -144,6 +147,7 @@ impl DesktopLease {
         }
         Ok(Self {
             chrome,
+            fence,
             original,
             target: None,
             inspection_target: None,
@@ -155,6 +159,10 @@ impl DesktopLease {
         })
     }
 
+    pub(super) fn inspection_started(&self) -> bool {
+        self.inspection_started
+    }
+
     /// The permit is consumed even when inspection/input acknowledgement fails.
     /// No original browser operation is dispatched or repeated here.
     pub(super) async fn inspect(
@@ -162,6 +170,9 @@ impl DesktopLease {
         page_url: &str,
         deadline: Instant,
     ) -> Result<Value, String> {
+        if !self.fence.available() {
+            return Err("native inspection authority was revoked or expired".into());
+        }
         if self.inspection_started {
             return Err("native inspection was already attempted".into());
         }
@@ -188,16 +199,21 @@ impl DesktopLease {
         );
         tokio::time::sleep(settle).await;
         self.chrome.require_alive()?;
-        if Instant::now() >= deadline
-            || !target.unchanged_foreground()
-            || input_stamp()? != stamp
-            || keys_or_buttons_held()
-        {
+        if !target.unchanged_foreground() || input_stamp()? != stamp || keys_or_buttons_held() {
             return Err("native target or user input changed before Escape; no key sent".into());
         }
+        // Retain a successful read-only binding for explicitly authorized
+        // rollback even when cancellation won before a key could be armed.
         self.inspection_target = Some(target.clone());
         self.input_after = Some(stamp);
-        self.armed_until = Some(deadline.min(Instant::now() + std::time::Duration::from_secs(2)));
+        if !self.fence.available() || Instant::now() >= deadline {
+            return Err("native authority was revoked or expired; no key sent".into());
+        }
+        let until = deadline.min(Instant::now() + std::time::Duration::from_secs(2));
+        if !self.fence.renew(until) {
+            return Err("native authority was revoked during inspection".into());
+        }
+        self.armed_until = Some(until);
         Ok(json!({"verified":true}))
     }
 
@@ -225,6 +241,7 @@ impl DesktopLease {
         // Keep key release in one blocking task: cancelling an async request
         // during the humanized dwell must not leave Escape logically held.
         let chrome = self.chrome.clone();
+        let fence = self.fence.clone();
         let native_hwnd = target.hwnd as u64;
         let admitted_target = target.clone();
         let outcome = tokio::task::spawn_blocking(move || {
@@ -236,6 +253,7 @@ impl DesktopLease {
             {
                 return Err("native target changed before key admission");
             }
+            let _dispatch = fence.begin()?;
             let input = |flags| INPUT {
                 r#type: INPUT_KEYBOARD,
                 Anonymous: INPUT_0 {

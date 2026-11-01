@@ -11,6 +11,7 @@ use std::{
 
 use serde_json::{json, Value};
 
+mod authority;
 mod documents;
 mod host;
 pub(crate) use host::NativeFocusHost;

@@ -1770,6 +1770,7 @@ async function handleForwardCdpCommand(msg) {
       getWindowTabs: id => chrome.tabs.query({ windowId: id }),
       focusWindow: id => chrome.windows.update(id, { focused: true }),
       request: (operation, args) => nativeFocusBridge.request(operation, args),
+      revoke: token => nativeFocusBridge.revoke(token),
     });
     nativeFocusContexts.set(context.token, context);
     setTimeout(() => nativeFocusContexts.delete(context.token), 145000);

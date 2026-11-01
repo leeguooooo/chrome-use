@@ -5211,6 +5211,16 @@ async fn nm_host_main() {
             });
             continue;
         }
+        if v.get("method").and_then(|m| m.as_str()) == Some("nativeFocusRevoke") {
+            if let Some(token) = v
+                .get("token")
+                .and_then(|value| value.as_str())
+                .filter(|token| token.len() == 32 && token.bytes().all(|b| b.is_ascii_hexdigit()))
+            {
+                native_focus.revoke(token);
+            }
+            continue;
+        }
         if v.get("method").and_then(|m| m.as_str()) == Some("nativeFocus") {
             let Some(request_id) = v
                 .get("requestId")
@@ -5220,6 +5230,11 @@ async fn nm_host_main() {
             else {
                 continue;
             };
+            if v["operation"].as_str() == Some("finish") {
+                if let Some(token) = v["params"]["token"].as_str() {
+                    native_focus.revoke(token);
+                }
+            }
             let host = native_focus.clone();
             let tx = to_ext.clone();
             let jobs = native_focus_jobs.clone();

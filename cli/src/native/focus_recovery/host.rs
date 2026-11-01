@@ -7,6 +7,10 @@ use std::sync::Arc;
 pub(crate) struct NativeFocusHost {
     #[cfg(windows)]
     state: tokio::sync::Mutex<State>,
+    #[cfg(windows)]
+    revocations: std::sync::Mutex<
+        std::collections::HashMap<String, std::sync::Weak<super::authority::DispatchFence>>,
+    >,
 }
 
 #[cfg(windows)]
@@ -23,6 +27,7 @@ struct Lease {
     expires: std::time::Instant,
     desktop: super::windows_desktop::DesktopLease,
     _desktop_lock: std::fs::File,
+    fence: Arc<super::authority::DispatchFence>,
 }
 
 #[cfg(windows)]
@@ -34,6 +39,7 @@ impl State {
             .is_some_and(|lease| std::time::Instant::now() >= lease.expires)
         {
             let mut lease = self.active.take().unwrap();
+            lease.fence.revoke();
             let result = serde_json::json!({"schemaVersion":1,"expired":true,"restore":lease.desktop.finish(false)});
             self.finished = Some((lease.token.clone(), result));
         }
@@ -45,6 +51,8 @@ impl NativeFocusHost {
         let host = Arc::new(Self {
             #[cfg(windows)]
             state: tokio::sync::Mutex::new(State::default()),
+            #[cfg(windows)]
+            revocations: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
         #[cfg(windows)]
         {
@@ -53,11 +61,42 @@ impl NativeFocusHost {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     let Some(host) = weak.upgrade() else { break };
-                    host.state.lock().await.expire();
+                    {
+                        let mut registry = host
+                            .revocations
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        registry.retain(|_, weak| {
+                            if let Some(fence) = weak.upgrade() {
+                                fence.expire();
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                    }
+                    if let Ok(mut state) = host.state.try_lock() {
+                        state.expire();
+                    }
                 }
             });
         }
         host
+    }
+
+    pub(crate) fn revoke(&self, token: &str) {
+        #[cfg(windows)]
+        if let Some(fence) = self
+            .revocations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(token)
+            .and_then(std::sync::Weak::upgrade)
+        {
+            fence.revoke();
+        }
+        #[cfg(not(windows))]
+        let _ = token;
     }
 
     pub(crate) async fn request(&self, operation: &str, params: &Value) -> Result<Value, String> {
@@ -110,15 +149,24 @@ impl NativeFocusHost {
                 .map_err(|_| "Native desktop lock unavailable")?;
             lock.try_lock()
                 .map_err(|_| "Another native host owns desktop recovery; no focus changed")?;
-            let desktop = super::windows_desktop::DesktopLease::prepare()?;
+            let expires = Instant::now() + Duration::from_secs(20);
+            let fence = super::authority::DispatchFence::new(expires);
+            let desktop = super::windows_desktop::DesktopLease::prepare(fence.clone())?;
             let token = uuid::Uuid::new_v4().simple().to_string();
             state.active = Some(Lease {
                 token: token.clone(),
                 page_url: page_url.to_string(),
-                expires: Instant::now() + Duration::from_secs(20),
+                expires,
                 desktop,
                 _desktop_lock: lock,
+                fence: fence.clone(),
             });
+            let mut registry = self
+                .revocations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            registry.retain(|_, weak| weak.strong_count() != 0);
+            registry.insert(token.clone(), Arc::downgrade(&fence));
             return Ok(json!({"schemaVersion":1,"token":token,"leaseMs":20000}));
         }
         let token = params["token"]
@@ -139,9 +187,18 @@ impl NativeFocusHost {
             .ok_or("Native focus lease is absent or expired; no key was repeated")?;
         match operation {
             "inspect" => {
+                if lease.desktop.inspection_started() {
+                    return Err(
+                        "native inspection was already attempted; lease was not renewed".into(),
+                    );
+                }
                 // Preparation without activation should release desktop
                 // ownership promptly; an active operation gets its own cap.
-                lease.expires = Instant::now() + Duration::from_secs(120);
+                let active_deadline = Instant::now() + Duration::from_secs(120);
+                if !lease.fence.renew(active_deadline) {
+                    return Err("native recovery authority was revoked before inspection".into());
+                }
+                lease.expires = active_deadline;
                 let verified = lease
                     .desktop
                     .inspect(&lease.page_url, lease.expires)

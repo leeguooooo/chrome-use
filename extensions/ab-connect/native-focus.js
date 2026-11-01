@@ -23,6 +23,13 @@ export class NativeFocusBridge {
       }
     });
   }
+  revoke(token) {
+    if (typeof token !== 'string' || !/^[0-9a-f]{32}$/i.test(token)) return false;
+    // A returned postMessage call is only a revocation request, not proof that
+    // an already-started OS dispatch was retracted.
+    try { this.send({ method: 'nativeFocusRevoke', token }); return true; }
+    catch { return false; }
+  }
   receive(message) {
     if (message?.method !== 'nativeFocusReply') return false;
     const pending = this.pending.get(message.requestId);
@@ -122,12 +129,15 @@ export async function prepareNativeFocusRecovery(params, deps) {
     },
     finish() {
       cancelled = true;
-      if (!finishing) finishing = (async () => {
-        let restoreAllowed = false;
-        try { restoreAllowed = (await read(true, true)) === windowId; } catch { /* Never restore over a changed binding. */ }
-        const receipt = await deps.request('finish', { token: prepared.token, restoreAllowed });
-        return { ...receipt, focusRequested };
-      })();
+      if (!finishing) {
+        const revocationRequested = deps.revoke ? deps.revoke(prepared.token) : false;
+        finishing = (async () => {
+          let restoreAllowed = false;
+          try { restoreAllowed = (await read(true, true)) === windowId; } catch { /* Never restore over a changed binding. */ }
+          const receipt = await deps.request('finish', { token: prepared.token, restoreAllowed });
+          return { ...receipt, focusRequested, revocationRequested };
+        })();
+      }
       return finishing;
     },
   };
