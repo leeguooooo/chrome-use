@@ -344,6 +344,44 @@ def native_focus(windows, hwnd, pid, title):
     return before, focused
 
 
+def restore_fixture_cover(windows, hwnd, pid, case, cover_hwnd, before_focus):
+    """Restore only this controller's cover, provided nobody moved focus away."""
+    page = windows.state(hwnd)
+    cover = windows.state(cover_hwnd)
+    if (
+        before_focus["foreground"] != cover_hwnd
+        or page["foreground"] != hwnd
+        or page["pid"] != pid
+        or page["title"] != before_focus["title"]
+        or not page["title"].startswith("BitwardenFixture " + case)
+        or cover["pid"] != os.getpid()
+        or cover["title"] != "Bitwarden fixture cover " + case
+        or cover["minimized"]
+        or not cover["visible"]
+    ):
+        return {
+            "attempted": False,
+            "restored": False,
+            "reason": "foreground-or-identity-changed",
+        }
+    # One attempt, followed by observation. Do not retry an uncertain change or
+    # move focus again if another window took the foreground in the meantime.
+    admitted = bool(windows.u.SetForegroundWindow(cover_hwnd))
+    observed = wait_for(
+        lambda: windows.state(cover_hwnd),
+        lambda state: state["foreground"] == cover_hwnd and state["centerOwned"],
+        2,
+    )
+    if observed["pid"] != os.getpid() or observed["title"] != cover["title"]:
+        raise RuntimeError("restored cover identity changed")
+    return {
+        "attempted": True,
+        "admitted": admitted,
+        "restored": True,
+        "window": observed,
+    }
+
+
 def native_menu_image(windows, hwnd, pid, case, path):
     from PIL import ImageGrab
 
@@ -884,6 +922,20 @@ def main():
                             lambda x: not x["bitwardenFrames"],
                             4,
                         )
+                    if args.setup_mode == "background" and record.get("nativeFocus"):
+                        record["stage"] = "restore-native-focus"
+                        record["nativeFocusRestore"] = restore_fixture_cover(
+                            windows,
+                            hwnd,
+                            chrome.pid,
+                            case,
+                            cover_hwnd,
+                            record["nativeFocus"]["before"],
+                        )
+                        if not record["nativeFocusRestore"]["restored"]:
+                            raise RuntimeError(
+                                "native focus restore could not be verified"
+                            )
                     record["accessAfter"] = invoke(
                         "access-after",
                         "eval",
