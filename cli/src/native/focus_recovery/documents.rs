@@ -158,4 +158,14 @@ mod tests {
         ]);
         assert!(!accepts(value));
     }
+    #[test]
+    fn real_native_document_shape_keeps_the_menu_under_its_page() {
+        // Run 41270621094, official Bitwarden 2026.10.1 in the CI fixture.
+        // Keep native nesting and empty browser widgets; replace only the
+        // disposable loopback URL and process/window identifiers.
+        let snapshot: Snapshot =
+            serde_json::from_str(include_str!("document-observation.json")).unwrap();
+        assert!(verify(&snapshot, 42, 84, PAGE).is_ok());
+        assert!(verify(&snapshot, 42, 84, "https://example.invalid/other").is_err());
+    }
 }
