@@ -461,8 +461,11 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
             return Err(format!("Agent service exited during startup ({status})"));
         }
         if let Ok(endpoint) = endpoint(directory, profile) {
+            let remaining = readiness_deadline.saturating_duration_since(Instant::now());
             if endpoint.binary_hash == *binary_hash
-                && exchange(&endpoint, "health", json!({})).is_ok()
+                && !remaining.is_zero()
+                && exchange_within(&endpoint, "health", json!({}), remaining).is_ok()
+                && Instant::now() < readiness_deadline
             {
                 return Ok(endpoint);
             }
