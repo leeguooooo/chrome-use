@@ -48,6 +48,11 @@ namespace FixtureUia {
         Element GetLastChildElement(Element element);
         Element GetNextSiblingElement(Element element);
     }
+    class Node {
+        public Element Element;
+        public string RootUrl;
+        public Node(Element element, string rootUrl) { Element = element; RootUrl = rootUrl; }
+    }
     public static class Inspector {
         // SDK property/control identifiers. Only Document legacy values (URLs)
         // are queried; Edit/Password values and text patterns are never read.
@@ -63,13 +68,15 @@ namespace FixtureUia {
                     !Convert.ToString(root.GetCurrentPropertyValue(Name)).StartsWith(title, StringComparison.Ordinal))
                     throw new InvalidOperationException("The native fixture window identity changed");
                 var walker = automation.GetRawViewWalker();
-                var pending = new Stack<Element>();
-                pending.Push(root);
+                var pending = new Stack<Node>();
+                pending.Push(new Node(root, null));
                 var documents = new List<object>();
                 var failures = new List<object>();
                 int visited = 0;
                 while (pending.Count > 0 && visited < Limit) {
-                    var element = pending.Pop();
+                    var node = pending.Pop();
+                    var element = node.Element;
+                    var rootUrl = node.RootUrl;
                     int index = visited++;
                     string stage = "control-type";
                     try {
@@ -86,11 +93,15 @@ namespace FixtureUia {
                             var value = element.GetCurrentPropertyValueEx(LegacyValue, true);
                             document["urlSupported"] = value is string;
                             document["url"] = value as string;
+                            Uri url;
+                            if (rootUrl == null && value is string && Uri.TryCreate((string)value, UriKind.Absolute, out url) &&
+                                (url.Scheme == "http" || url.Scheme == "https")) rootUrl = (string)value;
+                            document["rootUrl"] = rootUrl;
                         }
                         stage = "children";
                         for (var child = walker.GetFirstChildElement(element); child != null; child = walker.GetNextSiblingElement(child)) {
                             if (pending.Count + visited >= Limit) break;
-                            pending.Push(child);
+                            pending.Push(new Node(child, rootUrl));
                         }
                     } catch (Exception error) {
                         failures.Add(new {index, stage, error = error.Message});
