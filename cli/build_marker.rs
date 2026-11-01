@@ -177,7 +177,7 @@ pub fn emit() -> Result<()> {
     for (id, directory) in dependencies {
         tree(&mut hash, &format!("dependency/{id}"), &directory)?;
     }
-    // Include exact resolved graph/features without checkout-specific manifest paths.
+    // Include the exact resolved graph/features, including Cargo package path IDs.
     let resolve = metadata
         .get("resolve")
         .ok_or_else(|| failure("metadata resolution missing"))?;

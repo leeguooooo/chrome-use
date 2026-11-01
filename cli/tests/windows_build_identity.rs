@@ -242,7 +242,7 @@ fn old_loaded_generation_is_not_replaced_by_new_disk_marker() {
 }
 
 #[test]
-fn preexisting_writer_prevents_pin_and_failure_paths_release_handles() {
+fn preexisting_writer_prevents_pin_and_repeated_pins_release_handles() {
     let directory = tempfile::tempdir().unwrap();
     let path = copy_binary(directory.path(), "owned.exe");
     let writer = OpenOptions::new().write(true).open(&path).unwrap();
