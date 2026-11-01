@@ -1149,6 +1149,11 @@ def main():
                 except Exception as exc:
                     record["error"] = type(exc).__name__ + ": " + str(exc)[:1200]
                 finally:
+                    # Retain the independent receiver's observations even when
+                    # the renderer/readback failed. Missing fetches are not
+                    # evidence that input was absent.
+                    with fixture.lock:
+                        record["receivedFixtureEvents"] = list(fixture.events)
                     if close_cover:
                         try:
                             close_cover()
