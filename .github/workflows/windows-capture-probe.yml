@@ -10,11 +10,16 @@ on:
           - original
           - candidates
           - window-policy
+          - bitwarden
           - baseline
           - cleanup
           - cleanup-relay
         default: candidates
         required: true
+      source_build_run:
+        description: Bitwarden only; reuse a verified fresh build with identical product sources
+        required: false
+        default: ''
       samples:
         description: Fresh-profile repetitions per state and capture kind (1-5)
         required: true
@@ -35,6 +40,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: windows-capture-probe-${{ github.ref }}
@@ -46,6 +52,7 @@ jobs:
     timeout-minutes: 60
     env:
       CHROME_USE_NO_UPDATE_CHECK: '1'
+      SOURCE_BUILD_RUN: ${{ inputs.source_build_run }}
       PROBE_EXPERIMENT: ${{ inputs.experiment }}
       PROBE_SAMPLES: ${{ inputs.samples }}
       PROBE_ROWS: ${{ inputs.rows }}
@@ -55,13 +62,17 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
+      - name: Validate source replay selection
+        shell: pwsh
+        run: |
+          if ($env:SOURCE_BUILD_RUN -and ($env:PROBE_EXPERIMENT -ne 'bitwarden' -or $env:SOURCE_BUILD_RUN -notmatch '^[0-9]+$')) { throw 'Source replay requires a numeric build run and the Bitwarden experiment' }
+      - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.source_build_run == ''
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
           targets: x86_64-pc-windows-msvc
       - name: Verify detached Windows stderr handles without a browser
-        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
+        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.source_build_run == ''
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path probe-artifacts -Force | Out-Null
@@ -76,23 +87,31 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .node-version
+      - name: Check Bitwarden controller without a browser
+        if: inputs.experiment == 'bitwarden'
+        run: python -m unittest discover -s bench/bitwarden-780 -p 'test_*.py'
       - name: Install decoder for pure image checks
         if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
         run: python -m pip install --disable-pip-version-check Pillow
       - name: Check fixture and diagnostic generator without a browser
         if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
         run: python bench/windows-capture-798/test_probe.py
-      - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
+      - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.source_build_run == ''
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: cli
           key: x86_64-pc-windows-msvc-release
           cache-on-failure: true
+      - name: Reuse a verified identical source CLI
+        if: inputs.experiment == 'bitwarden' && inputs.source_build_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python bench/bitwarden-780/reuse_source.py --run "$env:SOURCE_BUILD_RUN" --output probe-artifacts
       - name: Validate inputs and build the exact Release CLI
-        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
+        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.source_build_run == ''
         shell: pwsh
         run: |
-          if ($env:PROBE_EXPERIMENT -notmatch '^(original|candidates|baseline|window-policy)$') { throw 'invalid experiment' }
+          if ($env:PROBE_EXPERIMENT -notmatch '^(original|candidates|baseline|window-policy|bitwarden)$') { throw 'invalid experiment' }
           if ($env:PROBE_SAMPLES -notmatch '^[1-5]$') { throw 'samples must be 1-5' }
           if ($env:PROBE_ROWS -notmatch '^[0-9]+$' -or [int]$env:PROBE_ROWS -lt 100 -or [int]$env:PROBE_ROWS -gt 3000) { throw 'rows must be 100-3000' }
           if ($env:PROBE_DPR -notmatch '^[12]$') { throw 'dpr must be 1 or 2' }
@@ -103,6 +122,10 @@ jobs:
           $binary = (Resolve-Path cli/target/x86_64-pc-windows-msvc/release/chrome-use.exe).Path
           "PROBE_BINARY=$binary" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Get-FileHash $binary -Algorithm SHA256 | Format-List | Out-File probe-artifacts/binary-sha256.txt
+          Copy-Item $binary probe-artifacts/source-cli.exe
+          @{mode='built';gitSha=$env:GITHUB_SHA;sourceBuildRun=$env:GITHUB_RUN_ID;binarySha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()} | ConvertTo-Json | Out-File probe-artifacts/source-build.json -Encoding utf8
+          "PROBE_BINARY_BUILD_SHA=$env:GITHUB_SHA" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PROBE_BINARY_SOURCE=built" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           cargo --version | Out-File probe-artifacts/toolchain.txt
           rustc --version | Out-File probe-artifacts/toolchain.txt -Append
       - name: Install isolated Chrome for Testing and image decoder
@@ -119,12 +142,38 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Image decoder install failed' }
           python -m pip freeze | Out-File probe-artifacts/python-packages.txt
       - name: Run the Windows relay capture matrix
-        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
+        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.experiment != 'bitwarden'
         shell: pwsh
         run: |
           $control = if ($env:PROBE_PENDING_DOM -eq 'true') { '--pending-dom-control' } else { '--no-pending-dom-control' }
           python bench/windows-capture-798/probe.py $control --experiment $env:PROBE_EXPERIMENT --binary "$env:PROBE_BINARY" --chrome "$env:PROBE_CHROME" --extension extensions/ab-connect --output probe-artifacts/results --samples $env:PROBE_SAMPLES --rows $env:PROBE_ROWS --dpr $env:PROBE_DPR
           if ($LASTEXITCODE -ne 0) { throw "Probe verdict is not PASS (exit $LASTEXITCODE); inspect summary and raw evidence" }
+      - name: Probe the official Bitwarden menu in disposable source-CLI profiles
+        if: inputs.experiment == 'bitwarden'
+        shell: pwsh
+        run: |
+          $binary = $env:PROBE_BINARY
+          $chrome = $env:PROBE_CHROME
+          if (-not (Test-Path $binary) -or -not (Test-Path $chrome)) { throw 'Exact source CLI or Chrome is absent' }
+          $bwArchive = Join-Path $env:RUNNER_TEMP 'bw780-official.zip'
+          $bwDir = Join-Path $env:RUNNER_TEMP 'bw780-official'
+          curl.exe --fail --location --max-time 120 'https://github.com/bitwarden/clients/releases/download/browser-v2026.10.1/dist-chrome-2026.10.1.zip' --output $bwArchive
+          if ($LASTEXITCODE -ne 0) { throw 'Official Bitwarden download failed' }
+          if ((Get-FileHash $bwArchive -Algorithm SHA256).Hash -ne 'd7c2d924f0d21ccb36f57e39bdaf732732644e94db95d5dd967629d8b878b93a') { throw 'Official Bitwarden archive hash mismatch' }
+          Expand-Archive -Path $bwArchive -DestinationPath $bwDir
+          Get-FileHash $binary,$bwArchive -Algorithm SHA256 | Format-List | Out-File probe-artifacts/input-hashes.txt
+          $verdicts = @()
+          foreach ($mode in @('default', 'foreground', 'background')) {
+            $output = "probe-artifacts/bitwarden-$mode"
+            python bench/bitwarden-780/probe.py --binary $binary --chrome $chrome --extension extensions/ab-connect --bitwarden $bwDir --output $output --setup-mode $mode
+            $verdicts += $LASTEXITCODE
+            $summary = Get-Content "$output/summary.json" -Raw | ConvertFrom-Json
+            if ($summary.browserStarted -ne $true) { throw 'Fixture prerequisites unavailable; no browser was started' }
+            if ($summary.sessionCleanupConfirmed -ne $true -or $summary.fixtureCleanupError) { throw 'Session/fixture cleanup unconfirmed; refusing another profile' }
+            if ($summary.registryRestored -ne $true) { throw 'Native-host registry restoration unknown; refusing another profile' }
+            if ($summary.browserCleanup.verified -ne $true -or $summary.coverCleanupError) { throw 'Cleanup unknown; refusing another fixture profile' }
+          }
+          if (@($verdicts | Where-Object { $_ -ne 0 }).Count -ne 0) { throw 'Real-extension diagnostic is not PASS; inspect evidence and scope' }
       - name: Diagnose owned Chrome process-tree cleanup without a CLI build
         if: inputs.experiment == 'cleanup' || inputs.experiment == 'cleanup-relay'
         shell: pwsh

@@ -340,7 +340,7 @@ class Windows:
         self.u.ShowWindowAsync(hwnd, 6)
         return wait_for(lambda: self.state(hwnd), lambda s: s["minimized"], 5)
 
-    def cover(self, hwnd, name):
+    def cover(self, hwnd, name, topmost=True):
         self.restore(hwnd)
         rect = self.state(hwnd)["rect"]
         ready = threading.Event()
@@ -348,7 +348,7 @@ class Windows:
         def ui():
             try:
                 result["thread"] = self.k.GetCurrentThreadId()
-                result["hwnd"] = self.u.CreateWindowExW(0x00000008, "STATIC", name, 0x90000000,
+                result["hwnd"] = self.u.CreateWindowExW(0x00000008 if topmost else 0, "STATIC", name, 0x90000000,
                     rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1], None, None, None, None)
                 if not result["hwnd"]:
                     raise ctypes.WinError(ctypes.get_last_error())
