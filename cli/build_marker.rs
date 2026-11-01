@@ -55,7 +55,17 @@ fn tree(hash: &mut Sha256, label: &str, root: &Path) -> Result<()> {
 }
 fn tool(hash: &mut Sha256, label: &str, executable: &str, arguments: &[&str]) -> Result<String> {
     let output = Command::new(executable).args(arguments).output()?;
-    if !output.status.success() || output.stdout.len() + output.stderr.len() > 128 * 1024 {
+    // The actual Microsoft 14.51 linker emits its version/help with status
+    // 1100 for /?. Accept that observed help contract only, never other errors.
+    let msvc_help = label == "linker-version"
+        && arguments == ["/?"]
+        && output.status.code() == Some(1100)
+        && output
+            .stdout
+            .starts_with(b"Microsoft (R) Incremental Linker Version ");
+    if (!output.status.success() && !msvc_help)
+        || output.stdout.len() + output.stderr.len() > 128 * 1024
+    {
         return Err(failure(&format!(
             "{label} version query failed: status={}, stdoutBytes={}, stderrBytes={}, stdoutPrefix={:?}, stderrPrefix={:?}",
             output.status,
@@ -67,6 +77,11 @@ fn tool(hash: &mut Sha256, label: &str, executable: &str, arguments: &[&str]) ->
     }
     record(hash, label.as_bytes(), &output.stdout);
     record(hash, format!("{label}/stderr").as_bytes(), &output.stderr);
+    record(
+        hash,
+        format!("{label}/status").as_bytes(),
+        output.status.to_string().as_bytes(),
+    );
     Ok(format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),

@@ -713,11 +713,27 @@ mod windows {
         let layout = &peer_file.layout;
         let headers = bounded_remote_read(process, base, length, 0, layout.headers.len(), false)?;
         if headers != layout.headers {
+            #[cfg(test)]
+            header_mismatch(&layout.headers, &headers, base);
             return Err(Error::LoadedLayoutMismatch);
         }
         let bytes =
             bounded_remote_read(process, base, length, layout.marker_rva, MARKER_LEN, true)?;
         Marker::parse(&bytes)
+    }
+    #[cfg(test)]
+    fn header_mismatch(expected: &[u8], observed: &[u8], base: usize) {
+        // Only already-read public PE metadata from an owned fixture executable.
+        // Keep refusal intact until the actual loader differences are explained.
+        let differences: Vec<_> = expected
+            .iter()
+            .zip(observed)
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(offset, (a, b))| (offset, *a, *b))
+            .take(32)
+            .collect();
+        eprintln!("owned PE header mismatch: base={base:#x}, expectedLength={}, observedLength={}, firstDifferences={differences:?}", expected.len(), observed.len());
     }
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum ArtifactMatch {
@@ -827,6 +843,7 @@ mod windows {
                     false,
                 )?;
                 if headers != self.layout.headers {
+                    header_mismatch(&self.layout.headers, &headers, self.base);
                     return Err(Error::LoadedLayoutMismatch);
                 }
                 let bytes = bounded_remote_read(
