@@ -90,7 +90,16 @@ def official_content_status(endpoint, tab_id):
     expression = """(async()=>{return await chrome.scripting.executeScript({
       target:{tabId:__TAB__,frameIds:[0]},world:'ISOLATED',func:()=>{
         const init=globalThis.bitwardenAutofillInit;
-        return {initialized:!!init,initKeys:init?Object.keys(init):[],
+        const overlay=init?.autofillOverlayContentService;
+        const ui=init?.autofillInlineMenuContentService;
+        const summarize=element=>{if(!element?.getBoundingClientRect)return null;const r=element.getBoundingClientRect();
+          return {connected:element.isConnected,width:r.width,height:r.height,display:getComputedStyle(element).display};};
+        const email=document.getElementById('email');
+        return {initialized:!!init,emailCached:overlay?.formFieldElements?.has(email)??false,
+          cachedFields:overlay?.formFieldElements?[...overlay.formFieldElements.keys()].map(el=>({id:el.id,type:el.type})):[],
+          emailRect:summarize(email),button:summarize(ui?.buttonElement),list:summarize(ui?.listElement),
+          recentField:overlay?.mostRecentlyFocusedField?.id??null,
+          initKeys:init?Object.keys(init):[],
           overlayKeys:init?.autofillOverlayContentService?Object.keys(init.autofillOverlayContentService):[],
           overlayMonitoring:init?.autofillOverlayContentService?.isMonitoring??null,
           visibility:document.visibilityState,focused:document.hasFocus(),
@@ -160,7 +169,7 @@ def menu_frames(endpoint, fixture_url, bitwarden_id):
     expression = '''(async()=>{const matches=(await chrome.tabs.query({})).filter(t=>t.url===URL);
     if(matches.length!==1)throw new Error('fixture tab is not unique');
     const tab=matches[0],frames=await chrome.webNavigation.getAllFrames({tabId:tab.id});
-    return {tabId:tab.id,windowId:tab.windowId,active:tab.active,
+    return {observerExtensionId:chrome.runtime.id,tabId:tab.id,windowId:tab.windowId,active:tab.active,
       bitwardenFrames:frames.filter(f=>f.url.startsWith('chrome-extension://'+BW+'/')).map(f=>({frameId:f.frameId,url:f.url}))};})()'''
     return worker(endpoint, expression.replace('URL',json.dumps(fixture_url)).replace('BW',json.dumps(bitwarden_id)))
 
@@ -274,19 +283,20 @@ def main():
                     record['windowBefore']=windows.state(hwnd)
                     record['storageBeforeFocus']=fixture_storage_status(bw_endpoint)
                     record['runtimeBeforeFocus']=official_runtime_status(bw_endpoint)
-                    fixture_tab=menu_frames(our_endpoint,fixture.url,bw_identity['id'])
+                    fixture_tab=menu_frames(bw_endpoint,fixture.url,bw_identity['id'])
                     record['contentBeforeFocus']=official_content_status(bw_endpoint,fixture_tab['tabId'])
                     record['contentReady']=wait_for(lambda:official_content_status(bw_endpoint,fixture_tab['tabId']),
-                        lambda items:any(item.get('result',{}).get('initialized') is True and item.get('result',{}).get('overlayMonitoring') is True for item in items),8)
+                        lambda items:any(item.get('result',{}).get('initialized') is True and item.get('result',{}).get('overlayMonitoring') is True and item.get('result',{}).get('emailCached') is True for item in items),8)
                     # One focus action only. A failure may mean focus took effect:
                     # never replay it in search of a successful acknowledgement.
                     record['focus']=invoke('focus','click','#email')
                     record['contentAfterFocus']=official_content_status(bw_endpoint,fixture_tab['tabId'])
+                    record['relayObservedMenuAfterFocus']=menu_frames(our_endpoint,fixture.url,bw_identity['id'])
                     record['storageAfterFocus']=fixture_storage_status(bw_endpoint)
-                    record['initialMenu']=wait_for(lambda:menu_frames(our_endpoint,fixture.url,bw_identity['id']),
+                    record['initialMenu']=wait_for(lambda:menu_frames(bw_endpoint,fixture.url,bw_identity['id']),
                         lambda x:len(x['bitwardenFrames'])>0,8)
                     record['accessBefore']=invoke('access-before','eval','document.title')
-                    menu=menu_frames(our_endpoint,fixture.url,bw_identity['id']);record['menuAfterExistingGuard']=menu
+                    menu=menu_frames(bw_endpoint,fixture.url,bw_identity['id']);record['menuAfterExistingGuard']=menu
                     if not menu['bitwardenFrames']:
                         record['mechanism']='menu-absent-after-cli-read'
                     else:
@@ -296,18 +306,18 @@ def main():
                         if menu['active'] is not True:raise RuntimeError('native candidate requires the bound fixture tab already active')
                         before,focused=native_focus(windows,hwnd,chrome.pid,'BitwardenFixture '+case)
                         record['nativeFocus']={'before':before,'after':focused}
-                        record['menuAfterNativeFocus']=menu_frames(our_endpoint,fixture.url,bw_identity['id'])
+                        record['menuAfterNativeFocus']=menu_frames(bw_endpoint,fixture.url,bw_identity['id'])
                         if record['menuAfterNativeFocus']['bitwardenFrames']:
                             record['nativeEscape']=send_escape(hwnd);record['mechanism']='menu-absent-after-native-escape'
                         else:record['mechanism']='menu-absent-after-native-focus'
-                        record['menuAfterNative']=wait_for(lambda:menu_frames(our_endpoint,fixture.url,bw_identity['id']),
+                        record['menuAfterNative']=wait_for(lambda:menu_frames(bw_endpoint,fixture.url,bw_identity['id']),
                             lambda x:not x['bitwardenFrames'],4)
                     record['accessAfter']=invoke('access-after','eval','({title:document.title,fixture:window.fixtureState()})')
                     after_data=checked(record['accessAfter'])
                     observed=after_data.get('result') or {}
                     if observed.get('title') != 'BitwardenFixture '+case or (observed.get('fixture') or {}).get('caseId')!=case:
                         raise RuntimeError('recovery read answered from a different page')
-                    record['finalMenu']=menu_frames(our_endpoint,fixture.url,bw_identity['id'])
+                    record['finalMenu']=menu_frames(bw_endpoint,fixture.url,bw_identity['id'])
                     with fixture.lock:record['receivedFixtureEvents']=list(fixture.events)
                     record['fixtureEvents']=observed['fixture'].get('events')
                     if not isinstance(record['fixtureEvents'],list):raise RuntimeError('fixture history missing')
