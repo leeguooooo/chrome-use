@@ -135,3 +135,9 @@ recovery acceptance**. The controller never grants ASFW_ANY, injects Escape,
 activates Chrome itself, or bypasses Windows foreground policy. Use an exact
 verified source build with identical product sources; do not use this condition
 to relabel the original background result.
+
+The control uses `samples` bounded fresh profiles. If the first operation already
+runs or fails for another reason, no permission is granted and the operation is
+never repeated. Its result and native window/cover state are retained. A successful
+operation also gets an immediate read-only counter observation before evaluating
+its restoration receipt, so an unconfirmed restore cannot hide the action result.
