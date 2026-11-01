@@ -10,6 +10,8 @@ use serde_json::{json, Value};
 mod documents;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+mod windows_parent;
 
 #[derive(Clone, Copy)]
 enum Budget {
