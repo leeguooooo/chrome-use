@@ -173,6 +173,7 @@ pub fn emit() -> Result<()> {
         .ok_or_else(|| failure("metadata packages missing"))?;
     let mut dependencies = BTreeMap::new();
     let our_root = cli.canonicalize()?;
+    let mut root_seen = false;
     for package in packages {
         let id = package["id"]
             .as_str()
@@ -187,6 +188,10 @@ pub fn emit() -> Result<()> {
             .ok_or_else(|| failure("dependency parent missing"))?
             .canonicalize()?;
         if directory == our_root {
+            if root_seen {
+                return Err(failure("duplicate root package in marker metadata"));
+            }
+            root_seen = true;
             let targets = package["targets"]
                 .as_array()
                 .ok_or_else(|| failure("root Cargo targets missing"))?;
@@ -204,6 +209,11 @@ pub fn emit() -> Result<()> {
             continue;
         }
         dependencies.insert(id.to_string(), directory);
+    }
+    if !root_seen {
+        return Err(failure(
+            "marker metadata does not describe this root package",
+        ));
     }
     if dependencies.is_empty() {
         return Err(failure("metadata dependency list is unexpectedly empty"));

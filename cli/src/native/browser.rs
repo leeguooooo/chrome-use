@@ -7386,24 +7386,31 @@ impl BrowserManager {
             feature = "windows-tcp-owner-prototype"
         ))]
         {
-            use super::focus_recovery::control::{self, Decision, GrantError, RelayHint};
-            let (hint, generation) = self
-                .client
-                .native_focus_transport()
-                .map_err(|error| format!("{error}; the current page operation was not run"))?;
-            let (local, host) = hint.endpoints();
-            let authorization = match control::request_current(RelayHint {
-                local_port: local.port(), host_port: host.port(), generation,
-            }).await {
-                Ok(decision @ (Decision::Admitted | Decision::AlreadyForegroundProcess
-                    | Decision::OsDenied { .. } | Decision::Unavailable { .. })) => decision,
-                Err(GrantError::Unavailable) => Decision::Unavailable { reason: "client did not negotiate the private foreground protocol".into() },
-                Ok(Decision::Refused { .. }) => return Err("native foreground authorization was refused; the current page operation was not run".into()),
-                Err(error) => return Err(format!("native foreground authorization failed ({error:?}); the current page operation was not run")),
-            };
-            super::focus_recovery::record_authorization(authorization)?;
-            if !self.client.native_focus_transport_is_current(generation) {
-                return Err("the selected relay connection changed during foreground authorization; the current page operation was not run".into());
+            use super::focus_recovery::control::{self, Decision, RelayHint};
+            let callback_required = control::callback_descriptor_required()
+                .map_err(|error| format!("native foreground negotiation failed ({error:?}); the current page operation was not run"))?;
+            if callback_required {
+                let (hint, generation) = self
+                    .client
+                    .native_focus_transport()
+                    .map_err(|error| format!("{error}; the current page operation was not run"))?;
+                let (local, host) = hint.endpoints();
+                let authorization = match control::request_current(RelayHint {
+                    local_port: local.port(), host_port: host.port(), generation,
+                }).await {
+                    Ok(decision @ (Decision::Admitted | Decision::AlreadyForegroundProcess
+                        | Decision::OsDenied { .. } | Decision::Unavailable { .. })) => decision,
+                    Ok(Decision::Refused { .. }) => return Err("native foreground authorization was refused; the current page operation was not run".into()),
+                    Err(error) => return Err(format!("native foreground authorization failed ({error:?}); the current page operation was not run")),
+                };
+                super::focus_recovery::record_authorization(authorization)?;
+                if !self.client.native_focus_transport_is_current(generation) {
+                    return Err("the selected relay connection changed during foreground authorization; the current page operation was not run".into());
+                }
+            } else {
+                super::focus_recovery::record_authorization(Decision::Unavailable {
+                    reason: "client did not negotiate the private foreground protocol".into(),
+                })?;
             }
         }
         let begun = self

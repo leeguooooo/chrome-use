@@ -161,9 +161,13 @@ pub(crate) fn service(cmd: &serde_json::Value, enabled: bool) -> (Broker, Servic
             _ => Err(GrantError::Protocol),
         }
     };
+    let mode = match &offer {
+        Ok(_) => Ok(()),
+        Err(error) => Err(error.clone()),
+    };
     let (tx, rx) = mpsc::channel(1);
     (
-        Broker { tx: Some(tx) },
+        Broker { tx: Some(tx), mode },
         Service {
             offer,
             rx,
@@ -195,8 +199,21 @@ pub(crate) async fn request_current(hint: RelayHint) -> Result<Decision, GrantEr
     broker.request_once(hint).await
 }
 
+/// Legacy/no-negotiation does not require callback-only local socket metadata.
+/// Malformed negotiation and an already-consumed broker remain hard failures.
+pub(crate) fn callback_descriptor_required() -> Result<bool, GrantError> {
+    match ROOT_BROKER.try_with(|slot| slot.borrow().as_ref().map(|broker| broker.mode.clone())) {
+        Err(_) => Ok(false),
+        Ok(None) => Err(GrantError::Protocol),
+        Ok(Some(Ok(()))) => Ok(true),
+        Ok(Some(Err(GrantError::Unavailable))) => Ok(false),
+        Ok(Some(Err(error))) => Err(error),
+    }
+}
+
 pub(crate) struct Broker {
     tx: Option<mpsc::Sender<Request>>,
+    mode: Result<(), GrantError>,
 }
 impl Broker {
     // Owner calls after consuming the existing permit and registering the one lease.
@@ -400,6 +417,10 @@ where
             _ = ticks.tick(), if keepalive && usable => {
                 let ok = tokio::select! {
                     value = &mut command => return DriverOutcome { value, transport_usable: false, close_after_final: true },
+                    // The command may now be waiting on service.rx. A blocked
+                    // heartbeat cannot prevent that request's failure/deadline
+                    // from being processed indefinitely.
+                    _ = time::sleep(WAIT) => false,
                     result = writer.write_all(b"\n") => result.is_ok(),
                 };
                 if !ok { usable = false; }
@@ -509,6 +530,35 @@ mod tests {
             broker.request_once(hint()).await,
             Err(GrantError::Transport)
         );
+    }
+    #[tokio::test]
+    async fn negotiation_distinguishes_legacy_and_malformed_before_socket_metadata() {
+        assert_eq!(callback_descriptor_required(), Ok(false));
+        for (offer, required) in [
+            (None, Ok(false)),
+            (
+                Some(serde_json::json!({"version":99,"nonce":"future"})),
+                Ok(false),
+            ),
+            (
+                Some(serde_json::json!({"version":1,"nonce":"bad"})),
+                Err(GrantError::Protocol),
+            ),
+            (
+                Some(serde_json::json!({"version":1,"nonce":"2a".repeat(32)})),
+                Ok(true),
+            ),
+        ] {
+            let mut cmd = serde_json::json!({"allowFocusRecovery":true});
+            if let Some(offer) = offer {
+                cmd[OFFER] = offer;
+            }
+            let (broker, _service) = service(&cmd, true);
+            scope(broker, async {
+                assert_eq!(callback_descriptor_required(), required);
+            })
+            .await;
+        }
     }
     #[tokio::test]
     async fn default_and_legacy_emit_no_control() {
@@ -760,6 +810,58 @@ mod tests {
     struct PartialWriter {
         bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
         entered: Option<oneshot::Sender<()>>,
+    }
+    struct BlockedHeartbeat(Option<oneshot::Sender<()>>);
+    impl tokio::io::AsyncWrite for BlockedHeartbeat {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            _: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            if let Some(entered) = self.0.take() {
+                let _ = entered.send(());
+            }
+            std::task::Poll::Pending
+        }
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+    #[tokio::test]
+    async fn blocked_heartbeat_cannot_deadlock_a_later_broker_request() {
+        let (_, _, broker, service) = setup(true);
+        let (entered, wait) = oneshot::channel();
+        let mut writer = BlockedHeartbeat(Some(entered));
+        let (_peer, read) = tokio::io::duplex(32);
+        let mut reader = BufReader::new(read);
+        let command = scope(broker, async {
+            wait.await.unwrap();
+            request_current(hint()).await
+        });
+        let out = time::timeout(
+            WAIT * 2,
+            drive(
+                &mut reader,
+                &mut writer,
+                service,
+                true,
+                Duration::from_millis(1),
+                command,
+            ),
+        )
+        .await
+        .expect("heartbeat prevented queued callback from reaching its failure bound");
+        assert_eq!(out.value, Err(GrantError::Transport));
+        assert!(!out.transport_usable);
     }
     impl tokio::io::AsyncWrite for PartialWriter {
         fn poll_write(
