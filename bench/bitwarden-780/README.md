@@ -71,3 +71,17 @@ all source/hash checks pass. This changes the observer, not the product binary.
 Startup worker discovery re-lists the same Chrome process after read-only
 metadata errors, retaining those errors. It never restarts Chrome or repeats
 fixture writes/input to obtain a successful response.
+
+The process preflight validates the current controller's creation/ancestry
+snapshot; later Chrome identities are still bound and verified independently.
+Early digest/fixture/platform failures write INCONCLUSIVE summaries. The fixture
+must first reproduce an actual protected-access denial, even if the menu later
+disappears during the ordinary CLI read. Session closure must acknowledge verified
+tab absence before another profile starts. The background cover's actual native
+extended style is checked to reject an accidentally topmost occluder.
+
+Input admission and delivery are separate facts. A native attempt is initially
+unattributed. This fixture reports observed Escape delivery only after its
+complete page history contains exactly one trusted Escape down/up pair. If an
+iframe consumes those events and delivery is not observable, closure remains
+unattributed and this diagnostic stays INCONCLUSIVE.
