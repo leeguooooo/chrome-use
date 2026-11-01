@@ -163,6 +163,43 @@ impl DesktopLease {
         self.inspection_started
     }
 
+    /// Chrome's focus request may return before the native foreground changes.
+    /// Observe that one request; never activate again or follow another window.
+    async fn focused_chrome(&self, pid: u32) -> Result<Window, String> {
+        let deadline = Instant::now() + std::time::Duration::from_millis(500);
+        loop {
+            if !self.fence.available() {
+                return Err("native focus authority was revoked before inspection".into());
+            }
+            self.chrome.require_alive()?;
+            if input_stamp()? != self.input_before || keys_or_buttons_held() {
+                return Err(
+                    "User input changed while focus was settling; no Escape was sent".into(),
+                );
+            }
+            // SAFETY: a read-only foreground query. A null result is possible
+            // during an activation transition and conveys no window authority.
+            let hwnd = unsafe { GetForegroundWindow() };
+            if hwnd != 0 {
+                let window = Window::read(hwnd)?;
+                if window.pid == pid {
+                    return Ok(window);
+                }
+                if window != self.original.window || !self.original.still_same() {
+                    return Err("Foreground changed to another window; no Escape was sent".into());
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err("Foreground did not become the attested Chrome within 500ms; no Escape was sent".into());
+            }
+            let pause = crate::native::humanize::key_dwell(
+                crate::native::humanize::HumanizeLevel::Fast,
+                crate::native::humanize::next_seed(),
+            );
+            tokio::time::sleep(pause.min(deadline.saturating_duration_since(Instant::now()))).await;
+        }
+    }
+
     /// The permit is consumed even when inspection/input acknowledgement fails.
     /// No original browser operation is dispatched or repeated here.
     pub(super) async fn inspect(
@@ -178,7 +215,7 @@ impl DesktopLease {
         }
         self.inspection_started = true;
         let pid = self.chrome.require_alive()?;
-        let target = Window::foreground()?;
+        let target = self.focused_chrome(pid).await?;
         if target.pid != pid
             || !String::from_utf16_lossy(&target.class).starts_with("Chrome_WidgetWin_")
             // SAFETY: target is an observed HWND; these are read-only queries.
@@ -186,7 +223,7 @@ impl DesktopLease {
             || unsafe { IsIconic(target.hwnd) } != 0
             || keys_or_buttons_held()
         {
-            return Err("foreground is not the attested Chrome window or input is held".into());
+            return Err("Attested Chrome foreground is not a visible, normal Chrome window or input is held; no Escape was sent".into());
         }
         let stamp = input_stamp()?;
         if stamp != self.input_before {
