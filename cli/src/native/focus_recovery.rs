@@ -70,7 +70,7 @@ pub(super) async fn scope(cmd: &Value, operation: impl Future<Output = Value>) -
             let restored = finished.as_ref().ok().and_then(|value| value.pointer("/restore/restored")).and_then(Value::as_bool) == Some(true);
             let note = if finished.as_ref().ok().and_then(|value| value.get("focusRequested")).and_then(Value::as_bool) == Some(false) {
                 "Native recovery stopped before requesting focus."
-            } else if restored { "Native focus recovery was attempted; the original foreground was verified restored." }
+            } else if restored { "Native focus recovery was attempted; the original foreground was verified." }
                 else { "Native focus recovery was attempted; original foreground restoration is unconfirmed. No native input was repeated." };
             if let Some(object) = reply.as_object_mut() {
                 let warning = object.get("warning").and_then(Value::as_str)

@@ -85,6 +85,37 @@ fn keys_or_buttons_held() -> bool {
     })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum RestoreObservation {
+    Original,
+    Pending,
+    Changed,
+}
+
+/// None means an observed null foreground during activation, not a failed read.
+fn restore_observation(
+    current: Option<&Window>,
+    original: &Window,
+    target: &Window,
+    unchanged: bool,
+) -> RestoreObservation {
+    if !unchanged {
+        return RestoreObservation::Changed;
+    }
+    match current {
+        Some(window) if window == original => RestoreObservation::Original,
+        None => RestoreObservation::Pending,
+        Some(window)
+            if window.hwnd == target.hwnd
+                && window.pid == target.pid
+                && window.class == target.class =>
+        {
+            RestoreObservation::Pending
+        }
+        Some(_) => RestoreObservation::Changed,
+    }
+}
+
 struct OriginalWindow {
     window: Window,
     process: HANDLE,
@@ -346,6 +377,9 @@ impl DesktopLease {
             }
         });
         let Some(target) = target else {
+            if self.original.still_same() && self.original.window.unchanged_foreground() {
+                return json!({"attempted":false,"restored":true,"reason":"original-foreground-unchanged"});
+            }
             return json!({"attempted":false,"restored":false,"reason":"no-verified-native-target"});
         };
         let same_target = Window::foreground().is_ok_and(|window| {
@@ -365,15 +399,30 @@ impl DesktopLease {
         // SAFETY: both window identities and held process handles were checked.
         let admitted = unsafe { SetForegroundWindow(self.original.window.hwnd) } != 0;
         let deadline = Instant::now() + std::time::Duration::from_millis(250);
-        let mut restored = self.original.window.unchanged_foreground();
-        while !restored && Instant::now() < deadline {
+        let mut restored = false;
+        loop {
             // Observation only: a delayed foreground transition is not a
             // reason to activate again or to chase a user's intervening input.
-            if input_stamp().ok() != self.input_after
-                || !self.original.still_same()
-                || !Window::foreground()
-                    .is_ok_and(|window| window.hwnd == target.hwnd && window.pid == target.pid)
-            {
+            let unchanged = input_stamp().ok() == self.input_after && self.original.still_same();
+            // SAFETY: read-only query. A null result grants no window authority.
+            let hwnd = unsafe { GetForegroundWindow() };
+            let current = if hwnd == 0 {
+                None
+            } else {
+                match Window::read(hwnd) {
+                    Ok(window) => Some(window),
+                    Err(_) => break,
+                }
+            };
+            match restore_observation(current.as_ref(), &self.original.window, &target, unchanged) {
+                RestoreObservation::Original => {
+                    restored = true;
+                    break;
+                }
+                RestoreObservation::Changed => break,
+                RestoreObservation::Pending => {}
+            }
+            if Instant::now() >= deadline {
                 break;
             }
             let pause = crate::native::humanize::key_dwell(
@@ -381,7 +430,6 @@ impl DesktopLease {
                 crate::native::humanize::next_seed(),
             );
             std::thread::sleep(pause.min(deadline.saturating_duration_since(Instant::now())));
-            restored = self.original.window.unchanged_foreground();
         }
         json!({"attempted":true,"admitted":admitted,"restored":restored})
     }
@@ -400,5 +448,78 @@ impl Drop for DesktopLease {
         // Host disconnect/cancellation must not silently keep a verified window
         // in front. The same no-interference checks apply to this fallback.
         let _ = self.finish(false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn window(hwnd: isize, pid: u32) -> Window {
+        Window {
+            hwnd,
+            pid,
+            title: vec![1],
+            class: vec![2],
+        }
+    }
+
+    #[test]
+    fn restore_accepts_the_original_when_it_arrives_between_observations() {
+        let original = window(1, 10);
+        let target = window(2, 20);
+        assert_eq!(
+            restore_observation(Some(&target), &original, &target, true),
+            RestoreObservation::Pending
+        );
+        assert_eq!(
+            restore_observation(None, &original, &target, true),
+            RestoreObservation::Pending
+        );
+        assert_eq!(
+            restore_observation(Some(&original), &original, &target, true),
+            RestoreObservation::Original
+        );
+    }
+
+    #[test]
+    fn restore_stops_on_changed_input_or_a_different_window() {
+        let original = window(1, 10);
+        let target = window(2, 20);
+        let third_window = window(3, 20);
+        let different_process = window(2, 30);
+        assert_eq!(
+            restore_observation(Some(&third_window), &original, &target, true),
+            RestoreObservation::Changed
+        );
+        assert_eq!(
+            restore_observation(Some(&different_process), &original, &target, true),
+            RestoreObservation::Changed
+        );
+        assert_eq!(
+            restore_observation(Some(&original), &original, &target, false),
+            RestoreObservation::Changed
+        );
+        assert_eq!(
+            restore_observation(None, &original, &target, false),
+            RestoreObservation::Changed
+        );
+    }
+
+    #[test]
+    fn a_page_title_change_is_not_a_new_native_target() {
+        let original = window(1, 10);
+        let target = window(2, 20);
+        let mut updated = target.clone();
+        updated.title = vec![3];
+        assert_eq!(
+            restore_observation(Some(&updated), &original, &target, true),
+            RestoreObservation::Pending
+        );
+        updated.class = vec![4];
+        assert_eq!(
+            restore_observation(Some(&updated), &original, &target, true),
+            RestoreObservation::Changed
+        );
     }
 }
