@@ -427,6 +427,7 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
     // an agent writes are quarantined. Bun-built CLIs extract and dlopen their
     // native libraries, which Gatekeeper then blocks. launchd starts the
     // service outside Chrome's process tree.
+    let launch_started = Instant::now();
     #[cfg(target_os = "macos")]
     let launched = match launchd_start(directory, &executable, &arguments) {
         Ok(()) => true,
@@ -444,7 +445,13 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
     } else {
         Some(spawn_detached(&executable, &arguments)?)
     };
-    while Instant::now() < deadline {
+    // Waiting for ownership or launchd must not consume the new service's
+    // readiness window. The process is started once; an unconfirmed start
+    // remains an error and never causes a replacement process.
+    let readiness_started = Instant::now();
+    let readiness_deadline = readiness_started + Duration::from_secs(8);
+    let launch_ms = launch_started.elapsed().as_millis();
+    while Instant::now() < readiness_deadline {
         if let Some(status) = match child.as_mut() {
             Some(child) => child
                 .try_wait()
@@ -462,7 +469,12 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
         }
         std::thread::sleep(Duration::from_millis(40));
     }
-    Err("Agent-service startup has not been confirmed; its process was not restarted".into())
+    Err(format!(
+        "Agent-service startup has not been confirmed after {} ms of readiness checks \
+         (launch {} ms); its process was not restarted",
+        readiness_started.elapsed().as_millis(),
+        launch_ms,
+    ))
 }
 
 fn spawn_detached(
