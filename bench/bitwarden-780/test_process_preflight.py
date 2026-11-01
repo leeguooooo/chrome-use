@@ -34,3 +34,37 @@ class ProcessPreflightTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class SetupFailureReportTests(unittest.TestCase):
+    def test_observer_failure_records_inconclusive_without_creating_a_browser(self):
+        import contextlib
+        import io
+        import json
+        import tempfile
+        import uuid
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            args=SimpleNamespace(output=root,binary=root/'binary',chrome=root/'chrome',
+                bitwarden=root/'bitwarden',extension=root/'extension',setup_mode='default')
+            class Parser:
+                def add_argument(self,*args,**kwargs):pass
+                def parse_args(self):return args
+            closed=[]
+            def unavailable(record):
+                raise RuntimeError('observer unavailable')
+            tree=ast.parse(Path(__file__).with_name('probe.py').read_text())
+            main=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='main')
+            namespace={'platform':SimpleNamespace(system=lambda:'Windows'),
+                'os':SimpleNamespace(environ={'GITHUB_ACTIONS':'true'}),
+                'argparse':SimpleNamespace(ArgumentParser=Parser),'Path':Path,'uuid':uuid,'json':json,
+                'FormFixture':lambda case:SimpleNamespace(close=lambda:closed.append(True)),
+                'Windows':lambda:None,'digest':lambda path:'fixture-hash','prepare_process_observer':unavailable}
+            exec(compile(ast.Module(body=[main],type_ignores=[]),'<actual-entrypoint>','exec'),namespace)
+            with contextlib.redirect_stdout(io.StringIO()):status=namespace['main']()
+            result=json.loads((root/'summary.json').read_text())
+            self.assertEqual(status,2)
+            self.assertEqual(result['verdict'],'INCONCLUSIVE')
+            self.assertFalse(result['browserStarted'])
+            self.assertIn('observer unavailable',result['error'])
+            self.assertEqual(closed,[True])

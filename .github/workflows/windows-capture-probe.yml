@@ -168,6 +168,7 @@ jobs:
             python bench/bitwarden-780/probe.py --binary $binary --chrome $chrome --extension extensions/ab-connect --bitwarden $bwDir --output $output --setup-mode $mode
             $verdicts += $LASTEXITCODE
             $summary = Get-Content "$output/summary.json" -Raw | ConvertFrom-Json
+            if ($summary.browserStarted -ne $true) { throw 'Fixture prerequisites unavailable; no browser was started' }
             if ($summary.browserCleanup.verified -ne $true -or $summary.coverCleanupError) { throw 'Cleanup unknown; refusing another fixture profile' }
           }
           if (@($verdicts | Where-Object { $_ -ne 0 }).Count -ne 0) { throw 'Real-extension diagnostic is not PASS; inspect evidence and scope' }

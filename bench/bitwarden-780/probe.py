@@ -470,6 +470,9 @@ def main():
                     except Exception as exc:
                         record['cleanupError']=str(exc)[:300];record['verdict']='INCONCLUSIVE'
                         if chrome.poll() is None:chrome.kill();chrome.wait(timeout=10)
+    except Exception as exc:
+        record['error']=type(exc).__name__+': '+str(exc)[:1200]
+        record['verdict']='INCONCLUSIVE'
     finally:
         fixture.close()
         (args.output/'summary.json').write_text(json.dumps(record,indent=2),encoding='utf-8')
