@@ -101,6 +101,10 @@ jobs:
         if: inputs.probe_tcp_owner
         timeout-minutes: 5
         run: cargo test --profile ci --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --features windows-tcp-owner-prototype --test windows_tcp_owner -- --test-threads=1 --nocapture
+      - name: Capture real selected-source WebSocket endpoints without Chrome
+        if: inputs.probe_tcp_owner
+        timeout-minutes: 5
+        run: cargo test --profile ci --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --features windows-tcp-owner-prototype --bin chrome-use focus_transport_tests -- --test-threads=1 --nocapture
 
   mac-startup-probe:
     if: github.event_name == 'workflow_dispatch' && inputs.probe_macos_startup
