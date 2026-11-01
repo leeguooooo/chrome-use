@@ -512,7 +512,7 @@ form submission or login is replayed. This restores an explicit exit path; it
 does not guarantee that a third-party menu can be closed automatically under
 stealth mode. These navigation changes require relay extension 0.5.98+.
 
-`--allow-focus-recovery` authorizes one native Escape recovery for this invocation only. On Windows extension relay, when a protected Bitwarden menu blocks debugger access, recovery may briefly focus the bound agent window. It requires an active agent-owned tab in a non-minimized window containing only agent tabs, verifies the same page and native menu, and attempts to restore the original foreground afterward.
+`--allow-focus-recovery` authorizes one native Escape recovery for this invocation only. On Windows extension relay with extension 0.5.103 or later and a recovery-capable native host, a protected Bitwarden menu blocking debugger access may trigger a brief focus change to the bound agent window. Native foreground verification waits at most 500 ms after that single focus request; it never requests focus again. It requires an active agent-owned tab in a non-minimized window containing only agent tabs, verifies the same page and native menu, and attempts to restore the original foreground afterward.
 
 It refuses an ambiguous target, unsupported platform, or changed user input. The default remains disabled; no environment variable, config, or reused daemon grants permission. The original operation runs only after a read-only probe confirms access; an operation with an unknown result is never replayed.
 
