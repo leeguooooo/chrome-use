@@ -147,3 +147,21 @@ test('disconnect and malformed admission cannot report a successful native opera
   await assert.rejects(malformed, /Malformed/);
   assert.equal(sent.length, 2);
 });
+
+test('default timers keep the WorkerGlobalScope receiver required by browser APIs', async () => {
+  const savedSet = globalThis.setTimeout, savedClear = globalThis.clearTimeout;
+  const sent = [];
+  let cleared = false;
+  globalThis.setTimeout = function () { assert.equal(this, globalThis); return 123; };
+  globalThis.clearTimeout = function (timer) { assert.equal(this, globalThis); assert.equal(timer, 123); cleared = true; };
+  try {
+    const bridge = new NativeFocusBridge({ identity: 'receiver-fixture', send: message => sent.push(message) });
+    const waiting = bridge.request('prepare', { allowFocusRecovery: true, url: params.url });
+    bridge.receive({ method: 'nativeFocusReply', requestId: sent[0].requestId, result: { schemaVersion: 1, token, leaseMs: 20000 } });
+    assert.equal((await waiting).token, token);
+    assert.equal(cleared, true);
+  } finally {
+    globalThis.setTimeout = savedSet;
+    globalThis.clearTimeout = savedClear;
+  }
+});

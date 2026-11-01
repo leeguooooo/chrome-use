@@ -1,6 +1,6 @@
 // A separate native-host protocol: panel permissions cannot authorize input.
 export class NativeFocusBridge {
-  constructor({ send, timeoutMs = 20000, schedule = setTimeout, cancel = clearTimeout, identity = crypto.randomUUID() }) {
+  constructor({ send, timeoutMs = 20000, schedule = (callback, delay) => globalThis.setTimeout(callback, delay), cancel = timer => globalThis.clearTimeout(timer), identity = crypto.randomUUID() }) {
     Object.assign(this, { send, timeoutMs, schedule, cancel, identity });
     this.sequence = 0;
     this.pending = new Map();
