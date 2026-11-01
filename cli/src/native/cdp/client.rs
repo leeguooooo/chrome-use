@@ -12,6 +12,14 @@ use tokio_tungstenite::tungstenite::Message;
 
 use super::types::{CdpCommand, CdpEvent, CdpMessage};
 
+#[cfg(all(
+    windows,
+    target_arch = "x86_64",
+    feature = "windows-tcp-owner-prototype"
+))]
+#[path = "focus_transport.rs"]
+mod focus_transport;
+
 type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<CdpMessage>>>>;
 
 /// Interval between WebSocket ping frames sent to keep the connection alive
@@ -64,6 +72,13 @@ pub struct RawCdpMessage {
 }
 
 pub struct CdpClient {
+    #[cfg(all(
+        windows,
+        target_arch = "x86_64",
+        feature = "windows-tcp-owner-prototype"
+    ))]
+    #[allow(dead_code)] // Prototype awaits the separately verified root control adapter.
+    focus_transport: Option<focus_transport::FocusTransport>,
     ws_tx: Arc<
         Mutex<
             futures_util::stream::SplitSink<
@@ -165,6 +180,13 @@ impl CdpClient {
 
         enable_tcp_keepalive(ws_stream.get_ref());
 
+        #[cfg(all(
+            windows,
+            target_arch = "x86_64",
+            feature = "windows-tcp-owner-prototype"
+        ))]
+        let focus_transport = focus_transport::FocusTransport::capture(ws_stream.get_ref());
+
         let (ws_tx, mut ws_rx) = ws_stream.split();
         let ws_tx = Arc::new(Mutex::new(ws_tx));
 
@@ -180,6 +202,15 @@ impl CdpClient {
 
         // Notify used to stop the keepalive task when the reader loop exits.
         let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+
+        #[cfg(all(
+            windows,
+            target_arch = "x86_64",
+            feature = "windows-tcp-owner-prototype"
+        ))]
+        let focus_reader_lifetime = focus_transport
+            .as_ref()
+            .map(|transport| transport.reader_lifetime());
 
         let reader_handle = tokio::spawn(async move {
             while let Some(msg) = ws_rx.next().await {
@@ -261,6 +292,13 @@ impl CdpClient {
                 }
             }
 
+            #[cfg(all(
+                windows,
+                target_arch = "x86_64",
+                feature = "windows-tcp-owner-prototype"
+            ))]
+            drop(focus_reader_lifetime);
+
             // Reader loop exited (connection closed or error). Drop all pending
             // command senders so callers get an immediate channel-closed error
             // instead of waiting for the 30-second timeout.
@@ -290,6 +328,12 @@ impl CdpClient {
         });
 
         Ok(Self {
+            #[cfg(all(
+                windows,
+                target_arch = "x86_64",
+                feature = "windows-tcp-owner-prototype"
+            ))]
+            focus_transport,
             ws_tx,
             next_id: AtomicU64::new(1),
             pending,
@@ -299,6 +343,39 @@ impl CdpClient {
             _reader_handle: reader_handle,
             _keepalive_handle: keepalive_handle,
         })
+    }
+
+    /// Captured endpoints and a reader generation, not kernel ownership proof.
+    /// The browser owner verifies this is its selected client; the root callback
+    /// independently attests actual socket rows, images and the Chrome parent.
+    #[cfg(all(
+        windows,
+        target_arch = "x86_64",
+        feature = "windows-tcp-owner-prototype"
+    ))]
+    #[allow(dead_code)]
+    pub(crate) fn native_focus_transport(
+        &self,
+    ) -> Result<(crate::windows_tcp_owner::SelectedConnectionHint, u64), &'static str> {
+        if self._reader_handle.is_finished() {
+            return Err("the selected relay reader has ended");
+        }
+        self.focus_transport
+            .as_ref()
+            .ok_or("the selected transport has no captured local Plain socket")?
+            .hint()
+    }
+
+    #[cfg(all(
+        windows,
+        target_arch = "x86_64",
+        feature = "windows-tcp-owner-prototype"
+    ))]
+    #[allow(dead_code)]
+    /// Checks this client's transport generation, not global browser selection.
+    pub(crate) fn native_focus_transport_is_current(&self, generation: u64) -> bool {
+        self.native_focus_transport()
+            .is_ok_and(|(_, current)| current == generation)
     }
 
     /// Hold the writer: every command waits to be sent until the returned
@@ -897,3 +974,84 @@ mod quiet_world_tests;
 #[cfg(test)]
 #[path = "isolation_policy_tests.rs"]
 mod isolation_policy_tests;
+
+#[cfg(all(
+    test,
+    windows,
+    target_arch = "x86_64",
+    feature = "windows-tcp-owner-prototype"
+))]
+mod focus_transport_tests {
+    use super::*;
+    use std::net::SocketAddr;
+    use tokio::net::TcpListener;
+
+    async fn fixture() -> (
+        CdpClient,
+        (SocketAddr, SocketAddr),
+        oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (observed_tx, observed_rx) = oneshot::channel();
+        let (close_tx, close_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let endpoints = (socket.local_addr().unwrap(), socket.peer_addr().unwrap());
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            observed_tx.send(endpoints).unwrap();
+            let _ = close_rx.await;
+            tokio::time::timeout(std::time::Duration::from_secs(2), ws.close(None))
+                .await
+                .unwrap()
+                .unwrap();
+        });
+        let client = CdpClient::connect(&format!("ws://{address}"))
+            .await
+            .unwrap();
+        (client, observed_rx.await.unwrap(), close_tx, server)
+    }
+
+    #[tokio::test]
+    async fn captured_socket_matches_the_actual_peer_and_expires_with_its_reader() {
+        // Two owned local WebSockets, no Chrome or browser command. The server
+        // independently observes each actual socket's endpoints after handshake.
+        let (first, observed, close_first, server_first) = fixture().await;
+        let (hint, generation) = first.native_focus_transport().unwrap();
+        let (local, peer) = hint.endpoints();
+        assert_eq!(SocketAddr::V4(local), observed.1);
+        assert_eq!(SocketAddr::V4(peer), observed.0);
+        assert!(first.native_focus_transport_is_current(generation));
+        let (second, _, close_second, server_second) = fixture().await;
+        let (_, second_generation) = second.native_focus_transport().unwrap();
+        assert_ne!(generation, second_generation);
+        assert!(!second.native_focus_transport_is_current(generation));
+        // Delay pending cleanup. The descriptor must expire as soon as the
+        // WebSocket reader ends, before acquiring that cleanup mutex.
+        let pending_guard = first.pending.lock().await;
+        close_first.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while first.native_focus_transport().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!first._reader_handle.is_finished());
+        drop(pending_guard);
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !first._reader_handle.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(first.native_focus_transport().is_err());
+        assert!(!first.native_focus_transport_is_current(generation));
+        assert!(second.native_focus_transport_is_current(second_generation));
+        close_second.send(()).unwrap();
+        server_first.await.unwrap();
+        server_second.await.unwrap();
+    }
+}

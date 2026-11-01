@@ -418,6 +418,7 @@ Regular Human pointer clicks now use a seeded 60–200ms settling pause after mo
 | Command | Purpose |
 |---|---|
 | `--humanize off\|fast\|human` | Fast is the default; Human regular pointer clicks add a seeded 60–200ms settling gap and recheck the live target before press |
+| `--allow-focus-recovery` | Allow one Windows relay native Escape recovery for this command; may change focus |
 | `chrome-use extension install --user-data-dir <path>` | macOS/Linux: register an existing custom Chrome data directory (repeatable; equals form accepted). Running custom directories are also discovered automatically. Windows uses HKCU and rejects this option. |
 | `--window user` (default) / `--window dedicated` | Extension relay: AI tabs open in your current window, each session in its own tab group starting with ✦; `dedicated` moves all AI sessions into one shared background window per profile |
 | `chrome-use open <url>` | Connect to your Chrome and navigate. If `load` has not arrived after 25s but the tab's page is clearly usable, it succeeds with a ⚠ warning; when that page can't be tied to this request (always over the extension relay) the reply carries `commit: "unverified"` and the tab's real URL. A page that isn't usable fails with `navigation_incomplete:`, saying what is known (commit, readyState, candidate resources) |
@@ -510,6 +511,18 @@ apply; child-frame or referrer-bearing navigation still needs CDP. No input,
 form submission or login is replayed. This restores an explicit exit path; it
 does not guarantee that a third-party menu can be closed automatically under
 stealth mode. These navigation changes require relay extension 0.5.98+.
+
+`--allow-focus-recovery` authorizes one native Escape recovery for this invocation only. On Windows extension relay with extension 0.5.103 or later and a recovery-capable native host, a protected Bitwarden menu blocking debugger access may trigger a brief focus change to the bound agent window. Native foreground verification waits at most 500 ms after that single focus request; it never requests focus again. It requires an active agent-owned tab in a non-minimized window containing only agent tabs, verifies the same page and native menu, and attempts to restore the original foreground afterward.
+
+It refuses an ambiguous target, unsupported platform, or changed user input. The default remains disabled; no environment variable, config, or reused daemon grants permission. The original operation runs only after a read-only probe confirms access; an operation with an unknown result is never replayed.
+
+The invoking Windows CLI can request foreground eligibility for the verified Chrome parent after matching the CLI, daemon and native host to the same binary build. This grants no authority to the daemon and performs no activation or input. Windows may deny the request. `nativeFocus.foregroundAuthorization` distinguishes `Admitted`, `AlreadyForegroundProcess`, `OsDenied` and legacy `Unavailable`; admission alone proves neither focus nor key delivery. Update and restart mismatched native hosts before a new attempt; never retry an unknown-effect operation blindly.
+
+JSON `nativeFocus` and warnings report input admission and restoration separately. OS input admission does not prove delivery, and restoration may remain unconfirmed. macOS currently provides only a read-only permission probe, without native focus recovery.
+
+```bash
+chrome-use --allow-focus-recovery click @e1
+```
 
 ### Bitwarden login
 

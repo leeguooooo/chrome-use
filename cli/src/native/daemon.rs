@@ -681,6 +681,22 @@ async fn handle_connection<S>(
                     }
                 };
 
+                #[cfg(all(
+                    windows,
+                    target_arch = "x86_64",
+                    feature = "windows-build-identity-prototype",
+                    feature = "windows-tcp-owner-prototype"
+                ))]
+                let (cmd, focus_control) = {
+                    use super::focus_recovery::control;
+                    if control::reject_reserved_command(&cmd).is_err() {
+                        break;
+                    }
+                    let mut cmd = cmd;
+                    let negotiation = control::accept_offer(&mut cmd);
+                    (cmd, negotiation)
+                };
+
                 if let Some(ref tx) = idle_reset_tx {
                     let _ = tx.try_send(());
                 }
@@ -696,7 +712,7 @@ async fn handle_connection<S>(
                 );
 
                 let keepalive = cmd.get("_keepalive").and_then(Value::as_bool) == Some(true);
-                let response = {
+                let (response, transport_usable, close_after_final) = {
                     let Some(mut s) =
                         lock_for_client(&state, &mut writer, keepalive, KEEPALIVE_PERIOD).await
                     else {
@@ -709,15 +725,51 @@ async fn handle_connection<S>(
                     // command's skip. Nested script steps inherit this value
                     // through `execute_command`, which runs below this point.
                     s.cb_skip = crate::native::actions::cb_skip_of(&cmd);
-                    let (mut response, timing) = with_keepalive(
-                        &mut writer,
-                        keepalive,
-                        KEEPALIVE_PERIOD,
-                        super::timing::timed(super::panel_action::execute_command_stamped(
-                            &cmd, &mut s,
-                        )),
-                    )
-                    .await;
+                    let operation = super::timing::timed(
+                        super::panel_action::execute_command_stamped(&cmd, &mut s),
+                    );
+                    #[cfg(all(
+                        windows,
+                        target_arch = "x86_64",
+                        feature = "windows-build-identity-prototype",
+                        feature = "windows-tcp-owner-prototype"
+                    ))]
+                    let ((mut response, timing), usable, close) =
+                        if let Some((broker, service)) = focus_control {
+                            use super::focus_recovery::control;
+                            let outcome = control::drive(
+                                &mut buf_reader,
+                                &mut writer,
+                                service,
+                                keepalive,
+                                KEEPALIVE_PERIOD,
+                                control::scope(broker, operation),
+                            )
+                            .await;
+                            (
+                                outcome.value,
+                                outcome.transport_usable,
+                                outcome.close_after_final,
+                            )
+                        } else {
+                            (
+                                with_keepalive(&mut writer, keepalive, KEEPALIVE_PERIOD, operation)
+                                    .await,
+                                true,
+                                false,
+                            )
+                        };
+                    #[cfg(not(all(
+                        windows,
+                        target_arch = "x86_64",
+                        feature = "windows-build-identity-prototype",
+                        feature = "windows-tcp-owner-prototype"
+                    )))]
+                    let ((mut response, timing), usable, close) = (
+                        with_keepalive(&mut writer, keepalive, KEEPALIVE_PERIOD, operation).await,
+                        true,
+                        false,
+                    );
                     let ok = response.get("success").and_then(|v| v.as_bool()) == Some(true);
                     let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
                     super::timing::log_command(&s.session_id, action, ok, &timing);
@@ -729,7 +781,7 @@ async fn handle_connection<S>(
                             obj.insert("timing".to_string(), timing);
                         }
                     }
-                    response
+                    (response, usable, close)
                 };
                 // An upgrade handoff that kept the tab exits like `close`, but
                 // the browser was never closed: the close_notify branch of the
@@ -762,6 +814,12 @@ async fn handle_connection<S>(
                     is_close = false;
                 }
 
+                if !transport_usable {
+                    // A partial private frame/heartbeat cannot be followed by
+                    // final JSON. The command has nevertheless completed its
+                    // existing cleanup path; this is only a connection close.
+                    break;
+                }
                 let mut resp = serde_json::to_string(&response).unwrap_or_default();
                 resp.push('\n');
                 if writer.write_all(resp.as_bytes()).await.is_err() {
@@ -789,6 +847,11 @@ async fn handle_connection<S>(
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     close_notify.notify_one();
                     return;
+                }
+                if close_after_final {
+                    // One root reply only: never consume a duplicate/late ACK
+                    // as a fresh generic command on this socket.
+                    break;
                 }
             }
             Err(_) => break,

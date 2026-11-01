@@ -1,0 +1,79 @@
+{
+  "pid": 42,
+  "hwnd": 84,
+  "readOnly": true,
+  "truncated": false,
+  "failedDocuments": 0,
+  "documents": [
+    {
+      "url": "",
+      "rootUrl": null,
+      "offscreen": false
+    },
+    {
+      "url": "",
+      "rootUrl": null,
+      "offscreen": false
+    },
+    {
+      "url": "",
+      "rootUrl": null,
+      "offscreen": false
+    },
+    {
+      "url": "",
+      "rootUrl": null,
+      "offscreen": false
+    },
+    {
+      "url": "https://example.invalid/login?case=780",
+      "rootUrl": "https://example.invalid/login?case=780",
+      "offscreen": false
+    },
+    {
+      "url": "",
+      "rootUrl": "https://example.invalid/login?case=780",
+      "offscreen": false
+    },
+    {
+      "url": "chrome-extension://hmjfbpicbfcphbcmemmcghpkcdinoahh/overlay/menu.html",
+      "rootUrl": "https://example.invalid/login?case=780",
+      "offscreen": false
+    },
+    {
+      "url": "",
+      "rootUrl": "https://example.invalid/login?case=780",
+      "offscreen": false
+    },
+    {
+      "url": "chrome-extension://hmjfbpicbfcphbcmemmcghpkcdinoahh/overlay/menu-list.html",
+      "rootUrl": "https://example.invalid/login?case=780",
+      "offscreen": false
+    },
+    {
+      "url": "",
+      "rootUrl": "https://example.invalid/login?case=780",
+      "offscreen": false
+    },
+    {
+      "url": "chrome-extension://hmjfbpicbfcphbcmemmcghpkcdinoahh/overlay/menu.html",
+      "rootUrl": "https://example.invalid/login?case=780",
+      "offscreen": false
+    },
+    {
+      "url": "",
+      "rootUrl": "https://example.invalid/login?case=780",
+      "offscreen": false
+    },
+    {
+      "url": "chrome-extension://hmjfbpicbfcphbcmemmcghpkcdinoahh/overlay/menu-button.html",
+      "rootUrl": "https://example.invalid/login?case=780",
+      "offscreen": false
+    },
+    {
+      "url": "",
+      "rootUrl": null,
+      "offscreen": false
+    }
+  ]
+}

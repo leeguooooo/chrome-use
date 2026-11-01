@@ -31,6 +31,18 @@ from owned_processes import (
 )
 
 
+def read_debugging_port(path, errors):
+    """Observe a completed port record without restarting Chrome on a file race."""
+    try:
+        lines = path.read_text().splitlines()
+        port = int(lines[0]) if lines else None
+        return port if port is not None and 0 < port <= 65535 else None
+    except (OSError, ValueError) as error:
+        if len(errors) < 16:
+            errors.append(type(error).__name__ + ": " + str(error))
+        return None
+
+
 class WorkerRequestError(RuntimeError):
     pass
 
@@ -261,7 +273,7 @@ class FormFixture:
           document.addEventListener(type,event=>{
             if(type==='submit')event.preventDefault();
             const observed={type,trusted:event.isTrusted,key:event.key||null,
-              visibility:document.visibilityState,atMs:performance.now()};
+              code:event.code||null,visibility:document.visibilityState,atMs:performance.now()};
             recordedEvents.push(observed);
             fetch('/event',{method:'POST',body:JSON.stringify(observed)});
           },true);
@@ -344,6 +356,44 @@ def native_focus(windows, hwnd, pid, title):
     return before, focused
 
 
+def restore_fixture_cover(windows, hwnd, pid, case, cover_hwnd, before_focus):
+    """Restore only this controller's cover, provided nobody moved focus away."""
+    page = windows.state(hwnd)
+    cover = windows.state(cover_hwnd)
+    if (
+        before_focus["foreground"] != cover_hwnd
+        or page["foreground"] != hwnd
+        or page["pid"] != pid
+        or page["title"] != before_focus["title"]
+        or not page["title"].startswith("BitwardenFixture " + case)
+        or cover["pid"] != os.getpid()
+        or cover["title"] != "Bitwarden fixture cover " + case
+        or cover["minimized"]
+        or not cover["visible"]
+    ):
+        return {
+            "attempted": False,
+            "restored": False,
+            "reason": "foreground-or-identity-changed",
+        }
+    # One attempt, followed by observation. Do not retry an uncertain change or
+    # move focus again if another window took the foreground in the meantime.
+    admitted = bool(windows.u.SetForegroundWindow(cover_hwnd))
+    observed = wait_for(
+        lambda: windows.state(cover_hwnd),
+        lambda state: state["foreground"] == cover_hwnd and state["centerOwned"],
+        2,
+    )
+    if observed["pid"] != os.getpid() or observed["title"] != cover["title"]:
+        raise RuntimeError("restored cover identity changed")
+    return {
+        "attempted": True,
+        "admitted": admitted,
+        "restored": True,
+        "window": observed,
+    }
+
+
 def native_menu_image(windows, hwnd, pid, case, path):
     from PIL import ImageGrab
 
@@ -367,6 +417,44 @@ def native_menu_image(windows, hwnd, pid, case, path):
         "height": image.height,
         "window": observed,
     }
+
+
+def inspect_native_fixture(hwnd, pid, case, fixture_url):
+    production = (
+        Path(__file__).resolve().parents[2]
+        / "cli/src/native/focus_recovery/windows-inspect.ps1"
+    )
+    script_path = (
+        production
+        if production.is_file()
+        else Path(__file__).with_name("native-ui-inspect.ps1")
+    )
+    script = script_path.read_text()
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+        input=json.dumps(
+            {
+                "hwnd": hwnd,
+                "pid": pid,
+                "title": "BitwardenFixture " + case,
+                "url": fixture_url,
+            }
+        ),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
+        creationflags=0x08000000,
+    )
+    if result.returncode:
+        raise RuntimeError(
+            "native UI inspection failed: " + result.stderr.strip()[:600]
+        )
+    observed = json.loads(result.stdout)
+    observed["reader"] = "production" if production.is_file() else "ci-prototype"
+    observed["readerSha256"] = digest(script_path)
+    return observed
 
 
 def send_escape(hwnd):
@@ -473,7 +561,10 @@ def protected_access_refusal(result):
 def native_escape_delivered(events):
     keys = [event for event in events if event.get("type") in ["keydown", "keyup"]]
     return [event.get("type") for event in keys] == ["keydown", "keyup"] and all(
-        event.get("key") == "Escape" and event.get("trusted") is True for event in keys
+        event.get("key") == "Escape"
+        and event.get("code") == "Escape"
+        and event.get("trusted") is True
+        for event in keys
     )
 
 
@@ -571,6 +662,61 @@ def prepare_process_observer(record):
     )
 
 
+def foreground_blocked_without_input(result):
+    response = result.get("response") or {}
+    native = response.get("nativeFocus") or {}
+    return (
+        result.get("exit") == 1
+        and result.get("killedAtDeadline") is False
+        and response.get("success") is False
+        and str(response.get("error", "")).startswith(
+            "Foreground did not become the attested Chrome within 500ms; no Escape was sent"
+        )
+        and "input" in native
+        and native["input"] is None
+        and native.get("originalOperationReplayed") is False
+    )
+
+
+def foreground_permission_control(windows, hwnd, chrome_pid, cover_hwnd):
+    """CI control: delegate rights from our foreground cover to our Chrome only."""
+    cover = windows.state(cover_hwnd)
+    target = windows.state(hwnd)
+    if (
+        chrome_pid <= 0
+        or chrome_pid >= 0xFFFFFFFF
+        or cover["pid"] != os.getpid()
+        or cover["foreground"] != cover_hwnd
+        or target["foreground"] != cover_hwnd
+        or target["pid"] != chrome_pid
+        or cover_hwnd == hwnd
+    ):
+        raise RuntimeError("foreground grant requires our unchanged cover and Chrome")
+    delegate = windows.u.AllowSetForegroundWindow
+    delegate.argtypes = [wintypes.DWORD]
+    delegate.restype = wintypes.BOOL
+    ctypes.set_last_error(0)
+    admitted = bool(delegate(chrome_pid))
+    error = 0 if admitted else ctypes.get_last_error()
+    after = windows.state(cover_hwnd)
+    return {
+        "controllerPid": os.getpid(),
+        "chromePid": chrome_pid,
+        "admitted": admitted,
+        "errorCode": error,
+        "foregroundUnchanged": after["pid"] == os.getpid()
+        and after["foreground"] == cover_hwnd,
+        "unassistedProductionAcceptance": False,
+    }
+
+
+def client_authorization_observed(receipt):
+    observation = receipt.get("foregroundAuthorization") or {}
+    return isinstance(observation, dict) and observation.get("kind") in {
+        "Admitted", "AlreadyForegroundProcess"
+    }
+
+
 def main():
     if platform.system() != "Windows" or os.environ.get("GITHUB_ACTIONS") != "true":
         raise SystemExit("Only a disposable Windows GitHub runner is allowed")
@@ -582,7 +728,13 @@ def main():
         choices=["default", "foreground", "background"],
         default="default",
     )
+    parser.add_argument("--inspect-native-ui", action="store_true")
+    parser.add_argument("--runtime-focus-recovery", action="store_true")
+    parser.add_argument("--expect-client-authorization", action="store_true")
+    parser.add_argument("--grant-chrome-foreground", action="store_true")
     args = parser.parse_args()
+    if args.expect_client_authorization and (not args.runtime_focus_recovery or args.grant_chrome_foreground):
+        raise SystemExit("Client authorization requires runtime recovery without a controller grant")
     args.output.mkdir(parents=True, exist_ok=True)
     case = "bw780-" + uuid.uuid4().hex[:10]
     fixture = None
@@ -598,6 +750,9 @@ def main():
         "realVaultTested": False,
         "productionRecoveryImplemented": False,
         "setupMode": args.setup_mode,
+        "runtimeFocusRecoveryRequested": args.runtime_focus_recovery,
+        "clientAuthorizationRequested": args.expect_client_authorization,
+        "foregroundPermissionControlRequested": args.grant_chrome_foreground,
         "browserStarted": False,
         "registryRestored": False,
         "sessionCleanupConfirmed": False,
@@ -669,10 +824,15 @@ def main():
                 common = None
                 close_cover = None
                 try:
-                    active_port = wait_for(
-                        lambda: profile / "DevToolsActivePort", lambda p: p.exists(), 15
+                    record["debuggingPortReadErrors"] = []
+                    port = wait_for(
+                        lambda: read_debugging_port(
+                            profile / "DevToolsActivePort",
+                            record["debuggingPortReadErrors"],
+                        ),
+                        lambda value: value is not None,
+                        15,
                     )
-                    port = int(active_port.read_text().splitlines()[0])
                     record["stage"] = "worker-discovery"
                     record["workerDiscoveryErrors"] = []
                     record["ignoredWorkerTargets"] = []
@@ -785,6 +945,20 @@ def main():
                         ),
                         8,
                     )
+                    if args.runtime_focus_recovery:
+                        record["counterBeforeRuntime"] = invoke(
+                            "counter-before-runtime", "eval", "window.fixtureState()"
+                        )
+                        initial_state = (
+                            checked(record["counterBeforeRuntime"]).get("result") or {}
+                        )
+                        if (
+                            initial_state.get("caseId") != case
+                            or initial_state.get("continuations") != 0
+                        ):
+                            raise RuntimeError(
+                                "runtime fixture did not start with a verified zero counter"
+                            )
                     # One focus action only. A failure may mean focus took effect:
                     # never replay it in search of a successful acknowledgement.
                     record["stage"] = "field-focus"
@@ -814,7 +988,104 @@ def main():
                         )
                     menu = menu_frames(bw_endpoint, fixture.url, bw_identity["id"])
                     record["menuAfterExistingGuard"] = menu
-                    if not menu["bitwardenFrames"]:
+                    if args.runtime_focus_recovery:
+                        if not menu["bitwardenFrames"]:
+                            raise RuntimeError(
+                                "runtime recovery requires the actual blocked menu to remain present"
+                            )
+                        record["stage"] = "runtime-focus-recovery"
+                        record["windowBeforeRuntime"] = windows.state(hwnd)
+                        record["runtimeRecovery"] = invoke(
+                            "runtime-recovery",
+                            "--allow-focus-recovery",
+                            "click",
+                            "#continue",
+                        )
+                        if args.grant_chrome_foreground:
+                            record["unassistedRuntimeRecovery"] = record["runtimeRecovery"]
+                            record["windowAfterFirstRuntime"] = windows.state(hwnd)
+                            record["coverAfterFirstRuntime"] = windows.state(cover_hwnd)
+                            if foreground_blocked_without_input(record["runtimeRecovery"]):
+                                if (
+                                    args.setup_mode != "background"
+                                    or any(e.get("type") in ("keydown", "keyup") for e in fixture.events)
+                                ):
+                                    raise RuntimeError("foreground control requires a verified no-input foreground refusal")
+                                record["foregroundPermissionControl"] = foreground_permission_control(
+                                    windows, hwnd, chrome.pid, cover_hwnd
+                                )
+                                control = record["foregroundPermissionControl"]
+                                if not control["admitted"] or not control["foregroundUnchanged"]:
+                                    raise RuntimeError("foreground permission delegation was not verified")
+                                record["scope"] += "; controller-granted foreground rights, NOT unassisted production recovery acceptance"
+                                record["runtimeRecovery"] = invoke(
+                                    "runtime-recovery-granted", "--allow-focus-recovery", "click", "#continue"
+                                )
+                            else:
+                                record["foregroundPermissionControlSkipped"] = "The first operation was not a verified no-input foreground refusal; it was not repeated"
+                            record["windowAfterRuntime"] = windows.state(hwnd)
+                            record["coverAfterRuntime"] = windows.state(cover_hwnd)
+                            if record["runtimeRecovery"].get("exit") == 0:
+                                record["runtimeImmediateRead"] = invoke(
+                                    "runtime-immediate-read", "eval", "({title:document.title,fixture:window.fixtureState()})"
+                                )
+                        checked(record["runtimeRecovery"])
+                        receipt = (
+                            record["runtimeRecovery"]["response"].get("nativeFocus")
+                            or {}
+                        )
+                        if args.expect_client_authorization:
+                            record["clientAuthorization"] = receipt.get("foregroundAuthorization")
+                            if not client_authorization_observed(receipt):
+                                raise RuntimeError("successful private CLI authorization was not observed; no helper grant is permitted")
+                        native_input = receipt.get("input") or {}
+                        native_restore = (receipt.get("restore") or {}).get(
+                            "restore"
+                        ) or {}
+                        binding = native_input.get("beforeKeyDown") or {}
+                        if (
+                            native_input.get("keyDownAdmitted") != 1
+                            or native_input.get("keyUpAdmitted") != 1
+                            or native_input.get("delivery") != "unverified"
+                            or native_input.get("replayed") is not False
+                            or binding.get("hwnd") != hwnd
+                            or binding.get("pid") != chrome.pid
+                            or receipt.get("originalOperationReplayed") is not False
+                            or native_restore.get("restored") is not True
+                        ):
+                            raise RuntimeError(
+                                "runtime native admission/binding/restore receipt was not verified"
+                            )
+                        record["runtimeNativeReceipt"] = receipt
+                        record["nativeEscape"] = {
+                            "source": "runtime-native-host",
+                            "admitted": 2,
+                            "replayed": False,
+                            "nativeInput": native_input,
+                        }
+                        record["mechanism"] = "native-input-attempted"
+                        record["menuAfterNative"] = wait_for(
+                            lambda: menu_frames(
+                                bw_endpoint, fixture.url, bw_identity["id"]
+                            ),
+                            lambda item: not item["bitwardenFrames"],
+                            4,
+                        )
+                        if args.setup_mode == "background":
+                            restored_window = windows.state(cover_hwnd)
+                            if (
+                                restored_window["foreground"] != cover_hwnd
+                                or not restored_window["centerOwned"]
+                            ):
+                                raise RuntimeError(
+                                    "runtime did not return the original CI cover to the foreground"
+                                )
+                            record["nativeFocusRestore"] = {
+                                **native_restore,
+                                "source": "runtime-native-host",
+                                "window": restored_window,
+                            }
+                    elif not menu["bitwardenFrames"]:
                         record["mechanism"] = "menu-absent-after-cli-read"
                     else:
                         if menu["active"] is not True:
@@ -838,6 +1109,19 @@ def main():
                                 case,
                                 args.output / "native-menu.png",
                             )
+                            if args.inspect_native_ui:
+                                record["nativeUiInspection"] = inspect_native_fixture(
+                                    hwnd, chrome.pid, case, fixture.url
+                                )
+                                record["menuAfterNativeInspection"] = menu_frames(
+                                    bw_endpoint, fixture.url, bw_identity["id"]
+                                )
+                                if not record["menuAfterNativeInspection"][
+                                    "bitwardenFrames"
+                                ]:
+                                    raise RuntimeError(
+                                        "native inspection changed the menu before Escape; observation is not an uninstrumented recovery"
+                                    )
                             record["nativeEscape"] = send_escape(hwnd)
                             record["mechanism"] = "native-input-attempted"
                         else:
@@ -857,13 +1141,15 @@ def main():
                     after_data = checked(record["accessAfter"])
                     if ((after_data.get("result") or {}).get("fixture") or {}).get(
                         "continuations"
-                    ) != 0:
+                    ) != (1 if args.runtime_focus_recovery else 0):
                         raise RuntimeError(
-                            "continuation happened before its authorized click"
+                            "continuation count differs from the authorized runtime action"
                         )
                     record["stage"] = "continuation"
-                    record["continuation"] = invoke(
-                        "continuation", "click", "#continue"
+                    record["continuation"] = (
+                        record["runtimeRecovery"]
+                        if args.runtime_focus_recovery
+                        else invoke("continuation", "click", "#continue")
                     )
                     checked(record["continuation"])
                     record["continuationRead"] = invoke(
@@ -884,6 +1170,44 @@ def main():
                         raise RuntimeError(
                             "continuation was not performed exactly once"
                         )
+                    if (
+                        args.setup_mode == "background"
+                        and record.get("nativeFocus")
+                        and not args.runtime_focus_recovery
+                    ):
+                        record["stage"] = "restore-native-focus"
+                        record["nativeFocusRestore"] = restore_fixture_cover(
+                            windows,
+                            hwnd,
+                            chrome.pid,
+                            case,
+                            cover_hwnd,
+                            record["nativeFocus"]["before"],
+                        )
+                        if not record["nativeFocusRestore"]["restored"]:
+                            raise RuntimeError(
+                                "native focus restore could not be verified"
+                            )
+                    if record.get("nativeFocusRestore"):
+                        record["postRestoreRead"] = invoke(
+                            "post-restore-read",
+                            "eval",
+                            "({title:document.title,fixture:window.fixtureState()})",
+                        )
+                        restored_data = (
+                            checked(record["postRestoreRead"]).get("result") or {}
+                        )
+                        if (
+                            restored_data.get("title") != "BitwardenFixture " + case
+                            or (restored_data.get("fixture") or {}).get("caseId")
+                            != case
+                            or (restored_data.get("fixture") or {}).get("continuations")
+                            != 1
+                        ):
+                            raise RuntimeError(
+                                "restored foreground changed the verified page result"
+                            )
+                        observed = restored_data
                     record["finalMenu"] = menu_frames(
                         bw_endpoint, fixture.url, bw_identity["id"]
                     )
@@ -921,6 +1245,11 @@ def main():
                 except Exception as exc:
                     record["error"] = type(exc).__name__ + ": " + str(exc)[:1200]
                 finally:
+                    # Retain the independent receiver's observations even when
+                    # the renderer/readback failed. Missing fetches are not
+                    # evidence that input was absent.
+                    with fixture.lock:
+                        record["receivedFixtureEvents"] = list(fixture.events)
                     if close_cover:
                         try:
                             close_cover()

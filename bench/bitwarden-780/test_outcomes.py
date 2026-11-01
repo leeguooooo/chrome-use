@@ -53,14 +53,15 @@ class OutcomeTests(unittest.TestCase):
     def test_admission_alone_cannot_be_reported_as_observed_escape_delivery(self):
         gate = helpers()["native_escape_delivered"]
         pair = [
-            {"type": "keydown", "key": "Escape", "trusted": True},
-            {"type": "keyup", "key": "Escape", "trusted": True},
+            {"type": "keydown", "key": "Escape", "code": "Escape", "trusted": True},
+            {"type": "keyup", "key": "Escape", "code": "Escape", "trusted": True},
         ]
         self.assertTrue(gate(pair))
         self.assertFalse(gate([]))
         self.assertFalse(gate(pair[:1]))
         self.assertFalse(gate([dict(event, trusted=False) for event in pair]))
         self.assertFalse(gate([dict(event, key="Enter") for event in pair]))
+        self.assertFalse(gate([dict(event, code="Unidentified") for event in pair]))
         self.assertFalse(gate(pair + [dict(pair[0])]))
         self.assertFalse(gate(pair + pair))
 

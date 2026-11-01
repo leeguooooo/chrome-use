@@ -63,10 +63,12 @@ Verbs: `fill` replaces a field, `type` appends keystrokes, `select @e "Opt"`
 for `<select>`, `pick @e --option "…"` for comboboxes, `check`/`uncheck`,
 `press Enter`, `upload @e file`. Fewer calls: `batch "fill @e1 Ada" "click
 @e2 --observe"`, `form fill --map`, `script` for bounded logic; still verify
-the final signal. Screenshots only for visual questions
-(`--with-screenshot <path>`). A screenshot timeout can leave its native capture pending;
-avoid overlapping retries. Background-color cleanup does not reset its attachment. Windows relay refuses known minimized-window captures before dispatch (extension 0.5.101+). Use `screenshot --allow-window-restore` only when window restoration is authorized; the window stays restored and focus may change. Full rules and observation fields
-(`openedTab`, `--follow`, `noProgress`, settle warnings): `core/loop`.
+the final signal. Screenshots only for visual questions (`--with-screenshot <path>`).
+A timed-out capture may remain pending: avoid overlapping retries. Windows
+window restoration needs explicit authorization and may change focus
+(`core/reading`). Observation fields and progress rules: `core/loop`.
+
+`--allow-focus-recovery`: opt in to one Windows native Escape with guarded foreground handoff only when authorized; never replay uncertain actions. Requirements: `core/connection`.
 
 ## Tabs and ending the task
 

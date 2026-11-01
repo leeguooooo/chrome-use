@@ -7178,6 +7178,11 @@ Options:
                              e.g., --proxy-bypass "localhost,*.internal.com"
   --ignore-https-errors      Ignore HTTPS certificate errors
   --allow-file-access        Allow file:// URLs to access local files (Chromium only)
+  --allow-focus-recovery     Permit one native Escape recovery for this invocation (Windows relay).
+                             May briefly focus an owned agent-only window; default disabled.
+                             Needs extension 0.5.103+ and a recovery-capable native host.
+                             Matched Windows builds may request Chrome foreground eligibility; the OS can refuse.
+                             Unknown-effect actions are never replayed; restore is best effort.
   --hide-scrollbars <bool>   Hide native scrollbars in headless Chromium screenshots (default: true)
                              Use --hide-scrollbars false to keep scrollbars visible
   -p, --provider <name>      Browser provider: ios, browserbase, kernel, browseruse, browserless, agentcore
@@ -7398,6 +7403,7 @@ Examples:
   chrome-use wait 2000               # Wait for slow pages to settle
   chrome-use --cdp 9222 snapshot      # Connect via CDP port
   chrome-use --auto-connect snapshot  # Auto-discover running Chrome
+  chrome-use --allow-focus-recovery click @e1  # Opt in to bounded Windows native recovery
   chrome-use stream enable            # Start runtime streaming on an auto-selected port
   chrome-use stream status            # Inspect runtime streaming state
   chrome-use --color-scheme dark open example.com  # Dark mode

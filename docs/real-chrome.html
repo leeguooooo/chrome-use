@@ -460,9 +460,14 @@
         绝大多数页面不在乎。例外是那些<strong>刻意</strong>按可见性决定要不要工作的页面（不让后台标签页续着设备租约、视频播放器、
         会暂停的游戏）：它们渲染的是「后台分支」，于是 <code>snapshot</code> 可能是空的，你以为会有的控件不在或用不了。
         现在树接近为空且标签页隐藏时，<code>snapshot</code> 会把这件事说出来。遇到时用
-        <code>chrome-use bringToFront</code> 刻意把它顶到前台再读一次——这也是唯一会让用户视图跟着你跑的操作，
+        <code>chrome-use bringToFront</code> 刻意把它顶到前台再读一次。这会改变用户的前台视图，
         所以要刻意用，不要顺手用。
       </div>
+
+      <h2>原生焦点恢复（显式授权）</h2>
+      <p><code>--allow-focus-recovery</code> 仅为本次命令允许一次原生 Escape 恢复。Windows 扩展中继需要扩展 0.5.103 或更新版本，以及支持恢复的 native host；遇到阻止调试器访问的 Bitwarden 菜单时，可能短暂聚焦当前绑定的 agent 窗口。一次聚焦请求后最多等待 500 毫秒核验原生前台，不会再次请求聚焦。目标必须是 agent 自己创建的活动标签，窗口不能最小化，且只能包含 agent 标签；恢复前会核验同一页面和原生菜单，结束后尝试恢复原前台窗口。目标不明确、平台不支持或检测到用户输入变化时会拒绝。默认关闭，环境变量、配置和复用的 daemon 都不会授权。只读探针确认访问恢复后才执行原操作，不会重放结果未知的操作。JSON 的 <code>nativeFocus</code> 和警告分别报告输入提交及焦点恢复结果；系统接收输入不代表页面收到，焦点恢复也可能无法确认。macOS 目前只有只读权限探针，不支持原生焦点恢复。</p>
+      <p>Windows CLI 会先核验自身、daemon 和 native host 来自同一二进制构建，再向核验过的 Chrome 父进程申请前台资格。该申请不向 daemon 授权，也不主动聚焦或输入；Windows 可以拒绝。<code>nativeFocus.foregroundAuthorization</code> 区分 <code>Admitted</code>、<code>AlreadyForegroundProcess</code>、<code>OsDenied</code> 和旧客户端的 <code>Unavailable</code>，申请获准并不代表焦点已切换或按键已送达。构建不匹配时先更新并重启 native host，再发起新命令，不要盲目重试结果未知的操作。</p>
+      <pre><code>chrome-use --allow-focus-recovery click @e1</code></pre>
 
       <h2>行为层反-bot：拟人化输入</h2>
       <p>

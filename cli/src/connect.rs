@@ -5102,6 +5102,10 @@ async fn nm_host_main() {
     // Panel filesystem work must not block relay replies or accept unbounded
     // work. This gate is separate from CDP and never prepares a browser.
     let panel_jobs = Arc::new(tokio::sync::Semaphore::new(PANEL_JOBS));
+    // Desktop recovery is a distinct, explicitly requested protocol. It never
+    // borrows panel authority and serializes native operations separately.
+    let native_focus = crate::native::focus_recovery::NativeFocusHost::new();
+    let native_focus_jobs = Arc::new(tokio::sync::Semaphore::new(1));
 
     // Single writer to Chrome (extension) over stdout, native-messaging framed.
     tokio::spawn(async move {
@@ -5203,6 +5207,68 @@ async fn nm_host_main() {
                     }),
                 };
                 let reply = serde_json::json!({"method": "upgradeCliResult", "params": params});
+                let _ = tx.send(reply.to_string().into_bytes()).await;
+            });
+            continue;
+        }
+        if v.get("method").and_then(|m| m.as_str()) == Some("nativeFocusRevoke") {
+            if let Some(token) = v
+                .get("token")
+                .and_then(|value| value.as_str())
+                .filter(|token| token.len() == 32 && token.bytes().all(|b| b.is_ascii_hexdigit()))
+            {
+                native_focus.revoke(token);
+            }
+            continue;
+        }
+        if v.get("method").and_then(|m| m.as_str()) == Some("nativeFocus") {
+            let Some(request_id) = v
+                .get("requestId")
+                .and_then(|value| value.as_str())
+                .filter(|id| !id.is_empty() && id.len() <= 128 && id.is_ascii())
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            if v["operation"].as_str() == Some("finish") {
+                if let Some(token) = v["params"]["token"].as_str() {
+                    native_focus.revoke(token);
+                }
+            }
+            let host = native_focus.clone();
+            let tx = to_ext.clone();
+            let jobs = native_focus_jobs.clone();
+            tokio::spawn(async move {
+                let slot = if v["operation"].as_str() == Some("finish") {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(12),
+                        jobs.acquire_owned(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(slot)) => Ok(slot),
+                        _ => Err(()),
+                    }
+                } else {
+                    jobs.try_acquire_owned().map_err(|_| ())
+                };
+                let result = match slot {
+                    Ok(_slot) => {
+                        host.request(v["operation"].as_str().unwrap_or(""), &v["params"])
+                            .await
+                    }
+                    Err(_) => {
+                        Err("Native focus operation is busy; it was not replayed".to_string())
+                    }
+                };
+                let reply = match result {
+                    Ok(result) => {
+                        serde_json::json!({"method":"nativeFocusReply","requestId":request_id,"result":result})
+                    }
+                    Err(error) => {
+                        serde_json::json!({"method":"nativeFocusReply","requestId":request_id,"error":error})
+                    }
+                };
                 let _ = tx.send(reply.to_string().into_bytes()).await;
             });
             continue;

@@ -3,6 +3,8 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
+mod build_marker;
+
 /// Embed the version of the `ab-connect` extension this CLI ships alongside, so
 /// `doctor` can tell a connected extension "you're older than what this CLI
 /// expects, update it." Read from the extension manifest at build time so it
@@ -38,7 +40,11 @@ fn ensure_dashboard_dir() {
 fn main() {
     ensure_dashboard_dir();
     embed_extension_version();
+    generate_protocol();
+    build_marker::emit().expect("Windows build identity marker generation failed");
+}
 
+fn generate_protocol() {
     let protocol_dir = Path::new("cdp-protocol");
     let out_dir = env::var("OUT_DIR").unwrap();
     let out_path = Path::new(&out_dir).join("cdp_generated.rs");

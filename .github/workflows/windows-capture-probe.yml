@@ -16,6 +16,26 @@ on:
           - cleanup-relay
         default: candidates
         required: true
+      runtime_focus_recovery:
+        description: Exercise the production opt-in recovery instead of the Python key prototype
+        type: boolean
+        required: false
+        default: false
+      client_foreground_handoff:
+        description: Build the experimental private CLI handoff; no controller delegation or source replay
+        type: boolean
+        required: false
+        default: false
+      inspect_native_ui:
+        description: Collect read-only native document metadata on the CI fixture
+        type: boolean
+        required: false
+        default: false
+      grant_foreground_control:
+        description: Diagnostic only; compare the same blocked page after its owning cover delegates foreground rights
+        type: boolean
+        required: false
+        default: false
       source_build_run:
         description: Bitwarden only; reuse a verified fresh build with identical product sources
         required: false
@@ -52,6 +72,10 @@ jobs:
     timeout-minutes: 60
     env:
       CHROME_USE_NO_UPDATE_CHECK: '1'
+      PROBE_RUNTIME_FOCUS: ${{ inputs.runtime_focus_recovery }}
+      PROBE_CLIENT_HANDOFF: ${{ inputs.client_foreground_handoff }}
+      PROBE_INSPECT_NATIVE_UI: ${{ inputs.inspect_native_ui }}
+      PROBE_FOREGROUND_CONTROL: ${{ inputs.grant_foreground_control }}
       SOURCE_BUILD_RUN: ${{ inputs.source_build_run }}
       PROBE_EXPERIMENT: ${{ inputs.experiment }}
       PROBE_SAMPLES: ${{ inputs.samples }}
@@ -66,6 +90,9 @@ jobs:
         shell: pwsh
         run: |
           if ($env:SOURCE_BUILD_RUN -and ($env:PROBE_EXPERIMENT -ne 'bitwarden' -or $env:SOURCE_BUILD_RUN -notmatch '^[0-9]+$')) { throw 'Source replay requires a numeric build run and the Bitwarden experiment' }
+          if ($env:PROBE_FOREGROUND_CONTROL -eq 'true' -and ($env:PROBE_EXPERIMENT -ne 'bitwarden' -or $env:PROBE_RUNTIME_FOCUS -ne 'true')) { throw 'Foreground control requires Bitwarden runtime recovery' }
+          if ($env:PROBE_CLIENT_HANDOFF -eq 'true' -and ($env:PROBE_EXPERIMENT -ne 'bitwarden' -or $env:PROBE_RUNTIME_FOCUS -ne 'true' -or $env:PROBE_FOREGROUND_CONTROL -eq 'true' -or $env:SOURCE_BUILD_RUN)) { throw 'Client handoff requires a fresh Bitwarden runtime build without controller delegation' }
+          if ($env:PROBE_SAMPLES -notmatch '^[1-5]$') { throw 'samples must be 1-5' }
       - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.source_build_run == ''
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
@@ -107,6 +134,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python bench/bitwarden-780/reuse_source.py --run "$env:SOURCE_BUILD_RUN" --output probe-artifacts
+      - name: Prepare controlled experimental Windows image generation
+        if: inputs.client_foreground_handoff
+        shell: pwsh
+        run: ./scripts/prepare-windows-identity.ps1
       - name: Validate inputs and build the exact Release CLI
         if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.source_build_run == ''
         shell: pwsh
@@ -117,17 +148,51 @@ jobs:
           if ($env:PROBE_DPR -notmatch '^[12]$') { throw 'dpr must be 1 or 2' }
           if ($env:PROBE_PENDING_DOM -notmatch '^(true|false)$') { throw 'pending_dom_control must be true or false' }
           New-Item -ItemType Directory -Path probe-artifacts -Force | Out-Null
-          cargo build --release --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc 2>&1 | Tee-Object probe-artifacts/build.log
+          $features = @()
+          if ($env:PROBE_CLIENT_HANDOFF -eq 'true') { $features = @('--features', 'windows-build-identity-prototype,windows-tcp-owner-prototype') }
+          cargo build --release --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc @features 2>&1 | Tee-Object probe-artifacts/build.log
           if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
           $binary = (Resolve-Path cli/target/x86_64-pc-windows-msvc/release/chrome-use.exe).Path
-          "PROBE_BINARY=$binary" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Get-FileHash $binary -Algorithm SHA256 | Format-List | Out-File probe-artifacts/binary-sha256.txt
           Copy-Item $binary probe-artifacts/source-cli.exe
-          @{mode='built';gitSha=$env:GITHUB_SHA;sourceBuildRun=$env:GITHUB_RUN_ID;binarySha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()} | ConvertTo-Json | Out-File probe-artifacts/source-build.json -Encoding utf8
+          $binary = (Resolve-Path probe-artifacts/source-cli.exe).Path
+          "PROBE_BINARY=$binary" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          @{mode='built';gitSha=$env:GITHUB_SHA;sourceBuildRun=$env:GITHUB_RUN_ID;clientForegroundHandoff=($env:PROBE_CLIENT_HANDOFF -eq 'true');binarySha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()} | ConvertTo-Json | Out-File probe-artifacts/source-build.json -Encoding utf8
           "PROBE_BINARY_BUILD_SHA=$env:GITHUB_SHA" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "PROBE_BINARY_SOURCE=built" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           cargo --version | Out-File probe-artifacts/toolchain.txt
           rustc --version | Out-File probe-artifacts/toolchain.txt -Append
+      - name: Verify native focus authority before browser acceptance
+        if: inputs.experiment == 'bitwarden' && inputs.source_build_run == ''
+        shell: pwsh
+        run: |
+          if (-not (Test-Path cli/src/native/focus_recovery.rs)) { throw 'Native focus authority source is absent' }
+          if ($env:PROBE_CLIENT_HANDOFF -eq 'true') {
+            # Fresh generation for this separate link. The immutable product
+            # copy was retained before building this kind-2 unit harness.
+            $env:CHROME_USE_BUILD_GENERATION = [guid]::NewGuid().ToString('N')
+            $arguments = @('test', '--release', '--locked', '--manifest-path', 'cli/Cargo.toml', '--target', 'x86_64-pc-windows-msvc', '--bin', 'chrome-use', '--features', 'windows-build-identity-prototype,windows-tcp-owner-prototype', '--no-run', '--message-format=json')
+            $messages = & cargo @arguments
+            if ($LASTEXITCODE -ne 0) { throw 'Native focus test harness failed to compile' }
+            $messages | Out-File probe-artifacts/native-focus-build.jsonl -Encoding utf8
+            $executables = @($messages | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.reason -eq 'compiler-artifact' -and $_.target.name -eq 'chrome-use' -and $_.profile.test -and $_.executable } | Select-Object -ExpandProperty executable -Unique)
+            if ($executables.Count -ne 1) { throw 'Expected exactly one compiled native focus harness' }
+            $testExecutable = $executables[0]
+            $cases = & $testExecutable focus_recovery --list
+          } else {
+            $arguments = @('test', '--release', '--locked', '--manifest-path', 'cli/Cargo.toml', '--target', 'x86_64-pc-windows-msvc', '--bin', 'chrome-use', 'focus_recovery')
+            $cases = & cargo @arguments -- --list
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Native focus tests failed to list' }
+          foreach ($required in @('real_native_document_shape_keeps_the_menu_under_its_page', 'standalone_test_process_cannot_claim_chrome_parent_authority', 'only_current_root_can_grant_one_attempt')) {
+            if (-not ($cases -match "${required}: test$")) { throw "Required native focus test absent: $required" }
+          }
+          if ($env:PROBE_CLIENT_HANDOFF -eq 'true') {
+            & $testExecutable focus_recovery --test-threads=1 2>&1 | Tee-Object probe-artifacts/native-focus-tests.log
+          } else {
+            & cargo @arguments -- --test-threads=1 2>&1 | Tee-Object probe-artifacts/native-focus-tests.log
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Native focus authority tests failed' }
       - name: Install isolated Chrome for Testing and image decoder
         if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
         shell: pwsh
@@ -163,9 +228,19 @@ jobs:
           Expand-Archive -Path $bwArchive -DestinationPath $bwDir
           Get-FileHash $binary,$bwArchive -Algorithm SHA256 | Format-List | Out-File probe-artifacts/input-hashes.txt
           $verdicts = @()
-          foreach ($mode in @('default', 'foreground', 'background')) {
+          $inspection = @()
+          if ($env:PROBE_INSPECT_NATIVE_UI -eq 'true') { $inspection = @('--inspect-native-ui') }
+          if ($env:PROBE_RUNTIME_FOCUS -eq 'true') { $inspection += '--runtime-focus-recovery' }
+          if ($env:PROBE_CLIENT_HANDOFF -eq 'true') { $inspection += '--expect-client-authorization' }
+          $modes = @('default', 'foreground', 'background')
+          if ($env:PROBE_FOREGROUND_CONTROL -eq 'true') {
+            $inspection += '--grant-chrome-foreground'
+            $modes = @(1..[int]$env:PROBE_SAMPLES | ForEach-Object { "background-$_" })
+          }
+          foreach ($mode in $modes) {
             $output = "probe-artifacts/bitwarden-$mode"
-            python bench/bitwarden-780/probe.py --binary $binary --chrome $chrome --extension extensions/ab-connect --bitwarden $bwDir --output $output --setup-mode $mode
+            $setupMode = if ($env:PROBE_FOREGROUND_CONTROL -eq 'true') { 'background' } else { $mode }
+            python bench/bitwarden-780/probe.py --binary $binary --chrome $chrome --extension extensions/ab-connect --bitwarden $bwDir --output $output --setup-mode $setupMode @inspection
             $verdicts += $LASTEXITCODE
             $summary = Get-Content "$output/summary.json" -Raw | ConvertFrom-Json
             if ($summary.browserStarted -ne $true) { throw 'Fixture prerequisites unavailable; no browser was started' }

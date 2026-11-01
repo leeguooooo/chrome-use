@@ -90,6 +90,20 @@ profile. `browsers` lists Chrome profiles; `tab list` lists session tabs.
 Adopt an existing user tab only when needed for the request. Do not close,
 navigate, or reconfigure unrelated tabs or sessions.
 
+## Opt-in native focus recovery
+
+`--allow-focus-recovery` authorizes one native Escape recovery for this invocation only. On Windows extension relay with extension 0.5.103 or later and a recovery-capable native host, a protected Bitwarden menu blocking debugger access may trigger a brief focus change to the bound agent window. Native foreground verification waits at most 500 ms after that single focus request; it never requests focus again. It requires an active agent-owned tab in a non-minimized window containing only agent tabs, verifies the same page and native menu, and attempts to restore the original foreground afterward.
+
+It refuses an ambiguous target, unsupported platform, or changed user input. The default remains disabled; no environment variable, config, or reused daemon grants permission. The original operation runs only after a read-only probe confirms access; an operation with an unknown result is never replayed.
+
+The invoking Windows CLI can request foreground eligibility for the verified Chrome parent after matching the CLI, daemon and native host to the same binary build. This grants no authority to the daemon and performs no activation or input. Windows may deny the request. `nativeFocus.foregroundAuthorization` distinguishes `Admitted`, `AlreadyForegroundProcess`, `OsDenied` and legacy `Unavailable`; admission alone proves neither focus nor key delivery. Update and restart mismatched native hosts before a new attempt; never retry an unknown-effect operation blindly.
+
+JSON `nativeFocus` and warnings report input admission and restoration separately. OS input admission does not prove delivery, and restoration may remain unconfirmed. macOS currently provides only a read-only permission probe, without native focus recovery.
+
+```bash
+chrome-use --allow-focus-recovery click @e1
+```
+
 ## Choosing a profile
 
 Each Chrome profile is its own login: one may hold the work GitHub account,

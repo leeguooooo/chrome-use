@@ -7296,6 +7296,179 @@ impl BrowserManager {
             .await
     }
 
+    /// Recover before dispatch, after the command layer has checked policy and
+    /// routed to its actual target. A no-op renderer read can trigger recovery;
+    /// the original operation has not run and is never replayed here.
+    pub(crate) async fn prepare_native_focus_recovery(
+        &self,
+        before_policy_url: Option<&str>,
+    ) -> Result<(), String> {
+        if !super::focus_recovery::enabled() || !self.on_relay() {
+            return Ok(());
+        }
+        let session = self.active_session_id()?.to_string();
+        let target = self.active_target_id()?.to_string();
+        let live = self.pinned_tab_browser_record().await?;
+        let url = live["url"]
+            .as_str()
+            .ok_or("native recovery could not read the bound tab URL")?
+            .to_string();
+        let live_target = live["targetId"]
+            .as_str()
+            .filter(|target| !target.is_empty())
+            .ok_or("native recovery could not read the live target binding")?
+            .to_string();
+        let chrome_tab = live["chromeTabId"]
+            .as_i64()
+            .ok_or("native recovery could not read the Chrome tab binding")?;
+        if Some(url.as_str()) != before_policy_url {
+            return Err("native recovery page changed during policy checks; the current page operation was not run".into());
+        }
+        let probe = || {
+            self.client.send_command(
+                "Runtime.evaluate",
+                Some(json!({"expression":"location.href","returnByValue":true})),
+                Some(&session),
+            )
+        };
+        match probe().await {
+            Ok(value)
+                if value.pointer("/result/value").and_then(Value::as_str) == Some(url.as_str()) =>
+            {
+                return Ok(())
+            }
+            Ok(_) => {
+                return Err(
+                    "native recovery found a different renderer URL; the command was not run"
+                        .into(),
+                )
+            }
+            Err(error) if !is_debugger_access_denied(&error) => return Ok(()),
+            Err(_) => {}
+        }
+        if !self.created_targets.contains(&target) {
+            return Err(
+                "native focus recovery refuses a tab this session did not create; no focus changed"
+                    .into(),
+            );
+        }
+        let _permit = super::focus_recovery::take_permit().ok_or(
+            "native recovery was already attempted in this invocation; the command was not run",
+        )?;
+        let prepared = self
+            .client
+            .send_command(
+                "ABExt.nativeFocusPrepare",
+                Some(json!({
+                    "allowFocusRecovery":true, "targetId":live_target, "sessionId":session, "chromeTabId":chrome_tab, "url":url,
+                })),
+                None,
+            )
+            .await?;
+        if prepared["prepared"].as_bool() != Some(true) {
+            return Err(
+                "native preparation was not confirmed; the current page operation was not run"
+                    .into(),
+            );
+        }
+        let token = prepared["token"]
+            .as_str()
+            .filter(|token| token.len() == 32 && token.bytes().all(|b| b.is_ascii_hexdigit()))
+            .ok_or("malformed native recovery lease; the current page operation was not run")?
+            .to_string();
+        // Own the cleanup capability before the extension may request focus.
+        // A canceled command can now revoke the remaining native sequence.
+        super::focus_recovery::register(self.client.clone(), token.clone(), Value::Null)?;
+        #[cfg(all(
+            windows,
+            target_arch = "x86_64",
+            feature = "windows-build-identity-prototype",
+            feature = "windows-tcp-owner-prototype"
+        ))]
+        {
+            use super::focus_recovery::control::{self, Decision, RelayHint};
+            let descriptor =
+                control::descriptor_if_negotiated(|| self.client.native_focus_transport())
+                    .map_err(|error| format!("{error}; the current page operation was not run"))?;
+            if let Some((hint, generation)) = descriptor {
+                let (local, host) = hint.endpoints();
+                let authorization = match control::request_current(RelayHint {
+                    local_port: local.port(), host_port: host.port(), generation,
+                }).await {
+                    Ok(decision @ (Decision::Admitted | Decision::AlreadyForegroundProcess
+                        | Decision::OsDenied { .. } | Decision::Unavailable { .. })) => decision,
+                    Ok(Decision::Refused { .. }) => return Err("native foreground authorization was refused; the current page operation was not run".into()),
+                    Err(error) => return Err(format!("native foreground authorization failed ({error:?}); the current page operation was not run")),
+                };
+                super::focus_recovery::record_authorization(authorization)?;
+                if !self.client.native_focus_transport_is_current(generation) {
+                    return Err("the selected relay connection changed during foreground authorization; the current page operation was not run".into());
+                }
+            } else {
+                super::focus_recovery::record_authorization(Decision::Unavailable {
+                    reason: "client did not negotiate the private foreground protocol".into(),
+                })?;
+            }
+        }
+        let begun = self
+            .client
+            .send_command("ABExt.nativeFocusBegin", Some(json!({"token":token})), None)
+            .await?;
+        super::focus_recovery::record_input(begun["input"].clone())?;
+        if begun["started"].as_bool() != Some(true) {
+            return Err(format!(
+                "{}; the current page operation was not run",
+                begun["error"]
+                    .as_str()
+                    .unwrap_or("native focus recovery was not confirmed")
+            ));
+        }
+        if begun
+            .pointer("/input/keyDownAdmitted")
+            .and_then(Value::as_u64)
+            != Some(1)
+            || begun
+                .pointer("/input/keyUpAdmitted")
+                .and_then(Value::as_u64)
+                != Some(1)
+            || begun.pointer("/input/delivery").and_then(Value::as_str) != Some("unverified")
+            || begun.pointer("/input/replayed").and_then(Value::as_bool) != Some(false)
+        {
+            return Err("native key admission is unconfirmed; original command was not run".into());
+        }
+        // Menu removal can finish asynchronously after native key admission.
+        // Recheck only this read, never Escape or the original operation.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let verified = tokio::time::timeout_at(deadline, probe()).await
+                .map_err(|_| "renderer readiness timed out after native recovery; original command was not run")?;
+            match verified {
+                Ok(value) => {
+                    if value.pointer("/result/value").and_then(Value::as_str) != Some(url.as_str())
+                    {
+                        return Err("renderer URL changed after native recovery; original command was not run".into());
+                    }
+                    break;
+                }
+                Err(error)
+                    if is_debugger_access_denied(&error)
+                        && tokio::time::Instant::now() < deadline =>
+                {
+                    let pause = super::humanize::key_dwell(
+                        super::humanize::HumanizeLevel::Fast,
+                        super::humanize::next_seed(),
+                    );
+                    tokio::time::sleep(
+                        pause.min(deadline.saturating_duration_since(tokio::time::Instant::now())),
+                    )
+                    .await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
     pub async fn pinned_tab_url_from_browser(&self) -> Option<String> {
         let live = self.pinned_tab_browser_record().await.ok()?;
         live.get("url").and_then(Value::as_str).map(str::to_string)
