@@ -24,28 +24,55 @@ from probe import Registry, Windows, checked, digest, execute, wait_for
 from owned_processes import OwnedProcessHandles, cleanup_acknowledged, descendants, processes
 
 
-def worker(endpoint, expression):
-    result = subprocess.run(['node', str(Path(__file__).with_name('worker-eval.mjs'))],
-        input=json.dumps({'endpoint': endpoint, 'expression': expression}),
-        capture_output=True, text=True, timeout=12, check=True)
+class WorkerRequestError(RuntimeError):
+    pass
+
+
+def worker(endpoint, expression, operation='query'):
+    try:
+        result = subprocess.run(['node', str(Path(__file__).with_name('worker-eval.mjs'))],
+            input=json.dumps({'endpoint': endpoint, 'expression': expression}),
+            capture_output=True, text=True, encoding='utf-8', timeout=12)
+    except subprocess.TimeoutExpired as error:
+        raise WorkerRequestError(operation+': worker controller exceeded its outer deadline') from error
+    if result.returncode:
+        raise WorkerRequestError(operation+': '+(result.stderr.strip() or 'controller exited without a diagnostic')[:900])
     return json.loads(result.stdout)
 
 
-def discover_workers(port):
-    with urllib.request.urlopen(f'http://127.0.0.1:{port}/json/list', timeout=3) as response:
-        targets = json.load(response)
+def discover_workers(port, errors):
+    try:
+        with urllib.request.urlopen(f'http://127.0.0.1:{port}/json/list', timeout=3) as response:
+            targets = json.load(response)
+    except (OSError, ValueError) as error:
+        errors.append({'operation':'list-workers','error':str(error)[:300]})
+        return {}
     result = {}
+    ambiguous = set()
     for target in targets:
         if target.get('type') != 'service_worker' or not target.get('url', '').startswith('chrome-extension://'):
             continue
-        endpoint = target['webSocketDebuggerUrl']
-        identity = worker(endpoint, '({id:chrome.runtime.id,version:chrome.runtime.getManifest().version,name:chrome.runtime.getManifest().name})')
-        if identity['version'] == '2026.10.1':
-            result['bitwarden'] = (endpoint, identity)
-        elif identity['name'] == 'chrome-use':
-            result['chromeUse'] = (endpoint, identity)
-    return result
-
+        endpoint = target.get('webSocketDebuggerUrl')
+        if not endpoint:
+            errors.append({'operation':'manifest','error':'worker endpoint not published yet'})
+            continue
+        try:
+            identity = worker(endpoint, '({id:chrome.runtime.id,version:chrome.runtime.getManifest().version,name:chrome.runtime.getManifest().name})', 'manifest')
+        except WorkerRequestError as error:
+            # Discovery is read-only. Re-list the same Chrome process until
+            # its startup worker realms are ready; never restart the browser.
+            errors.append({'operation':'manifest','target':target['url'],'error':str(error)})
+            continue
+        if not isinstance(identity, dict):
+            errors.append({'operation':'manifest','error':'worker identity is not an object'})
+            continue
+        name = 'bitwarden' if identity.get('version') == '2026.10.1' else 'chromeUse' if identity.get('name') == 'chrome-use' else None
+        if name:
+            if name in result:
+                ambiguous.add(name)
+                errors.append({'operation':'manifest','error':'multiple live '+name+' workers'})
+            result[name] = (endpoint, identity)
+    return {name:value for name,value in result.items() if name not in ambiguous}
 
 
 def fixture_storage_status(endpoint):
@@ -81,7 +108,7 @@ def official_runtime_status(endpoint):
         monitoringFrames:monitoring instanceof Map?monitoring.size:null,
         activeMonitoringFrames:monitoring instanceof Map?[...monitoring.values()].filter(Boolean).length:null};
     })()"""
-    return worker(endpoint, expression)
+    return worker(endpoint, expression, 'runtime-status')
 
 
 def official_content_status(endpoint, tab_id):
@@ -105,7 +132,7 @@ def official_content_status(endpoint, tab_id):
           visibility:document.visibilityState,focused:document.hasFocus(),
           activeElement:document.activeElement?.id||null,ready:document.readyState};
       }});})()""".replace('__TAB__', str(tab_id))
-    return worker(endpoint, expression)
+    return worker(endpoint, expression, 'content-status')
 
 
 def seed_locked_fixture(endpoint):
@@ -123,7 +150,7 @@ def seed_locked_fixture(endpoint):
     # notifications. Match its per-key serialized writes so derived account
     # observables adopt the fixture state, then verify adoption separately.
     expression = '(async()=>{for(const [key,value] of Object.entries(' + json.dumps(seed) + ')){await chrome.storage.local.set({[key]:{__json__:true,value:JSON.stringify(value)}});}return {syntheticAccount:true,version:chrome.runtime.getManifest().version};})()'
-    return worker(endpoint, expression)
+    return worker(endpoint, expression, 'seed-fixture')
 
 
 class FormFixture:
@@ -187,7 +214,7 @@ def menu_frames(endpoint, fixture_url, bitwarden_id):
       expectedMenuUrls:expected,observedFrames:frames.map(frame=>({frameId:frame.frameId,url:frame.url})),
       ownerContexts:contexts.map(context=>({contextType:context.contextType,frameId:context.frameId,tabId:context.tabId,documentUrl:context.documentUrl})),
       bitwardenFrames:found};})()"""
-    return worker(endpoint, expression.replace('===URL','==='+json.dumps(fixture_url)).replace('===BW','==='+json.dumps(bitwarden_id)))
+    return worker(endpoint, expression.replace('===URL','==='+json.dumps(fixture_url)).replace('===BW','==='+json.dumps(bitwarden_id)), 'menu-contexts')
 
 
 def native_focus(windows, hwnd, pid, title):
@@ -268,7 +295,9 @@ def main():
         'binarySha256':digest(args.binary),'chromeSha256':digest(args.chrome),
         'bitwardenBackgroundSha256':digest(args.bitwarden/'background.js'),
         'sourceExtensionBackgroundSha256':digest(args.extension/'background.js'),
-        'sourceGitSha':os.environ.get('GITHUB_SHA'),
+        'probeGitSha':os.environ.get('GITHUB_SHA'),
+        'binaryBuildGitSha':os.environ.get('PROBE_BINARY_BUILD_SHA',os.environ.get('GITHUB_SHA')),
+        'binarySource':os.environ.get('PROBE_BINARY_SOURCE','built'),
         'realVaultTested':False,'productionRecoveryImplemented':False,'setupMode':args.setup_mode}
     try:
         with tempfile.TemporaryDirectory(prefix='chrome780-') as tmp:
@@ -295,9 +324,12 @@ def main():
                 try:
                     active_port=wait_for(lambda: profile/'DevToolsActivePort',lambda p:p.exists(),15)
                     port=int(active_port.read_text().splitlines()[0])
-                    controls=wait_for(lambda:discover_workers(port),lambda x:set(x)=={'chromeUse','bitwarden'},30)
+                    record['stage']='worker-discovery'
+                    record['workerDiscoveryErrors']=[]
+                    controls=wait_for(lambda:discover_workers(port,record['workerDiscoveryErrors']),lambda x:set(x)=={'chromeUse','bitwarden'},30)
                     bw_endpoint,bw_identity=controls['bitwarden'];our_endpoint,our_identity=controls['chromeUse']
                     record['extensions']={'bitwarden':bw_identity,'chromeUse':our_identity}
+                    record['stage']='seed-fixture'
                     record['seed']=seed_locked_fixture(bw_endpoint)
                     record['storageAfterSeed']=fixture_storage_status(bw_endpoint)
                     record['runtimeAfterSeed']=wait_for(lambda:official_runtime_status(bw_endpoint),
@@ -307,10 +339,12 @@ def main():
                     browser=files[0].name.removeprefix('relay-cdp-url-')
                     common=[str(args.binary),'--session',case,'--browser',browser,'--window','dedicated','--json']
                     invoke=lambda name,*words:execute(common+list(words),env,args.output/name,timeout=40)
+                    record['stage']='open-fixture'
                     record['open']=invoke('open','open',fixture.url)
                     opened=checked(record['open'])
                     if opened.get('url')!=fixture.url:raise RuntimeError('fixture URL not reached: '+str(opened.get('url')))
                     hwnd=wait_for(lambda:windows.find(chrome.pid,'BitwardenFixture '+case),lambda x:x is not None,5)
+                    record['stage']='window-setup'
                     record['windowBefore']=windows.state(hwnd)
                     if args.setup_mode=='foreground':
                         before,after=native_focus(windows,hwnd,chrome.pid,'BitwardenFixture '+case)
@@ -318,6 +352,7 @@ def main():
                     elif args.setup_mode=='background':
                         close_cover,cover_hwnd=windows.cover(hwnd,'Bitwarden fixture cover '+case,topmost=False)
                         record['setupCover']={'window':windows.state(cover_hwnd),'coveredChrome':windows.state(hwnd)}
+                    record['stage']='field-readiness'
                     record['storageBeforeFocus']=fixture_storage_status(bw_endpoint)
                     record['runtimeBeforeFocus']=official_runtime_status(bw_endpoint)
                     fixture_tab=menu_frames(bw_endpoint,fixture.url,bw_identity['id'])
@@ -326,12 +361,15 @@ def main():
                         lambda items:any(item.get('result',{}).get('initialized') is True and item.get('result',{}).get('overlayMonitoring') is True and item.get('result',{}).get('emailCached') is True for item in items),8)
                     # One focus action only. A failure may mean focus took effect:
                     # never replay it in search of a successful acknowledgement.
+                    record['stage']='field-focus'
                     record['focus']=invoke('focus','click','#email')
                     record['contentAfterFocus']=official_content_status(bw_endpoint,fixture_tab['tabId'])
                     record['relayObservedMenuAfterFocus']=menu_frames(our_endpoint,fixture.url,bw_identity['id'])
                     record['storageAfterFocus']=fixture_storage_status(bw_endpoint)
+                    record['stage']='menu-open'
                     record['initialMenu']=wait_for(lambda:menu_frames(bw_endpoint,fixture.url,bw_identity['id']),
                         lambda x:len(x['bitwardenFrames'])>0,8)
+                    record['stage']='blocked-read'
                     record['accessBefore']=invoke('access-before','eval','document.title')
                     menu=menu_frames(bw_endpoint,fixture.url,bw_identity['id']);record['menuAfterExistingGuard']=menu
                     if not menu['bitwardenFrames']:
@@ -341,10 +379,12 @@ def main():
                         if 'debugger_access_denied' not in str(response.get('error','')):
                             raise RuntimeError('real menu exists, but protected-access failure was not reproduced')
                         if menu['active'] is not True:raise RuntimeError('native candidate requires the bound fixture tab already active')
+                        record['stage']='native-focus'
                         before,focused=native_focus(windows,hwnd,chrome.pid,'BitwardenFixture '+case)
                         record['nativeFocus']={'before':before,'after':focused}
                         record['menuAfterNativeFocus']=menu_frames(bw_endpoint,fixture.url,bw_identity['id'])
                         if record['menuAfterNativeFocus']['bitwardenFrames']:
+                            record['stage']='native-escape'
                             record['nativeMenuImage']=native_menu_image(windows,hwnd,chrome.pid,case,args.output/'native-menu.png')
                             record['nativeEscape']=send_escape(hwnd);record['mechanism']='menu-absent-after-native-escape'
                         else:record['mechanism']='menu-absent-after-native-focus'
@@ -354,6 +394,7 @@ def main():
                     after_data=checked(record['accessAfter'])
                     if ((after_data.get('result') or {}).get('fixture') or {}).get('continuations')!=0:
                         raise RuntimeError('continuation happened before its authorized click')
+                    record['stage']='continuation'
                     record['continuation']=invoke('continuation','click','#continue')
                     checked(record['continuation'])
                     record['continuationRead']=invoke('continuation-read','eval','({title:document.title,fixture:window.fixtureState()})')
@@ -369,6 +410,7 @@ def main():
                     if record['finalMenu']['bitwardenFrames']:raise RuntimeError('menu reopened after recovery read')
                     if any(e['type']=='submit' or (e['type']=='visibilitychange' and e['trusted'] is not True) for e in record['fixtureEvents']):
                         raise RuntimeError('unexpected submission or synthetic visibility event')
+                    record['stage']='verified'
                     record['verdict']='PASS'
                 except Exception as exc:
                     record['error']=type(exc).__name__+': '+str(exc)[:1200]

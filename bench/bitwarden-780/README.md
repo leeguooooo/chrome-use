@@ -54,3 +54,20 @@ the official extension's scripting API. Those probes add no main-world
 property, DOM node, event listener or event, and return no token contents.
 Stored account metadata alone is not proof that Bitwarden adopted that state
 or that a locked/unlocked menu was rendered.
+
+## Verified build replay for controller changes
+
+`source_build_run` optionally selects a completed fresh dispatch of this same
+repository/workflow. Its Cargo build step must have succeeded, the binary must
+match its retained SHA-256 receipt, and Git must confirm identical tracked
+product sources with no untracked product files. Only this controller directory,
+this manual workflow and its artifact output are excluded from comparison.
+Changes to CLI code, extension code, embedded skills or any other product path
+require a fresh build. Replays cannot be chained.
+
+Records distinguish `binaryBuildGitSha`, `binarySource` and `probeGitSha`.
+An earlier failed diagnostic is usable only when its fresh build succeeded and
+all source/hash checks pass. This changes the observer, not the product binary.
+Startup worker discovery re-lists the same Chrome process after read-only
+metadata errors, retaining those errors. It never restarts Chrome or repeats
+fixture writes/input to obtain a successful response.

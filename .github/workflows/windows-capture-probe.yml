@@ -16,6 +16,10 @@ on:
           - cleanup-relay
         default: candidates
         required: true
+      source_build_run:
+        description: Bitwarden only; reuse a verified fresh build with identical product sources
+        required: false
+        default: ''
       samples:
         description: Fresh-profile repetitions per state and capture kind (1-5)
         required: true
@@ -36,6 +40,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: windows-capture-probe-${{ github.ref }}
@@ -47,6 +52,7 @@ jobs:
     timeout-minutes: 60
     env:
       CHROME_USE_NO_UPDATE_CHECK: '1'
+      SOURCE_BUILD_RUN: ${{ inputs.source_build_run }}
       PROBE_EXPERIMENT: ${{ inputs.experiment }}
       PROBE_SAMPLES: ${{ inputs.samples }}
       PROBE_ROWS: ${{ inputs.rows }}
@@ -56,13 +62,17 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
+      - name: Validate source replay selection
+        shell: pwsh
+        run: |
+          if ($env:SOURCE_BUILD_RUN -and ($env:PROBE_EXPERIMENT -ne 'bitwarden' -or $env:SOURCE_BUILD_RUN -notmatch '^[0-9]+$')) { throw 'Source replay requires a numeric build run and the Bitwarden experiment' }
+      - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.source_build_run == ''
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
           targets: x86_64-pc-windows-msvc
       - name: Verify detached Windows stderr handles without a browser
-        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
+        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.source_build_run == ''
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path probe-artifacts -Force | Out-Null
@@ -79,21 +89,26 @@ jobs:
           node-version-file: .node-version
       - name: Check Bitwarden controller without a browser
         if: inputs.experiment == 'bitwarden'
-        run: python bench/bitwarden-780/test_probe.py
+        run: python -m unittest discover -s bench/bitwarden-780 -p 'test_*.py'
       - name: Install decoder for pure image checks
         if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
         run: python -m pip install --disable-pip-version-check Pillow
       - name: Check fixture and diagnostic generator without a browser
         if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
         run: python bench/windows-capture-798/test_probe.py
-      - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
+      - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.source_build_run == ''
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: cli
           key: x86_64-pc-windows-msvc-release
           cache-on-failure: true
+      - name: Reuse a verified identical source CLI
+        if: inputs.experiment == 'bitwarden' && inputs.source_build_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python bench/bitwarden-780/reuse_source.py --run "$env:SOURCE_BUILD_RUN" --output probe-artifacts
       - name: Validate inputs and build the exact Release CLI
-        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
+        if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.source_build_run == ''
         shell: pwsh
         run: |
           if ($env:PROBE_EXPERIMENT -notmatch '^(original|candidates|baseline|window-policy|bitwarden)$') { throw 'invalid experiment' }
@@ -108,6 +123,9 @@ jobs:
           "PROBE_BINARY=$binary" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Get-FileHash $binary -Algorithm SHA256 | Format-List | Out-File probe-artifacts/binary-sha256.txt
           Copy-Item $binary probe-artifacts/source-cli.exe
+          @{mode='built';gitSha=$env:GITHUB_SHA;sourceBuildRun=$env:GITHUB_RUN_ID;binarySha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()} | ConvertTo-Json | Out-File probe-artifacts/source-build.json -Encoding utf8
+          "PROBE_BINARY_BUILD_SHA=$env:GITHUB_SHA" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PROBE_BINARY_SOURCE=built" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           cargo --version | Out-File probe-artifacts/toolchain.txt
           rustc --version | Out-File probe-artifacts/toolchain.txt -Append
       - name: Install isolated Chrome for Testing and image decoder
