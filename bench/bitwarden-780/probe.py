@@ -662,6 +662,54 @@ def prepare_process_observer(record):
     )
 
 
+def foreground_blocked_without_input(result):
+    response = result.get("response") or {}
+    native = response.get("nativeFocus") or {}
+    return (
+        result.get("exit") == 1
+        and result.get("killedAtDeadline") is False
+        and response.get("success") is False
+        and str(response.get("error", "")).startswith(
+            "Foreground did not become the attested Chrome within 500ms; no Escape was sent"
+        )
+        and "input" in native
+        and native["input"] is None
+        and native.get("originalOperationReplayed") is False
+    )
+
+
+def foreground_permission_control(windows, hwnd, chrome_pid, cover_hwnd):
+    """CI control: delegate rights from our foreground cover to our Chrome only."""
+    cover = windows.state(cover_hwnd)
+    target = windows.state(hwnd)
+    if (
+        chrome_pid <= 0
+        or chrome_pid >= 0xFFFFFFFF
+        or cover["pid"] != os.getpid()
+        or cover["foreground"] != cover_hwnd
+        or target["foreground"] != cover_hwnd
+        or target["pid"] != chrome_pid
+        or cover_hwnd == hwnd
+    ):
+        raise RuntimeError("foreground grant requires our unchanged cover and Chrome")
+    delegate = windows.u.AllowSetForegroundWindow
+    delegate.argtypes = [wintypes.DWORD]
+    delegate.restype = wintypes.BOOL
+    ctypes.set_last_error(0)
+    admitted = bool(delegate(chrome_pid))
+    error = 0 if admitted else ctypes.get_last_error()
+    after = windows.state(cover_hwnd)
+    return {
+        "controllerPid": os.getpid(),
+        "chromePid": chrome_pid,
+        "admitted": admitted,
+        "errorCode": error,
+        "foregroundUnchanged": after["pid"] == os.getpid()
+        and after["foreground"] == cover_hwnd,
+        "unassistedProductionAcceptance": False,
+    }
+
+
 def main():
     if platform.system() != "Windows" or os.environ.get("GITHUB_ACTIONS") != "true":
         raise SystemExit("Only a disposable Windows GitHub runner is allowed")
@@ -675,6 +723,7 @@ def main():
     )
     parser.add_argument("--inspect-native-ui", action="store_true")
     parser.add_argument("--runtime-focus-recovery", action="store_true")
+    parser.add_argument("--grant-chrome-foreground", action="store_true")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     case = "bw780-" + uuid.uuid4().hex[:10]
@@ -692,6 +741,7 @@ def main():
         "productionRecoveryImplemented": False,
         "setupMode": args.setup_mode,
         "runtimeFocusRecoveryRequested": args.runtime_focus_recovery,
+        "foregroundPermissionControlRequested": args.grant_chrome_foreground,
         "browserStarted": False,
         "registryRestored": False,
         "sessionCleanupConfirmed": False,
@@ -940,6 +990,24 @@ def main():
                             "click",
                             "#continue",
                         )
+                        if args.grant_chrome_foreground:
+                            record["unassistedRuntimeRecovery"] = record["runtimeRecovery"]
+                            if (
+                                args.setup_mode != "background"
+                                or not foreground_blocked_without_input(record["runtimeRecovery"])
+                                or any(e.get("type") in ("keydown", "keyup") for e in fixture.events)
+                            ):
+                                raise RuntimeError("foreground control requires a verified no-input foreground refusal")
+                            record["foregroundPermissionControl"] = foreground_permission_control(
+                                windows, hwnd, chrome.pid, cover_hwnd
+                            )
+                            control = record["foregroundPermissionControl"]
+                            if not control["admitted"] or not control["foregroundUnchanged"]:
+                                raise RuntimeError("foreground permission delegation was not verified")
+                            record["scope"] += "; controller-granted foreground rights, NOT unassisted production recovery acceptance"
+                            record["runtimeRecovery"] = invoke(
+                                "runtime-recovery-granted", "--allow-focus-recovery", "click", "#continue"
+                            )
                         checked(record["runtimeRecovery"])
                         receipt = (
                             record["runtimeRecovery"]["response"].get("nativeFocus")

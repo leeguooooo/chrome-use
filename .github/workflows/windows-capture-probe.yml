@@ -26,6 +26,11 @@ on:
         type: boolean
         required: false
         default: false
+      grant_foreground_control:
+        description: Diagnostic only; compare the same blocked page after its owning cover delegates foreground rights
+        type: boolean
+        required: false
+        default: false
       source_build_run:
         description: Bitwarden only; reuse a verified fresh build with identical product sources
         required: false
@@ -64,6 +69,7 @@ jobs:
       CHROME_USE_NO_UPDATE_CHECK: '1'
       PROBE_RUNTIME_FOCUS: ${{ inputs.runtime_focus_recovery }}
       PROBE_INSPECT_NATIVE_UI: ${{ inputs.inspect_native_ui }}
+      PROBE_FOREGROUND_CONTROL: ${{ inputs.grant_foreground_control }}
       SOURCE_BUILD_RUN: ${{ inputs.source_build_run }}
       PROBE_EXPERIMENT: ${{ inputs.experiment }}
       PROBE_SAMPLES: ${{ inputs.samples }}
@@ -78,6 +84,7 @@ jobs:
         shell: pwsh
         run: |
           if ($env:SOURCE_BUILD_RUN -and ($env:PROBE_EXPERIMENT -ne 'bitwarden' -or $env:SOURCE_BUILD_RUN -notmatch '^[0-9]+$')) { throw 'Source replay requires a numeric build run and the Bitwarden experiment' }
+          if ($env:PROBE_FOREGROUND_CONTROL -eq 'true' -and ($env:PROBE_EXPERIMENT -ne 'bitwarden' -or $env:PROBE_RUNTIME_FOCUS -ne 'true')) { throw 'Foreground control requires Bitwarden runtime recovery' }
       - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.source_build_run == ''
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
@@ -191,7 +198,12 @@ jobs:
           $inspection = @()
           if ($env:PROBE_INSPECT_NATIVE_UI -eq 'true') { $inspection = @('--inspect-native-ui') }
           if ($env:PROBE_RUNTIME_FOCUS -eq 'true') { $inspection += '--runtime-focus-recovery' }
-          foreach ($mode in @('default', 'foreground', 'background')) {
+          $modes = @('default', 'foreground', 'background')
+          if ($env:PROBE_FOREGROUND_CONTROL -eq 'true') {
+            $inspection += '--grant-chrome-foreground'
+            $modes = @('background')
+          }
+          foreach ($mode in $modes) {
             $output = "probe-artifacts/bitwarden-$mode"
             python bench/bitwarden-780/probe.py --binary $binary --chrome $chrome --extension extensions/ab-connect --bitwarden $bwDir --output $output --setup-mode $mode @inspection
             $verdicts += $LASTEXITCODE
