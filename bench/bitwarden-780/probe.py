@@ -31,6 +31,18 @@ from owned_processes import (
 )
 
 
+def read_debugging_port(path, errors):
+    """Observe a completed port record without restarting Chrome on a file race."""
+    try:
+        lines = path.read_text().splitlines()
+        port = int(lines[0]) if lines else None
+        return port if port is not None and 0 < port <= 65535 else None
+    except (OSError, ValueError) as error:
+        if len(errors) < 16:
+            errors.append(type(error).__name__ + ": " + str(error))
+        return None
+
+
 class WorkerRequestError(RuntimeError):
     pass
 
@@ -729,10 +741,15 @@ def main():
                 common = None
                 close_cover = None
                 try:
-                    active_port = wait_for(
-                        lambda: profile / "DevToolsActivePort", lambda p: p.exists(), 15
+                    record["debuggingPortReadErrors"] = []
+                    port = wait_for(
+                        lambda: read_debugging_port(
+                            profile / "DevToolsActivePort",
+                            record["debuggingPortReadErrors"],
+                        ),
+                        lambda value: value is not None,
+                        15,
                     )
-                    port = int(active_port.read_text().splitlines()[0])
                     record["stage"] = "worker-discovery"
                     record["workerDiscoveryErrors"] = []
                     record["ignoredWorkerTargets"] = []
