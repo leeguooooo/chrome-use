@@ -11,6 +11,11 @@ on:
       - '.github/workflows/windows-panel.yml'
   workflow_dispatch:
     inputs:
+      probe_windows_identity:
+        description: 'Run only GUI-free loaded-generation metadata probes (no foreground grants)'
+        required: false
+        type: boolean
+        default: false
       probe_macos_startup:
         description: 'Run only the Intel macOS native-service startup diagnostic'
         required: false
@@ -27,7 +32,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   native-panel:
-    if: github.event_name != 'workflow_dispatch' || !inputs.probe_macos_startup
+    if: github.event_name != 'workflow_dispatch' || (!inputs.probe_macos_startup && !inputs.probe_windows_identity)
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -107,4 +112,122 @@ jobs:
         with:
           name: native-service-startup-${{ github.sha }}
           path: startup-artifacts
+          retention-days: 7
+
+  identity-gnu-build:
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_windows_identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: cli
+          key: x86_64-pc-windows-gnu-release-identity
+          cache-on-failure: true
+      - name: Prepare actual release toolchain and exact dependency manifest
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mingw-w64
+          cargo fetch --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-gnu
+          cargo metadata --manifest-path cli/Cargo.toml --locked --offline --format-version 1 --filter-platform x86_64-pc-windows-gnu --features windows-build-identity-prototype > "$RUNNER_TEMP/identity-dependencies.json"
+          echo "CHROME_USE_MARKER_DEPENDENCIES=$RUNNER_TEMP/identity-dependencies.json" >> "$GITHUB_ENV"
+          python3 -c 'import secrets; print("CHROME_USE_BUILD_GENERATION=" + secrets.token_hex(16))' >> "$GITHUB_ENV"
+      - name: Compile actual GNU release product and metadata tests
+        shell: bash
+        run: |
+          cargo test --locked --release --manifest-path cli/Cargo.toml --target x86_64-pc-windows-gnu --features windows-build-identity-prototype --test windows_build_identity --no-run --message-format=json > "$RUNNER_TEMP/identity-build.jsonl"
+          python3 scripts/identity-stage.py "$RUNNER_TEMP/identity-build.jsonl" identity-artifacts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-identity-gnu-${{ github.sha }}
+          path: identity-artifacts
+          retention-days: 7
+
+  identity-gnu-runtime:
+    needs: identity-gnu-build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-identity-gnu-${{ github.sha }}
+          path: identity-artifacts
+      - name: Verify archive and run its exact product without Chrome
+        shell: pwsh
+        run: |
+          $receipt = Get-Content identity-artifacts/receipt.json -Raw | ConvertFrom-Json
+          if ((Get-FileHash identity-artifacts/product.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant() -ne $receipt.archiveSha256) { throw 'Archive mismatch' }
+          if ((Get-FileHash identity-artifacts/windows_build_identity.exe -Algorithm SHA256).Hash.ToLowerInvariant() -ne $receipt.testsSha256) { throw 'Test binary mismatch' }
+          New-Item -ItemType Directory identity-artifacts/extracted | Out-Null
+          tar -xzf identity-artifacts/product.tar.gz -C identity-artifacts/extracted
+          if ($LASTEXITCODE -ne 0) { throw 'Archive extraction failed' }
+          $env:CHROME_USE_IDENTITY_BIN = (Resolve-Path identity-artifacts/extracted/chrome-use.exe).Path
+          if ((Get-FileHash $env:CHROME_USE_IDENTITY_BIN -Algorithm SHA256).Hash.ToLowerInvariant() -ne $receipt.productSha256) { throw 'Extracted product mismatch' }
+          & identity-artifacts/windows_build_identity.exe --test-threads=1 --nocapture 2>&1 | Tee-Object identity-artifacts/runtime.log
+          if ($LASTEXITCODE -ne 0) { throw 'GNU metadata fixture failed' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: windows-identity-gnu-runtime-${{ github.sha }}
+          path: identity-artifacts
+          retention-days: 7
+
+  identity-msvc:
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_windows_identity
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: cli
+          key: x86_64-pc-windows-msvc-ci-identity
+          cache-on-failure: true
+      - name: Prepare MSVC environment and actual dependency manifest
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$installation) { throw 'MSVC installation missing' }
+          $setup = Join-Path $installation 'Common7\Tools\VsDevCmd.bat'
+          $command = '""' + $setup + '" -no_logo -arch=x64 >nul && set"'
+          cmd.exe /s /c $command | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process') }
+          }
+          $linker = (Get-Command link.exe -ErrorAction Stop).Source
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          foreach ($name in @('PATH', 'LIB', 'LIBPATH', 'INCLUDE')) { "$name=$([Environment]::GetEnvironmentVariable($name, 'Process'))" | Out-File $env:GITHUB_ENV -Append -Encoding utf8 }
+          cargo fetch --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency fetch failed' }
+          cargo metadata --manifest-path cli/Cargo.toml --locked --offline --format-version 1 --filter-platform x86_64-pc-windows-msvc --features windows-build-identity-prototype > "$env:RUNNER_TEMP/identity-dependencies.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Metadata preparation failed' }
+          "CHROME_USE_MARKER_DEPENDENCIES=$env:RUNNER_TEMP/identity-dependencies.json" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "CHROME_USE_BUILD_GENERATION=$([guid]::NewGuid().ToString('N'))" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Run GUI-free actual MSVC product metadata checks
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory identity-artifacts | Out-Null
+          cargo test --profile ci --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --features windows-build-identity-prototype --test windows_build_identity -- --test-threads=1 --nocapture 2>&1 | Tee-Object identity-artifacts/runtime.log
+          if ($LASTEXITCODE -ne 0) { throw 'MSVC metadata fixture failed' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: windows-identity-msvc-${{ github.sha }}
+          path: identity-artifacts
           retention-days: 7
