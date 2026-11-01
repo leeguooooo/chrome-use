@@ -427,6 +427,7 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
     // an agent writes are quarantined. Bun-built CLIs extract and dlopen their
     // native libraries, which Gatekeeper then blocks. launchd starts the
     // service outside Chrome's process tree.
+    let launch_started = Instant::now();
     #[cfg(target_os = "macos")]
     let launched = match launchd_start(directory, &executable, &arguments) {
         Ok(()) => true,
@@ -444,7 +445,16 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
     } else {
         Some(spawn_detached(&executable, &arguments)?)
     };
-    while Instant::now() < deadline {
+    // Waiting for ownership or launchd must not consume the new service's
+    // readiness window. The process is started once; an unconfirmed start
+    // remains an error and never causes a replacement process.
+    let readiness_started = Instant::now();
+    let readiness_deadline = readiness_started + Duration::from_secs(8);
+    let launch_ms = launch_started.elapsed().as_millis();
+    let mut endpoint_seen = false;
+    let mut matching_endpoint_seen = false;
+    let mut health_observation = "not-probed";
+    while Instant::now() < readiness_deadline {
         if let Some(status) = match child.as_mut() {
             Some(child) => child
                 .try_wait()
@@ -454,15 +464,36 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
             return Err(format!("Agent service exited during startup ({status})"));
         }
         if let Ok(endpoint) = endpoint(directory, profile) {
-            if endpoint.binary_hash == *binary_hash
-                && exchange(&endpoint, "health", json!({})).is_ok()
-            {
-                return Ok(endpoint);
+            endpoint_seen = true;
+            let remaining = readiness_deadline.saturating_duration_since(Instant::now());
+            if endpoint.binary_hash == *binary_hash && !remaining.is_zero() {
+                matching_endpoint_seen = true;
+                match exchange_within(&endpoint, "health", json!({}), remaining) {
+                    Ok(health)
+                        if health["binaryHash"] == *binary_hash
+                            && Instant::now() < readiness_deadline =>
+                    {
+                        return Ok(endpoint)
+                    }
+                    Ok(health) if health["binaryHash"] != *binary_hash => {
+                        health_observation = "different-build"
+                    }
+                    Ok(_) => health_observation = "late-reply",
+                    Err(error) if error == "Agent service did not answer" => {
+                        health_observation = "connection-unavailable"
+                    }
+                    Err(_) => health_observation = "reply-unconfirmed",
+                }
             }
         }
         std::thread::sleep(Duration::from_millis(40));
     }
-    Err("Agent-service startup has not been confirmed; its process was not restarted".into())
+    Err(format!(
+        "Agent-service startup has not been confirmed after {} ms of readiness checks \
+         (launch {} ms; endpoint seen {}; matching build {}; health {}); its process was not restarted",
+        readiness_started.elapsed().as_millis(),
+        launch_ms, endpoint_seen, matching_endpoint_seen, health_observation,
+    ))
 }
 
 fn spawn_detached(

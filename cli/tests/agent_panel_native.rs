@@ -408,7 +408,10 @@ fn both_cli_protocols_keep_conversations_alive_across_native_host_disconnects() 
         json!({"method":"hello","version":"fixture","profileId":profile}),
     );
     let health = panel_reply(&mut host, &rx, "health", "serviceHealth", json!({}));
-    assert!(health.get("error").is_none());
+    assert!(
+        health.get("error").is_none(),
+        "Native service health failed: {health}"
+    );
     let service_pid = health["result"]["pid"].clone();
     let fixture = fixture_program(registry.path());
     let relative = panel_reply(
@@ -1237,9 +1240,13 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
             "conversationCreate",
             json!({"agentId":"codex","executable":fixture}),
         );
+        assert!(
+            created.get("error").is_none(),
+            "Native conversation creation failed: {created}"
+        );
         let id = created["result"]["conversation"]["id"]
             .as_str()
-            .unwrap()
+            .expect("Native conversation creation returned no conversation id")
             .to_string();
         cleanup.chats.push(id.clone());
         let sent = panel_reply(

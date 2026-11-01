@@ -11,6 +11,11 @@ on:
       - '.github/workflows/windows-panel.yml'
   workflow_dispatch:
     inputs:
+      probe_macos_startup:
+        description: 'Run only the Intel macOS native-service startup diagnostic'
+        required: false
+        type: boolean
+        default: false
       published_tag:
         description: 'Verify the published Windows binary (e.g. v1.5.212)'
         required: false
@@ -22,6 +27,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   native-panel:
+    if: github.event_name != 'workflow_dispatch' || !inputs.probe_macos_startup
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -69,3 +75,36 @@ jobs:
         run: cargo test --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --test agent_panel_native -- --test-threads=1
       - name: Check Windows code and protocol tests
         run: cargo clippy --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --bin chrome-use --test agent_panel_native -- -D clippy::all
+
+  mac-startup-probe:
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_macos_startup
+    runs-on: macos-15-intel
+    timeout-minutes: 25
+    env:
+      CHROME_USE_NO_UPDATE_CHECK: '1'
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+          targets: x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: cli
+          key: x86_64-apple-darwin-ci
+          cache-on-failure: true
+      - name: Exercise real framed hosts and service startup without Chrome
+        shell: bash
+        run: |
+          mkdir -p startup-artifacts
+          sw_vers -productVersion > startup-artifacts/platform.txt
+          cargo test --profile ci --locked --manifest-path cli/Cargo.toml --target x86_64-apple-darwin --test agent_panel_native -- --test-threads=1 2>&1 | tee startup-artifacts/native-startup.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: native-service-startup-${{ github.sha }}
+          path: startup-artifacts
+          retention-days: 7
