@@ -26,6 +26,12 @@ on:
         required: false
         type: boolean
         default: false
+      identity_toolchain:
+        description: 'Composition toolchain; select one when only its result needs refreshing'
+        required: false
+        type: choice
+        options: [both, msvc, gnu]
+        default: both
       probe_macos_startup:
         description: 'Run only the Intel macOS native-service startup diagnostic'
         required: false
@@ -140,7 +146,7 @@ jobs:
           retention-days: 7
 
   identity-gnu-build:
-    if: github.event_name == 'workflow_dispatch' && inputs.probe_windows_identity
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_windows_identity && inputs.identity_toolchain != 'msvc'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -215,7 +221,7 @@ jobs:
           retention-days: 7
 
   identity-msvc:
-    if: github.event_name == 'workflow_dispatch' && inputs.probe_windows_identity
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_windows_identity && inputs.identity_toolchain != 'gnu'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
