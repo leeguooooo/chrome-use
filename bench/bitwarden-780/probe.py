@@ -992,22 +992,32 @@ def main():
                         )
                         if args.grant_chrome_foreground:
                             record["unassistedRuntimeRecovery"] = record["runtimeRecovery"]
-                            if (
-                                args.setup_mode != "background"
-                                or not foreground_blocked_without_input(record["runtimeRecovery"])
-                                or any(e.get("type") in ("keydown", "keyup") for e in fixture.events)
-                            ):
-                                raise RuntimeError("foreground control requires a verified no-input foreground refusal")
-                            record["foregroundPermissionControl"] = foreground_permission_control(
-                                windows, hwnd, chrome.pid, cover_hwnd
-                            )
-                            control = record["foregroundPermissionControl"]
-                            if not control["admitted"] or not control["foregroundUnchanged"]:
-                                raise RuntimeError("foreground permission delegation was not verified")
-                            record["scope"] += "; controller-granted foreground rights, NOT unassisted production recovery acceptance"
-                            record["runtimeRecovery"] = invoke(
-                                "runtime-recovery-granted", "--allow-focus-recovery", "click", "#continue"
-                            )
+                            record["windowAfterFirstRuntime"] = windows.state(hwnd)
+                            record["coverAfterFirstRuntime"] = windows.state(cover_hwnd)
+                            if foreground_blocked_without_input(record["runtimeRecovery"]):
+                                if (
+                                    args.setup_mode != "background"
+                                    or any(e.get("type") in ("keydown", "keyup") for e in fixture.events)
+                                ):
+                                    raise RuntimeError("foreground control requires a verified no-input foreground refusal")
+                                record["foregroundPermissionControl"] = foreground_permission_control(
+                                    windows, hwnd, chrome.pid, cover_hwnd
+                                )
+                                control = record["foregroundPermissionControl"]
+                                if not control["admitted"] or not control["foregroundUnchanged"]:
+                                    raise RuntimeError("foreground permission delegation was not verified")
+                                record["scope"] += "; controller-granted foreground rights, NOT unassisted production recovery acceptance"
+                                record["runtimeRecovery"] = invoke(
+                                    "runtime-recovery-granted", "--allow-focus-recovery", "click", "#continue"
+                                )
+                            else:
+                                record["foregroundPermissionControlSkipped"] = "The first operation was not a verified no-input foreground refusal; it was not repeated"
+                            record["windowAfterRuntime"] = windows.state(hwnd)
+                            record["coverAfterRuntime"] = windows.state(cover_hwnd)
+                            if record["runtimeRecovery"].get("exit") == 0:
+                                record["runtimeImmediateRead"] = invoke(
+                                    "runtime-immediate-read", "eval", "({title:document.title,fixture:window.fixtureState()})"
+                                )
                         checked(record["runtimeRecovery"])
                         receipt = (
                             record["runtimeRecovery"]["response"].get("nativeFocus")

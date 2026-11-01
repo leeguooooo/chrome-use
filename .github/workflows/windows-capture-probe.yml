@@ -85,6 +85,7 @@ jobs:
         run: |
           if ($env:SOURCE_BUILD_RUN -and ($env:PROBE_EXPERIMENT -ne 'bitwarden' -or $env:SOURCE_BUILD_RUN -notmatch '^[0-9]+$')) { throw 'Source replay requires a numeric build run and the Bitwarden experiment' }
           if ($env:PROBE_FOREGROUND_CONTROL -eq 'true' -and ($env:PROBE_EXPERIMENT -ne 'bitwarden' -or $env:PROBE_RUNTIME_FOCUS -ne 'true')) { throw 'Foreground control requires Bitwarden runtime recovery' }
+          if ($env:PROBE_SAMPLES -notmatch '^[1-5]$') { throw 'samples must be 1-5' }
       - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.source_build_run == ''
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
@@ -201,11 +202,12 @@ jobs:
           $modes = @('default', 'foreground', 'background')
           if ($env:PROBE_FOREGROUND_CONTROL -eq 'true') {
             $inspection += '--grant-chrome-foreground'
-            $modes = @('background')
+            $modes = @(1..[int]$env:PROBE_SAMPLES | ForEach-Object { "background-$_" })
           }
           foreach ($mode in $modes) {
             $output = "probe-artifacts/bitwarden-$mode"
-            python bench/bitwarden-780/probe.py --binary $binary --chrome $chrome --extension extensions/ab-connect --bitwarden $bwDir --output $output --setup-mode $mode @inspection
+            $setupMode = if ($env:PROBE_FOREGROUND_CONTROL -eq 'true') { 'background' } else { $mode }
+            python bench/bitwarden-780/probe.py --binary $binary --chrome $chrome --extension extensions/ab-connect --bitwarden $bwDir --output $output --setup-mode $setupMode @inspection
             $verdicts += $LASTEXITCODE
             $summary = Get-Content "$output/summary.json" -Raw | ConvertFrom-Json
             if ($summary.browserStarted -ne $true) { throw 'Fixture prerequisites unavailable; no browser was started' }
