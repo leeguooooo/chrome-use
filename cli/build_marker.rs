@@ -56,9 +56,14 @@ fn tree(hash: &mut Sha256, label: &str, root: &Path) -> Result<()> {
 fn tool(hash: &mut Sha256, label: &str, executable: &str, arguments: &[&str]) -> Result<String> {
     let output = Command::new(executable).args(arguments).output()?;
     if !output.status.success() || output.stdout.len() + output.stderr.len() > 128 * 1024 {
-        return Err(failure(
-            "compiler/linker version query failed or exceeded bound",
-        ));
+        return Err(failure(&format!(
+            "{label} version query failed: status={}, stdoutBytes={}, stderrBytes={}, stdoutPrefix={:?}, stderrPrefix={:?}",
+            output.status,
+            output.stdout.len(),
+            output.stderr.len(),
+            String::from_utf8_lossy(&output.stdout[..output.stdout.len().min(1024)]),
+            String::from_utf8_lossy(&output.stderr[..output.stderr.len().min(1024)]),
+        )));
     }
     record(hash, label.as_bytes(), &output.stdout);
     record(hash, format!("{label}/stderr").as_bytes(), &output.stderr);
