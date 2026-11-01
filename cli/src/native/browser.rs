@@ -7379,6 +7379,33 @@ impl BrowserManager {
         // Own the cleanup capability before the extension may request focus.
         // A canceled command can now revoke the remaining native sequence.
         super::focus_recovery::register(self.client.clone(), token.clone(), Value::Null)?;
+        #[cfg(all(
+            windows,
+            target_arch = "x86_64",
+            feature = "windows-build-identity-prototype",
+            feature = "windows-tcp-owner-prototype"
+        ))]
+        {
+            use super::focus_recovery::control::{self, Decision, GrantError, RelayHint};
+            let (hint, generation) = self
+                .client
+                .native_focus_transport()
+                .map_err(|error| format!("{error}; the current page operation was not run"))?;
+            let (local, host) = hint.endpoints();
+            let authorization = match control::request_current(RelayHint {
+                local_port: local.port(), host_port: host.port(), generation,
+            }).await {
+                Ok(decision @ (Decision::Admitted | Decision::AlreadyForegroundProcess
+                    | Decision::OsDenied { .. } | Decision::Unavailable { .. })) => decision,
+                Err(GrantError::Unavailable) => Decision::Unavailable { reason: "client did not negotiate the private foreground protocol".into() },
+                Ok(Decision::Refused { .. }) => return Err("native foreground authorization was refused; the current page operation was not run".into()),
+                Err(error) => return Err(format!("native foreground authorization failed ({error:?}); the current page operation was not run")),
+            };
+            super::focus_recovery::record_authorization(authorization)?;
+            if !self.client.native_focus_transport_is_current(generation) {
+                return Err("the selected relay connection changed during foreground authorization; the current page operation was not run".into());
+            }
+        }
         let begun = self
             .client
             .send_command("ABExt.nativeFocusBegin", Some(json!({"token":token})), None)

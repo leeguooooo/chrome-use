@@ -102,7 +102,23 @@ impl Drop for OwnedDaemon {
 }
 
 fn marker() -> image::Marker {
-    image::compiled_marker()
+    // This separate harness observes the actual product artifact. Its own
+    // loaded marker is deliberately a different kind and cannot anchor grants.
+    image::fixture::disk_marker(&binary()).unwrap()
+}
+
+#[test]
+fn a_test_executable_cannot_anchor_a_product_foreground_grant() {
+    let our_path = std::env::current_exe().unwrap();
+    assert_eq!(
+        image::fixture::disk_marker(&our_path).unwrap(),
+        image::compiled_marker()
+    );
+    assert_ne!(image::compiled_marker(), marker());
+    assert!(matches!(
+        image::ExpectedImage::pin_self(),
+        Err(image::Error::UnsupportedArtifactKind)
+    ));
 }
 fn copy_binary(directory: &Path, name: &str) -> PathBuf {
     let path = directory.join(name);

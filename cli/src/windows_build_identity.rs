@@ -29,6 +29,7 @@ pub(super) enum Error {
     LoadedLayoutMismatch,
     LoadedMarkerMismatch,
     ModuleAmbiguous,
+    UnsupportedArtifactKind,
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -58,7 +59,7 @@ impl Marker {
             || le16(&bytes, 8)? != 1
             || le16(&bytes, 10)? != 64
             || le16(&bytes, 12)? != 0x8664
-            || le16(&bytes, 14)? != 1
+            || ![1, 2].contains(&le16(&bytes, 14)?)
             || bytes[16..48].iter().all(|b| *b == 0)
             || bytes[48..].iter().all(|b| *b == 0)
         {
@@ -77,7 +78,18 @@ impl Marker {
 #[cfg(all(windows, feature = "windows-build-identity-prototype"))]
 #[used]
 #[link_section = ".cufg"]
-static BUILD_MARKER: [u8; MARKER_LEN] = include!(concat!(env!("OUT_DIR"), "/cufg_marker.rs"));
+static BUILD_MARKER: [u8; MARKER_LEN] =
+    artifact_marker(include!(concat!(env!("OUT_DIR"), "/cufg_marker.rs")));
+
+#[cfg(all(windows, feature = "windows-build-identity-prototype"))]
+const fn artifact_marker(mut bytes: [u8; MARKER_LEN]) -> [u8; MARKER_LEN] {
+    // Cargo shares one build-script output across the product and test
+    // executables. Only the sole product kind may anchor foreground grants.
+    if cfg!(test) {
+        bytes[14] = 2;
+    }
+    bytes
+}
 
 #[cfg(all(windows, feature = "windows-build-identity-prototype"))]
 pub(super) fn compiled_marker() -> Marker {
@@ -417,6 +429,25 @@ mod windows {
         digest: [u8; 32],
         layout: Layout,
     }
+    fn file_identity(file: &File) -> Result<FileIdentity> {
+        // SAFETY: info is writable and exactly FILE_ID_INFO size.
+        let mut info: FILE_ID_INFO = unsafe { zeroed() };
+        if unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle() as HANDLE,
+                FileIdInfo,
+                (&mut info as *mut FILE_ID_INFO).cast(),
+                size_of::<FILE_ID_INFO>() as u32,
+            )
+        } == 0
+        {
+            return Err(Error::Io("FileIdInfo"));
+        }
+        Ok(FileIdentity {
+            volume: info.VolumeSerialNumber,
+            id: info.FileId.Identifier,
+        })
+    }
     impl PinnedFile {
         fn open(path: &Path) -> Result<Self> {
             let mut file = OpenOptions::new()
@@ -431,19 +462,7 @@ mod windows {
             if !(64..=MAX_FILE).contains(&length) {
                 return Err(Error::Malformed("pinned file size"));
             }
-            // SAFETY: info is writable and exactly FILE_ID_INFO size.
-            let mut info: FILE_ID_INFO = unsafe { zeroed() };
-            if unsafe {
-                GetFileInformationByHandleEx(
-                    file.as_raw_handle() as HANDLE,
-                    FileIdInfo,
-                    (&mut info as *mut FILE_ID_INFO).cast(),
-                    size_of::<FILE_ID_INFO>() as u32,
-                )
-            } == 0
-            {
-                return Err(Error::Io("FileIdInfo"));
-            }
+            let identity = file_identity(&file)?;
             let mut data = Vec::with_capacity(length as usize);
             (&mut file)
                 .take(MAX_FILE + 1)
@@ -454,10 +473,6 @@ mod windows {
             }
             let digest: [u8; 32] = Sha256::digest(&data).into();
             let layout = parse_image(&data)?;
-            let identity = FileIdentity {
-                volume: info.VolumeSerialNumber,
-                id: info.FileId.Identifier,
-            };
             Ok(Self {
                 file,
                 identity,
@@ -474,7 +489,11 @@ mod windows {
         #[cfg(feature = "windows-build-identity-prototype")]
         pub(crate) fn pin_self() -> Result<Self> {
             let path = std::env::current_exe().map_err(|_| Error::Io("current_exe"))?;
-            Self::pin(&path, compiled_marker())
+            let marker = compiled_marker();
+            if le16(&marker.0, 14)? != 1 {
+                return Err(Error::UnsupportedArtifactKind);
+            }
+            Self::pin(&path, marker)
         }
         fn pin(path: &Path, marker: Marker) -> Result<Self> {
             let pinned = PinnedFile::open(path)?;
@@ -512,7 +531,7 @@ mod windows {
                 PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
             )?;
             alive(query.0, owner.birth)?;
-            same_principal(query.0)?;
+            require_current_principal(query.0)?;
             Ok(Self { query, owner })
         }
     }
@@ -553,7 +572,7 @@ mod windows {
         }
         Ok(OwnedHandle(result))
     }
-    fn same_principal(process: HANDLE) -> Result<()> {
+    pub(crate) fn require_current_principal(process: HANDLE) -> Result<()> {
         // SAFETY: GetCurrentProcess is a borrowed pseudo-handle, never wrapped/closed.
         let current = token(unsafe { GetCurrentProcess() })?;
         let peer = token(process)?;
@@ -777,12 +796,27 @@ mod windows {
         pub(crate) observed_marker: Marker,
     }
     impl MatchingLoadedGeneration {
+        /// Observed identity, available only after matching pinned artifact and
+        /// loaded marker. Consumers still verify semantic role and live ancestry.
+        pub(crate) fn kernel_identity_after_revalidation(&self) -> Result<(u32, u64)> {
+            self.revalidate()?;
+            Ok((self.peer.owner.pid, self.peer.owner.birth))
+        }
         pub(crate) fn revalidate(&self) -> Result<()> {
             alive(self.peer.query.0, self.peer.owner.birth)?;
             alive(self.read.0, self.peer.owner.birth)?;
-            same_principal(self.peer.query.0)?;
-            let image = PinnedFile::open(&process_path(self.peer.query.0)?)?;
-            if image.identity != self.peer_file.identity || image.digest != self.peer_file.digest {
+            require_current_principal(self.peer.query.0)?;
+            // Both artifact handles remain pinned with FILE_SHARE_READ only.
+            // Ordinary writes/delete/rename cannot coexist with those pins.
+            // Reopen the current process path to check its volume/file identity;
+            // rehashing the immutable pinned file at every ancestry check adds
+            // no replacement evidence and can exhaust the callback deadline.
+            let image = OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ)
+                .open(process_path(self.peer.query.0)?)
+                .map_err(|_| Error::Io("revalidate pinned image"))?;
+            if file_identity(&image)? != self.peer_file.identity {
                 return Err(Error::ProcessChanged);
             }
             Ok(())
@@ -811,7 +845,7 @@ mod windows {
                 | PROCESS_SYNCHRONIZE,
         )?;
         alive(read.0, peer.owner.birth)?;
-        same_principal(read.0)?;
+        require_current_principal(read.0)?;
         let marker = observed_marker(read.0, &peer_file)?;
         if marker != expected.marker {
             return Err(Error::LoadedMarkerMismatch);
@@ -934,7 +968,8 @@ mod windows {
 pub(super) use windows::fixture;
 #[cfg(all(windows, target_arch = "x86_64"))]
 pub(super) use windows::{
-    check, ArtifactMatch, ExpectedImage, HeldPeer, KernelOwner, MatchingLoadedGeneration,
+    check, require_current_principal, ArtifactMatch, ExpectedImage, HeldPeer, KernelOwner,
+    MatchingLoadedGeneration,
 };
 
 #[cfg(test)]

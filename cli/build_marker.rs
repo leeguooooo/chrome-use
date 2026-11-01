@@ -187,6 +187,20 @@ pub fn emit() -> Result<()> {
             .ok_or_else(|| failure("dependency parent missing"))?
             .canonicalize()?;
         if directory == our_root {
+            let targets = package["targets"]
+                .as_array()
+                .ok_or_else(|| failure("root Cargo targets missing"))?;
+            let binaries: Vec<_> = targets
+                .iter()
+                .filter(|target| {
+                    target["kind"]
+                        .as_array()
+                        .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("bin")))
+                })
+                .collect();
+            if binaries.len() != 1 || binaries[0]["name"].as_str() != Some("chrome-use") {
+                return Err(failure("CUFG product kind requires exactly one chrome-use binary target; assign distinct artifact kinds before adding another binary"));
+            }
             continue;
         }
         dependencies.insert(id.to_string(), directory);

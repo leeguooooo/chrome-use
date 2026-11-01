@@ -2754,13 +2754,64 @@ fn exchange_command(
     stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
     let mut cmd = cmd.clone();
     cmd["_keepalive"] = Value::Bool(true);
+    #[cfg(all(
+        windows,
+        target_arch = "x86_64",
+        feature = "windows-build-identity-prototype",
+        feature = "windows-tcp-owner-prototype"
+    ))]
+    let focus_client = if cmd.get("allowFocusRecovery").and_then(Value::as_bool) == Some(true) {
+        let mut nonce = [0u8; 32];
+        getrandom::getrandom(&mut nonce)
+            .map_err(|_| "could not create private focus callback nonce")?;
+        crate::native::focus_recovery::control::attach_offer(&mut cmd, true, nonce)
+            .map_err(|e| format!("private focus offer: {e:?}"))?
+    } else {
+        None
+    };
+    #[cfg(all(
+        windows,
+        target_arch = "x86_64",
+        feature = "windows-build-identity-prototype",
+        feature = "windows-tcp-owner-prototype"
+    ))]
+    let offered_focus = focus_client.is_some();
+    #[cfg(not(all(
+        windows,
+        target_arch = "x86_64",
+        feature = "windows-build-identity-prototype",
+        feature = "windows-tcp-owner-prototype"
+    )))]
+    let offered_focus = false;
     let mut json_str = serde_json::to_string(&cmd).map_err(|e| e.to_string())?;
     json_str.push('\n');
     stream
         .write_all(json_str.as_bytes())
-        .map_err(|e| format!("Failed to send: {}", e))?;
+        .map_err(|e| if offered_focus {
+            format!("{OUTCOME_UNKNOWN} focus-enabled request write failed ({e}); it may have reached the daemon. Check the session before repeating the operation.")
+        } else { format!("Failed to send: {}", e) })?;
 
     let started = std::time::Instant::now();
+    #[cfg(all(
+        windows,
+        target_arch = "x86_64",
+        feature = "windows-build-identity-prototype",
+        feature = "windows-tcp-owner-prototype"
+    ))]
+    if let Some(client) = focus_client {
+        let mut reader = FocusReplySource {
+            reader: BufReader::new(stream),
+            client,
+        };
+        return await_reply(
+            &mut reader,
+            || started.elapsed(),
+            session,
+            read_to,
+            overall,
+            stop_on_close,
+        );
+    }
     let mut reader = BufReader::new(stream);
     await_reply(
         &mut reader,
@@ -2788,6 +2839,135 @@ enum ReplyRead {
 /// without racing a real clock.
 trait ReplySource {
     fn read_line_within(&mut self, timeout: Duration) -> ReplyRead;
+}
+
+#[cfg(all(
+    windows,
+    target_arch = "x86_64",
+    feature = "windows-build-identity-prototype",
+    feature = "windows-tcp-owner-prototype"
+))]
+struct FocusReplySource {
+    reader: BufReader<Connection>,
+    client: crate::native::focus_recovery::control::Client,
+}
+
+#[cfg(all(
+    windows,
+    target_arch = "x86_64",
+    feature = "windows-build-identity-prototype",
+    feature = "windows-tcp-owner-prototype"
+))]
+impl FocusReplySource {
+    fn failure(message: impl Into<String>) -> std::io::Error {
+        std::io::Error::other(message.into())
+    }
+
+    fn read_private_line(
+        &mut self,
+        timeout: Duration,
+    ) -> std::io::Result<(Vec<u8>, bool, std::time::Instant)> {
+        use crate::native::focus_recovery::control::PREFIX;
+        let mut deadline = std::time::Instant::now() + timeout;
+        let mut bytes = Vec::new();
+        let mut control = false;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(Self::failure("private focus reply deadline expired"));
+            }
+            self.reader.get_ref().set_read_timeout(Some(remaining))?;
+            let chunk = self.reader.fill_buf()?;
+            if chunk.is_empty() {
+                if bytes.is_empty() {
+                    return Err(Self::failure(
+                        "focus-enabled request disconnected without a reply",
+                    ));
+                }
+                return Ok((bytes, false, deadline)); // preserve ordinary legacy EOF-delimited JSON
+            }
+            let n = chunk
+                .iter()
+                .position(|b| *b == b'\n')
+                .map_or(chunk.len(), |i| i + 1);
+            let complete = chunk[n - 1] == b'\n';
+            bytes.extend_from_slice(&chunk[..n]);
+            self.reader.consume(n);
+            if bytes.starts_with(PREFIX.as_bytes()) {
+                if !control {
+                    control = true;
+                    deadline = deadline.min(std::time::Instant::now() + Duration::from_secs(3));
+                }
+                if bytes.len() > 4096 {
+                    return Err(Self::failure("private focus frame exceeds 4 KiB"));
+                }
+            }
+            if complete {
+                return Ok((bytes, true, deadline));
+            }
+        }
+    }
+
+    fn next_line(&mut self, timeout: Duration) -> std::io::Result<String> {
+        use crate::native::focus_recovery::control::ClientLine;
+        let (bytes, complete, line_deadline) = self.read_private_line(timeout)?;
+        match self
+            .client
+            .inspect(&bytes)
+            .map_err(|e| Self::failure(format!("private focus frame refused: {e:?}")))?
+        {
+            ClientLine::Ordinary => {
+                String::from_utf8(bytes).map_err(|_| Self::failure("non-UTF8 daemon response"))
+            }
+            ClientLine::Request(request) => {
+                if !complete {
+                    return Err(Self::failure("incomplete private focus frame"));
+                }
+                let deadline =
+                    line_deadline.min(std::time::Instant::now() + Duration::from_secs(3));
+                let reply = crate::native::focus_recovery::authorize(
+                    self.reader.get_ref(),
+                    request,
+                    deadline,
+                )
+                .map_err(Self::failure)?;
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err(Self::failure(
+                        "private focus authorization deadline expired",
+                    ));
+                }
+                self.reader.get_ref().set_write_timeout(Some(remaining))?;
+                self.reader.get_mut().write_all(&reply.bytes)?;
+                if let Some(reason) = reply.refusal {
+                    // The daemon aborts this preflight, but remains healthy.
+                    // Return through Failed, never kill_stale_daemon or replay.
+                    return Err(Self::failure(format!(
+                        "native foreground authorization refused: {reason}"
+                    )));
+                }
+                Ok(String::new()) // consume privately; ordinary overall ceiling is unchanged
+            }
+        }
+    }
+}
+
+#[cfg(all(
+    windows,
+    target_arch = "x86_64",
+    feature = "windows-build-identity-prototype",
+    feature = "windows-tcp-owner-prototype"
+))]
+impl ReplySource for FocusReplySource {
+    fn read_line_within(&mut self, timeout: Duration) -> ReplyRead {
+        match self.next_line(timeout) {
+            Ok(line) => ReplyRead::Line(line),
+            // This root may intentionally close after a callback error while
+            // its daemon remains healthy. All offered-root read failures are
+            // unknown outcomes, not permission to kill that daemon or retry.
+            Err(error) => ReplyRead::Failed(error),
+        }
+    }
 }
 
 impl ReplySource for BufReader<Connection> {
@@ -4776,5 +4956,115 @@ mod tests {
             .unwrap()
             .get("nativeFocus")
             .is_none());
+    }
+}
+
+#[cfg(all(
+    test,
+    windows,
+    target_arch = "x86_64",
+    feature = "windows-build-identity-prototype",
+    feature = "windows-tcp-owner-prototype"
+))]
+mod private_focus_reply_tests {
+    use super::*;
+    use std::net::{Shutdown, TcpListener};
+
+    fn source(bytes: &[u8]) -> (FocusReplySource, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        server.write_all(bytes).unwrap();
+        server.shutdown(Shutdown::Write).unwrap();
+        let mut cmd = serde_json::json!({"action":"click", "allowFocusRecovery":true});
+        let client_state =
+            crate::native::focus_recovery::control::attach_offer(&mut cmd, true, [42; 32])
+                .unwrap()
+                .unwrap();
+        (
+            FocusReplySource {
+                reader: BufReader::new(client),
+                client: client_state,
+            },
+            server,
+        )
+    }
+
+    fn reply(bytes: &[u8]) -> Result<Response, String> {
+        let (mut source, _server) = source(bytes);
+        let started = std::time::Instant::now();
+        await_reply(
+            &mut source,
+            || started.elapsed(),
+            "focus-reply-fixture",
+            Duration::from_millis(500),
+            Duration::from_secs(2),
+            true,
+        )
+    }
+
+    #[test]
+    fn an_offered_root_disconnect_preserves_session_registration() {
+        let guard = crate::test_utils::EnvGuard::new(&["AGENT_BROWSER_SOCKET_DIR"]);
+        let root = tempfile::tempdir().unwrap();
+        guard.set("AGENT_BROWSER_SOCKET_DIR", root.path().to_str().unwrap());
+        let registration = get_pid_path("focus-reply-fixture");
+        fs::write(&registration, "fixture-not-a-pid").unwrap();
+        let error = reply(b"").err().expect("EOF cannot be success");
+        assert!(error.starts_with(OUTCOME_UNKNOWN), "{error}");
+        assert_eq!(
+            fs::read_to_string(registration).unwrap(),
+            "fixture-not-a-pid",
+            "private callback connection failure must not run stale-daemon cleanup"
+        );
+    }
+
+    #[test]
+    fn ordinary_legacy_json_and_nested_page_data_remain_opaque() {
+        let response =
+            reply(b"{\"success\":true,\"data\":{\"_chrome_use_focus_control\":{\"page\":true}}}")
+                .unwrap();
+        assert!(response.success);
+        assert_eq!(
+            response.data.unwrap()["_chrome_use_focus_control"]["page"],
+            true
+        );
+    }
+
+    #[test]
+    fn malformed_and_unterminated_control_never_receive_authorization() {
+        let wrong_nonce = serde_json::json!({"_chrome_use_focus_control":{
+            "kind":"Request", "version":1, "nonce":"ab".repeat(32), "serial":1,
+            "hint":{"local_port":12,"host_port":34,"generation":7}
+        }})
+        .to_string()
+            + "\n";
+        let error = reply(wrong_nonce.as_bytes()).err().unwrap();
+        assert!(
+            error.starts_with(OUTCOME_UNKNOWN) && error.contains("Protocol"),
+            "{error}"
+        );
+        let complete_json_without_delimiter = serde_json::json!({"_chrome_use_focus_control":{
+            "kind":"Request", "version":1, "nonce":"2a".repeat(32), "serial":1,
+            "hint":{"local_port":12,"host_port":34,"generation":7}
+        }})
+        .to_string();
+        let error = reply(complete_json_without_delimiter.as_bytes())
+            .err()
+            .unwrap();
+        assert!(error.contains("incomplete private focus frame"), "{error}");
+    }
+
+    #[test]
+    fn canonical_control_is_bounded_before_any_authorizer_runs() {
+        let bytes = format!(
+            "{{\"_chrome_use_focus_control\":{{{}\"kind\":\"Request\"}}}}\n",
+            " ".repeat(4096)
+        );
+        let error = reply(bytes.as_bytes()).err().unwrap();
+        assert!(
+            error.starts_with(OUTCOME_UNKNOWN) && error.contains("exceeds 4 KiB"),
+            "{error}"
+        );
     }
 }

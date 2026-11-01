@@ -9,6 +9,9 @@
 #[cfg(feature = "windows-build-identity-prototype")]
 #[path = "../src/windows_build_identity.rs"]
 mod windows_build_identity;
+#[cfg(feature = "windows-build-identity-prototype")]
+#[path = "../src/native/focus_recovery/windows_parent.rs"]
+mod windows_parent;
 #[path = "../src/windows_tcp_owner.rs"]
 mod windows_tcp_owner;
 
@@ -242,13 +245,17 @@ fn tcp_owner_can_feed_separate_expected_artifact_check_without_a_pid_argument() 
     let root = owner::capture_std(&socket).unwrap();
     let expected = windows_build_identity::fixture::expected(
         &binary(),
-        windows_build_identity::compiled_marker(),
+        windows_build_identity::fixture::disk_marker(&binary()).unwrap(),
     )
     .unwrap();
     let peer = windows_build_identity::HeldPeer::hold(root.peer_for_metadata().unwrap()).unwrap();
     let marker = windows_build_identity::check(expected, peer).unwrap();
     root.revalidate_std(&socket).unwrap();
     marker.revalidate().unwrap();
+    assert!(
+        windows_parent::ChromeParent::from_verified_tool(&marker).is_err(),
+        "an ordinary CLI daemon launched by this test is not a Chrome native host"
+    );
     drop(marker);
     drop(root);
     daemon.stop();

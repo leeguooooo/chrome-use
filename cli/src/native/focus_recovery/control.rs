@@ -11,19 +11,19 @@ use tokio::{
 
 const LIMIT: usize = 4096;
 const WAIT: Duration = Duration::from_secs(3);
-const PREFIX: &str = "{\"_chrome_use_focus_control\":";
+pub(crate) const PREFIX: &str = "{\"_chrome_use_focus_control\":";
 const OFFER: &str = "_chrome_use_focus_offer";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct RelayHint {
+pub(crate) struct RelayHint {
     pub local_port: u16,
     pub host_port: u16,
     pub generation: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
-pub(super) enum Decision {
+pub(crate) enum Decision {
     AlreadyForegroundProcess,
     Admitted,
     OsDenied { code: u32 },
@@ -39,7 +39,7 @@ impl Decision {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum GrantError {
+pub(crate) enum GrantError {
     Unavailable,
     Protocol,
     Timeout,
@@ -97,7 +97,7 @@ fn line(frame: Frame) -> Result<Vec<u8>, GrantError> {
 }
 // Called only for Windows explicit boolean true. `nonce` MUST be 32 CSPRNG bytes;
 // generation belongs to caller so this module has no RNG or platform dependency.
-pub(super) fn attach_offer(
+pub(crate) fn attach_offer(
     cmd: &mut serde_json::Value,
     enabled: bool,
     nonce: [u8; 32],
@@ -123,7 +123,7 @@ pub(super) fn attach_offer(
 // Call before *any* generic command dispatch, including daemon/bootstrap routing.
 // Offers use a different key and are allowed on ordinary action commands. Any
 // top-level control key is reserved, even if other fields (e.g. action) exist.
-pub(super) fn reject_reserved_command(cmd: &serde_json::Value) -> Result<(), GrantError> {
+pub(crate) fn reject_reserved_command(cmd: &serde_json::Value) -> Result<(), GrantError> {
     if cmd
         .as_object()
         .is_some_and(|o| o.contains_key("_chrome_use_focus_control"))
@@ -133,8 +133,25 @@ pub(super) fn reject_reserved_command(cmd: &serde_json::Value) -> Result<(), Gra
         Ok(())
     }
 }
+/// Consume transport negotiation before action stamping, session history or
+/// generic routing can observe its nonce. Ordinary command fields stay intact.
+pub(crate) fn accept_offer(cmd: &mut serde_json::Value) -> Option<(Broker, Service)> {
+    let offered = if cmd
+        .get("allowFocusRecovery")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        Some(service(cmd, true))
+    } else {
+        None
+    };
+    if let Some(object) = cmd.as_object_mut() {
+        object.remove(OFFER);
+    }
+    offered
+}
 // A bad/missing offer is remembered, not rejected during an otherwise normal command.
-pub(super) fn service(cmd: &serde_json::Value, enabled: bool) -> (Broker, Service) {
+pub(crate) fn service(cmd: &serde_json::Value, enabled: bool) -> (Broker, Service) {
     let offer = if !enabled || cmd.get(OFFER).is_none() {
         Err(GrantError::Unavailable)
     } else {
@@ -158,40 +175,60 @@ struct Request {
     hint: RelayHint,
     reply: oneshot::Sender<Result<Decision, GrantError>>,
 }
-pub(super) struct Broker {
+tokio::task_local! {
+    static ROOT_BROKER: std::cell::RefCell<Option<Broker>>;
+}
+
+pub(crate) async fn scope<F: Future>(broker: Broker, operation: F) -> F::Output {
+    ROOT_BROKER
+        .scope(std::cell::RefCell::new(Some(broker)), operation)
+        .await
+}
+
+pub(crate) async fn request_current(hint: RelayHint) -> Result<Decision, GrantError> {
+    // Never retain a RefCell borrow across await. Taking the whole broker also
+    // makes a second request (including nested script steps) unavailable.
+    let mut broker = ROOT_BROKER
+        .try_with(|slot| slot.borrow_mut().take())
+        .map_err(|_| GrantError::Unavailable)?
+        .ok_or(GrantError::Protocol)?;
+    broker.request_once(hint).await
+}
+
+pub(crate) struct Broker {
     tx: Option<mpsc::Sender<Request>>,
 }
 impl Broker {
     // Owner calls after consuming the existing permit and registering the one lease.
-    pub(super) async fn request_once(&mut self, hint: RelayHint) -> Result<Decision, GrantError> {
+    pub(crate) async fn request_once(&mut self, hint: RelayHint) -> Result<Decision, GrantError> {
         let tx = self.tx.take().ok_or(GrantError::Protocol)?;
         let (reply, rx) = oneshot::channel();
         tx.send(Request { hint, reply })
             .await
-            .map_err(|_| GrantError::Unavailable)?;
-        rx.await.map_err(|_| GrantError::Unavailable)?
+            .map_err(|_| GrantError::Transport)?;
+        rx.await.map_err(|_| GrantError::Transport)?
     }
 }
-pub(super) struct Service {
+pub(crate) struct Service {
     offer: Result<Offer, GrantError>,
     rx: mpsc::Receiver<Request>,
     used: bool,
 }
-pub(super) struct Client {
+pub(crate) struct Client {
     nonce: String,
     used: bool,
 }
-pub(super) enum ClientLine {
+pub(crate) enum ClientLine {
     Ordinary,
     Request(ClientRequest),
 }
-pub(super) struct ClientRequest {
+pub(crate) struct ClientRequest {
     nonce: String,
     hint: RelayHint,
 }
 impl Client {
     // Inspect only the entire top-level line before Response parsing, never its data field.
-    pub(super) fn inspect(&mut self, raw: &[u8]) -> Result<ClientLine, GrantError> {
+    pub(crate) fn inspect(&mut self, raw: &[u8]) -> Result<ClientLine, GrantError> {
         if !raw.starts_with(PREFIX.as_bytes()) {
             // Only our canonical envelope can authorize a callback. Reject a
             // reserved top-level key with other ordering/spacing too: Response
@@ -223,11 +260,11 @@ impl Client {
     }
 }
 impl ClientRequest {
-    pub(super) fn hint(&self) -> RelayHint {
+    pub(crate) fn hint(&self) -> RelayHint {
         self.hint
     }
     // Called once after the platform authorizer independently checks real sockets.
-    pub(super) fn reply(self, decision: Decision) -> Result<Vec<u8>, GrantError> {
+    pub(crate) fn reply(self, decision: Decision) -> Result<Vec<u8>, GrantError> {
         if !decision.valid() {
             return Err(GrantError::Protocol);
         }
@@ -284,7 +321,7 @@ fn parse_ack(raw: &[u8], offer: &Offer, hint: RelayHint) -> Result<Decision, Gra
         _ => Err(GrantError::Protocol),
     }
 }
-pub(super) struct DriverOutcome<T> {
+pub(crate) struct DriverOutcome<T> {
     pub value: T,
     pub transport_usable: bool,
     pub close_after_final: bool,
@@ -292,7 +329,7 @@ pub(super) struct DriverOutcome<T> {
 // Sole reader/writer owner while the caller's command holds the session mutex.
 // Writer errors do not cancel an already-running command. Once control has been
 // sent, unread duplicate/late input makes this connection non-reusable.
-pub(super) async fn drive<R, W, F>(
+pub(crate) async fn drive<R, W, F>(
     reader: &mut BufReader<R>,
     writer: &mut W,
     mut service: Service,
@@ -389,7 +426,7 @@ mod tests {
         (cmd, c, b, s)
     }
     async fn session(decision: Decision) -> (Result<Decision, GrantError>, bool) {
-        let (_, mut client, mut broker, svc) = setup(true);
+        let (_, mut client, broker, svc) = setup(true);
         let (a, b) = tokio::io::duplex(8192);
         let (ar, mut aw) = tokio::io::split(a);
         let (br, mut bw) = tokio::io::split(b);
@@ -412,7 +449,15 @@ mod tests {
             assert_eq!(req.hint(), hint());
             bw.write_all(&req.reply(decision).unwrap()).await.unwrap();
         };
-        let command = async move { broker.request_once(hint()).await };
+        let command = scope(broker, async {
+            assert_eq!(
+                tokio::spawn(request_current(hint())).await.unwrap(),
+                Err(GrantError::Unavailable)
+            );
+            let result = request_current(hint()).await;
+            assert_eq!(request_current(hint()).await, Err(GrantError::Protocol));
+            result
+        });
         let (out, ()) = tokio::join!(
             drive(
                 &mut reader,
@@ -453,6 +498,16 @@ mod tests {
             .await
             .0,
             Err(GrantError::Refused)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lost_driver_is_not_treated_as_legacy_unavailability() {
+        let (_, _, mut broker, service) = setup(true);
+        drop(service);
+        assert_eq!(
+            broker.request_once(hint()).await,
+            Err(GrantError::Transport)
         );
     }
     #[tokio::test]
@@ -687,6 +742,20 @@ mod tests {
         .unwrap();
         let v: serde_json::Value = serde_json::from_slice(&ack).unwrap();
         assert_eq!(reject_reserved_command(&v), Err(GrantError::Protocol));
+    }
+    #[test]
+    fn transport_offer_is_removed_before_action_history_or_stamping() {
+        let mut cmd = serde_json::json!({"action":"click", "allowFocusRecovery":true,
+            "data":{"_chrome_use_focus_offer":"page content"}});
+        attach_offer(&mut cmd, true, [42; 32]).unwrap();
+        assert!(accept_offer(&mut cmd).is_some());
+        assert!(cmd.get(OFFER).is_none());
+        assert_eq!(cmd["action"], "click");
+        assert_eq!(cmd["data"][OFFER], "page content");
+        cmd["allowFocusRecovery"] = serde_json::json!(false);
+        attach_offer(&mut cmd, true, [42; 32]).unwrap();
+        assert!(accept_offer(&mut cmd).is_none());
+        assert!(cmd.get(OFFER).is_none());
     }
     struct PartialWriter {
         bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,

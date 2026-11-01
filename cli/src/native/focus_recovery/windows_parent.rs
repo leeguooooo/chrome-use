@@ -130,12 +130,31 @@ fn system_command_intermediary(path: &str) -> bool {
 }
 
 impl ChromeParent {
+    #[cfg(all(target_arch = "x86_64", feature = "windows-build-identity-prototype"))]
+    pub(super) fn from_verified_tool(
+        host: &crate::windows_build_identity::MatchingLoadedGeneration,
+    ) -> Result<ChromeFromVerifiedTool<'_>, &'static str> {
+        let (pid, birth) = host
+            .kernel_identity_after_revalidation()
+            .map_err(|_| "the matched tool peer exited or changed")?;
+        let bound = ChromeFromVerifiedTool {
+            parent: Self::from_host_identity(pid, birth)?,
+            host,
+        };
+        bound.require_alive()?;
+        Ok(bound)
+    }
+
     /// Attest either Chrome's direct launch or its documented Windows system
     /// cmd.exe intermediary. Do not search arbitrary shell/agent ancestry.
     pub(super) fn attest() -> Result<Self, &'static str> {
         // SAFETY: these process identity APIs take no pointer arguments.
         let host_pid = unsafe { GetCurrentProcessId() };
         let host_created = created(unsafe { GetCurrentProcess() })?;
+        Self::from_host_identity(host_pid, host_created)
+    }
+
+    fn from_host_identity(host_pid: u32, host_created: u64) -> Result<Self, &'static str> {
         let mut pid = parent_pid(host_pid)?;
         let (mut process, birth, mut path) = held_process(pid, host_created)?;
         let mut launcher = None;
@@ -180,6 +199,25 @@ impl ChromeParent {
             return Err("the attested Chrome parent exited or cannot be verified");
         }
         Ok(self.pid)
+    }
+}
+
+/// Keeps the matched native tool proof borrowed throughout the grant decision;
+/// observing only its parent PID must never outlive that source verification.
+#[cfg(all(target_arch = "x86_64", feature = "windows-build-identity-prototype"))]
+pub(super) struct ChromeFromVerifiedTool<'a> {
+    parent: ChromeParent,
+    host: &'a crate::windows_build_identity::MatchingLoadedGeneration,
+}
+#[cfg(all(target_arch = "x86_64", feature = "windows-build-identity-prototype"))]
+impl ChromeFromVerifiedTool<'_> {
+    pub(super) fn require_alive(&self) -> Result<u32, &'static str> {
+        self.host
+            .revalidate()
+            .map_err(|_| "the matched native tool peer changed")?;
+        crate::windows_build_identity::require_current_principal(self.parent.process.0)
+            .map_err(|_| "the Chrome parent does not match the caller user, logon and session")?;
+        self.parent.require_alive()
     }
 }
 

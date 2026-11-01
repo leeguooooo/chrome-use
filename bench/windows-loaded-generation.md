@@ -1,47 +1,75 @@
-# Windows loaded-generation feasibility probe
+# Windows foreground handoff probe
 
-This branch tests a prerequisite for issue #780. It does not implement foreground
-authorization. The `windows-build-identity-prototype` Cargo feature defaults off.
-Normal builds have no embedded marker or new runtime process inspection.
+This independent branch contains default-off Windows identity/TCP features and
+an experimental on-demand CLI callback. PR #834 remains a separate draft. The
+new callback has not passed the complete native recovery matrix or release gates.
+Ordinary builds do not compile this callback or carry its image marker.
 
-Run the existing Windows agent panel workflow manually with
-`probe_windows_identity=true`. It cross-compiles the actual GNU release product
-with its normal thin LTO and stripping, archives it, checks the archive and
-extracted product hashes on Windows, and runs GUI-free owned-daemon tests. A
-separate MSVC job checks the developer build. Neither job launches Chrome,
-requests desktop permission, calls AllowSetForegroundWindow, or sends input.
+With both prototype features enabled, only this invocation's explicit
+`--allow-focus-recovery` can negotiate the private callback. The daemon requests
+it after its existing ownership/page checks, sole Permit consumption, native
+preparation and existing cleanup-lease registration. The CLI verifies its actual
+root socket, both directions of the daemon-selected socket, matching tool images
+and a bounded Chrome parent. It may call AllowSetForegroundWindow once for that
+held Chrome process. It never grants the daemon, uses a wildcard, activates a
+window or sends input. NativeBegin retains the separate exact-window, document,
+last-input and cancellation guards. OS admission does not prove focus or delivery.
 
-The checker pins read-only executable files, compares complete artifact SHA256,
-then reads only bounded PE headers and one 64-byte read-only `.cufg` marker from
-the previously bound peer's main image. The caller's actual static marker must
-match its pinned disk file. Same-file identity and byte-identical copies are
-reported separately. Borrowed module handles are never closed. A failed artifact
-comparison occurs before acquiring VM_READ rights. This is matching artifact
-content and an observed loaded generation, not mapped-code integrity,
-Authenticode, unique installation identity, or a defense against compromised
-same-user processes.
+The source descriptor comes from the actual Plain WebSocket before split. A
+process-local generation and reader-owned invalidation prevent reuse after that
+reader ends, including while pending-command cleanup is blocked. Descriptor
+capture is not kernel ownership proof or global browser selection. The browser
+owner and CLI callback independently enforce those facts.
 
-Observed GNU and MSVC loaded headers replace the PE32+ ImageBase field with the
-actual module base. Header comparison accepts only the unchanged preferred
-address or that exact actual base for this one field; all other header bytes
-remain exact. Section layout, marker bytes and memory protections are checked
-independently. The initial strict comparison refused three positive cases under
-each toolchain; bounded fixture diagnostics identified the field before changing
-its comparison rule.
+Private negotiation is removed before generic dispatch/history. A nonce, schema,
+one-use request and three-second deadline bind the callback to its root connection.
+Malformed/unfinished controls abort before NativeBegin; late ACKs cannot become a
+new command. Offered-root transport failures report unknown outcome without
+replaying the operation or removing a healthy daemon registration. Once a request
+has been delivered, cancellation cannot atomically retract an OS grant; eligibility
+is process scoped and is not revoked by Drop or native Finish. A valid OS denial
+or genuinely unsupported legacy negotiation can use the previous guarded path.
 
-The controlled build requires a fresh nonzero 16-byte hex
-`CHROME_USE_BUILD_GENERATION` for every Cargo invocation and exact locked/offline
-dependency metadata at `CHROME_USE_MARKER_DEPENDENCIES`. The helper hashes source,
-generated and embedded resources, resolved dependency contents, build flags,
-compiler and linker information. Reusing a nonce across a later relink is outside
-this prototype's contract. A production generation strategy and build-invalidation
-checks remain required before this marker can authorize anything.
+Run Windows agent panel manually with `probe_windows_identity=true` for the
+composition check. It builds both features and the actual GNU release product,
+retaining thin LTO/stripping, archives it and validates archive/product/test hashes
+on Windows. A separate MSVC job runs the Rust unit and metadata suites. These
+owned-daemon fixtures send no browser commands. `probe_tcp_owner=true` separately
+checks exact socket ownership and real local WebSocket capture without Chrome;
+`probe_focus_protocol=true` exercises scripted private transport only.
 
-`KernelOwner` is an internal unsafe caller contract. This prototype does not
-implement TCP ownership attribution, daemon/native-host role validation, Chrome
-ancestry, input-desktop checks, or a foreground grant. The tests derive peers only
-from owned actual CLI child handles and disable automatic site refresh. Windows
-Known Folders are not redirected by setting HOME; the tests use explicit private
-socket/temp directories and issue no browser commands. Live executable replacement
-that the OS refuses is reported as inconclusive, never as a passing replacement
-test.
+The image checker pins read-only executable files and compares complete artifact
+SHA256 before acquiring VM_READ. It reads only bounded main-image PE headers and
+one read-only 64-byte `.cufg` marker. The caller's actual static marker must match
+its pinned file. Same-file and identical-copy matches are separate observations.
+While both file pins prohibit ordinary write/delete sharing, revalidation checks
+held process birth/liveness, principal and the current path's volume/file ID;
+repeatedly hashing the same pinned bytes adds no replacement evidence. Borrowed
+module/desktop handles are never closed. This is matching artifact content and an
+observed embedded generation, not mapped-code integrity, Authenticode, unique
+installation identity or a defense against compromised same-user processes.
+
+GNU and MSVC fixtures expose the actual module base in the loaded PE32+ ImageBase
+field. Comparison accepts only the original preferred value or that exact actual
+base for this field; all other header bytes remain exact. Section layout, marker
+bytes and memory protections are checked independently. Bounded diagnostics
+identified that field before changing the initial strict comparison.
+
+Controlled builds require fresh nonzero 16-byte hex CHROME_USE_BUILD_GENERATION
+for every Cargo invocation and exact locked/offline dependency metadata at
+CHROME_USE_MARKER_DEPENDENCIES. Source/generated/embedded resources, dependency
+contents, build flags and compiler/linker information are hashed. Product kind 1
+requires exactly one chrome-use binary target. Test harnesses use kind 2 and
+cannot anchor foreground grants, avoiding a shared build-script output being
+mistaken for an identical product generation. Reusing a nonce for a later link
+violates the controlled contract. Production build/release invalidation remains
+an adoption gate; this branch is not ready to publish merely because its metadata
+checks pass.
+
+KernelOwner is an internal unsafe caller contract, not authority from a JSON PID.
+The TCP bridge supplies actual kernel row/birth observations; matching-image proof
+alone does not establish native-host role. Chrome ancestry and caller input desktop
+checks precede a grant, while the exact target-window/input proof remains native.
+Windows Known Folders are not redirected by HOME; tests use explicit private
+socket/temp paths and disable automatic site refresh. An OS-refused live-image
+rename is inconclusive, never a passing replacement test.
