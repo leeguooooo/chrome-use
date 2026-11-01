@@ -16,6 +16,11 @@ on:
           - cleanup-relay
         default: candidates
         required: true
+      inspect_native_ui:
+        description: Collect read-only native document metadata on the CI fixture
+        type: boolean
+        required: false
+        default: false
       source_build_run:
         description: Bitwarden only; reuse a verified fresh build with identical product sources
         required: false
@@ -52,6 +57,7 @@ jobs:
     timeout-minutes: 60
     env:
       CHROME_USE_NO_UPDATE_CHECK: '1'
+      PROBE_INSPECT_NATIVE_UI: ${{ inputs.inspect_native_ui }}
       SOURCE_BUILD_RUN: ${{ inputs.source_build_run }}
       PROBE_EXPERIMENT: ${{ inputs.experiment }}
       PROBE_SAMPLES: ${{ inputs.samples }}
@@ -163,9 +169,11 @@ jobs:
           Expand-Archive -Path $bwArchive -DestinationPath $bwDir
           Get-FileHash $binary,$bwArchive -Algorithm SHA256 | Format-List | Out-File probe-artifacts/input-hashes.txt
           $verdicts = @()
+          $inspection = @()
+          if ($env:PROBE_INSPECT_NATIVE_UI -eq 'true') { $inspection = @('--inspect-native-ui') }
           foreach ($mode in @('default', 'foreground', 'background')) {
             $output = "probe-artifacts/bitwarden-$mode"
-            python bench/bitwarden-780/probe.py --binary $binary --chrome $chrome --extension extensions/ab-connect --bitwarden $bwDir --output $output --setup-mode $mode
+            python bench/bitwarden-780/probe.py --binary $binary --chrome $chrome --extension extensions/ab-connect --bitwarden $bwDir --output $output --setup-mode $mode @inspection
             $verdicts += $LASTEXITCODE
             $summary = Get-Content "$output/summary.json" -Raw | ConvertFrom-Json
             if ($summary.browserStarted -ne $true) { throw 'Fixture prerequisites unavailable; no browser was started' }
