@@ -302,6 +302,21 @@ def terminate_owned(chrome):
 
 
 
+
+def registry_restored(registry):
+    api=registry.winreg
+    for path,existed,original in registry.saved:
+        try:
+            with api.OpenKey(api.HKEY_CURRENT_USER,path) as key:
+                try:current=api.QueryValueEx(key,'')
+                except FileNotFoundError:current=None
+        except FileNotFoundError:
+            if existed:return False
+            continue
+        if not existed or current!=original:return False
+    return True
+
+
 def prepare_process_observer(record):
     history=[]
     record['processObserverPreflight']=history
@@ -334,7 +349,7 @@ def main():
         'probeGitSha':os.environ.get('GITHUB_SHA'),
         'binaryBuildGitSha':os.environ.get('PROBE_BINARY_BUILD_SHA',os.environ.get('GITHUB_SHA')),
         'binarySource':os.environ.get('PROBE_BINARY_SOURCE','built'),
-        'realVaultTested':False,'productionRecoveryImplemented':False,'setupMode':args.setup_mode,'browserStarted':False}
+        'realVaultTested':False,'productionRecoveryImplemented':False,'setupMode':args.setup_mode,'browserStarted':False,'registryRestored':False}
     try:
         record['stage']='process-observer-preflight'
         prepare_process_observer(record)
@@ -351,7 +366,8 @@ def main():
             profile=root/'profile';relay=root/'relay';relay.mkdir()
             env=dict(os.environ,CHROME_USE_RELAY_DIR=str(relay),AGENT_BROWSER_SOCKET_DIR=str(root/'socket'),
                 CHROME_USE_NO_UPDATE_CHECK='1',AGENT_BROWSER_AUTO_LOGIN='off')
-            with Registry(args.binary,root,extension_id),(args.output/'chrome.log').open('w') as log:
+            registry=Registry(args.binary,root,extension_id)
+            with registry,(args.output/'chrome.log').open('w') as log:
                 chrome=subprocess.Popen([str(args.chrome),'--no-first-run','--no-default-browser-check',
                     '--user-data-dir='+str(profile),'--remote-debugging-port=0',
                     '--load-extension='+str(extension)+','+str(args.bitwarden),
@@ -470,6 +486,8 @@ def main():
                     except Exception as exc:
                         record['cleanupError']=str(exc)[:300];record['verdict']='INCONCLUSIVE'
                         if chrome.poll() is None:chrome.kill();chrome.wait(timeout=10)
+            record['registryRestored']=registry_restored(registry)
+            if record['registryRestored'] is not True:raise RuntimeError('native-host registry restoration was not verified')
     except Exception as exc:
         record['error']=type(exc).__name__+': '+str(exc)[:1200]
         record['verdict']='INCONCLUSIVE'

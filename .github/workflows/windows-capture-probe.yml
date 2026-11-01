@@ -169,6 +169,7 @@ jobs:
             $verdicts += $LASTEXITCODE
             $summary = Get-Content "$output/summary.json" -Raw | ConvertFrom-Json
             if ($summary.browserStarted -ne $true) { throw 'Fixture prerequisites unavailable; no browser was started' }
+            if ($summary.registryRestored -ne $true) { throw 'Native-host registry restoration unknown; refusing another profile' }
             if ($summary.browserCleanup.verified -ne $true -or $summary.coverCleanupError) { throw 'Cleanup unknown; refusing another fixture profile' }
           }
           if (@($verdicts | Where-Object { $_ -ne 0 }).Count -ne 0) { throw 'Real-extension diagnostic is not PASS; inspect evidence and scope' }

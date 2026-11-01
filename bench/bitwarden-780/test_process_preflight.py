@@ -33,9 +33,6 @@ class ProcessPreflightTests(unittest.TestCase):
         self.assertTrue(all(item['ready'] is False for item in record['processObserverPreflight']))
 
 
-if __name__=='__main__':unittest.main()
-
-
 class SetupFailureReportTests(unittest.TestCase):
     def test_observer_failure_records_inconclusive_without_creating_a_browser(self):
         import contextlib
@@ -68,3 +65,6 @@ class SetupFailureReportTests(unittest.TestCase):
             self.assertFalse(result['browserStarted'])
             self.assertIn('observer unavailable',result['error'])
             self.assertEqual(closed,[True])
+
+
+if __name__=='__main__':unittest.main()
