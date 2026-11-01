@@ -68,7 +68,7 @@ A timed-out capture may remain pending: avoid overlapping retries. Windows
 window restoration needs explicit authorization and may change focus
 (`core/reading`). Observation fields and progress rules: `core/loop`.
 
-`--allow-focus-recovery`: opt in to one Windows native Escape only with authorized foreground changes; never replay uncertain actions. Requirements: `core/connection`.
+`--allow-focus-recovery`: opt in to one Windows native Escape with guarded foreground handoff only when authorized; never replay uncertain actions. Requirements: `core/connection`.
 
 ## Tabs and ending the task
 

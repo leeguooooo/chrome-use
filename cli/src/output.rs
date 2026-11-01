@@ -7181,6 +7181,7 @@ Options:
   --allow-focus-recovery     Permit one native Escape recovery for this invocation (Windows relay).
                              May briefly focus an owned agent-only window; default disabled.
                              Needs extension 0.5.103+ and a recovery-capable native host.
+                             Matched Windows builds may request Chrome foreground eligibility; the OS can refuse.
                              Unknown-effect actions are never replayed; restore is best effort.
   --hide-scrollbars <bool>   Hide native scrollbars in headless Chromium screenshots (default: true)
                              Use --hide-scrollbars false to keep scrollbars visible

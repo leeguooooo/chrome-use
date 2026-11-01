@@ -2,7 +2,7 @@
 
 ## Bitwarden menu blocks debugger access
 
-On Windows relay, explicit `--allow-focus-recovery` permits one native Escape recovery for a new command known not to have run (extension 0.5.103+ and a recovery-capable native host). It may briefly focus the bound agent-only window. A missing native foreground, changed user input, or unverified menu refuses input. Read `nativeFocus` and restoration warnings. Never add this flag to blindly retry an `action_outcome_unknown` operation. `close` can remove an owned tab using its exact live browser target even if debugger attachment is blocked; it cannot use that fallback to close user or lent tabs. macOS native recovery remains unsupported. Full constraints: `core/connection`.
+On Windows relay, explicit `--allow-focus-recovery` permits one native Escape recovery for a new command known not to have run (extension 0.5.103+ and a recovery-capable native host). It may briefly focus the bound agent-only window. A missing native foreground, changed user input, or unverified menu refuses input. Read `nativeFocus`, its `foregroundAuthorization` observation and restoration warnings. A foreground handoff requires matching CLI/native-host builds; update and restart a mismatched host before a new command. Never add this flag to blindly retry an `action_outcome_unknown` operation. `close` can remove an owned tab using its exact live browser target even if debugger attachment is blocked; it cannot use that fallback to close user or lent tabs. macOS native recovery remains unsupported. Full constraints: `core/connection`.
 
 ## Side panel: "Specified native messaging host not found."
 

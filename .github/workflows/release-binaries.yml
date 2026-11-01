@@ -133,6 +133,16 @@ jobs:
           [target.x86_64-pc-windows-gnu]
           linker = "x86_64-w64-mingw32-gcc"
           EOF
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc" >> "$GITHUB_ENV"
+
+      - name: Prepare matched Windows foreground build
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        shell: bash
+        run: |
+          cargo fetch --locked --manifest-path cli/Cargo.toml
+          cargo metadata --locked --offline --manifest-path cli/Cargo.toml --format-version 1 --filter-platform x86_64-pc-windows-gnu --features windows-build-identity-prototype,windows-tcp-owner-prototype > "$RUNNER_TEMP/windows-build-metadata.json"
+          echo "CHROME_USE_MARKER_DEPENDENCIES=$RUNNER_TEMP/windows-build-metadata.json" >> "$GITHUB_ENV"
+          python3 -c 'import secrets; print("CHROME_USE_BUILD_GENERATION=" + secrets.token_hex(16))' >> "$GITHUB_ENV"
 
       - name: Build (zigbuild)
         if: matrix.use_zigbuild
@@ -140,7 +150,13 @@ jobs:
 
       - name: Build (cargo)
         if: '!matrix.use_zigbuild'
-        run: cargo build --release --manifest-path cli/Cargo.toml --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          feature_args=()
+          if [[ "${{ matrix.target }}" == x86_64-pc-windows-gnu ]]; then
+            feature_args=(--features 'windows-build-identity-prototype,windows-tcp-owner-prototype')
+          fi
+          cargo build --release --locked --manifest-path cli/Cargo.toml --target "${{ matrix.target }}" "${feature_args[@]}"
 
       # Sign and notarize the macOS binaries. Ad-hoc signed ones are rejected
       # by `spctl`, so a copy downloaded through a browser (which carries a

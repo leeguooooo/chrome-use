@@ -472,6 +472,8 @@ chrome-use 会保留该标签并报告目标 ID。保持相同 session 和连接
 
 `--allow-focus-recovery` 仅为本次命令允许一次原生 Escape 恢复。Windows 扩展中继需要扩展 0.5.103 或更新版本，以及支持恢复的 native host；遇到阻止调试器访问的 Bitwarden 菜单时，可能短暂聚焦当前绑定的 agent 窗口。一次聚焦请求后最多等待 500 毫秒核验原生前台，不会再次请求聚焦。目标必须是 agent 自己创建的活动标签，窗口不能最小化，且只能包含 agent 标签；恢复前会核验同一页面和原生菜单，结束后尝试恢复原前台窗口。目标不明确、平台不支持或检测到用户输入变化时会拒绝。默认关闭，环境变量、配置和复用的 daemon 都不会授权。只读探针确认访问恢复后才执行原操作，不会重放结果未知的操作。JSON 的 `nativeFocus` 和警告分别报告输入提交及焦点恢复结果；系统接收输入不代表页面收到，焦点恢复也可能无法确认。macOS 目前只有只读权限探针，不支持原生焦点恢复。
 
+Windows CLI 会先核验自身、daemon 和 native host 来自同一二进制构建，再向核验过的 Chrome 父进程申请前台资格。该申请不向 daemon 授权，也不主动聚焦或输入；Windows 可以拒绝。`nativeFocus.foregroundAuthorization` 区分 `Admitted`、`AlreadyForegroundProcess`、`OsDenied` 和旧客户端的 `Unavailable`，申请获准并不代表焦点已切换或按键已送达。构建不匹配时先更新并重启 native host，再发起新命令，不要盲目重试结果未知的操作。
+
 ```bash
 chrome-use --allow-focus-recovery click @e1
 ```
