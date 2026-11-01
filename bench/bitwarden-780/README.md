@@ -117,3 +117,21 @@ unattributed. This fixture reports observed Escape delivery only after its
 complete page history contains exactly one trusted Escape down/up pair. If an
 iframe consumes those events and delivery is not observable, closure remains
 unattributed and this diagnostic stays INCONCLUSIVE.
+
+## Foreground permission control (diagnostic only)
+
+`grant_foreground_control` requires `runtime_focus_recovery` and the Bitwarden
+experiment. It runs only the background fixture. The first real runtime call
+must refuse at the 500 ms native-foreground guard with no admitted input and no
+fixture key event. Only then does the controller, which owns the foreground
+cover, call `AllowSetForegroundWindow` once for its own Chrome PID. It verifies
+that this grant did not itself change the foreground and invokes one new
+runtime operation. Unknown-effect failures cannot enter this path.
+
+The original unassisted refusal and the explicit grant remain in the report.
+The same-page counter, trusted Escape pair, menu and cleanup checks still apply.
+A PASS here means the assisted control worked; it is **not unassisted production
+recovery acceptance**. The controller never grants ASFW_ANY, injects Escape,
+activates Chrome itself, or bypasses Windows foreground policy. Use an exact
+verified source build with identical product sources; do not use this condition
+to relabel the original background result.
