@@ -49,6 +49,13 @@ pub struct Response {
         skip_serializing_if = "Option::is_none"
     )]
     pub action_context: Option<Value>,
+    /// Native recovery admission and foreground restoration observations.
+    #[serde(
+        default,
+        rename = "nativeFocus",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub native_focus: Option<Value>,
 }
 
 #[allow(dead_code)]
@@ -4751,5 +4758,23 @@ mod tests {
             }
             assert_eq!(binding_snapshot(d, &session), binding, "{bad:?}");
         }
+    }
+    #[test]
+    fn native_focus_receipt_survives_the_cli_response_boundary() {
+        let wire = serde_json::json!({
+            "success":true, "data":{"clicked":"#continue"},
+            "nativeFocus":{"input":{"keyDownAdmitted":1,"keyUpAdmitted":1,"delivery":"unverified"},
+                "restore":{"restore":{"restored":true}},"originalOperationReplayed":false}
+        });
+        let response: super::Response = serde_json::from_value(wire.clone()).unwrap();
+        let emitted = serde_json::to_value(response).unwrap();
+        assert_eq!(emitted["nativeFocus"], wire["nativeFocus"]);
+        let legacy: super::Response =
+            serde_json::from_value(serde_json::json!({"success":true,"data":null,"error":null}))
+                .unwrap();
+        assert!(serde_json::to_value(legacy)
+            .unwrap()
+            .get("nativeFocus")
+            .is_none());
     }
 }

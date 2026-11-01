@@ -3715,6 +3715,7 @@ fn main() {
             warning: None,
             timing: None,
             action_context: None,
+            native_focus: None,
         };
         let passive = || {
             inventory_response(diag::list_all_tabs(
@@ -3776,6 +3777,7 @@ fn main() {
                 warning: None,
                 timing: None,
                 action_context: None,
+                native_focus: None,
             },
             Err(e) => {
                 let metadata = error_envelope::classify_error(&e);
@@ -3788,6 +3790,7 @@ fn main() {
                     warning: None,
                     timing: None,
                     action_context: None,
+                    native_focus: None,
                 }
             }
         };
