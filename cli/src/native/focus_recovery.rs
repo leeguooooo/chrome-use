@@ -7,6 +7,10 @@ use std::{cell::Cell, future::Future};
 
 use serde_json::{json, Value};
 
+mod documents;
+#[cfg(windows)]
+mod windows;
+
 #[derive(Clone, Copy)]
 enum Budget {
     Disabled,
