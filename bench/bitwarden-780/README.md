@@ -38,6 +38,25 @@ When native focus leaves the real menu present, a native desktop crop records
 only the exact foreground CI-owned fixture window before Escape. It is an
 illustration for review, not a claim about a maintainer's browser or vault.
 
+With `inspect_native_ui` enabled, the job also reads native UI Automation
+Document metadata before sending Escape. When the runtime reader exists, the
+controller uses that exact script and records its hash; otherwise it uses the
+CI prototype. Only Document URL values are read, never Edit or Password values.
+The browser's raw UI tree initially may contain empty Document widgets. Bounded
+read-only rechecks require the fixture URL and a known menu resource URL, rather
+than treating a document count as identity proof. Each menu document records its
+containing page URL. The privileged Bitwarden owner probe remains a separate
+fixture oracle and is not a production capability.
+
+The background case keeps Chrome in front until the single new local action
+and its readback finish, then restores only the controller's original cover.
+It refuses restoration if foreground ownership or window identity changed.
+Restoration requires observing the original cover in front; a successful native
+API return alone is insufficient. A post-restoration read must still identify
+the same page and counter value, and the final owner probe must find no menu.
+Returning focus before the new action is an insufficient sequence in observed
+runs: the later click can encounter protected-access denial again.
+
 Artifacts retain window/frame snapshots, CLI outcomes, fixture event trust,
 input admission, binary/source hashes and process cleanup proof. Missing menu
 reproduction, access failures or unverified cleanup remain INCONCLUSIVE. PASS
@@ -68,7 +87,8 @@ require a fresh build. Replays cannot be chained.
 Records distinguish `binaryBuildGitSha`, `binarySource` and `probeGitSha`.
 An earlier failed diagnostic is usable only when its fresh build succeeded and
 all source/hash checks pass. This changes the observer, not the product binary.
-Startup worker discovery re-lists the same Chrome process after read-only
+Startup waits for a readable, valid debugging port record, retaining file-read
+errors without restarting Chrome. Worker discovery re-lists the same Chrome process after read-only
 metadata errors, retaining those errors. It never restarts Chrome or repeats
 fixture writes/input to obtain a successful response.
 
