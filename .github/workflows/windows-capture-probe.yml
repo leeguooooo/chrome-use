@@ -31,6 +31,11 @@ on:
         type: boolean
         required: false
         default: false
+      foreground_grant_client:
+        description: Diagnostic only; delegate from a fresh controller child instead of the foreground controller
+        type: boolean
+        required: false
+        default: false
       source_build_run:
         description: Bitwarden only; reuse a verified fresh build with identical product sources
         required: false
@@ -70,6 +75,7 @@ jobs:
       PROBE_RUNTIME_FOCUS: ${{ inputs.runtime_focus_recovery }}
       PROBE_INSPECT_NATIVE_UI: ${{ inputs.inspect_native_ui }}
       PROBE_FOREGROUND_CONTROL: ${{ inputs.grant_foreground_control }}
+      PROBE_FOREGROUND_CLIENT: ${{ inputs.foreground_grant_client }}
       SOURCE_BUILD_RUN: ${{ inputs.source_build_run }}
       PROBE_EXPERIMENT: ${{ inputs.experiment }}
       PROBE_SAMPLES: ${{ inputs.samples }}
@@ -85,6 +91,7 @@ jobs:
         run: |
           if ($env:SOURCE_BUILD_RUN -and ($env:PROBE_EXPERIMENT -ne 'bitwarden' -or $env:SOURCE_BUILD_RUN -notmatch '^[0-9]+$')) { throw 'Source replay requires a numeric build run and the Bitwarden experiment' }
           if ($env:PROBE_FOREGROUND_CONTROL -eq 'true' -and ($env:PROBE_EXPERIMENT -ne 'bitwarden' -or $env:PROBE_RUNTIME_FOCUS -ne 'true')) { throw 'Foreground control requires Bitwarden runtime recovery' }
+          if ($env:PROBE_FOREGROUND_CLIENT -eq 'true' -and $env:PROBE_FOREGROUND_CONTROL -ne 'true') { throw 'Foreground child requires the permission control' }
           if ($env:PROBE_SAMPLES -notmatch '^[1-5]$') { throw 'samples must be 1-5' }
       - if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay' && inputs.source_build_run == ''
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
@@ -110,6 +117,15 @@ jobs:
       - name: Check Bitwarden controller without a browser
         if: inputs.experiment == 'bitwarden'
         run: python -m unittest discover -s bench/bitwarden-780 -p 'test_*.py'
+      - name: Build the foreground child control without a browser
+        if: inputs.foreground_grant_client
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path probe-artifacts -Force | Out-Null
+          rustc --edition 2024 bench/bitwarden-780/foreground-client.rs -o probe-artifacts/foreground-client.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Foreground child control failed to compile' }
+          Get-FileHash probe-artifacts/foreground-client.exe -Algorithm SHA256 | Format-List | Out-File probe-artifacts/foreground-client-sha256.txt
+          rustc --version | Out-File probe-artifacts/foreground-client-toolchain.txt
       - name: Install decoder for pure image checks
         if: inputs.experiment != 'cleanup' && inputs.experiment != 'cleanup-relay'
         run: python -m pip install --disable-pip-version-check Pillow
@@ -204,6 +220,7 @@ jobs:
             $inspection += '--grant-chrome-foreground'
             $modes = @(1..[int]$env:PROBE_SAMPLES | ForEach-Object { "background-$_" })
           }
+          if ($env:PROBE_FOREGROUND_CLIENT -eq 'true') { $inspection += @('--foreground-grant-client', (Resolve-Path probe-artifacts/foreground-client.exe).Path) }
           foreach ($mode in $modes) {
             $output = "probe-artifacts/bitwarden-$mode"
             $setupMode = if ($env:PROBE_FOREGROUND_CONTROL -eq 'true') { 'background' } else { $mode }

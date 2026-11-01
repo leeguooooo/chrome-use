@@ -108,6 +108,7 @@ class SetupFailureReportTests(unittest.TestCase):
                 setup_mode="default",
                 runtime_focus_recovery=False,
                 grant_chrome_foreground=False,
+                foreground_grant_client=None,
             )
 
             class Parser:

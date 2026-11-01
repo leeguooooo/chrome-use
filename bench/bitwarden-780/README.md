@@ -141,3 +141,12 @@ runs or fails for another reason, no permission is granted and the operation is
 never repeated. Its result and native window/cover state are retained. A successful
 operation also gets an immediate read-only counter observation before evaluating
 its restoration receipt, so an unconfirmed restore cannot hide the action result.
+
+`foreground_grant_client` further requires `grant_foreground_control`. It builds
+a small standalone Rust child that performs only the same public delegation and
+read-only foreground queries. The child is launched with the same subprocess
+mechanism as a CLI invocation. Its PID, OS result, before/after foreground and
+absence of activation/input are retained and checked; denial or malformed data
+never falls back to a controller grant. This tests a fresh child's eligibility,
+not a product IPC implementation or a guarantee for a persistent daemon, another
+host, another Windows session, or an agent whose parent lacks foreground rights.

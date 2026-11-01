@@ -35,6 +35,49 @@ def fixture(admitted=True):
 
 
 class ForegroundControlTests(unittest.TestCase):
+    def child_result(self, admitted=True):
+        return {'exit': 0 if admitted else 1, 'killedAtDeadline': False,
+                'response': {'success': admitted, 'data': {
+                    'callerPid': 99, 'chromePid': 42, 'admitted': admitted,
+                    'errorCode': 0 if admitted else 5,
+                    'foregroundBefore': 100, 'foregroundAfter': 100,
+                    'foregroundPidBefore': 12, 'foregroundPidAfter': 12,
+                    'nativeInputAttempted': False, 'windowActivationAttempted': False}}}
+
+    def test_the_fresh_child_is_the_only_grant_caller(self):
+        windows, delegate, _, _ = fixture()
+        namespace = helpers()
+        result = self.child_result()
+        calls = []
+        namespace['execute'] = lambda words, env, artifact, timeout: (calls.append(words), result)[1]
+        report = namespace['foreground_permission_control'](windows, 200, 42, 100, Path('child.exe'), {}, Path('artifact'))
+        self.assertTrue(report['admitted'])
+        self.assertEqual(delegate.calls, [])
+        self.assertEqual(calls, [['child.exe', '--ci-allow-foreground-delegation', '42']])
+        self.assertEqual(report['childControl'], result)
+
+    def test_child_denial_is_preserved_without_controller_fallback(self):
+        windows, delegate, _, _ = fixture()
+        namespace = helpers()
+        namespace['execute'] = lambda *args, **kwargs: self.child_result(False)
+        report = namespace['foreground_permission_control'](windows, 200, 42, 100, Path('child.exe'), {}, Path('artifact'))
+        self.assertFalse(report['admitted'])
+        self.assertEqual(report['errorCode'], 5)
+        self.assertEqual(delegate.calls, [])
+
+    def test_unknown_child_effects_never_become_a_verified_grant(self):
+        for field, value in [('chromePid', 43), ('callerPid', 12), ('foregroundBefore', 999),
+                             ('foregroundPidBefore', 99), ('foregroundAfter', 999),
+                             ('nativeInputAttempted', True), ('windowActivationAttempted', True)]:
+            windows, delegate, _, _ = fixture()
+            namespace = helpers()
+            result = self.child_result()
+            result['response']['data'][field] = value
+            namespace['execute'] = lambda *args, **kwargs: result
+            with self.assertRaises(RuntimeError):
+                namespace['foreground_permission_control'](windows, 200, 42, 100, Path('child.exe'), {}, Path('artifact'))
+            self.assertEqual(delegate.calls, [])
+
     def test_only_verified_no_input_foreground_refusals_allow_the_control(self):
         gate = helpers()['foreground_blocked_without_input']
         native = {'input': None, 'originalOperationReplayed': False}

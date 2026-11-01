@@ -678,7 +678,7 @@ def foreground_blocked_without_input(result):
     )
 
 
-def foreground_permission_control(windows, hwnd, chrome_pid, cover_hwnd):
+def foreground_permission_control(windows, hwnd, chrome_pid, cover_hwnd, client=None, env=None, artifact=None):
     """CI control: delegate rights from our foreground cover to our Chrome only."""
     cover = windows.state(cover_hwnd)
     target = windows.state(hwnd)
@@ -692,12 +692,37 @@ def foreground_permission_control(windows, hwnd, chrome_pid, cover_hwnd):
         or cover_hwnd == hwnd
     ):
         raise RuntimeError("foreground grant requires our unchanged cover and Chrome")
-    delegate = windows.u.AllowSetForegroundWindow
-    delegate.argtypes = [wintypes.DWORD]
-    delegate.restype = wintypes.BOOL
-    ctypes.set_last_error(0)
-    admitted = bool(delegate(chrome_pid))
-    error = 0 if admitted else ctypes.get_last_error()
+    child = None
+    if client is None:
+        delegate = windows.u.AllowSetForegroundWindow
+        delegate.argtypes = [wintypes.DWORD]
+        delegate.restype = wintypes.BOOL
+        ctypes.set_last_error(0)
+        admitted = bool(delegate(chrome_pid))
+        error = 0 if admitted else ctypes.get_last_error()
+    else:
+        child = execute([str(client), "--ci-allow-foreground-delegation", str(chrome_pid)], env, artifact, timeout=10)
+        data = (child.get("response") or {}).get("data") or {}
+        if (
+            child.get("killedAtDeadline") is not False
+            or child.get("exit") not in (0, 1)
+            or data.get("chromePid") != chrome_pid
+            or not isinstance(data.get("callerPid"), int)
+            or data["callerPid"] in (0, os.getpid())
+            or data.get("foregroundBefore") != cover_hwnd
+            or data.get("foregroundPidBefore") != os.getpid()
+            or data.get("nativeInputAttempted") is not False
+            or data.get("windowActivationAttempted") is not False
+            or not isinstance(data.get("admitted"), bool)
+            or child.get("exit") != (0 if data.get("admitted") is True else 1)
+            or (child.get("response") or {}).get("success") is not data.get("admitted")
+            or data.get("foregroundAfter") != cover_hwnd
+            or data.get("foregroundPidAfter") != os.getpid()
+            or not isinstance(data.get("errorCode"), int)
+        ):
+            raise RuntimeError("foreground child control outcome is unconfirmed; no operation was repeated")
+        admitted = data["admitted"]
+        error = data.get("errorCode")
     after = windows.state(cover_hwnd)
     return {
         "controllerPid": os.getpid(),
@@ -707,6 +732,7 @@ def foreground_permission_control(windows, hwnd, chrome_pid, cover_hwnd):
         "foregroundUnchanged": after["pid"] == os.getpid()
         and after["foreground"] == cover_hwnd,
         "unassistedProductionAcceptance": False,
+        "childControl": child,
     }
 
 
@@ -724,6 +750,7 @@ def main():
     parser.add_argument("--inspect-native-ui", action="store_true")
     parser.add_argument("--runtime-focus-recovery", action="store_true")
     parser.add_argument("--grant-chrome-foreground", action="store_true")
+    parser.add_argument("--foreground-grant-client", type=Path)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     case = "bw780-" + uuid.uuid4().hex[:10]
@@ -742,6 +769,7 @@ def main():
         "setupMode": args.setup_mode,
         "runtimeFocusRecoveryRequested": args.runtime_focus_recovery,
         "foregroundPermissionControlRequested": args.grant_chrome_foreground,
+        "foregroundGrantCaller": "child" if args.foreground_grant_client else "controller",
         "browserStarted": False,
         "registryRestored": False,
         "sessionCleanupConfirmed": False,
@@ -1001,7 +1029,8 @@ def main():
                                 ):
                                     raise RuntimeError("foreground control requires a verified no-input foreground refusal")
                                 record["foregroundPermissionControl"] = foreground_permission_control(
-                                    windows, hwnd, chrome.pid, cover_hwnd
+                                    windows, hwnd, chrome.pid, cover_hwnd,
+                                    args.foreground_grant_client, env, args.output / "foreground-client"
                                 )
                                 control = record["foregroundPermissionControl"]
                                 if not control["admitted"] or not control["foregroundUnchanged"]:
