@@ -699,12 +699,12 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_failure_does_not_cancel_started_command() {
         let (_, _, _broker, svc) = setup(false);
-        let (a, b) = tokio::io::duplex(32);
-        drop(b);
-        let (r, mut w) = tokio::io::split(a);
+        let (_peer, r) = tokio::io::duplex(32);
         let mut r = BufReader::new(r);
+        let (failed, observed) = oneshot::channel();
+        let mut w = FailedHeartbeat(Some(failed));
         let out = drive(&mut r, &mut w, svc, true, Duration::from_millis(1), async {
-            time::sleep(Duration::from_millis(10)).await;
+            observed.await.unwrap();
             42
         })
         .await;
@@ -841,6 +841,31 @@ mod tests {
         entered: Option<oneshot::Sender<()>>,
     }
     struct BlockedHeartbeat(Option<oneshot::Sender<()>>);
+    struct FailedHeartbeat(Option<oneshot::Sender<()>>);
+    impl tokio::io::AsyncWrite for FailedHeartbeat {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            _: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            if let Some(failed) = self.0.take() {
+                let _ = failed.send(());
+            }
+            std::task::Poll::Ready(Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe)))
+        }
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
     impl tokio::io::AsyncWrite for BlockedHeartbeat {
         fn poll_write(
             mut self: std::pin::Pin<&mut Self>,
