@@ -18,6 +18,7 @@ def load_reader(reader):
         "processes": reader,
         "os": SimpleNamespace(getpid=lambda: 42),
         "subprocess": subprocess,
+        "time": SimpleNamespace(sleep=lambda delay: None),
         "re": re,
     }
     legacy = ast.parse(

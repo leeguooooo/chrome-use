@@ -61,6 +61,8 @@ class OutcomeTests(unittest.TestCase):
         self.assertFalse(gate(pair[:1]))
         self.assertFalse(gate([dict(event, trusted=False) for event in pair]))
         self.assertFalse(gate([dict(event, key="Enter") for event in pair]))
+        self.assertFalse(gate(pair + [dict(pair[0])]))
+        self.assertFalse(gate(pair + pair))
 
     def test_teardown_requires_a_successful_verified_absence_response(self):
         confirmed = {

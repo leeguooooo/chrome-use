@@ -71,7 +71,7 @@ class SourceProofTests(unittest.TestCase):
 
 
 class BuildEligibilityTests(unittest.TestCase):
-    def replay(self, build_status, chained=False):
+    def replay(self, build_status, chained=False, built=False):
         import contextlib
         import io
         import json
@@ -129,9 +129,15 @@ class BuildEligibilityTests(unittest.TestCase):
                 sha = hashlib.sha256(payload).hexdigest()
                 (destination / "source-cli.exe").write_bytes(payload)
                 (destination / "binary-sha256.txt").write_text("Hash : " + sha + "\n")
-                if chained:
+                if chained or built:
                     (destination / "source-build.json").write_text(
-                        json.dumps({"mode": "replayed", "gitSha": source})
+                        json.dumps(
+                            {
+                                "mode": "replayed" if chained else "built",
+                                "gitSha": source,
+                                "binarySha256": sha,
+                            }
+                        )
                     )
                 return SimpleNamespace(returncode=0)
 
@@ -177,6 +183,9 @@ class BuildEligibilityTests(unittest.TestCase):
         self.assertEqual(self.replay("success"), [True])
         self.assertEqual(self.replay("failure"), [])
         self.assertEqual(self.replay("skipped"), [])
+
+    def test_a_successful_fresh_built_manifest_can_be_replayed(self):
+        self.assertEqual(self.replay("success", built=True), [True])
 
     def test_a_replayed_manifest_cannot_be_chained(self):
         self.assertEqual(self.replay("success", True), [True])

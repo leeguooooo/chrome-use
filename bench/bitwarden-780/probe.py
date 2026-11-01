@@ -500,6 +500,27 @@ def window_is_topmost(windows, hwnd):
     return bool(style & 0x00000008)
 
 
+def close_fixture_session(record, common, environment, output):
+    if common:
+        try:
+            record["sessionCleanup"] = execute(
+                common + ["close"], environment, output / "close", timeout=20
+            )
+            record["sessionCleanupConfirmed"] = session_close_confirmed(
+                record["sessionCleanup"]
+            )
+            if not record["sessionCleanupConfirmed"]:
+                record["sessionCleanupError"] = "session closure was not confirmed"
+        except Exception as error:
+            record["sessionCleanupConfirmed"] = False
+            record["sessionCleanupError"] = str(error)[:300]
+    else:
+        record["sessionCleanupStatus"] = "not-started"
+        record["sessionCleanupConfirmed"] = True
+    if not record["sessionCleanupConfirmed"]:
+        record["verdict"] = "INCONCLUSIVE"
+
+
 def registry_restored(registry):
     api = registry.winreg
     for path, existed, original in registry.saved:
@@ -540,6 +561,8 @@ def prepare_process_observer(record):
                     "error": type(error).__name__ + ": " + str(error)[:400],
                 }
             )
+            if attempt < 2:
+                time.sleep(0.25)
             continue
         history.append({"ready": True, "observedProcesses": len(snapshot)})
         return
@@ -905,28 +928,7 @@ def main():
                         except Exception as exc:
                             record["coverCleanupError"] = str(exc)[:300]
                             record["verdict"] = "INCONCLUSIVE"
-                    if common:
-                        try:
-                            record["sessionCleanup"] = execute(
-                                common + ["close"],
-                                env,
-                                args.output / "close",
-                                timeout=20,
-                            )
-                            record["sessionCleanupConfirmed"] = session_close_confirmed(
-                                record["sessionCleanup"]
-                            )
-                            if not record["sessionCleanupConfirmed"]:
-                                record["sessionCleanupError"] = (
-                                    "session closure was not confirmed"
-                                )
-                        except Exception as exc:
-                            record["sessionCleanupError"] = str(exc)[:300]
-                    else:
-                        record["sessionCleanupStatus"] = "not-started"
-                        record["sessionCleanupConfirmed"] = True
-                    if not record["sessionCleanupConfirmed"]:
-                        record["verdict"] = "INCONCLUSIVE"
+                    close_fixture_session(record, common, env, args.output)
                     try:
                         if chrome.poll() is not None:
                             raise RuntimeError(
