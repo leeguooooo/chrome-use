@@ -21,6 +21,11 @@ on:
         required: false
         type: boolean
         default: false
+      probe_macos_full:
+        description: 'Run the complete Intel macOS Rust suite with bounded exit evidence, without Chrome'
+        required: false
+        type: boolean
+        default: false
       published_tag:
         description: 'Verify the published Windows binary (e.g. v1.5.212)'
         required: false
@@ -32,7 +37,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   native-panel:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.probe_macos_startup && !inputs.probe_macos_exit)
+    if: github.event_name != 'workflow_dispatch' || (!inputs.probe_macos_startup && !inputs.probe_macos_exit && !inputs.probe_macos_full)
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -115,7 +120,7 @@ jobs:
           retention-days: 7
 
   mac-exit-probe:
-    if: github.event_name == 'workflow_dispatch' && inputs.probe_macos_exit
+    if: github.event_name == 'workflow_dispatch' && (inputs.probe_macos_exit || inputs.probe_macos_full)
     runs-on: macos-15-intel
     timeout-minutes: 30
     env:
@@ -135,6 +140,7 @@ jobs:
           key: x86_64-apple-darwin-ci
           cache-on-failure: true
       - name: Compare session exit with normal and disabled automatic refresh
+        if: ${{ !inputs.probe_macos_full }}
         shell: bash
         run: |
           mkdir -p exit-artifacts
@@ -149,6 +155,13 @@ jobs:
           if [ "$normal" -ne 0 ] || [ "$disabled" -ne 0 ]; then
             exit 1
           fi
+      - name: Complete Intel Rust suite with normal startup refresh
+        if: inputs.probe_macos_full
+        shell: bash
+        run: |
+          mkdir -p exit-artifacts
+          sw_vers -productVersion > exit-artifacts/platform.txt
+          env -u AGENT_BROWSER_SITES_NO_AUTO_UPDATE cargo test --profile ci --locked --manifest-path cli/Cargo.toml --target x86_64-apple-darwin 2>&1 | tee exit-artifacts/full-suite.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
