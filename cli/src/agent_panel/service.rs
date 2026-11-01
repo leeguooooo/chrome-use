@@ -451,6 +451,9 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
     let readiness_started = Instant::now();
     let readiness_deadline = readiness_started + Duration::from_secs(8);
     let launch_ms = launch_started.elapsed().as_millis();
+    let mut endpoint_seen = false;
+    let mut matching_endpoint_seen = false;
+    let mut health_observation = "not-probed";
     while Instant::now() < readiness_deadline {
         if let Some(status) = match child.as_mut() {
             Some(child) => child
@@ -461,22 +464,35 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
             return Err(format!("Agent service exited during startup ({status})"));
         }
         if let Ok(endpoint) = endpoint(directory, profile) {
+            endpoint_seen = true;
             let remaining = readiness_deadline.saturating_duration_since(Instant::now());
-            if endpoint.binary_hash == *binary_hash
-                && !remaining.is_zero()
-                && exchange_within(&endpoint, "health", json!({}), remaining).is_ok()
-                && Instant::now() < readiness_deadline
-            {
-                return Ok(endpoint);
+            if endpoint.binary_hash == *binary_hash && !remaining.is_zero() {
+                matching_endpoint_seen = true;
+                match exchange_within(&endpoint, "health", json!({}), remaining) {
+                    Ok(health)
+                        if health["binaryHash"] == *binary_hash
+                            && Instant::now() < readiness_deadline =>
+                    {
+                        return Ok(endpoint)
+                    }
+                    Ok(health) if health["binaryHash"] != *binary_hash => {
+                        health_observation = "different-build"
+                    }
+                    Ok(_) => health_observation = "late-reply",
+                    Err(error) if error == "Agent service did not answer" => {
+                        health_observation = "connection-unavailable"
+                    }
+                    Err(_) => health_observation = "reply-unconfirmed",
+                }
             }
         }
         std::thread::sleep(Duration::from_millis(40));
     }
     Err(format!(
         "Agent-service startup has not been confirmed after {} ms of readiness checks \
-         (launch {} ms); its process was not restarted",
+         (launch {} ms; endpoint seen {}; matching build {}; health {}); its process was not restarted",
         readiness_started.elapsed().as_millis(),
-        launch_ms,
+        launch_ms, endpoint_seen, matching_endpoint_seen, health_observation,
     ))
 }
 
