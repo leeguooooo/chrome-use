@@ -22,7 +22,7 @@ pub mod dom_snapshot;
 pub mod element;
 pub mod first_tab;
 #[allow(dead_code)]
-mod focus_recovery;
+pub(crate) mod focus_recovery;
 pub mod focus_restore;
 #[allow(dead_code)]
 pub mod humanize;

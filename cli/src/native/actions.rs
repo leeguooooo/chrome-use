@@ -2811,6 +2811,16 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             return error_response(&id, &e);
         }
     }
+    // Native recovery has explicit per-invocation authority. Run only after
+    // policy, target routing and kept-ref verification, before any observation
+    // or input. Recovery does not bypass the selector checks below.
+    if (acts_on_page(action) || safe_to_repeat(action)) && super::focus_recovery::enabled() {
+        if let Some(manager) = state.browser.as_ref() {
+            if let Err(error) = manager.prepare_native_focus_recovery().await {
+                return error_response(&id, &error);
+            }
+        }
+    }
     // A selector that matches several elements is refused before anything
     // runs (the observe baseline included): acting on the first match is how
     // `click .iLNqted2.DiddnkXT` hit "充钻石" instead of "投稿" and said ✓.
@@ -17888,6 +17898,11 @@ fn command_secrets(cmd: &Value) -> Vec<String> {
 
 async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    // The opt-in native path performs a preflight inside policy/target guards.
+    // Do not run the legacy pre-action tab flips or replay a blocked original.
+    if super::focus_recovery::enabled() {
+        return execute_command(cmd, state).await;
+    }
     // A command acting through a kept (unverified) ref runs guarded: its
     // refusal, and any block it meets, are reported as they are. Hiding the
     // tab and blurring the field to run it again is exactly the side effect

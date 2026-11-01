@@ -7296,6 +7296,86 @@ impl BrowserManager {
             .await
     }
 
+    /// Recover before dispatch, after the command layer has checked policy and
+    /// routed to its actual target. A no-op renderer read can trigger recovery;
+    /// the original operation has not run and is never replayed here.
+    pub(crate) async fn prepare_native_focus_recovery(&self) -> Result<(), String> {
+        if !super::focus_recovery::enabled() || !self.on_relay() {
+            return Ok(());
+        }
+        let session = self.active_session_id()?.to_string();
+        let target = self.active_target_id()?.to_string();
+        let url = self
+            .pinned_tab_url_from_browser()
+            .await
+            .ok_or("native recovery could not read the bound tab")?;
+        let probe = || {
+            self.client.send_command(
+                "Runtime.evaluate",
+                Some(json!({"expression":"location.href","returnByValue":true})),
+                Some(&session),
+            )
+        };
+        match probe().await {
+            Ok(value)
+                if value.pointer("/result/value").and_then(Value::as_str) == Some(url.as_str()) =>
+            {
+                return Ok(())
+            }
+            Ok(_) => {
+                return Err(
+                    "native recovery found a different renderer URL; the command was not run"
+                        .into(),
+                )
+            }
+            Err(error) if !is_debugger_access_denied(&error) => return Ok(()),
+            Err(_) => {}
+        }
+        let _permit = super::focus_recovery::take_permit().ok_or(
+            "native recovery was already attempted in this invocation; the command was not run",
+        )?;
+        let begun = self
+            .client
+            .send_command(
+                "ABExt.nativeFocusBegin",
+                Some(json!({
+                    "allowFocusRecovery":true, "targetId":target, "sessionId":session, "url":url,
+                })),
+                None,
+            )
+            .await?;
+        if begun["started"].as_bool() != Some(true) {
+            let message = begun["error"]
+                .as_str()
+                .unwrap_or("native focus recovery was not confirmed");
+            return Err(format!(
+                "{message}; original command was not run. Foreground restoration: {}",
+                if begun
+                    .pointer("/restore/restore/restored")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                {
+                    "verified"
+                } else {
+                    "unconfirmed"
+                }
+            ));
+        }
+        let token = begun["token"]
+            .as_str()
+            .filter(|token| token.len() == 32 && token.bytes().all(|b| b.is_ascii_hexdigit()))
+            .ok_or("malformed native recovery lease; original command was not run")?
+            .to_string();
+        super::focus_recovery::register(self.client.clone(), token, begun["input"].clone())?;
+        let verified = probe().await?;
+        if verified.pointer("/result/value").and_then(Value::as_str) != Some(url.as_str()) {
+            return Err(
+                "renderer URL changed after native recovery; original command was not run".into(),
+            );
+        }
+        Ok(())
+    }
+
     pub async fn pinned_tab_url_from_browser(&self) -> Option<String> {
         let live = self.pinned_tab_browser_record().await.ok()?;
         live.get("url").and_then(Value::as_str).map(str::to_string)

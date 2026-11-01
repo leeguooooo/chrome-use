@@ -40,6 +40,7 @@ import { attachTabById } from './attach-by-id.js';
 import { attachCreatedTab, createTabAttachmentQueue } from './tab-attachment.js';
 import { releaseTab } from './release-tab.js';
 import { blurFocusedField } from './menu-blur.js';
+import { NativeFocusBridge, beginNativeFocusRecovery } from './native-focus.js';
 import { SITE_ACCESS_NOTIFICATION, SITE_ACCESS_OPTIONS_PAGE, hasSiteAccess, isSiteAccessError, notifySiteAccessNeeded } from './site-access.js';
 import { DWELL_MS, UserTouchedTabs } from './user-touched.js';
 import { removeAgentTab } from './remove-agent-tab.js';
@@ -140,6 +141,12 @@ if (chrome.runtime.getManifest().key) {
 const HOST_NAME = 'com.agent_browser.connect';
 let agentPanelEntry = { ready: false, error: 'Side panel entry is being configured.' };
 void configureAgentPanel(chrome).then(result => { agentPanelEntry = result; });
+const nativeFocusBridge = new NativeFocusBridge({
+  send(message) {
+    if (!port) throw new Error('Native host is not connected');
+    port.postMessage(message);
+  },
+});
 const agentPanelBridge = new AgentPanelBridge({
   send(message) {
     if (!port) throw new Error('Native host is not connected');
@@ -1133,6 +1140,7 @@ function connectHost() {
   const connectedPort = port;
   connectedPort.onMessage.addListener((msg) => {
     if (port !== connectedPort) return;
+    if (nativeFocusBridge.receive(msg)) return;
     if (agentPanelBridge.receive(msg)) return;
     if (hostConnection.receive(connectedPort, msg)) {
       hostReconnect.confirmed();
@@ -1209,6 +1217,7 @@ function hostGone(connectedPort, error) {
   if (port !== connectedPort) return;
   const wasConnected = hostConnection.snapshot().connected;
   hostConnection.end(connectedPort, error);
+  nativeFocusBridge.disconnect();
   agentPanelBridge.disconnect(error);
   port = null;
   hostReconnect.failed();
@@ -1721,6 +1730,30 @@ async function handleForwardCdpCommand(msg) {
   // A password manager's menu blocks the debugger on an agent tab and the tab
   // flip cannot close it (Chrome is not the frontmost app): take focus out of
   // the field it belongs to. See menu-blur.js.
+  if (method === 'ABExt.nativeFocusFinish') {
+    return nativeFocusBridge.request('finish', { token: params?.token });
+  }
+  if (method === 'ABExt.nativeFocusBegin') {
+    await loadOwnedTabs();
+    const tid = typeof params?.targetId === 'string' ? params.targetId : '';
+    const sid = typeof params?.sessionId === 'string' ? params.sessionId : sessionId;
+    const boundTab = () => {
+      if (!tid || !sid || childSessionToTab.has(sid)) return null;
+      const fromSession = resolveSessionTab(sid, sessionToTab, childSessionToTab);
+      const fromTarget = tabForTarget(tid);
+      return Number.isInteger(fromSession) && fromSession === fromTarget ? fromSession : null;
+    };
+    return beginNativeFocusRecovery(params, {
+      boundTab,
+      guard: id => guardTab(id, agentSession),
+      isOwned: id => ownedTabs.has(id),
+      getTab: id => chrome.tabs.get(id),
+      getWindow: id => chrome.windows.get(id),
+      getWindowTabs: id => chrome.tabs.query({ windowId: id }),
+      focusWindow: id => chrome.windows.update(id, { focused: true }),
+      request: (operation, args) => nativeFocusBridge.request(operation, args),
+    });
+  }
   if (method === 'ABExt.blurFocusedField') {
     await loadOwnedTabs();
     const tid = typeof params?.targetId === 'string' ? params.targetId : '';

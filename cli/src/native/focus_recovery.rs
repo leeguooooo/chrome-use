@@ -3,13 +3,21 @@
 //! A nested script, confirmed command, or reused daemon cannot grant itself
 //! desktop input permission. Only the current root request can grant one permit.
 
-use std::{cell::Cell, future::Future};
+use std::{
+    cell::{Cell, RefCell},
+    future::Future,
+    sync::Arc,
+};
 
 use serde_json::{json, Value};
 
 mod documents;
+mod host;
+pub(crate) use host::NativeFocusHost;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+mod windows_desktop;
 #[cfg(windows)]
 mod windows_parent;
 
@@ -22,6 +30,7 @@ enum Budget {
 
 tokio::task_local! {
     static BUDGET: Cell<Budget>;
+    static LEASE: RefCell<Option<ClientLease>>;
 }
 
 /// Non-cloneable authority consumed before a native input attempt. A failed or
@@ -49,7 +58,24 @@ pub(super) async fn scope(cmd: &Value, operation: impl Future<Output = Value>) -
     } else {
         Budget::Disabled
     };
-    BUDGET.scope(Cell::new(budget), operation).await
+    BUDGET.scope(Cell::new(budget), LEASE.scope(RefCell::new(None), async {
+        let mut reply = operation.await;
+        let lease = LEASE.with(|slot| slot.borrow_mut().take());
+        if let Some(lease) = lease {
+            let input = lease.input.clone();
+            let finished = lease.finish().await;
+            let restored = finished.as_ref().ok().and_then(|value| value.pointer("/restore/restored")).and_then(Value::as_bool) == Some(true);
+            let note = if restored { "Native focus recovery was attempted; the original foreground was verified restored." }
+                else { "Native focus recovery was attempted; original foreground restoration is unconfirmed. No native input was repeated." };
+            if let Some(object) = reply.as_object_mut() {
+                let warning = object.get("warning").and_then(Value::as_str)
+                    .map(|existing| format!("{existing}\n{note}")).unwrap_or_else(|| note.to_string());
+                object.insert("warning".into(), json!(warning));
+                object.insert("nativeFocus".into(), json!({"input":input,"restore":finished.ok(),"originalOperationReplayed":false}));
+            }
+        }
+        reply
+    })).await
 }
 
 /// Take the invocation's sole native recovery attempt. Call only after checking
@@ -66,6 +92,76 @@ pub(super) fn take_permit() -> Option<Permit> {
         })
         .ok()
         .flatten()
+}
+
+struct ClientLease {
+    client: Arc<super::cdp::client::CdpClient>,
+    token: String,
+    input: Value,
+    armed: bool,
+}
+impl ClientLease {
+    async fn finish(mut self) -> Result<Value, String> {
+        self.armed = false;
+        self.client
+            .send_command(
+                "ABExt.nativeFocusFinish",
+                Some(json!({"token":self.token})),
+                None,
+            )
+            .await
+    }
+}
+impl Drop for ClientLease {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        // Cancellation gets one cleanup request, never a new Escape attempt.
+        // If the runtime/transport is gone the native host's lease expiry is
+        // the independent bounded fallback.
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let client = self.client.clone();
+            let token = self.token.clone();
+            runtime.spawn(async move {
+                let _ = client
+                    .send_command(
+                        "ABExt.nativeFocusFinish",
+                        Some(json!({"token":token})),
+                        None,
+                    )
+                    .await;
+            });
+        }
+    }
+}
+
+pub(super) fn enabled() -> bool {
+    BUDGET
+        .try_with(|budget| !matches!(budget.get(), Budget::Disabled))
+        .unwrap_or(false)
+}
+
+pub(super) fn register(
+    client: Arc<super::cdp::client::CdpClient>,
+    token: String,
+    input: Value,
+) -> Result<(), String> {
+    LEASE
+        .try_with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_some() {
+                return Err("native focus lease already exists".to_string());
+            }
+            *slot = Some(ClientLease {
+                client,
+                token,
+                input,
+                armed: true,
+            });
+            Ok(())
+        })
+        .map_err(|_| "native focus recovery has no invocation scope".to_string())?
 }
 
 #[cfg(test)]

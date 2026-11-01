@@ -5102,6 +5102,10 @@ async fn nm_host_main() {
     // Panel filesystem work must not block relay replies or accept unbounded
     // work. This gate is separate from CDP and never prepares a browser.
     let panel_jobs = Arc::new(tokio::sync::Semaphore::new(PANEL_JOBS));
+    // Desktop recovery is a distinct, explicitly requested protocol. It never
+    // borrows panel authority and serializes native operations separately.
+    let native_focus = crate::native::focus_recovery::NativeFocusHost::new();
+    let native_focus_jobs = Arc::new(tokio::sync::Semaphore::new(1));
 
     // Single writer to Chrome (extension) over stdout, native-messaging framed.
     tokio::spawn(async move {
@@ -5203,6 +5207,40 @@ async fn nm_host_main() {
                     }),
                 };
                 let reply = serde_json::json!({"method": "upgradeCliResult", "params": params});
+                let _ = tx.send(reply.to_string().into_bytes()).await;
+            });
+            continue;
+        }
+        if v.get("method").and_then(|m| m.as_str()) == Some("nativeFocus") {
+            let Some(request_id) = v
+                .get("requestId")
+                .and_then(|value| value.as_str())
+                .filter(|id| !id.is_empty() && id.len() <= 128 && id.is_ascii())
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            let host = native_focus.clone();
+            let tx = to_ext.clone();
+            let slot = native_focus_jobs.clone().try_acquire_owned();
+            tokio::spawn(async move {
+                let result = match slot {
+                    Ok(_slot) => {
+                        host.request(v["operation"].as_str().unwrap_or(""), &v["params"])
+                            .await
+                    }
+                    Err(_) => {
+                        Err("Native focus operation is busy; it was not replayed".to_string())
+                    }
+                };
+                let reply = match result {
+                    Ok(result) => {
+                        serde_json::json!({"method":"nativeFocusReply","requestId":request_id,"result":result})
+                    }
+                    Err(error) => {
+                        serde_json::json!({"method":"nativeFocusReply","requestId":request_id,"error":error})
+                    }
+                };
                 let _ = tx.send(reply.to_string().into_bytes()).await;
             });
             continue;
