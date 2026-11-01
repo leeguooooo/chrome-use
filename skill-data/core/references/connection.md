@@ -90,6 +90,18 @@ profile. `browsers` lists Chrome profiles; `tab list` lists session tabs.
 Adopt an existing user tab only when needed for the request. Do not close,
 navigate, or reconfigure unrelated tabs or sessions.
 
+## Opt-in native focus recovery
+
+`--allow-focus-recovery` authorizes one native Escape recovery for this invocation only. On Windows extension relay, when a protected Bitwarden menu blocks debugger access, recovery may briefly focus the bound agent window. It requires an active agent-owned tab in a non-minimized window containing only agent tabs, verifies the same page and native menu, and attempts to restore the original foreground afterward.
+
+It refuses an ambiguous target, unsupported platform, or changed user input. The default remains disabled; no environment variable, config, or reused daemon grants permission. The original operation runs only after a read-only probe confirms access; an operation with an unknown result is never replayed.
+
+JSON `nativeFocus` and warnings report input admission and restoration separately. OS input admission does not prove delivery, and restoration may remain unconfirmed. macOS currently provides only a read-only permission probe, without native focus recovery.
+
+```bash
+chrome-use --allow-focus-recovery click @e1
+```
+
 ## Choosing a profile
 
 Each Chrome profile is its own login: one may hold the work GitHub account,

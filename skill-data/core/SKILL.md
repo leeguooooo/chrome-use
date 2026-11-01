@@ -68,6 +68,8 @@ the final signal. Screenshots only for visual questions
 avoid overlapping retries. Background-color cleanup does not reset its attachment. Windows relay refuses known minimized-window captures before dispatch (extension 0.5.101+). Use `screenshot --allow-window-restore` only when window restoration is authorized; the window stays restored and focus may change. Full rules and observation fields
 (`openedTab`, `--follow`, `noProgress`, settle warnings): `core/loop`.
 
+`--allow-focus-recovery` is explicit per-command permission for one Windows relay native Escape recovery. Use only when the user has authorized brief foreground changes. It requires the bound active agent-owned tab in a non-minimized agent-only window; it never replays unknown-effect actions. Read `nativeFocus` and restoration warnings. macOS native recovery is unsupported. See `core/connection`.
+
 ## Tabs and ending the task
 
 Your tabs open in the background of the user's window, in your project's
