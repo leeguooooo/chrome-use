@@ -2,13 +2,16 @@
 //! A caller-supplied pid, window title, or extension-origin argv is insufficient.
 
 use std::mem::size_of;
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE, WAIT_TIMEOUT,
+};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcessId, GetExitCodeProcess, OpenProcess, QueryFullProcessImageNameW,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcess, GetCurrentProcessId, GetProcessTimes, OpenProcess,
+    QueryFullProcessImageNameW, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE,
 };
 
 struct Handle(HANDLE);
@@ -56,17 +59,43 @@ fn parent_pid() -> Result<u32, &'static str> {
     Err("native host process was absent from its ancestry snapshot")
 }
 
+fn created(handle: HANDLE) -> Result<u64, &'static str> {
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut creation, mut exit, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: all four FILETIME output records are distinct, writable and live.
+    if unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) } == 0 {
+        return Err("could not verify native host ancestry creation times");
+    }
+    Ok(((creation.dwHighDateTime as u64) << 32) | creation.dwLowDateTime as u64)
+}
+
 impl ChromeParent {
     /// Called only in the Chrome native-messaging host. Standalone CLI and test
     /// wrappers do not gain desktop authority by providing a pid or origin.
     pub(super) fn attest() -> Result<Self, &'static str> {
         let pid = parent_pid()?;
         // SAFETY: requests read-only information about the observed OS parent.
-        let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        let raw = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                0,
+                pid,
+            )
+        };
         if raw == 0 {
             return Err("could not bind the native host parent");
         }
         let process = Handle(raw);
+        // A parent pid from the snapshot may have exited before OpenProcess.
+        // Reject a replacement process created after this native host.
+        // SAFETY: the pseudo-handle is read-only and must not be closed.
+        let host_created = created(unsafe { GetCurrentProcess() })?;
+        if created(process.0)? > host_created {
+            return Err("the native host parent pid was reused");
+        }
         let mut name = vec![0u16; 32768];
         let mut length = name.len() as u32;
         // SAFETY: the buffer is writable for length UTF-16 units, and the held
@@ -100,10 +129,9 @@ impl ChromeParent {
     }
 
     pub(super) fn require_alive(&self) -> Result<u32, &'static str> {
-        let mut exit = 0;
-        // SAFETY: this process handle stays owned until self is dropped; exit
-        // points to a writable DWORD. STILL_ACTIVE is the Win32 value 259.
-        if unsafe { GetExitCodeProcess(self.process.0, &mut exit) } == 0 || exit != 259 {
+        // SAFETY: the held handle has PROCESS_SYNCHRONIZE access. A zero-time
+        // wait observes liveness without waiting or interpreting an exit code.
+        if unsafe { WaitForSingleObject(self.process.0, 0) } != WAIT_TIMEOUT {
             return Err("the attested Chrome parent exited or cannot be verified");
         }
         Ok(self.pid)
