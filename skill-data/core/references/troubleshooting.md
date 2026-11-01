@@ -1,5 +1,9 @@
 # Troubleshooting
 
+## Bitwarden menu blocks debugger access
+
+On Windows relay, explicit `--allow-focus-recovery` permits one native Escape recovery for a new command known not to have run (extension 0.5.103+ and a recovery-capable native host). It may briefly focus the bound agent-only window. A missing native foreground, changed user input, or unverified menu refuses input. Read `nativeFocus` and restoration warnings. Never add this flag to blindly retry an `action_outcome_unknown` operation. `close` can remove an owned tab using its exact live browser target even if debugger attachment is blocked; it cannot use that fallback to close user or lent tabs. macOS native recovery remains unsupported. Full constraints: `core/connection`.
+
 ## Side panel: "Specified native messaging host not found."
 
 If this Chrome was started with `--user-data-dir` (for example by a script), its native-host manifest must be registered in that data directory on macOS/Linux. Keep it running and run `chrome-use extension install`; this also registers discovered running Chromium-family browsers with existing custom directories. For an undiscovered or stopped instance, run `chrome-use extension install --user-data-dir "/path/Chrome Data"` (repeatable, also accepts the equals form; the directory must exist). Reopen the side panel afterward or wait for automatic reconnection. Verified manifests confirm registration, not a live connection. Windows uses HKCU registration and rejects this option. Discovery scans only the current user’s processes. Failures in discovered directories warn and skip that registration; default and explicit directory failures remain errors (retry with `--user-data-dir`). Successful custom registrations are recorded in `~/.chrome-use/custom-host-dirs.json` for status and uninstall even when the browser is stopped. Recording failures warn that uninstall may leave manifests behind.
