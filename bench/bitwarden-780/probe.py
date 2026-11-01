@@ -301,6 +301,23 @@ def terminate_owned(chrome):
     return result
 
 
+
+def prepare_process_observer(record):
+    history=[]
+    record['processObserverPreflight']=history
+    for attempt in range(3):
+        try:
+            snapshot=processes()
+            if not any(item.get('ProcessId')==os.getpid() for item in snapshot):
+                raise ValueError('process snapshot does not contain this controller')
+        except (subprocess.TimeoutExpired,subprocess.CalledProcessError,OSError,ValueError) as error:
+            history.append({'ready':False,'error':type(error).__name__+': '+str(error)[:400]})
+            continue
+        history.append({'ready':True,'observedProcesses':len(snapshot)})
+        return
+    raise RuntimeError('process identity observer is not ready; no fixture browser was started')
+
+
 def main():
     if platform.system()!='Windows' or os.environ.get('GITHUB_ACTIONS')!='true':
         raise SystemExit('Only a disposable Windows GitHub runner is allowed')
@@ -317,8 +334,10 @@ def main():
         'probeGitSha':os.environ.get('GITHUB_SHA'),
         'binaryBuildGitSha':os.environ.get('PROBE_BINARY_BUILD_SHA',os.environ.get('GITHUB_SHA')),
         'binarySource':os.environ.get('PROBE_BINARY_SOURCE','built'),
-        'realVaultTested':False,'productionRecoveryImplemented':False,'setupMode':args.setup_mode}
+        'realVaultTested':False,'productionRecoveryImplemented':False,'setupMode':args.setup_mode,'browserStarted':False}
     try:
+        record['stage']='process-observer-preflight'
+        prepare_process_observer(record)
         with tempfile.TemporaryDirectory(prefix='chrome780-') as tmp:
             root=Path(tmp);extension=root/'chrome-use';shutil.copytree(args.extension,extension)
             manifest_path=extension/'manifest.json';manifest=json.loads(manifest_path.read_text())
@@ -339,7 +358,7 @@ def main():
                     '--disable-extensions-except='+str(extension)+','+str(args.bitwarden),
                     '--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1',
                     '--window-size=1280,800','about:blank'],env=env,stdout=log,stderr=log)
-                record['chromePid']=chrome.pid;common=None;close_cover=None
+                record['chromePid']=chrome.pid;record['browserStarted']=True;common=None;close_cover=None
                 try:
                     active_port=wait_for(lambda: profile/'DevToolsActivePort',lambda p:p.exists(),15)
                     port=int(active_port.read_text().splitlines()[0])
