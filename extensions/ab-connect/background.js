@@ -2083,10 +2083,22 @@ async function handleForwardCdpCommand(msg) {
   }
   if (method === 'Target.closeTarget') {
     const tid = typeof params?.targetId === 'string' ? params.targetId : '';
-    const tabId = tid ? tabForTarget(tid) : null;
-    if (!tabId) return { success: false };
+    let tabId = tid ? tabForTarget(tid) : null;
     // A tab the user lent stays theirs: the agent never closes it.
     await tabGrants.load();
+    if (!Number.isInteger(tabId) && tid) {
+      // A protected menu can prevent attachment without closing the tab.
+      // Resolve its exact live target through Chrome, never by URL or title.
+      await Promise.all([loadOwnedTabs(), loadAgentPopups()]);
+      const targets = await withRelayTimeout(chrome.debugger.getTargets(), 'close target registry');
+      const matches = targets.filter(target => target.id === tid && target.type === 'page' && Number.isInteger(target.tabId));
+      if (matches.length !== 1) return { success: false };
+      tabId = matches[0].tabId;
+      // Missing attachment state cannot authorize closing a user's tab.
+      if (!ownedTabs.has(tabId) && !agentPopups.has(tabId)) return { success: false };
+      guardTab(tabId, agentSession);
+    }
+    if (!Number.isInteger(tabId)) return { success: false };
     if (tabGrants.get(tabId)) throw new Error(LENT_TAB_CLOSE);
     // Right after a worker restart both sets are still on disk; an unloaded
     // set would make an agent tab look like a user's and skip the ungroup.
