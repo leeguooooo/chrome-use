@@ -1733,6 +1733,9 @@ async function handleForwardCdpCommand(msg) {
   // A password manager's menu blocks the debugger on an agent tab and the tab
   // flip cannot close it (Chrome is not the frontmost app): take focus out of
   // the field it belongs to. See menu-blur.js.
+  if (method === 'ABExt.nativeFocusProbe') {
+    return nativeFocusBridge.request('probe', {});
+  }
   if (method === 'ABExt.nativeFocusFinish') {
     const context = nativeFocusContexts.get(params?.token);
     nativeFocusContexts.delete(params?.token);

@@ -75,7 +75,8 @@ impl NativeFocusHost {
                             }
                         });
                     }
-                    if let Ok(mut state) = host.state.try_lock() {
+                    let state = host.state.try_lock();
+                    if let Ok(mut state) = state {
                         state.expire();
                     }
                 }
@@ -100,6 +101,13 @@ impl NativeFocusHost {
     }
 
     pub(crate) async fn request(&self, operation: &str, params: &Value) -> Result<Value, String> {
+        #[cfg(target_os = "macos")]
+        if operation == "probe" {
+            if params != &serde_json::json!({}) {
+                return Err("Native capability probe takes no parameters".into());
+            }
+            return Ok(super::macos_probe::observe());
+        }
         #[cfg(not(windows))]
         {
             let _ = (operation, params);

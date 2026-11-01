@@ -6,7 +6,7 @@ export class NativeFocusBridge {
     this.pending = new Map();
   }
   request(operation, params) {
-    if (!['prepare', 'inspect', 'escape', 'finish'].includes(operation)) return Promise.reject(new Error('Unsupported native focus operation'));
+    if (!['probe', 'prepare', 'inspect', 'escape', 'finish'].includes(operation)) return Promise.reject(new Error('Unsupported native focus operation'));
     if (this.pending.size >= 8) return Promise.reject(new Error('Native focus requests are busy'));
     const requestId = `${this.identity}:${++this.sequence}`;
     return new Promise((resolve, reject) => {
@@ -52,6 +52,7 @@ export class NativeFocusBridge {
 
 function validReply({ operation, token }, reply) {
   if (reply?.schemaVersion !== 1) return false;
+  if (operation === 'probe') return reply.platform === 'macos' && reply.probeOnly === true && reply.nativeInputEnabled === false && reply.token === undefined && reply.leaseMs === undefined;
   if (operation === 'prepare') return typeof reply.token === 'string' && /^[0-9a-f]{32}$/i.test(reply.token) && Number.isInteger(reply.leaseMs) && reply.leaseMs > 0 && reply.leaseMs <= 120000;
   if (operation === 'inspect') return reply.token === token && reply.verified === true;
   if (operation === 'finish') return typeof reply.expired === 'boolean' && typeof reply.restore?.attempted === 'boolean' && typeof reply.restore?.restored === 'boolean';

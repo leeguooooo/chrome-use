@@ -177,3 +177,21 @@ test('revocation control does not wait for an outstanding native inspection', as
   await waiting;
   assert.equal(sent.length, 2);
 });
+
+test('a capability probe cannot return an input-enabled or lease-bearing success', async () => {
+  const sent = [];
+  const bridge = new NativeFocusBridge({ identity: 'probe-fixture', send: message => sent.push(message), schedule: () => 1, cancel: () => {} });
+  const waiting = bridge.request('probe', {});
+  bridge.receive({ method: 'nativeFocusReply', requestId: sent[0].requestId,
+    result: { schemaVersion: 1, platform: 'macos', probeOnly: true, nativeInputEnabled: false,
+      preflight: { accessibilityTrusted: false, postEventsAllowed: null, listenEventsAllowed: false } } });
+  assert.equal((await waiting).nativeInputEnabled, false);
+  const invalid = bridge.request('probe', {});
+  bridge.receive({ method: 'nativeFocusReply', requestId: sent[1].requestId,
+    result: { schemaVersion: 1, platform: 'macos', probeOnly: true, nativeInputEnabled: true } });
+  await assert.rejects(invalid, /Malformed/);
+  const leaseBearing = bridge.request('probe', {});
+  bridge.receive({ method: 'nativeFocusReply', requestId: sent[2].requestId,
+    result: { schemaVersion: 1, platform: 'macos', probeOnly: true, nativeInputEnabled: false, token } });
+  await assert.rejects(leaseBearing, /Malformed/);
+});

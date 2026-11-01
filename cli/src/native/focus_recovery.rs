@@ -14,6 +14,8 @@ use serde_json::{json, Value};
 mod authority;
 mod documents;
 mod host;
+#[cfg(target_os = "macos")]
+mod macos_probe;
 pub(crate) use host::NativeFocusHost;
 #[cfg(windows)]
 mod windows;
