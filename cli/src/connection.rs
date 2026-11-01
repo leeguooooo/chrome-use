@@ -2839,6 +2839,9 @@ enum ReplyRead {
 /// without racing a real clock.
 trait ReplySource {
     fn read_line_within(&mut self, timeout: Duration) -> ReplyRead;
+    fn response_decode_error(&self, error: serde_json::Error) -> String {
+        format!("Invalid response: {error}")
+    }
 }
 
 #[cfg(all(
@@ -2965,6 +2968,11 @@ impl ReplySource for FocusReplySource {
             Err(error) => ReplyRead::Failed(error),
         }
     }
+    fn response_decode_error(&self, error: serde_json::Error) -> String {
+        // A truncated ordinary final result can say EOF, which the outer
+        // legacy retry classifier otherwise treats as safe to send again.
+        format!("{OUTCOME_UNKNOWN} invalid daemon response ({:?} at line {}, column {}); check the session before repeating the sent operation.", error.classify(), error.line(), error.column())
+    }
 }
 
 impl ReplySource for BufReader<Connection> {
@@ -3059,8 +3067,7 @@ fn await_reply(
             heard_keepalive = true;
             continue;
         }
-        return serde_json::from_str(&response_line)
-            .map_err(|e| format!("Invalid response: {}", e));
+        return serde_json::from_str(&response_line).map_err(|e| reader.response_decode_error(e));
     }
 }
 
@@ -5026,6 +5033,11 @@ mod private_focus_reply_tests {
             response.data.unwrap()["_chrome_use_focus_control"]["page"],
             true
         );
+    }
+    #[test]
+    fn a_truncated_final_result_cannot_invite_an_automatic_replay() {
+        let error = reply(b"{").err().unwrap();
+        assert!(error.starts_with(OUTCOME_UNKNOWN), "{error}");
     }
 
     #[test]

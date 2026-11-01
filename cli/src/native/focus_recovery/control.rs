@@ -211,6 +211,17 @@ pub(crate) fn callback_descriptor_required() -> Result<bool, GrantError> {
     }
 }
 
+pub(crate) fn descriptor_if_negotiated<T>(
+    describe: impl FnOnce() -> Result<T, &'static str>,
+) -> Result<Option<T>, String> {
+    if !callback_descriptor_required()
+        .map_err(|e| format!("native foreground negotiation failed ({e:?})"))?
+    {
+        return Ok(None);
+    }
+    describe().map(Some).map_err(str::to_string)
+}
+
 pub(crate) struct Broker {
     tx: Option<mpsc::Sender<Request>>,
     mode: Result<(), GrantError>,
@@ -556,6 +567,24 @@ mod tests {
             let (broker, _service) = service(&cmd, true);
             scope(broker, async {
                 assert_eq!(callback_descriptor_required(), required);
+                if required == Ok(false) {
+                    assert_eq!(
+                        descriptor_if_negotiated(|| -> Result<(), &'static str> {
+                            panic!(
+                                "legacy negotiation must not inspect callback-only socket metadata"
+                            )
+                        })
+                        .unwrap(),
+                        None
+                    );
+                } else if required == Ok(true) {
+                    assert_eq!(
+                        descriptor_if_negotiated(|| -> Result<(), &'static str> {
+                            Err("missing local Plain socket")
+                        }),
+                        Err("missing local Plain socket".into())
+                    );
+                }
             })
             .await;
         }

@@ -7387,13 +7387,10 @@ impl BrowserManager {
         ))]
         {
             use super::focus_recovery::control::{self, Decision, RelayHint};
-            let callback_required = control::callback_descriptor_required()
-                .map_err(|error| format!("native foreground negotiation failed ({error:?}); the current page operation was not run"))?;
-            if callback_required {
-                let (hint, generation) = self
-                    .client
-                    .native_focus_transport()
+            let descriptor =
+                control::descriptor_if_negotiated(|| self.client.native_focus_transport())
                     .map_err(|error| format!("{error}; the current page operation was not run"))?;
+            if let Some((hint, generation)) = descriptor {
                 let (local, host) = hint.endpoints();
                 let authorization = match control::request_current(RelayHint {
                     local_port: local.port(), host_port: host.port(), generation,
