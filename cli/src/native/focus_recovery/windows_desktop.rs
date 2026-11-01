@@ -77,23 +77,9 @@ fn input_stamp() -> Result<u32, &'static str> {
 }
 
 fn keys_or_buttons_held() -> bool {
-    // Mouse buttons, modifiers, Windows keys and Escape. Do not interfere with
-    // a drag, shortcut or an Escape key the user already holds.
-    [
-        1,
-        2,
-        4,
-        5,
-        6,
-        0x10,
-        0x11,
-        0x12,
-        0x5b,
-        0x5c,
-        VK_ESCAPE as i32,
-    ]
-    .into_iter()
-    .any(|key| {
+    // Observe the high bit only: toggle state is irrelevant. Do not interrupt
+    // typing, composition, a shortcut, or a mouse drag already in progress.
+    (1..=254).any(|key| {
         // SAFETY: GetAsyncKeyState reads a virtual-key state.
         (unsafe { GetAsyncKeyState(key) }) < 0
     })
@@ -137,17 +123,28 @@ pub(super) struct DesktopLease {
     original: OriginalWindow,
     target: Option<Window>,
     input_after: Option<u32>,
+    input_before: u32,
     attempted: bool,
 }
 
 impl DesktopLease {
     /// Capture before the extension focuses its exact owned Chrome window.
     pub(super) fn prepare() -> Result<Self, &'static str> {
+        let chrome = Arc::new(ChromeParent::attest()?);
+        if keys_or_buttons_held() {
+            return Err("User input is held; native recovery declined before focus");
+        }
+        let input_before = input_stamp()?;
+        let original = OriginalWindow::capture()?;
+        if input_stamp()? != input_before {
+            return Err("User input changed before native preparation completed");
+        }
         Ok(Self {
-            chrome: Arc::new(ChromeParent::attest()?),
-            original: OriginalWindow::capture()?,
+            chrome,
+            original,
             target: None,
             input_after: None,
+            input_before,
             attempted: false,
         })
     }
@@ -175,6 +172,9 @@ impl DesktopLease {
             return Err("foreground is not the attested Chrome window or input is held".into());
         }
         let stamp = input_stamp()?;
+        if stamp != self.input_before {
+            return Err("User input changed after preparation; no Escape was sent".into());
+        }
         let _proof = super::windows::inspect(
             target.hwnd as u64,
             pid,
@@ -200,6 +200,7 @@ impl DesktopLease {
         // Keep key release in one blocking task: cancelling an async request
         // during the humanized dwell must not leave Escape logically held.
         let chrome = self.chrome.clone();
+        let native_hwnd = target.hwnd as u64;
         let outcome = tokio::task::spawn_blocking(move || {
             chrome.require_alive()?;
             if Instant::now() >= deadline
@@ -240,7 +241,8 @@ impl DesktopLease {
         self.input_after = Some(outcome.2);
         Ok(
             json!({"keyDownAdmitted":outcome.0, "keyUpAdmitted":outcome.1,
-            "delivery":"unverified", "replayed":false}),
+            "delivery":"unverified", "replayed":false,
+            "beforeKeyDown":{"hwnd":native_hwnd,"pid":pid}}),
         )
     }
 

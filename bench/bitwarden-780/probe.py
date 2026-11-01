@@ -671,6 +671,7 @@ def main():
         default="default",
     )
     parser.add_argument("--inspect-native-ui", action="store_true")
+    parser.add_argument("--runtime-focus-recovery", action="store_true")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     case = "bw780-" + uuid.uuid4().hex[:10]
@@ -879,6 +880,20 @@ def main():
                         ),
                         8,
                     )
+                    if args.runtime_focus_recovery:
+                        record["counterBeforeRuntime"] = invoke(
+                            "counter-before-runtime", "eval", "window.fixtureState()"
+                        )
+                        initial_state = (
+                            checked(record["counterBeforeRuntime"]).get("result") or {}
+                        )
+                        if (
+                            initial_state.get("caseId") != case
+                            or initial_state.get("continuations") != 0
+                        ):
+                            raise RuntimeError(
+                                "runtime fixture did not start with a verified zero counter"
+                            )
                     # One focus action only. A failure may mean focus took effect:
                     # never replay it in search of a successful acknowledgement.
                     record["stage"] = "field-focus"
@@ -908,7 +923,72 @@ def main():
                         )
                     menu = menu_frames(bw_endpoint, fixture.url, bw_identity["id"])
                     record["menuAfterExistingGuard"] = menu
-                    if not menu["bitwardenFrames"]:
+                    if args.runtime_focus_recovery:
+                        if not menu["bitwardenFrames"]:
+                            raise RuntimeError(
+                                "runtime recovery requires the actual blocked menu to remain present"
+                            )
+                        record["stage"] = "runtime-focus-recovery"
+                        record["windowBeforeRuntime"] = windows.state(hwnd)
+                        record["runtimeRecovery"] = invoke(
+                            "runtime-recovery",
+                            "--allow-focus-recovery",
+                            "click",
+                            "#continue",
+                        )
+                        checked(record["runtimeRecovery"])
+                        receipt = (
+                            record["runtimeRecovery"]["response"].get("nativeFocus")
+                            or {}
+                        )
+                        native_input = receipt.get("input") or {}
+                        native_restore = (receipt.get("restore") or {}).get(
+                            "restore"
+                        ) or {}
+                        binding = native_input.get("beforeKeyDown") or {}
+                        if (
+                            native_input.get("keyDownAdmitted") != 1
+                            or native_input.get("keyUpAdmitted") != 1
+                            or native_input.get("delivery") != "unverified"
+                            or native_input.get("replayed") is not False
+                            or binding.get("hwnd") != hwnd
+                            or binding.get("pid") != chrome.pid
+                            or receipt.get("originalOperationReplayed") is not False
+                            or native_restore.get("restored") is not True
+                        ):
+                            raise RuntimeError(
+                                "runtime native admission/binding/restore receipt was not verified"
+                            )
+                        record["runtimeNativeReceipt"] = receipt
+                        record["nativeEscape"] = {
+                            "source": "runtime-native-host",
+                            "admitted": 2,
+                            "replayed": False,
+                            "nativeInput": native_input,
+                        }
+                        record["mechanism"] = "native-input-attempted"
+                        record["menuAfterNative"] = wait_for(
+                            lambda: menu_frames(
+                                bw_endpoint, fixture.url, bw_identity["id"]
+                            ),
+                            lambda item: not item["bitwardenFrames"],
+                            4,
+                        )
+                        if args.setup_mode == "background":
+                            restored_window = windows.state(cover_hwnd)
+                            if (
+                                restored_window["foreground"] != cover_hwnd
+                                or not restored_window["centerOwned"]
+                            ):
+                                raise RuntimeError(
+                                    "runtime did not return the original CI cover to the foreground"
+                                )
+                            record["nativeFocusRestore"] = {
+                                **native_restore,
+                                "source": "runtime-native-host",
+                                "window": restored_window,
+                            }
+                    elif not menu["bitwardenFrames"]:
                         record["mechanism"] = "menu-absent-after-cli-read"
                     else:
                         if menu["active"] is not True:
@@ -964,13 +1044,15 @@ def main():
                     after_data = checked(record["accessAfter"])
                     if ((after_data.get("result") or {}).get("fixture") or {}).get(
                         "continuations"
-                    ) != 0:
+                    ) != (1 if args.runtime_focus_recovery else 0):
                         raise RuntimeError(
-                            "continuation happened before its authorized click"
+                            "continuation count differs from the authorized runtime action"
                         )
                     record["stage"] = "continuation"
-                    record["continuation"] = invoke(
-                        "continuation", "click", "#continue"
+                    record["continuation"] = (
+                        record["runtimeRecovery"]
+                        if args.runtime_focus_recovery
+                        else invoke("continuation", "click", "#continue")
                     )
                     checked(record["continuation"])
                     record["continuationRead"] = invoke(
@@ -991,7 +1073,11 @@ def main():
                         raise RuntimeError(
                             "continuation was not performed exactly once"
                         )
-                    if args.setup_mode == "background" and record.get("nativeFocus"):
+                    if (
+                        args.setup_mode == "background"
+                        and record.get("nativeFocus")
+                        and not args.runtime_focus_recovery
+                    ):
                         record["stage"] = "restore-native-focus"
                         record["nativeFocusRestore"] = restore_fixture_cover(
                             windows,

@@ -7367,11 +7367,48 @@ impl BrowserManager {
             .ok_or("malformed native recovery lease; original command was not run")?
             .to_string();
         super::focus_recovery::register(self.client.clone(), token, begun["input"].clone())?;
-        let verified = probe().await?;
-        if verified.pointer("/result/value").and_then(Value::as_str) != Some(url.as_str()) {
-            return Err(
-                "renderer URL changed after native recovery; original command was not run".into(),
-            );
+        if begun
+            .pointer("/input/keyDownAdmitted")
+            .and_then(Value::as_u64)
+            != Some(1)
+            || begun
+                .pointer("/input/keyUpAdmitted")
+                .and_then(Value::as_u64)
+                != Some(1)
+            || begun.pointer("/input/delivery").and_then(Value::as_str) != Some("unverified")
+            || begun.pointer("/input/replayed").and_then(Value::as_bool) != Some(false)
+        {
+            return Err("native key admission is unconfirmed; original command was not run".into());
+        }
+        // Menu removal can finish asynchronously after native key admission.
+        // Recheck only this read, never Escape or the original operation.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let verified = tokio::time::timeout_at(deadline, probe()).await
+                .map_err(|_| "renderer readiness timed out after native recovery; original command was not run")?;
+            match verified {
+                Ok(value) => {
+                    if value.pointer("/result/value").and_then(Value::as_str) != Some(url.as_str())
+                    {
+                        return Err("renderer URL changed after native recovery; original command was not run".into());
+                    }
+                    break;
+                }
+                Err(error)
+                    if is_debugger_access_denied(&error)
+                        && tokio::time::Instant::now() < deadline =>
+                {
+                    let pause = super::humanize::key_dwell(
+                        super::humanize::HumanizeLevel::Fast,
+                        super::humanize::next_seed(),
+                    );
+                    tokio::time::sleep(
+                        pause.min(deadline.saturating_duration_since(tokio::time::Instant::now())),
+                    )
+                    .await;
+                }
+                Err(error) => return Err(error),
+            }
         }
         Ok(())
     }

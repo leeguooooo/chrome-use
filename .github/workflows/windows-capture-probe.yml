@@ -16,6 +16,11 @@ on:
           - cleanup-relay
         default: candidates
         required: true
+      runtime_focus_recovery:
+        description: Exercise the production opt-in recovery instead of the Python key prototype
+        type: boolean
+        required: false
+        default: false
       inspect_native_ui:
         description: Collect read-only native document metadata on the CI fixture
         type: boolean
@@ -57,6 +62,7 @@ jobs:
     timeout-minutes: 60
     env:
       CHROME_USE_NO_UPDATE_CHECK: '1'
+      PROBE_RUNTIME_FOCUS: ${{ inputs.runtime_focus_recovery }}
       PROBE_INSPECT_NATIVE_UI: ${{ inputs.inspect_native_ui }}
       SOURCE_BUILD_RUN: ${{ inputs.source_build_run }}
       PROBE_EXPERIMENT: ${{ inputs.experiment }}
@@ -184,6 +190,7 @@ jobs:
           $verdicts = @()
           $inspection = @()
           if ($env:PROBE_INSPECT_NATIVE_UI -eq 'true') { $inspection = @('--inspect-native-ui') }
+          if ($env:PROBE_RUNTIME_FOCUS -eq 'true') { $inspection += '--runtime-focus-recovery' }
           foreach ($mode in @('default', 'foreground', 'background')) {
             $output = "probe-artifacts/bitwarden-$mode"
             python bench/bitwarden-780/probe.py --binary $binary --chrome $chrome --extension extensions/ab-connect --bitwarden $bwDir --output $output --setup-mode $mode @inspection

@@ -2815,8 +2815,13 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     // policy, target routing and kept-ref verification, before any observation
     // or input. Recovery does not bypass the selector checks below.
     if (acts_on_page(action) || safe_to_repeat(action)) && super::focus_recovery::enabled() {
+        // Site policy must name the routed page, not the tab that happened to
+        // be pinned when this command entered the dispatcher.
+        if let Some(response) = site_gate(cmd, action, &id, state).await {
+            return response;
+        }
         if let Some(manager) = state.browser.as_ref() {
-            if let Err(error) = manager.prepare_native_focus_recovery().await {
+            if let Err(error) = Box::pin(manager.prepare_native_focus_recovery()).await {
                 return error_response(&id, &error);
             }
         }
@@ -2899,6 +2904,9 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let url_before = state.browser.as_ref().map(|m| m.cached_active_url());
     let stale_recoverable = action != "navigate"
         && action != "launch"
+        // Opt-in native recovery verifies readiness before the operation; it
+        // never grants authority to replay an operation that later went stale.
+        && !super::focus_recovery::enabled()
         && state.browser.as_ref().is_some_and(|m| m.on_relay());
     let mut stale_attempts = 0u32;
     state.defer_click_tab_check = observe && action == "click";
