@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+import urllib.parse
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'windows-capture-798'))
@@ -40,17 +41,32 @@ def worker(endpoint, expression, operation='query'):
     return json.loads(result.stdout)
 
 
-def discover_workers(port, errors):
+def worker_candidate(target, entrypoints):
+    if target.get('type') != 'service_worker':
+        return False
+    try:
+        url = urllib.parse.urlsplit(target.get('url', ''))
+    except ValueError:
+        return False
+    return url.scheme == 'chrome-extension' and url.path in entrypoints
+
+
+def discover_workers(port, errors, ignored, entrypoints):
     try:
         with urllib.request.urlopen(f'http://127.0.0.1:{port}/json/list', timeout=3) as response:
             targets = json.load(response)
     except (OSError, ValueError) as error:
         errors.append({'operation':'list-workers','error':str(error)[:300]})
         return {}
+    if not isinstance(targets,list):
+        errors.append({'operation':'list-workers','error':'worker list is not an array'})
+        return {}
     result = {}
     ambiguous = set()
     for target in targets:
-        if target.get('type') != 'service_worker' or not target.get('url', '').startswith('chrome-extension://'):
+        if not worker_candidate(target,entrypoints):
+            if target.get('type')=='service_worker' and target.get('url') not in ignored:
+                ignored.append(target.get('url'))
             continue
         endpoint = target.get('webSocketDebuggerUrl')
         if not endpoint:
@@ -65,6 +81,9 @@ def discover_workers(port, errors):
             continue
         if not isinstance(identity, dict):
             errors.append({'operation':'manifest','error':'worker identity is not an object'})
+            continue
+        if identity.get('id') != urllib.parse.urlsplit(target['url']).hostname:
+            errors.append({'operation':'manifest','error':'worker identity does not match its target origin'})
             continue
         name = 'bitwarden' if identity.get('version') == '2026.10.1' else 'chromeUse' if identity.get('name') == 'chrome-use' else None
         if name:
@@ -326,7 +345,11 @@ def main():
                     port=int(active_port.read_text().splitlines()[0])
                     record['stage']='worker-discovery'
                     record['workerDiscoveryErrors']=[]
-                    controls=wait_for(lambda:discover_workers(port,record['workerDiscoveryErrors']),lambda x:set(x)=={'chromeUse','bitwarden'},30)
+                    record['ignoredWorkerTargets']=[]
+                    bw_manifest=json.loads((args.bitwarden/'manifest.json').read_text())
+                    entrypoints={'/'+m['background']['service_worker'].lstrip('/') for m in [manifest,bw_manifest]}
+                    record['declaredWorkerEntrypoints']=sorted(entrypoints)
+                    controls=wait_for(lambda:discover_workers(port,record['workerDiscoveryErrors'],record['ignoredWorkerTargets'],entrypoints),lambda x:set(x)=={'chromeUse','bitwarden'},30)
                     bw_endpoint,bw_identity=controls['bitwarden'];our_endpoint,our_identity=controls['chromeUse']
                     record['extensions']={'bitwarden':bw_identity,'chromeUse':our_identity}
                     record['stage']='seed-fixture'
