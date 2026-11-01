@@ -97,6 +97,7 @@ jobs:
           key: x86_64-apple-darwin-ci
           cache-on-failure: true
       - name: Exercise real framed hosts and service startup without Chrome
+        shell: bash
         run: |
           mkdir -p startup-artifacts
           sw_vers -productVersion > startup-artifacts/platform.txt
