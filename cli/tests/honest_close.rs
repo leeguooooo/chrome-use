@@ -458,7 +458,10 @@ impl Daemon {
         while started.elapsed() < Duration::from_secs(30) {
             if !self.sock_path().exists() {
                 match self.child.try_wait() {
-                    Ok(Some(status)) if status.success() => return true,
+                    Ok(Some(status)) if status.success() => {
+                        self.exit_diagnostics(false);
+                        return true;
+                    }
                     Ok(Some(status)) => {
                         eprintln!("daemon exited unsuccessfully: {status}");
                         self.exit_diagnostics(false);
@@ -477,6 +480,7 @@ impl Daemon {
         let socket_present = self.sock_path().exists();
         let exit = self.child.try_wait();
         if !socket_present && matches!(&exit, Ok(Some(status)) if status.success()) {
+            self.exit_diagnostics(false);
             return true;
         }
         eprintln!("socket present: {socket_present}, process exited: {exit:?}");

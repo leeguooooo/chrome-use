@@ -295,6 +295,15 @@ jobs:
       - name: Run Rust tests
         run: cargo test --profile ci --manifest-path cli/Cargo.toml --target ${{ matrix.target }}
 
+      - name: Retain bounded session-exit evidence
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-session-exit-${{ matrix.target }}-${{ github.sha }}
+          path: cli/target/test-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Retain a verified Mac native-probe build
         if: always() && runner.os == 'macOS' && github.event_name == 'workflow_dispatch'
         shell: bash
