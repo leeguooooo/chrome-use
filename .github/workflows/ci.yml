@@ -130,7 +130,9 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.run_rust == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Compilation, unit tests and the serial browser suite share this budget.
+    # Recent runs reached 20 minutes while browser tests were still passing.
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
