@@ -688,6 +688,7 @@ def main():
         "realVaultTested": False,
         "productionRecoveryImplemented": False,
         "setupMode": args.setup_mode,
+        "runtimeFocusRecoveryRequested": args.runtime_focus_recovery,
         "browserStarted": False,
         "registryRestored": False,
         "sessionCleanupConfirmed": False,

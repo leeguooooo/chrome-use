@@ -74,6 +74,18 @@ property, DOM node, event listener or event, and return no token contents.
 Stored account metadata alone is not proof that Bitwarden adopted that state
 or that a locked/unlocked menu was rendered.
 
+## Production recovery path
+
+Set the workflow input `runtime_focus_recovery` to test the actual CLI flag,
+relay handler, native host and foreground cleanup. This mode verifies a zero
+page counter first, reproduces the real protected-access refusal, then invokes
+`--allow-focus-recovery click #continue` once. The Python controller sends no
+native focus or key input in this mode. It requires the runtime's native lease
+receipt, verifies the final counter is one, checks the original cover is back
+in front, and independently checks the same page, owner menu absence and trusted
+Escape history. Native input admission remains distinct from observed delivery.
+A failure is not retried to obtain a successful fixture outcome.
+
 ## Verified build replay for controller changes
 
 `source_build_run` optionally selects a completed fresh dispatch of this same
