@@ -374,7 +374,9 @@ impl Daemon {
             // The endpoint is the relay's: the daemon treats it as one.
             std::fs::write(relay.path().join("relay-cdp-url"), cdp).unwrap();
         }
+        let startup_log = std::fs::File::create(sock.path().join("startup.log")).unwrap();
         let child = Command::new(BIN)
+            .env("AGENT_BROWSER_DEBUG", "1")
             .env("AGENT_BROWSER_DAEMON", "1")
             .env("AGENT_BROWSER_SESSION", session)
             .env("AGENT_BROWSER_SOCKET_DIR", sock.path())
@@ -387,7 +389,7 @@ impl Daemon {
             .env("NO_COLOR", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::from(startup_log))
             .spawn()
             .unwrap();
         let d = Daemon {
@@ -455,18 +457,144 @@ impl Daemon {
         let started = Instant::now();
         while started.elapsed() < Duration::from_secs(30) {
             if !self.sock_path().exists() {
-                if let Ok(Some(_)) = self.child.try_wait() {
-                    return true;
+                match self.child.try_wait() {
+                    Ok(Some(status)) if status.success() => return true,
+                    Ok(Some(status)) => {
+                        eprintln!("daemon exited unsuccessfully: {status}");
+                        self.exit_diagnostics(false);
+                        return false;
+                    }
+                    Err(error) => {
+                        eprintln!("cannot observe daemon exit: {error}");
+                        self.exit_diagnostics(false);
+                        return false;
+                    }
+                    Ok(None) => {}
                 }
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        eprintln!(
-            "socket present: {}, process exited: {:?}",
-            self.sock_path().exists(),
-            self.child.try_wait()
-        );
+        let socket_present = self.sock_path().exists();
+        let exit = self.child.try_wait();
+        if !socket_present && matches!(&exit, Ok(Some(status)) if status.success()) {
+            return true;
+        }
+        eprintln!("socket present: {socket_present}, process exited: {exit:?}");
+        self.exit_diagnostics(matches!(exit, Ok(None)));
         false
+    }
+
+    fn exit_diagnostics(&self, child_is_live: bool) {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-diagnostics");
+        if let Err(error) = std::fs::create_dir_all(&dir) {
+            eprintln!("cannot create exit diagnostics directory: {error}");
+            return;
+        }
+        let prefix = format!("honest-close-{}", self.child.id());
+        // The daemon redirects stderr after starting. Keep only our static
+        // markers from both sides of that redirect, never the other debug text.
+        let mut markers = String::new();
+        for path in [
+            self.sock.path().join("startup.log"),
+            self.sock.path().join(format!("{}.log", self.session)),
+        ] {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                for line in content
+                    .lines()
+                    .filter(|line| line.starts_with("[exit-diag] "))
+                    .take(100)
+                {
+                    markers.push_str(line);
+                    markers.push('\n');
+                }
+            }
+        }
+        let marker_path = dir.join(format!("{prefix}.log"));
+        if std::fs::write(&marker_path, &markers).is_ok() {
+            eprintln!("exit markers: {}\n{markers}", marker_path.display());
+        }
+        #[cfg(target_os = "macos")]
+        if child_is_live {
+            // try_wait observed our still-unreaped child. Its PID cannot be
+            // reused while it remains unreaped, including during sampling.
+            let sample_path = dir.join(format!("{prefix}.sample.txt"));
+            let mut sampler = match Command::new("/usr/bin/sample")
+                .arg(self.child.id().to_string())
+                .arg("2")
+                .arg("-file")
+                .arg(&sample_path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                Ok(child) => child,
+                Err(error) => {
+                    eprintln!("cannot start owned-daemon sampler: {error}");
+                    return;
+                }
+            };
+            let deadline = Instant::now() + Duration::from_secs(8);
+            let status = loop {
+                match sampler.try_wait() {
+                    Ok(Some(status)) => break Some(status),
+                    Ok(None) if Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    Ok(None) => {
+                        let _ = sampler.kill();
+                        let cleanup_deadline = Instant::now() + Duration::from_secs(2);
+                        loop {
+                            match sampler.try_wait() {
+                                Ok(Some(_)) => break,
+                                Ok(None) if Instant::now() < cleanup_deadline => {
+                                    std::thread::sleep(Duration::from_millis(50));
+                                }
+                                _ => {
+                                    eprintln!("sampler termination is unconfirmed");
+                                    break;
+                                }
+                            }
+                        }
+                        break None;
+                    }
+                    Err(error) => {
+                        eprintln!("cannot observe sampler exit: {error}");
+                        break None;
+                    }
+                }
+            };
+            if status.is_some_and(|status| status.success()) {
+                eprintln!("owned daemon sample: {}", sample_path.display());
+                if let Ok(sample) = std::fs::read_to_string(&sample_path) {
+                    // Print only symbol names from call-tree lines, not paths,
+                    // addresses, process arguments, or the rest of the sample.
+                    for line in sample
+                        .lines()
+                        .filter(|line| line.contains(" (in "))
+                        .filter_map(|line| {
+                            let head = line.split(" (in ").next()?.trim();
+                            let symbol = head.trim_start_matches(|c: char| {
+                                c.is_ascii_digit() || c == '+' || c == ' '
+                            });
+                            (!symbol.is_empty()
+                                && symbol.len() <= 200
+                                && symbol.chars().all(|c| {
+                                    c.is_ascii_alphanumeric() || "_:<>,.*&[]() +-".contains(c)
+                                }))
+                            .then_some(symbol)
+                        })
+                        .take(20)
+                    {
+                        eprintln!("  {line}");
+                    }
+                }
+            } else {
+                eprintln!("owned-daemon sample failed or timed out");
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = child_is_live;
     }
 
     fn alive(&mut self) -> bool {

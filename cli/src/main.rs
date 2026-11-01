@@ -2255,6 +2255,19 @@ fn main() {
             .build()
             .expect("Failed to create tokio runtime");
         rt.block_on(native::daemon::run_daemon(&session));
+        if env::var_os("AGENT_BROWSER_DEBUG").is_some() {
+            let _ = std::io::Write::write_all(
+                &mut std::io::stderr(),
+                b"[exit-diag] run_daemon returned; runtime drop start\n",
+            );
+        }
+        drop(rt);
+        if env::var_os("AGENT_BROWSER_DEBUG").is_some() {
+            let _ = std::io::Write::write_all(
+                &mut std::io::stderr(),
+                b"[exit-diag] runtime drop finished\n",
+            );
+        }
         return;
     }
 

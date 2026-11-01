@@ -1206,6 +1206,13 @@ pub async fn update() -> Result<usize, String> {
         }
     }
 
+    if std::env::var_os("AGENT_BROWSER_DEBUG").is_some() {
+        let _ = std::io::Write::write_all(
+            &mut std::io::stderr(),
+            b"[exit-diag] default site sources finished\n",
+        );
+    }
+
     // 2) Extra sources (private/org packs). Best-effort, overlaid on top. Built-in
     // names are filtered by read_sources() for compatibility with old config files.
     let token = sources_token();
@@ -1229,10 +1236,33 @@ pub async fn update() -> Result<usize, String> {
     }
     // OpenCLI's adapters run from its own package (see opencli.rs); a failure
     // here never fails the update.
-    match tokio::task::spawn_blocking(crate::opencli::sync).await {
+    match tokio::task::spawn_blocking(|| {
+        if std::env::var_os("AGENT_BROWSER_DEBUG").is_some() {
+            let _ = std::io::Write::write_all(
+                &mut std::io::stderr(),
+                b"[exit-diag] opencli sync worker started\n",
+            );
+        }
+        let result = crate::opencli::sync();
+        if std::env::var_os("AGENT_BROWSER_DEBUG").is_some() {
+            let _ = std::io::Write::write_all(
+                &mut std::io::stderr(),
+                b"[exit-diag] opencli sync worker finished\n",
+            );
+        }
+        result
+    })
+    .await
+    {
         Ok(Err(e)) => eprintln!("site update: {e}"),
         Err(e) => eprintln!("site update: opencli: {e}"),
         _ => {}
+    }
+    if std::env::var_os("AGENT_BROWSER_DEBUG").is_some() {
+        let _ = std::io::Write::write_all(
+            &mut std::io::stderr(),
+            b"[exit-diag] opencli sync finished\n",
+        );
     }
     sync_opencli_sources().await;
     write_domain_index(&dir);
@@ -1273,7 +1303,24 @@ async fn sync_opencli_sources() {
             eprintln!("site update: opencli source `{}` skipped: {e}", s.source);
         }
     }
-    match tokio::task::spawn_blocking(opencli::index_sources).await {
+    match tokio::task::spawn_blocking(|| {
+        if std::env::var_os("AGENT_BROWSER_DEBUG").is_some() {
+            let _ = std::io::Write::write_all(
+                &mut std::io::stderr(),
+                b"[exit-diag] opencli source index worker started\n",
+            );
+        }
+        let result = opencli::index_sources();
+        if std::env::var_os("AGENT_BROWSER_DEBUG").is_some() {
+            let _ = std::io::Write::write_all(
+                &mut std::io::stderr(),
+                b"[exit-diag] opencli source index worker finished\n",
+            );
+        }
+        result
+    })
+    .await
+    {
         Ok(Ok(reports)) => {
             for r in reports {
                 for p in r.problems {

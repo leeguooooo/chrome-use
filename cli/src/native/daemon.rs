@@ -103,7 +103,19 @@ pub async fn run_daemon(session: &str) {
     // latency to any command. Best-effort; offline is a no-op.
     if crate::site::needs_refresh() {
         tokio::spawn(async {
+            if env::var_os("AGENT_BROWSER_DEBUG").is_some() {
+                let _ = std::io::Write::write_all(
+                    &mut std::io::stderr(),
+                    b"[exit-diag] background site refresh started\n",
+                );
+            }
             let _ = crate::site::update().await;
+            if env::var_os("AGENT_BROWSER_DEBUG").is_some() {
+                let _ = std::io::Write::write_all(
+                    &mut std::io::stderr(),
+                    b"[exit-diag] background site refresh returned\n",
+                );
+            }
         });
     }
 
@@ -272,6 +284,16 @@ pub async fn run_daemon(session: &str) {
         idle_timeout_ms,
     )
     .await;
+    if env::var_os("AGENT_BROWSER_DEBUG").is_some() {
+        let _ = std::io::Write::write_all(
+            &mut std::io::stderr(),
+            b"[exit-diag] socket server returned\n",
+        );
+        let _ = std::io::Write::write_all(
+            &mut std::io::stderr(),
+            b"[exit-diag] binding cleanup start\n",
+        );
+    }
 
     // The binding records (#472) are only this daemon's to delete while it is
     // still the session's registered daemon, decided under the binding gate
@@ -279,6 +301,12 @@ pub async fn run_daemon(session: &str) {
     // `connection::clear_binding_at_daemon_exit`). Done first, while our pid
     // file is still ours to be checked against.
     crate::connection::clear_binding_at_daemon_exit(session, process::id());
+    if env::var_os("AGENT_BROWSER_DEBUG").is_some() {
+        let _ = std::io::Write::write_all(
+            &mut std::io::stderr(),
+            b"[exit-diag] binding cleanup finished\n",
+        );
+    }
 
     #[cfg(unix)]
     {
@@ -296,6 +324,12 @@ pub async fn run_daemon(session: &str) {
     let _ = fs::remove_file(socket_dir.join(format!("{}.provider", session)));
     let _ = fs::remove_file(socket_dir.join(format!("{}.extensions", session)));
 
+    if env::var_os("AGENT_BROWSER_DEBUG").is_some() {
+        let _ = std::io::Write::write_all(
+            &mut std::io::stderr(),
+            b"[exit-diag] daemon cleanup finished\n",
+        );
+    }
     if let Err(e) = result {
         let _ = writeln!(std::io::stderr(), "Daemon error: {}", e);
         process::exit(1);
@@ -769,6 +803,12 @@ async fn handle_connection<S>(
                 }
 
                 if is_close {
+                    if env::var_os("AGENT_BROWSER_DEBUG").is_some() {
+                        let _ = std::io::Write::write_all(
+                            &mut std::io::stderr(),
+                            b"[exit-diag] close reply written\n",
+                        );
+                    }
                     if let Some(ref path) = stream_file_cleanup {
                         let _ = fs::remove_file(path);
                     }
@@ -787,6 +827,12 @@ async fn handle_connection<S>(
                     // calling process::exit(), which skips destructors and
                     // can leave Chrome processes orphaned (issue #1113).
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    if env::var_os("AGENT_BROWSER_DEBUG").is_some() {
+                        let _ = std::io::Write::write_all(
+                            &mut std::io::stderr(),
+                            b"[exit-diag] close notify sent\n",
+                        );
+                    }
                     close_notify.notify_one();
                     return;
                 }
