@@ -2,7 +2,10 @@
 //! owner must still bind this client as its selected connection. A URL, listener
 //! port or a freshly opened substitute cannot establish these source facts.
 //! Default-off TCP metadata prototype only; no foreground permission or input.
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
+};
 
 use crate::windows_tcp_owner::SelectedConnectionHint;
 use tokio_tungstenite::MaybeTlsStream;
@@ -12,6 +15,15 @@ static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 pub(super) struct FocusTransport {
     hint: SelectedConnectionHint,
     generation: u64,
+    reader_alive: Arc<AtomicBool>,
+}
+
+/// Invalidate independently of pending-command cleanup, including unwinding.
+pub(super) struct ReaderLifetime(Arc<AtomicBool>);
+impl Drop for ReaderLifetime {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl FocusTransport {
@@ -32,10 +44,21 @@ impl FocusTransport {
                 current.checked_add(1)
             })
             .ok()?;
-        Some(Self { hint, generation })
+        Some(Self {
+            hint,
+            generation,
+            reader_alive: Arc::new(AtomicBool::new(true)),
+        })
     }
 
-    pub(super) fn hint(&self) -> (SelectedConnectionHint, u64) {
-        (self.hint, self.generation)
+    pub(super) fn reader_lifetime(&self) -> ReaderLifetime {
+        ReaderLifetime(self.reader_alive.clone())
+    }
+
+    pub(super) fn hint(&self) -> Result<(SelectedConnectionHint, u64), &'static str> {
+        if !self.reader_alive.load(Ordering::Acquire) {
+            return Err("the captured relay reader has ended");
+        }
+        Ok((self.hint, self.generation))
     }
 }

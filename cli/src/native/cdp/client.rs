@@ -203,6 +203,15 @@ impl CdpClient {
         // Notify used to stop the keepalive task when the reader loop exits.
         let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
 
+        #[cfg(all(
+            windows,
+            target_arch = "x86_64",
+            feature = "windows-tcp-owner-prototype"
+        ))]
+        let focus_reader_lifetime = focus_transport
+            .as_ref()
+            .map(|transport| transport.reader_lifetime());
+
         let reader_handle = tokio::spawn(async move {
             while let Some(msg) = ws_rx.next().await {
                 // Accept both Text and Binary frames — remote CDP proxies
@@ -283,6 +292,13 @@ impl CdpClient {
                 }
             }
 
+            #[cfg(all(
+                windows,
+                target_arch = "x86_64",
+                feature = "windows-tcp-owner-prototype"
+            ))]
+            drop(focus_reader_lifetime);
+
             // Reader loop exited (connection closed or error). Drop all pending
             // command senders so callers get an immediate channel-closed error
             // instead of waiting for the 30-second timeout.
@@ -344,11 +360,10 @@ impl CdpClient {
         if self._reader_handle.is_finished() {
             return Err("the selected relay reader has ended");
         }
-        Ok(self
-            .focus_transport
+        self.focus_transport
             .as_ref()
             .ok_or("the selected transport has no captured local Plain socket")?
-            .hint())
+            .hint()
     }
 
     #[cfg(all(
@@ -1012,7 +1027,19 @@ mod focus_transport_tests {
         let (_, second_generation) = second.native_focus_transport().unwrap();
         assert_ne!(generation, second_generation);
         assert!(!second.native_focus_transport_is_current(generation));
+        // Delay pending cleanup. The descriptor must expire as soon as the
+        // WebSocket reader ends, before acquiring that cleanup mutex.
+        let pending_guard = first.pending.lock().await;
         close_first.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while first.native_focus_transport().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!first._reader_handle.is_finished());
+        drop(pending_guard);
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             while !first._reader_handle.is_finished() {
                 tokio::task::yield_now().await;
