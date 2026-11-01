@@ -26,6 +26,8 @@ namespace FixtureUia {
         Element GetFocusedElementBuildCache(IntPtr request);
         Walker CreateTreeWalker(IntPtr condition);
         Walker GetControlViewWalker();
+        Walker GetContentViewWalker();
+        Walker GetRawViewWalker();
     }
     [ComImport, Guid("d22108aa-8ac5-49a5-837b-37bbb3d7591e"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface Element {
@@ -59,7 +61,7 @@ namespace FixtureUia {
                 if (Convert.ToInt32(root.GetCurrentPropertyValue(ProcessId)) != pid ||
                     !Convert.ToString(root.GetCurrentPropertyValue(Name)).StartsWith(title, StringComparison.Ordinal))
                     throw new InvalidOperationException("The native fixture window identity changed");
-                var walker = automation.GetControlViewWalker();
+                var walker = automation.GetRawViewWalker();
                 var pending = new Stack<Element>();
                 pending.Push(root);
                 var documents = new List<object>();
@@ -102,5 +104,18 @@ namespace FixtureUia {
 }
 '@
 $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
-[FixtureUia.Inspector]::Read([long]$request.hwnd, [int]$request.pid, [string]$request.title) |
+# The first observed native snapshots contained browser chrome but no web
+# Document. Keep each re-read bounded and retain the empty attempts as facts.
+$attempts = @()
+for ($attempt = 0; $attempt -lt 8; $attempt++) {
+    $snapshot = [FixtureUia.Inspector]::Read([long]$request.hwnd, [int]$request.pid, [string]$request.title)
+    $attempts += @{documentCount=$snapshot.documentCount;visitedNodes=$snapshot.visitedNodes;
+        failedDocuments=$snapshot.failedDocuments;truncated=$snapshot.truncated}
+    if ($snapshot.documentCount -ge 3 -or $snapshot.truncated -or $snapshot.failedDocuments -gt 0) { break }
+    if ($attempt -lt 7) { Start-Sleep -Milliseconds 150 }
+}
+@{readOnly=$snapshot.readOnly;pid=$snapshot.pid;hwnd=$snapshot.hwnd;
+    documentCount=$snapshot.documentCount;visitedNodes=$snapshot.visitedNodes;
+    truncated=$snapshot.truncated;failedDocuments=$snapshot.failedDocuments;
+    failures=$snapshot.failures;documents=$snapshot.documents;attempts=$attempts} |
     ConvertTo-Json -Depth 8 -Compress
