@@ -38,6 +38,17 @@ owned-daemon fixtures send no browser commands. `probe_tcp_owner=true` separatel
 checks exact socket ownership and real local WebSocket capture without Chrome;
 `probe_focus_protocol=true` exercises scripted private transport only.
 
+After composition passes, the separate Windows capture workflow can run
+experiment bitwarden with runtime_focus_recovery and client_foreground_handoff
+enabled. That mode requires a fresh controlled build and forbids controller
+delegation/source replay. It retains an immutable product copy before linking
+its separate test harness. Each positive recovery requires the CLI's redacted
+foregroundAuthorization receipt, plus the existing trusted Escape pair, exact
+window binding, one continuation, foreground verification and cleanup gates.
+AlreadyForegroundProcess does not establish that an OS grant was exercised;
+only Admitted records that observation. The fixture still uses a synthetic
+account and says nothing about a real vault or installed release.
+
 The image checker pins read-only executable files and compares complete artifact
 SHA256 before acquiring VM_READ. It reads only bounded main-image PE headers and
 one read-only 64-byte `.cufg` marker. The caller's actual static marker must match

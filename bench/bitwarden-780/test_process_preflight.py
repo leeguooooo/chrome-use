@@ -107,6 +107,7 @@ class SetupFailureReportTests(unittest.TestCase):
                 extension=root / "extension",
                 setup_mode="default",
                 runtime_focus_recovery=False,
+                expect_client_authorization=False,
                 grant_chrome_foreground=False,
             )
 

@@ -710,6 +710,13 @@ def foreground_permission_control(windows, hwnd, chrome_pid, cover_hwnd):
     }
 
 
+def client_authorization_observed(receipt):
+    observation = receipt.get("foregroundAuthorization") or {}
+    return isinstance(observation, dict) and observation.get("kind") in {
+        "Admitted", "AlreadyForegroundProcess"
+    }
+
+
 def main():
     if platform.system() != "Windows" or os.environ.get("GITHUB_ACTIONS") != "true":
         raise SystemExit("Only a disposable Windows GitHub runner is allowed")
@@ -723,8 +730,11 @@ def main():
     )
     parser.add_argument("--inspect-native-ui", action="store_true")
     parser.add_argument("--runtime-focus-recovery", action="store_true")
+    parser.add_argument("--expect-client-authorization", action="store_true")
     parser.add_argument("--grant-chrome-foreground", action="store_true")
     args = parser.parse_args()
+    if args.expect_client_authorization and (not args.runtime_focus_recovery or args.grant_chrome_foreground):
+        raise SystemExit("Client authorization requires runtime recovery without a controller grant")
     args.output.mkdir(parents=True, exist_ok=True)
     case = "bw780-" + uuid.uuid4().hex[:10]
     fixture = None
@@ -741,6 +751,7 @@ def main():
         "productionRecoveryImplemented": False,
         "setupMode": args.setup_mode,
         "runtimeFocusRecoveryRequested": args.runtime_focus_recovery,
+        "clientAuthorizationRequested": args.expect_client_authorization,
         "foregroundPermissionControlRequested": args.grant_chrome_foreground,
         "browserStarted": False,
         "registryRestored": False,
@@ -1023,6 +1034,10 @@ def main():
                             record["runtimeRecovery"]["response"].get("nativeFocus")
                             or {}
                         )
+                        if args.expect_client_authorization:
+                            record["clientAuthorization"] = receipt.get("foregroundAuthorization")
+                            if not client_authorization_observed(receipt):
+                                raise RuntimeError("successful private CLI authorization was not observed; no helper grant is permitted")
                         native_input = receipt.get("input") or {}
                         native_restore = (receipt.get("restore") or {}).get(
                             "restore"
