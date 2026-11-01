@@ -11,6 +11,11 @@ on:
       - '.github/workflows/windows-panel.yml'
   workflow_dispatch:
     inputs:
+      probe_tcp_owner:
+        description: 'Run only GUI-free exact TCP ownership tests'
+        required: false
+        type: boolean
+        default: false
       probe_focus_protocol:
         description: 'Run only scripted foreground control transport tests'
         required: false
@@ -58,7 +63,7 @@ jobs:
           key: x86_64-pc-windows-msvc-ci
           cache-on-failure: true
       - name: Windows private-state and process-tree tests
-        if: ${{ !inputs.probe_focus_protocol }}
+        if: ${{ !inputs.probe_focus_protocol && !inputs.probe_tcp_owner }}
         run: cargo test --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --bin chrome-use agent_panel -- --test-threads=1
       - name: Download and verify the published Windows binary
         if: github.event_name == 'workflow_dispatch' && inputs.published_tag != ''
@@ -83,14 +88,19 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or ($version -join "`n") -notmatch ([regex]::Escape($env:PANEL_RELEASE_TAG.Substring(1)))) { throw 'Published binary version mismatch' }
           "CHROME_USE_TEST_BIN=$binary" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Full native-host protocol parity
-        if: ${{ !inputs.probe_focus_protocol }}
+        if: ${{ !inputs.probe_focus_protocol && !inputs.probe_tcp_owner }}
         run: cargo test --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --test agent_panel_native -- --test-threads=1
       - name: Private foreground control framing without OS authorization
+        if: ${{ !inputs.probe_tcp_owner }}
         timeout-minutes: 3
         run: cargo test --profile ci --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --test focus_control_protocol -- --test-threads=1
       - name: Check Windows code and protocol tests
-        if: ${{ !inputs.probe_focus_protocol }}
+        if: ${{ !inputs.probe_focus_protocol && !inputs.probe_tcp_owner }}
         run: cargo clippy --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --bin chrome-use --test agent_panel_native -- -D clippy::all
+      - name: Exact TCP owners with owned CLI processes and no browser commands
+        if: inputs.probe_tcp_owner
+        timeout-minutes: 5
+        run: cargo test --profile ci --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --features windows-tcp-owner-prototype --test windows_tcp_owner -- --test-threads=1 --nocapture
 
   mac-startup-probe:
     if: github.event_name == 'workflow_dispatch' && inputs.probe_macos_startup

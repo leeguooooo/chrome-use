@@ -52,6 +52,8 @@ mod upgrade_handoff;
 mod validation;
 #[cfg(feature = "windows-build-identity-prototype")]
 mod windows_build_identity;
+#[cfg(feature = "windows-tcp-owner-prototype")]
+mod windows_tcp_owner;
 
 use serde_json::{json, Value};
 use std::env;
