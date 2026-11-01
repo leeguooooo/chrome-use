@@ -478,6 +478,9 @@ mod tests {
             assert_eq!(out.value, Err(GrantError::Unavailable));
             assert!(out.transport_usable);
             drop(w);
+            // tokio::io::split keeps the duplex transport alive until both
+            // halves drop. Close the test reader before waiting for peer EOF.
+            drop(r);
             let mut buf = Vec::new();
             tokio::io::AsyncReadExt::read_to_end(&mut peer, &mut buf)
                 .await
