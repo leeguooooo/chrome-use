@@ -31,6 +31,18 @@ from owned_processes import (
 )
 
 
+def read_debugging_port(path, errors):
+    """Observe a completed port record without restarting Chrome on a file race."""
+    try:
+        lines = path.read_text().splitlines()
+        port = int(lines[0]) if lines else None
+        return port if port is not None and 0 < port <= 65535 else None
+    except (OSError, ValueError) as error:
+        if len(errors) < 16:
+            errors.append(type(error).__name__ + ": " + str(error))
+        return None
+
+
 class WorkerRequestError(RuntimeError):
     pass
 
@@ -344,6 +356,44 @@ def native_focus(windows, hwnd, pid, title):
     return before, focused
 
 
+def restore_fixture_cover(windows, hwnd, pid, case, cover_hwnd, before_focus):
+    """Restore only this controller's cover, provided nobody moved focus away."""
+    page = windows.state(hwnd)
+    cover = windows.state(cover_hwnd)
+    if (
+        before_focus["foreground"] != cover_hwnd
+        or page["foreground"] != hwnd
+        or page["pid"] != pid
+        or page["title"] != before_focus["title"]
+        or not page["title"].startswith("BitwardenFixture " + case)
+        or cover["pid"] != os.getpid()
+        or cover["title"] != "Bitwarden fixture cover " + case
+        or cover["minimized"]
+        or not cover["visible"]
+    ):
+        return {
+            "attempted": False,
+            "restored": False,
+            "reason": "foreground-or-identity-changed",
+        }
+    # One attempt, followed by observation. Do not retry an uncertain change or
+    # move focus again if another window took the foreground in the meantime.
+    admitted = bool(windows.u.SetForegroundWindow(cover_hwnd))
+    observed = wait_for(
+        lambda: windows.state(cover_hwnd),
+        lambda state: state["foreground"] == cover_hwnd and state["centerOwned"],
+        2,
+    )
+    if observed["pid"] != os.getpid() or observed["title"] != cover["title"]:
+        raise RuntimeError("restored cover identity changed")
+    return {
+        "attempted": True,
+        "admitted": admitted,
+        "restored": True,
+        "window": observed,
+    }
+
+
 def native_menu_image(windows, hwnd, pid, case, path):
     from PIL import ImageGrab
 
@@ -369,13 +419,27 @@ def native_menu_image(windows, hwnd, pid, case, path):
     }
 
 
-def inspect_native_fixture(hwnd, pid, case):
-    script = Path(__file__).with_name("native-ui-inspect.ps1").read_text()
+def inspect_native_fixture(hwnd, pid, case, fixture_url):
+    production = (
+        Path(__file__).resolve().parents[2]
+        / "cli/src/native/focus_recovery/windows-inspect.ps1"
+    )
+    script_path = (
+        production
+        if production.is_file()
+        else Path(__file__).with_name("native-ui-inspect.ps1")
+    )
+    script = script_path.read_text()
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     result = subprocess.run(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
         input=json.dumps(
-            {"hwnd": hwnd, "pid": pid, "title": "BitwardenFixture " + case}
+            {
+                "hwnd": hwnd,
+                "pid": pid,
+                "title": "BitwardenFixture " + case,
+                "url": fixture_url,
+            }
         ),
         capture_output=True,
         text=True,
@@ -387,7 +451,10 @@ def inspect_native_fixture(hwnd, pid, case):
         raise RuntimeError(
             "native UI inspection failed: " + result.stderr.strip()[:600]
         )
-    return json.loads(result.stdout)
+    observed = json.loads(result.stdout)
+    observed["reader"] = "production" if production.is_file() else "ci-prototype"
+    observed["readerSha256"] = digest(script_path)
+    return observed
 
 
 def send_escape(hwnd):
@@ -691,10 +758,15 @@ def main():
                 common = None
                 close_cover = None
                 try:
-                    active_port = wait_for(
-                        lambda: profile / "DevToolsActivePort", lambda p: p.exists(), 15
+                    record["debuggingPortReadErrors"] = []
+                    port = wait_for(
+                        lambda: read_debugging_port(
+                            profile / "DevToolsActivePort",
+                            record["debuggingPortReadErrors"],
+                        ),
+                        lambda value: value is not None,
+                        15,
                     )
-                    port = int(active_port.read_text().splitlines()[0])
                     record["stage"] = "worker-discovery"
                     record["workerDiscoveryErrors"] = []
                     record["ignoredWorkerTargets"] = []
@@ -862,7 +934,7 @@ def main():
                             )
                             if args.inspect_native_ui:
                                 record["nativeUiInspection"] = inspect_native_fixture(
-                                    hwnd, chrome.pid, case
+                                    hwnd, chrome.pid, case, fixture.url
                                 )
                                 record["menuAfterNativeInspection"] = menu_frames(
                                     bw_endpoint, fixture.url, bw_identity["id"]
@@ -919,6 +991,40 @@ def main():
                         raise RuntimeError(
                             "continuation was not performed exactly once"
                         )
+                    if args.setup_mode == "background" and record.get("nativeFocus"):
+                        record["stage"] = "restore-native-focus"
+                        record["nativeFocusRestore"] = restore_fixture_cover(
+                            windows,
+                            hwnd,
+                            chrome.pid,
+                            case,
+                            cover_hwnd,
+                            record["nativeFocus"]["before"],
+                        )
+                        if not record["nativeFocusRestore"]["restored"]:
+                            raise RuntimeError(
+                                "native focus restore could not be verified"
+                            )
+                    if record.get("nativeFocusRestore"):
+                        record["postRestoreRead"] = invoke(
+                            "post-restore-read",
+                            "eval",
+                            "({title:document.title,fixture:window.fixtureState()})",
+                        )
+                        restored_data = (
+                            checked(record["postRestoreRead"]).get("result") or {}
+                        )
+                        if (
+                            restored_data.get("title") != "BitwardenFixture " + case
+                            or (restored_data.get("fixture") or {}).get("caseId")
+                            != case
+                            or (restored_data.get("fixture") or {}).get("continuations")
+                            != 1
+                        ):
+                            raise RuntimeError(
+                                "restored foreground changed the verified page result"
+                            )
+                        observed = restored_data
                     record["finalMenu"] = menu_frames(
                         bw_endpoint, fixture.url, bw_identity["id"]
                     )
