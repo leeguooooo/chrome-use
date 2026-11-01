@@ -112,7 +112,16 @@ for ($attempt = 0; $attempt -lt 8; $attempt++) {
     $snapshot = [FixtureUia.Inspector]::Read([long]$request.hwnd, [int]$request.pid, [string]$request.title)
     $attempts += @{documentCount=$snapshot.documentCount;visitedNodes=$snapshot.visitedNodes;
         failedDocuments=$snapshot.failedDocuments;truncated=$snapshot.truncated}
-    if ($snapshot.documentCount -ge 3 -or $snapshot.truncated -or $snapshot.failedDocuments -gt 0) { break }
+    $pageDocuments = @($snapshot.documents | Where-Object {
+        $_.url -is [string] -and $_.url.StartsWith('http://127.0.0.1:', [StringComparison]::Ordinal)
+    })
+    $menuDocuments = @($snapshot.documents | Where-Object {
+        $_.url -is [string] -and $_.url.StartsWith('chrome-extension://', [StringComparison]::Ordinal) -and
+        $_.url -match '/overlay/menu(-button|-list)?[.]html([?#]|$)'
+    })
+    # Raw-view browser widgets can themselves be Document controls with empty
+    # values. Their count must never stand in for the fixture or menu identity.
+    if (($pageDocuments.Count -gt 0 -and $menuDocuments.Count -gt 0) -or $snapshot.truncated -or $snapshot.failedDocuments -gt 0) { break }
     if ($attempt -lt 7) { Start-Sleep -Milliseconds 150 }
 }
 @{readOnly=$snapshot.readOnly;pid=$snapshot.pid;hwnd=$snapshot.hwnd;

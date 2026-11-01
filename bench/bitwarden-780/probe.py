@@ -990,6 +990,7 @@ def main():
                             raise RuntimeError(
                                 "restored foreground changed the verified page result"
                             )
+                        observed = restored_data
                     record["finalMenu"] = menu_frames(
                         bw_endpoint, fixture.url, bw_identity["id"]
                     )
