@@ -37,18 +37,45 @@ pub fn job_pid(target: &str) -> Option<u32> {
 }
 
 /// What launchd reports about a job (state, pid, runs, last exit), for an
-/// error that has to say whether the job ever ran. `None` when launchd knows
-/// no job of that `target`.
-pub fn job_summary(target: &str) -> Option<String> {
-    let out = std::process::Command::new("/bin/launchctl")
+/// error that has to say whether the job ever ran. `not loaded` only when
+/// launchd says it has no such job; a query that fails or takes longer than
+/// two seconds is an error.
+pub fn job_summary(target: &str) -> Result<String, String> {
+    use std::io::Read;
+    let mut child = std::process::Command::new("/bin/launchctl")
         .args(["print", target])
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    out.status
-        .success()
-        .then(|| summarize_print(&String::from_utf8_lossy(&out.stdout)))
+        .spawn()
+        .map_err(|error| format!("launchctl print did not start ({error})"))?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20))
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("launchctl print timed out".into());
+            }
+            Err(error) => return Err(format!("launchctl print could not be awaited ({error})")),
+        }
+    };
+    // The output is a few KB, well inside the pipe buffer, so reading after
+    // exit cannot have blocked the child.
+    let mut text = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_string(&mut text);
+    }
+    match status.code() {
+        Some(0) => Ok(summarize_print(&text)),
+        // EX_NOTFOUND-style 113: "Could not find service ... in domain".
+        Some(113) => Ok("not loaded".into()),
+        _ => Err(format!("launchctl print failed ({status})")),
+    }
 }
 
 /// The first `state`, `pid`, `runs` and last-exit lines of `launchctl print`.
@@ -176,6 +203,7 @@ mod tests {
         let print = "gui/501/com.chrome-use.panel-service.0123 = {\n\
             \tactive count = 0\n\
             \tstate = not running\n\
+            \tpid = 4242\n\
             \tprogram = /tmp/chrome-use\n\
             \truns = 1\n\
             \tlast exit code = 78: EX_CONFIG\n\
@@ -185,7 +213,7 @@ mod tests {
             }\n";
         assert_eq!(
             summarize_print(print),
-            "state = not running, runs = 1, last exit code = 78: EX_CONFIG"
+            "state = not running, pid = 4242, runs = 1, last exit code = 78: EX_CONFIG"
         );
         assert_eq!(summarize_print("nothing useful\n"), "no state reported");
     }

@@ -495,7 +495,8 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
         let (target, _) = launchd_target(directory);
         format!(
             "; launchd job: {}",
-            crate::launchd::job_summary(&target).unwrap_or_else(|| "not loaded".into())
+            crate::launchd::job_summary(&target)
+                .unwrap_or_else(|error| format!("unknown, {error}"))
         )
     } else {
         String::new()
