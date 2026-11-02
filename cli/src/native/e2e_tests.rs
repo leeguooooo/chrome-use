@@ -16928,6 +16928,9 @@ async fn e2e_reads_keep_a_fixed_modal_under_a_clipped_body() {
             </div>
           </div>
         </div>
+        <div style="position:absolute;top:100vh;left:0;width:200px;height:0"><p style="position:fixed;left:10px;bottom:10px;margin:0">BOTTOMEDGE visible</p></div>
+        <div style="position:absolute;left:100vw;top:0;width:0;height:50px"><p style="position:fixed;left:10px;top:200px;margin:0">RIGHTEDGE visible</p></div>
+        <div style="transform:translateZ(0);overflow:hidden;height:20px"><p style="position:fixed;top:300px;left:10px;margin:0">TRANSFORMCLIP hidden</p></div>
         </body></html>"##}), &mut state).await;
     assert_success(&page);
 
@@ -16952,6 +16955,17 @@ async fn e2e_reads_keep_a_fixed_modal_under_a_clipped_body() {
     assert!(
         content.contains("MODAL title"),
         "read lost the modal:\n{content}"
+    );
+    // A zero-size wrapper that only touches the bottom or right edge keeps
+    // its fixed children; a transformed clipping ancestor still clips them.
+    for word in ["BOTTOMEDGE visible", "RIGHTEDGE visible"] {
+        assert!(content.contains(word), "read lost {word}:\n{content}");
+    }
+    assert!(!content.contains("TRANSFORMCLIP"), "{content}");
+    assert_ne!(
+        get_data(&read)["hiddenText"]["failed"],
+        json!(true),
+        "the visibility scan failed: {read}"
     );
 
     let text = execute_command(
