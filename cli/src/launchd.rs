@@ -49,27 +49,33 @@ pub fn job_summary(target: &str) -> Result<String, String> {
         .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|error| format!("launchctl print did not start ({error})"))?;
+    // The report includes the job's environment, which the plist copies in
+    // full, so it can outgrow the pipe buffer: drain it while the child runs.
+    let stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        if let Some(mut stdout) = stdout {
+            let _ = stdout.read_to_string(&mut text);
+        }
+        text
+    });
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     let status = loop {
-        match child.try_wait() {
+        let failure = match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(20))
+                std::thread::sleep(Duration::from_millis(20));
+                continue;
             }
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("launchctl print timed out".into());
-            }
-            Err(error) => return Err(format!("launchctl print could not be awaited ({error})")),
-        }
+            Ok(None) => "launchctl print timed out".to_string(),
+            Err(error) => format!("launchctl print could not be awaited ({error})"),
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = reader.join();
+        return Err(failure);
     };
-    // The output is a few KB, well inside the pipe buffer, so reading after
-    // exit cannot have blocked the child.
-    let mut text = String::new();
-    if let Some(mut stdout) = child.stdout.take() {
-        let _ = stdout.read_to_string(&mut text);
-    }
+    let text = reader.join().unwrap_or_default();
     match status.code() {
         Some(0) => Ok(summarize_print(&text)),
         // EX_NOTFOUND-style 113: "Could not find service ... in domain".
