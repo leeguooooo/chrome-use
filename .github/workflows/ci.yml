@@ -268,7 +268,7 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - os: macos-latest
+          - os: macos-15
             target: aarch64-apple-darwin
           # Run Intel tests natively. Running them through Rosetta on the arm64
           # runner was the slowest and flakiest leg in the entire workflow.
@@ -454,7 +454,7 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary: chrome-use-linux-x64
-          - os: macos-latest
+          - os: macos-15
             target: aarch64-apple-darwin
             binary: chrome-use-darwin-arm64
 
