@@ -553,35 +553,63 @@ fn spawn_detached(
 /// `service.log` in the profile directory, emptied, for a starting service's
 /// stderr: a start that never writes `service.json` says why there.
 fn startup_log(directory: &Path) -> Option<std::fs::File> {
-    let file = private_open(&directory.join("service.log"), true).ok()?;
-    file.set_len(0).ok()?;
-    Some(file)
+    let path = directory.join("service.log");
+    let file = private_open(&path, true)
+        .ok()
+        .filter(|file| file.set_len(0).is_ok());
+    // A log that could not be emptied must not pass off the previous start's
+    // output as this one's: without a file the evidence says "none".
+    if file.is_none() {
+        let _ = std::fs::remove_file(&path);
+    }
+    file
 }
 
 /// What a start that was never confirmed left behind: whether a process
 /// still owns the profile lock (a slow start) or not (it exited), and the end
 /// of its stderr.
 fn startup_evidence(directory: &Path) -> String {
-    let lock = match private_open(&directory.join("service.lock"), false) {
-        Ok(file) => match file.try_lock() {
-            Ok(()) => "free",
-            Err(_) => "held",
+    use std::io::{Read, Seek, SeekFrom};
+    let lock_path = directory.join("service.lock");
+    let lock = match std::fs::symlink_metadata(&lock_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent",
+        Err(_) => "unknown",
+        Ok(_) => match private_open(&lock_path, false) {
+            Ok(file) => match file.try_lock() {
+                Ok(()) => "free",
+                Err(std::fs::TryLockError::WouldBlock) => "held",
+                Err(std::fs::TryLockError::Error(_)) => "unknown",
+            },
+            Err(_) => "unknown",
         },
-        Err(_) => "absent",
     };
-    let log = std::fs::read(directory.join("service.log")).unwrap_or_default();
-    let tail = String::from_utf8_lossy(&log[log.len().saturating_sub(400)..])
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    format!(
-        "service lock {lock}; service log: {}",
-        if tail.is_empty() {
-            "empty".to_string()
-        } else {
-            format!("\"{tail}\"")
+    // Only the end of a regular file: private_open refuses anything else, so
+    // a FIFO in its place cannot block this error path.
+    let log = match private_open(&directory.join("service.log"), false) {
+        Err(_) => None,
+        Ok(mut file) => {
+            let length = file.metadata().map(|m| m.len()).unwrap_or(0);
+            let mut bytes = Vec::new();
+            let _ = file.seek(SeekFrom::Start(length.saturating_sub(400)));
+            let _ = file.take(400).read_to_end(&mut bytes);
+            Some(bytes)
         }
-    )
+    };
+    let log = match log {
+        None => "none".to_string(),
+        Some(bytes) => {
+            let tail = String::from_utf8_lossy(&bytes)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if tail.is_empty() {
+                "empty".to_string()
+            } else {
+                format!("\"{tail}\"")
+            }
+        }
+    };
+    format!("service lock {lock}; service log: {log}")
 }
 
 /// The launchd job (`gui/<uid>/<label>`) that starts the service of a data
@@ -3673,10 +3701,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
         tokio::spawn(async move {
             // Give extension handshakes and profile registration time to settle.
             tokio::time::sleep(Duration::from_secs(5)).await;
+            let (mut last_schedule_error, mut last_progress_error) = (None::<String>, None::<String>);
             loop {
                 if scheduler.lock().await.stop { break; }
-                if let Err(error)=schedule_tick(&scheduler).await { eprintln!("Schedule check failed: {error}"); }
-                if let Err(error)=evidence_ops::progress_tick(&scheduler).await { eprintln!("Progress check failed: {error}"); }
+                // stderr is service.log, kept for the service's lifetime: a
+                // failure that repeats every second is written once.
+                match schedule_tick(&scheduler).await { Err(error) if last_schedule_error.as_deref()!=Some(error.as_str()) => { eprintln!("Schedule check failed: {error}"); last_schedule_error=Some(error); } Err(_) => {} Ok(_) => last_schedule_error=None }
+                match evidence_ops::progress_tick(&scheduler).await { Err(error) if last_progress_error.as_deref()!=Some(error.as_str()) => { eprintln!("Progress check failed: {error}"); last_progress_error=Some(error); } Err(_) => {} Ok(_) => last_progress_error=None }
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
         });
@@ -6665,7 +6696,7 @@ mod startup_evidence_tests {
         let directory = temp.path();
         assert_eq!(
             startup_evidence(directory),
-            "service lock absent; service log: empty"
+            "service lock absent; service log: none"
         );
         let held = private_open(&directory.join("service.lock"), true).unwrap();
         held.try_lock().unwrap();
@@ -6684,5 +6715,30 @@ mod startup_evidence_tests {
         // A new start empties the log of the previous one.
         drop(startup_log(directory).unwrap());
         assert!(startup_evidence(directory).ends_with("service log: empty"));
+        // Only the last 400 bytes are read.
+        let mut log = startup_log(directory).unwrap();
+        std::io::Write::write_all(&mut log, format!("{}END", "x ".repeat(1000)).as_bytes())
+            .unwrap();
+        let evidence = startup_evidence(directory);
+        assert!(evidence.ends_with("x x END\""), "{evidence}");
+        assert!(evidence.len() < 500, "{evidence}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_in_place_of_the_log_does_not_block_the_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let fifo = std::ffi::CString::new(
+            temp.path()
+                .join("service.log")
+                .as_os_str()
+                .as_encoded_bytes(),
+        )
+        .unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        assert_eq!(
+            startup_evidence(temp.path()),
+            "service lock absent; service log: none"
+        );
     }
 }
