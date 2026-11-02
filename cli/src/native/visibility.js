@@ -105,10 +105,14 @@ function (mode) {
     var L = r.left + (fixed ? 0 : sx), T = r.top + (fixed ? 0 : sy);
     var R = r.right + (fixed ? 0 : sx), B = r.bottom + (fixed ? 0 : sy);
     var W = fixed ? vw : docW, H = fixed ? vh : docH;
-    if (R <= 0 || B <= 0 || L >= W || T >= H) return 'off-screen';
-    if (clip && cs.position !== 'absolute' && !fixed) {
-      if (R <= clip[0] || B <= clip[1] || L >= clip[2] || T >= clip[3]) return 'clipped';
+    // A box with no height (or width) that only touches an edge is not past
+    // it: a portal wrapper whose children are all fixed has a 0px box at
+    // top 0 and draws a full-screen modal (#838).
+    function outside(x0, y0, x1, y1) {
+      return (r.width > 0 ? R <= x0 : R < x0) || (r.height > 0 ? B <= y0 : B < y0) || L >= x1 || T >= y1;
     }
+    if (outside(0, 0, W, H)) return 'off-screen';
+    if (clip && cs.position !== 'absolute' && !fixed && outside(clip[0], clip[1], clip[2], clip[3])) return 'clipped';
     return null;
   }
   function hasText(n) { return /\S/.test(n.textContent || ''); }
@@ -139,7 +143,10 @@ function (mode) {
       if (!textChecked) { textChecked = true; textReason = own || textHidden(el, cs); }
       if (textReason && textReason !== 'skip') push(k, textReason);
     }
-    var next = clip;
+    // A fixed box is not clipped by its ancestors' overflow (an Ant Design
+    // modal portalled under a `body` that opening it set to overflow-y:
+    // hidden, #838), so what is under it starts unclipped too.
+    var next = cs.position === 'fixed' ? null : clip;
     if (clipped(cs.overflowX) || clipped(cs.overflowY)) {
       var L = r.left + sx, T = r.top + sy, R = r.right + sx, B = r.bottom + sy;
       if (!clipped(cs.overflowX)) { L = -Infinity; R = Infinity; }
