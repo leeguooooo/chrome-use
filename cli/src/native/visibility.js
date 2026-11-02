@@ -121,13 +121,15 @@ function (mode) {
   function hasText(n) { return /\S/.test(n.textContent || ''); }
   function push(n, reason) { out.push(n); why.push(reason); }
 
-  // A transform, filter, perspective or paint containment makes an element
+  // A transform, filter, perspective or paint containment (also implied by
+  // `content-visibility: auto | hidden`) makes an element
   // the containing block of its fixed descendants, so their clip comes from
   // it and the overflow above it instead of being dropped.
   function holdsFixed(cs) {
     return (cs.transform && cs.transform !== 'none') || (cs.perspective && cs.perspective !== 'none')
       || (cs.filter && cs.filter !== 'none') || (cs.backdropFilter && cs.backdropFilter !== 'none')
-      || /paint|layout|strict|content/.test(cs.contain || '') || /transform|perspective|filter/.test(cs.willChange || '');
+      || /paint|layout|strict|content/.test(cs.contain || '') || /transform|perspective|filter/.test(cs.willChange || '')
+      || (!!cs.contentVisibility && cs.contentVisibility !== 'visible');
   }
 
   // `clip` applies to this element; `fixedClip` is what applies to a fixed
