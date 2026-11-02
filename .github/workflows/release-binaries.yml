@@ -73,7 +73,8 @@ jobs:
     # Runs after a skipped `validate` too: that is a cache-warming run.
     if: ${{ !cancelled() && (needs.validate.result == 'success' || needs.validate.result == 'skipped') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # The Intel runner can pass 30 minutes on a bad day.
+    timeout-minutes: 45
     # The `secrets` context is NOT allowed in a step-level `if:` — a workflow
     # that uses it there is rejected wholesale, with no jobs and no log to read.
     # Hoisting the check into a job-level env var is the supported form, and the
@@ -89,11 +90,14 @@ jobs:
           - { name: Linux musl x64,   os: ubuntu-latest, target: x86_64-unknown-linux-musl,   asset: chrome-use-linux-musl-x64,   use_zigbuild: true,  ext: '' }
           - { name: Linux musl ARM64, os: ubuntu-latest, target: aarch64-unknown-linux-musl,  asset: chrome-use-linux-musl-arm64, use_zigbuild: true,  ext: '' }
           - { name: Windows x64,      os: ubuntu-latest, target: x86_64-pc-windows-gnu,       asset: chrome-use-win32-x64,        use_zigbuild: false, ext: '.exe' }
-          # Cross-compiled on the ARM runner. The Intel one was the slowest leg
-          # by far (14 minutes on a good day, past the 30-minute timeout on a
-          # bad one). CI still runs the tests on real Intel hardware.
-          - { name: macOS x64,        os: macos-15,      target: x86_64-apple-darwin,         asset: chrome-use-darwin-x64,       use_zigbuild: false, ext: '' }
-          - { name: macOS ARM64,      os: macos-15,      target: aarch64-apple-darwin,        asset: chrome-use-darwin-arm64,     use_zigbuild: false, ext: '' }
+          # The two macOS targets build on different runner pools, each
+          # cross-compiling the other's architecture: x64 on the ARM runner
+          # (the Intel one was the slowest leg, 14 minutes on a good day), and
+          # ARM64 on the Intel one, because hosted arm64 capacity ran out and
+          # cancelled the 1.5.278 ARM64 build eight times in a row on
+          # 2026-11-02 while x64 built. CI still runs the tests on both.
+          - { name: macOS x64,        os: macos-15,       target: x86_64-apple-darwin,         asset: chrome-use-darwin-x64,       use_zigbuild: false, ext: '' }
+          - { name: macOS ARM64,      os: macos-15-intel, target: aarch64-apple-darwin,        asset: chrome-use-darwin-arm64,     use_zigbuild: false, ext: '' }
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
