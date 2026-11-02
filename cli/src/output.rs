@@ -7194,6 +7194,7 @@ Options:
   --screenshot-format <fmt>  Screenshot format: png, jpeg (or AGENT_BROWSER_SCREENSHOT_FORMAT)
   --humanize <level>         off|fast|human; default fast with adaptive escalation
                              Human regular pointer clicks settle 60-200ms before press
+                             off fails input-behavior checks; keep it out of watched sites
                              (also AGENT_BROWSER_HUMANIZE)
   --headed                   Always on (default). Headless is forbidden (bot-detection tell);
                              display-less servers can opt back in with AGENT_BROWSER_ALLOW_HEADLESS=1

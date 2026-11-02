@@ -399,7 +399,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 
 | 命令 | 用途 |
 |---|---|
-| `--humanize off\|fast\|human` | 默认 Fast；Human 常规指针点击增加按种子变化的 60–200ms 停顿，并在按下前回查存活目标 |
+| `--humanize off\|fast\|human` | 默认 Fast；Human 常规指针点击增加按种子变化的 60–200ms 停顿，并在按下前回查存活目标。`off` 插入文字时没有按键事件，滚动时没有滚轮事件，行为检测会标记 |
 | `--allow-focus-recovery` | 仅为本次命令允许一次 Windows 中继原生 Escape 恢复，可能切换焦点 |
 | `chrome-use extension install --user-data-dir <path>` | macOS/Linux：为已有的自定义 Chrome 数据目录注册 host，可重复指定，也接受等号形式；还会自动扫描正在运行的自定义目录。Windows 使用 HKCU，不支持此选项。 |
 | `--window user`（默认）/ `--window dedicated` | 扩展连接：AI 标签开在你当前的窗口里，每个会话一个标签组，组名前面带 ✦；`dedicated` 改为同一 profile 的所有 AI 会话共用一个后台窗口 |

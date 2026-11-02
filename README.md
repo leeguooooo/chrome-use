@@ -417,7 +417,7 @@ Regular Human pointer clicks now use a seeded 60–200ms settling pause after mo
 
 | Command | Purpose |
 |---|---|
-| `--humanize off\|fast\|human` | Fast is the default; Human regular pointer clicks add a seeded 60–200ms settling gap and recheck the live target before press |
+| `--humanize off\|fast\|human` | Fast is the default; Human regular pointer clicks add a seeded 60–200ms settling gap and recheck the live target before press. `off` inserts text without key events and scrolls without wheel events, which behavior detectors flag |
 | `--allow-focus-recovery` | Allow one Windows relay native Escape recovery for this command; may change focus |
 | `chrome-use extension install --user-data-dir <path>` | macOS/Linux: register an existing custom Chrome data directory (repeatable; equals form accepted). Running custom directories are also discovered automatically. Windows uses HKCU and rejects this option. |
 | `--window user` (default) / `--window dedicated` | Extension relay: AI tabs open in your current window, each session in its own tab group starting with ✦; `dedicated` moves all AI sessions into one shared background window per profile |
