@@ -92,8 +92,8 @@ jobs:
           # Cross-compiled on the ARM runner. The Intel one was the slowest leg
           # by far (14 minutes on a good day, past the 30-minute timeout on a
           # bad one). CI still runs the tests on real Intel hardware.
-          - { name: macOS x64,        os: macos-latest,  target: x86_64-apple-darwin,         asset: chrome-use-darwin-x64,       use_zigbuild: false, ext: '' }
-          - { name: macOS ARM64,      os: macos-latest,  target: aarch64-apple-darwin,        asset: chrome-use-darwin-arm64,     use_zigbuild: false, ext: '' }
+          - { name: macOS x64,        os: macos-15,      target: x86_64-apple-darwin,         asset: chrome-use-darwin-x64,       use_zigbuild: false, ext: '' }
+          - { name: macOS ARM64,      os: macos-15,      target: aarch64-apple-darwin,        asset: chrome-use-darwin-arm64,     use_zigbuild: false, ext: '' }
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
