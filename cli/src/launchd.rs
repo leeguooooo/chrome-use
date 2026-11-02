@@ -36,6 +36,46 @@ pub fn job_pid(target: &str) -> Option<u32> {
         .find_map(|line| line.trim().strip_prefix("pid = ")?.trim().parse().ok())
 }
 
+/// What launchd reports about a job (state, pid, runs, last exit), for an
+/// error that has to say whether the job ever ran. `None` when launchd knows
+/// no job of that `target`.
+pub fn job_summary(target: &str) -> Option<String> {
+    let out = std::process::Command::new("/bin/launchctl")
+        .args(["print", target])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| summarize_print(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// The first `state`, `pid`, `runs` and last-exit lines of `launchctl print`.
+/// Nested sections repeat some keys; the job's own come first.
+fn summarize_print(text: &str) -> String {
+    const KEYS: [&str; 6] = [
+        "state = ",
+        "pid = ",
+        "runs = ",
+        "last exit code = ",
+        "last exit reason = ",
+        "last terminating signal = ",
+    ];
+    let mut found: Vec<Option<&str>> = vec![None; KEYS.len()];
+    for line in text.lines().map(str::trim) {
+        if let Some(i) = KEYS.iter().position(|key| line.starts_with(key)) {
+            found[i].get_or_insert(line);
+        }
+    }
+    let fields: Vec<&str> = found.into_iter().flatten().collect();
+    if fields.is_empty() {
+        "no state reported".into()
+    } else {
+        fields.join(", ")
+    }
+}
+
 /// `gui/<uid>`, the domain of the logged-in user's jobs.
 pub fn gui_domain() -> String {
     format!("gui/{}", unsafe { libc::getuid() })
@@ -125,4 +165,28 @@ pub fn plist(
 </plist>
 "#
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summarize_print;
+
+    #[test]
+    fn a_job_summary_keeps_the_jobs_own_state_and_last_exit() {
+        let print = "gui/501/com.chrome-use.panel-service.0123 = {\n\
+            \tactive count = 0\n\
+            \tstate = not running\n\
+            \tprogram = /tmp/chrome-use\n\
+            \truns = 1\n\
+            \tlast exit code = 78: EX_CONFIG\n\
+            \tendpoints = {\n\
+            \t\tstate = active\n\
+            \t}\n\
+            }\n";
+        assert_eq!(
+            summarize_print(print),
+            "state = not running, runs = 1, last exit code = 78: EX_CONFIG"
+        );
+        assert_eq!(summarize_print("nothing useful\n"), "no state reported");
+    }
 }
