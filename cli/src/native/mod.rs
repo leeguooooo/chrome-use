@@ -21,6 +21,8 @@ pub mod dom_snapshot;
 #[allow(dead_code)]
 pub mod element;
 pub mod first_tab;
+#[allow(dead_code)]
+pub(crate) mod focus_recovery;
 pub mod focus_restore;
 #[allow(dead_code)]
 pub mod humanize;

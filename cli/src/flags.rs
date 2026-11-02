@@ -18,6 +18,7 @@ pub(crate) const GLOBAL_BOOL_FLAGS: &[&str] = &[
     "--debug",
     "--ignore-https-errors",
     "--allow-file-access",
+    "--allow-focus-recovery",
     "--hide-scrollbars",
     "--auto-connect",
     "--launch",
@@ -446,6 +447,9 @@ pub struct Flags {
     pub provider: Option<String>,
     pub ignore_https_errors: bool,
     pub allow_file_access: bool,
+    /// Explicit authorization for this invocation's bounded native UI recovery.
+    /// Never loaded from ambient config/environment or cached by the daemon.
+    pub allow_focus_recovery: bool,
     pub hide_scrollbars: bool,
     pub device: Option<String>,
     pub auto_connect: bool,
@@ -1011,6 +1015,7 @@ pub fn parse_flags(args: &[String]) -> Flags {
             || config.ignore_https_errors.unwrap_or(false),
         allow_file_access: env_var_is_truthy("AGENT_BROWSER_ALLOW_FILE_ACCESS")
             || config.allow_file_access.unwrap_or(false),
+        allow_focus_recovery: false,
         hide_scrollbars: env_var_bool("AGENT_BROWSER_HIDE_SCROLLBARS")
             .or(config.hide_scrollbars)
             .unwrap_or(true),
@@ -1290,6 +1295,13 @@ pub fn parse_flags(args: &[String]) -> Flags {
                 let (val, consumed) = parse_bool_arg(args, i);
                 flags.allow_file_access = val;
                 flags.cli_allow_file_access = true;
+                if consumed {
+                    i += 1;
+                }
+            }
+            "--allow-focus-recovery" => {
+                let (value, consumed) = parse_bool_arg(args, i);
+                flags.allow_focus_recovery = value;
                 if consumed {
                     i += 1;
                 }
@@ -2575,5 +2587,16 @@ mod tests {
 
         let cleaned = clean_args(&args("click @e1 --tab t2"));
         assert_eq!(cleaned, vec!["click", "@e1"]);
+    }
+
+    #[test]
+    fn focus_recovery_is_explicit_per_invocation_and_keeps_positionals() {
+        let enabled = args("--allow-focus-recovery click @e1");
+        assert!(parse_flags(&enabled).allow_focus_recovery);
+        assert_eq!(clean_args(&enabled), vec!["click", "@e1"]);
+        assert!(!parse_flags(&args("click @e1")).allow_focus_recovery);
+        let disabled = args("click @e1 --allow-focus-recovery false");
+        assert!(!parse_flags(&disabled).allow_focus_recovery);
+        assert_eq!(clean_args(&disabled), vec!["click", "@e1"]);
     }
 }

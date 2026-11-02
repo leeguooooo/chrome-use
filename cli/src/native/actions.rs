@@ -2811,6 +2811,27 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             return error_response(&id, &e);
         }
     }
+    // Native recovery has explicit per-invocation authority. Run only after
+    // policy, target routing and kept-ref verification, before any observation
+    // or input. Recovery does not bypass the selector checks below.
+    if (acts_on_page(action) || safe_to_repeat(action)) && super::focus_recovery::enabled() {
+        let before_policy_url = match state.browser.as_ref() {
+            Some(manager) if manager.on_relay() => manager.pinned_tab_url_from_browser().await,
+            _ => None,
+        };
+        // Site policy must name the routed page, not the tab that happened to
+        // be pinned when this command entered the dispatcher.
+        if let Some(response) = site_gate(cmd, action, &id, state).await {
+            return response;
+        }
+        if let Some(manager) = state.browser.as_ref() {
+            if let Err(error) =
+                Box::pin(manager.prepare_native_focus_recovery(before_policy_url.as_deref())).await
+            {
+                return error_response(&id, &error);
+            }
+        }
+    }
     // A selector that matches several elements is refused before anything
     // runs (the observe baseline included): acting on the first match is how
     // `click .iLNqted2.DiddnkXT` hit "充钻石" instead of "投稿" and said ✓.
@@ -2889,6 +2910,9 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let url_before = state.browser.as_ref().map(|m| m.cached_active_url());
     let stale_recoverable = action != "navigate"
         && action != "launch"
+        // Opt-in native recovery verifies readiness before the operation; it
+        // never grants authority to replay an operation that later went stale.
+        && !super::focus_recovery::enabled()
         && state.browser.as_ref().is_some_and(|m| m.on_relay());
     let mut stale_attempts = 0u32;
     state.defer_click_tab_check = observe && action == "click";
@@ -17888,6 +17912,11 @@ fn command_secrets(cmd: &Value) -> Vec<String> {
 
 async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    // The opt-in native path performs a preflight inside policy/target guards.
+    // Do not run the legacy pre-action tab flips or replay a blocked original.
+    if super::focus_recovery::enabled() {
+        return execute_command(cmd, state).await;
+    }
     // A command acting through a kept (unverified) ref runs guarded: its
     // refusal, and any block it meets, are reported as they are. Hiding the
     // tab and blurring the field to run it again is exactly the side effect

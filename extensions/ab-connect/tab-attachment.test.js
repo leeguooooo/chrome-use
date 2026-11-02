@@ -221,3 +221,43 @@ test('the agent cannot close a tab the user lent it (0.5.62)', async () => {
   assert.equal(JSON.stringify(await context.closeTarget({ targetId: 'T6' })), '{"success":true}')
   assert.deepEqual(removed, ['owned loaded', 'popups loaded', 6])
 })
+
+test('an unattached owned target can close through the exact live Chrome registry', async () => {
+  const removed = [], guarded = []
+  const context = {
+    tabGrants: { load: async () => {}, get: () => null },
+    LENT_TAB_CLOSE: 'the agent cannot close it', agentSession: 'task',
+    tabForTarget: () => null,
+    ownedTabs: new Set([7]), agentPopups: new Set(),
+    loadOwnedTabs: async () => {}, loadAgentPopups: async () => {},
+    chrome: { debugger: { getTargets: async () => [{ id: 'T7', tabId: 7, type: 'page' }] } },
+    withRelayTimeout: p => p,
+    guardTab: (id, session) => { guarded.push([id, session]) },
+    removeAgentTab: async id => { removed.push(id) }, agentTabRemoval: {},
+  }
+  vm.createContext(context)
+  vm.runInContext('globalThis.closeTarget = async function (params) { const method = "Target.closeTarget";\n' + section("if (method === 'Target.closeTarget') {", "if (method === 'Target.activateTarget')") + '}', context)
+  assert.equal(JSON.stringify(await context.closeTarget({ targetId: 'T7' })), '{"success":true}')
+  assert.deepEqual(removed, [7])
+  assert.deepEqual(guarded, [[7, 'task']])
+
+  for (const registry of [
+    [{ id: 'OTHER', tabId: 7, type: 'page' }],
+    [{ id: 'T7', tabId: 8, type: 'page' }],
+    [{ id: 'T7', tabId: 7, type: 'iframe' }],
+    [{ id: 'T7', tabId: 7, type: 'page' }, { id: 'T7', tabId: 9, type: 'page' }],
+  ]) {
+    context.chrome.debugger.getTargets = async () => registry
+    removed.length = 0
+    assert.equal(JSON.stringify(await context.closeTarget({ targetId: 'T7' })), '{"success":false}')
+    assert.deepEqual(removed, [])
+  }
+  context.chrome.debugger.getTargets = async () => [{ id: 'T7', tabId: 7, type: 'page' }]
+  context.tabGrants.get = () => ({ tabId: 7 })
+  await assert.rejects(context.closeTarget({ targetId: 'T7' }), /cannot close it/)
+  assert.deepEqual(removed, [])
+  context.tabGrants.get = () => null
+  context.guardTab = () => { throw new Error('session access denied') }
+  await assert.rejects(context.closeTarget({ targetId: 'T7' }), /session access denied/)
+  assert.deepEqual(removed, [])
+})

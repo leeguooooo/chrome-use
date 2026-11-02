@@ -40,6 +40,7 @@ import { attachTabById } from './attach-by-id.js';
 import { attachCreatedTab, createTabAttachmentQueue } from './tab-attachment.js';
 import { releaseTab } from './release-tab.js';
 import { blurFocusedField } from './menu-blur.js';
+import { NativeFocusBridge, prepareNativeFocusRecovery } from './native-focus.js';
 import { SITE_ACCESS_NOTIFICATION, SITE_ACCESS_OPTIONS_PAGE, hasSiteAccess, isSiteAccessError, notifySiteAccessNeeded } from './site-access.js';
 import { DWELL_MS, UserTouchedTabs } from './user-touched.js';
 import { removeAgentTab } from './remove-agent-tab.js';
@@ -140,6 +141,13 @@ if (chrome.runtime.getManifest().key) {
 const HOST_NAME = 'com.agent_browser.connect';
 let agentPanelEntry = { ready: false, error: 'Side panel entry is being configured.' };
 void configureAgentPanel(chrome).then(result => { agentPanelEntry = result; });
+const nativeFocusContexts = new Map();
+const nativeFocusBridge = new NativeFocusBridge({
+  send(message) {
+    if (!port) throw new Error('Native host is not connected');
+    port.postMessage(message);
+  },
+});
 const agentPanelBridge = new AgentPanelBridge({
   send(message) {
     if (!port) throw new Error('Native host is not connected');
@@ -1133,6 +1141,7 @@ function connectHost() {
   const connectedPort = port;
   connectedPort.onMessage.addListener((msg) => {
     if (port !== connectedPort) return;
+    if (nativeFocusBridge.receive(msg)) return;
     if (agentPanelBridge.receive(msg)) return;
     if (hostConnection.receive(connectedPort, msg)) {
       hostReconnect.confirmed();
@@ -1209,6 +1218,9 @@ function hostGone(connectedPort, error) {
   if (port !== connectedPort) return;
   const wasConnected = hostConnection.snapshot().connected;
   hostConnection.end(connectedPort, error);
+  nativeFocusBridge.disconnect();
+  for (const context of nativeFocusContexts.values()) context.cancel();
+  nativeFocusContexts.clear();
   agentPanelBridge.disconnect(error);
   port = null;
   hostReconnect.failed();
@@ -1721,6 +1733,52 @@ async function handleForwardCdpCommand(msg) {
   // A password manager's menu blocks the debugger on an agent tab and the tab
   // flip cannot close it (Chrome is not the frontmost app): take focus out of
   // the field it belongs to. See menu-blur.js.
+  if (method === 'ABExt.nativeFocusProbe') {
+    return nativeFocusBridge.request('probe', {});
+  }
+  if (method === 'ABExt.nativeFocusFinish') {
+    const context = nativeFocusContexts.get(params?.token);
+    nativeFocusContexts.delete(params?.token);
+    return context ? context.finish() : nativeFocusBridge.request('finish', { token: params?.token });
+  }
+  if (method === 'ABExt.nativeFocusBegin') {
+    const context = nativeFocusContexts.get(params?.token);
+    if (!context) throw new Error('Native focus preparation is absent or expired');
+    return context.begin();
+  }
+  if (method === 'ABExt.nativeFocusPrepare') {
+    await loadOwnedTabs();
+    const tid = typeof params?.targetId === 'string' ? params.targetId : '';
+    const sid = typeof params?.sessionId === 'string' ? params.sessionId : sessionId;
+    const boundTab = () => {
+      if (!tid || !sid) throw new Error('Native focus requires both target and session identities');
+      if (childSessionToTab.has(sid)) throw new Error('Native focus refuses a child-frame session');
+      const fromSession = resolveSessionTab(sid, sessionToTab, childSessionToTab);
+      const fromTarget = tabForTarget(tid);
+      if (!Number.isInteger(fromSession)) throw new Error('Native focus session has no browser tab binding');
+      // Attachment records are not Chrome's liveness authority.
+      // A missing cache entry is checked against Chrome's target registry
+      // below; a conflicting entry is always refused.
+      if ((Number.isInteger(fromTarget) && fromSession !== fromTarget) || fromSession !== params?.chromeTabId) throw new Error('Native focus target and session name different Chrome tabs');
+      return fromSession;
+    };
+    const context = await prepareNativeFocusRecovery(params, {
+      boundTab,
+      validateBinding: async () => (await withRelayTimeout(chrome.debugger.getTargets(), 'native focus target registry'))
+        .some(target => target.id === tid && target.tabId === params.chromeTabId && target.type === 'page'),
+      guard: id => guardTab(id, agentSession),
+      isOwned: id => ownedTabs.has(id),
+      getTab: id => chrome.tabs.get(id),
+      getWindow: id => chrome.windows.get(id),
+      getWindowTabs: id => chrome.tabs.query({ windowId: id }),
+      focusWindow: id => chrome.windows.update(id, { focused: true }),
+      request: (operation, args) => nativeFocusBridge.request(operation, args),
+      revoke: token => nativeFocusBridge.revoke(token),
+    });
+    nativeFocusContexts.set(context.token, context);
+    setTimeout(() => nativeFocusContexts.delete(context.token), 145000);
+    return { prepared: true, token: context.token };
+  }
   if (method === 'ABExt.blurFocusedField') {
     await loadOwnedTabs();
     const tid = typeof params?.targetId === 'string' ? params.targetId : '';
@@ -2025,10 +2083,22 @@ async function handleForwardCdpCommand(msg) {
   }
   if (method === 'Target.closeTarget') {
     const tid = typeof params?.targetId === 'string' ? params.targetId : '';
-    const tabId = tid ? tabForTarget(tid) : null;
-    if (!tabId) return { success: false };
+    let tabId = tid ? tabForTarget(tid) : null;
     // A tab the user lent stays theirs: the agent never closes it.
     await tabGrants.load();
+    if (!Number.isInteger(tabId) && tid) {
+      // A protected menu can prevent attachment without closing the tab.
+      // Resolve its exact live target through Chrome, never by URL or title.
+      await Promise.all([loadOwnedTabs(), loadAgentPopups()]);
+      const targets = await withRelayTimeout(chrome.debugger.getTargets(), 'close target registry');
+      const matches = targets.filter(target => target.id === tid && target.type === 'page' && Number.isInteger(target.tabId));
+      if (matches.length !== 1) return { success: false };
+      tabId = matches[0].tabId;
+      // Missing attachment state cannot authorize closing a user's tab.
+      if (!ownedTabs.has(tabId) && !agentPopups.has(tabId)) return { success: false };
+      guardTab(tabId, agentSession);
+    }
+    if (!Number.isInteger(tabId)) return { success: false };
     if (tabGrants.get(tabId)) throw new Error(LENT_TAB_CLOSE);
     // Right after a worker restart both sets are still on disk; an unloaded
     // set would make an agent tab look like a user's and skip the ungroup.

@@ -11,6 +11,27 @@ on:
       - '.github/workflows/windows-panel.yml'
   workflow_dispatch:
     inputs:
+      probe_tcp_owner:
+        description: 'Run only GUI-free exact TCP ownership tests'
+        required: false
+        type: boolean
+        default: false
+      probe_focus_protocol:
+        description: 'Run only scripted foreground control transport tests'
+        required: false
+        type: boolean
+        default: false
+      probe_windows_identity:
+        description: 'Run only GUI-free loaded-generation metadata probes (no foreground grants)'
+        required: false
+        type: boolean
+        default: false
+      identity_toolchain:
+        description: 'Composition toolchain; select one when only its result needs refreshing'
+        required: false
+        type: choice
+        options: [both, msvc, gnu]
+        default: both
       probe_macos_startup:
         description: 'Run only the Intel macOS native-service startup diagnostic'
         required: false
@@ -27,7 +48,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   native-panel:
-    if: github.event_name != 'workflow_dispatch' || !inputs.probe_macos_startup
+    if: github.event_name != 'workflow_dispatch' || (!inputs.probe_macos_startup && !inputs.probe_windows_identity)
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -48,6 +69,7 @@ jobs:
           key: x86_64-pc-windows-msvc-ci
           cache-on-failure: true
       - name: Windows private-state and process-tree tests
+        if: ${{ !inputs.probe_focus_protocol && !inputs.probe_tcp_owner }}
         run: cargo test --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --bin chrome-use agent_panel -- --test-threads=1
       - name: Download and verify the published Windows binary
         if: github.event_name == 'workflow_dispatch' && inputs.published_tag != ''
@@ -72,9 +94,23 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or ($version -join "`n") -notmatch ([regex]::Escape($env:PANEL_RELEASE_TAG.Substring(1)))) { throw 'Published binary version mismatch' }
           "CHROME_USE_TEST_BIN=$binary" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Full native-host protocol parity
+        if: ${{ !inputs.probe_focus_protocol && !inputs.probe_tcp_owner }}
         run: cargo test --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --test agent_panel_native -- --test-threads=1
+      - name: Private foreground control framing without OS authorization
+        if: ${{ !inputs.probe_tcp_owner }}
+        timeout-minutes: 3
+        run: cargo test --profile ci --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --test focus_control_protocol -- --test-threads=1
       - name: Check Windows code and protocol tests
+        if: ${{ !inputs.probe_focus_protocol && !inputs.probe_tcp_owner }}
         run: cargo clippy --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --bin chrome-use --test agent_panel_native -- -D clippy::all
+      - name: Exact TCP owners with owned CLI processes and no browser commands
+        if: inputs.probe_tcp_owner
+        timeout-minutes: 5
+        run: cargo test --profile ci --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --features windows-tcp-owner-prototype --test windows_tcp_owner -- --test-threads=1 --nocapture
+      - name: Capture real selected-source WebSocket endpoints without Chrome
+        if: inputs.probe_tcp_owner
+        timeout-minutes: 5
+        run: cargo test --profile ci --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --features windows-tcp-owner-prototype --bin chrome-use focus_transport_tests -- --test-threads=1 --nocapture
 
   mac-startup-probe:
     if: github.event_name == 'workflow_dispatch' && inputs.probe_macos_startup
@@ -107,4 +143,132 @@ jobs:
         with:
           name: native-service-startup-${{ github.sha }}
           path: startup-artifacts
+          retention-days: 7
+
+  identity-gnu-build:
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_windows_identity && inputs.identity_toolchain != 'msvc'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: cli
+          key: x86_64-pc-windows-gnu-release-identity
+          cache-on-failure: true
+      - name: Prepare actual release toolchain and exact dependency manifest
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mingw-w64
+          cargo fetch --locked --manifest-path cli/Cargo.toml
+          cargo metadata --manifest-path cli/Cargo.toml --locked --offline --format-version 1 --filter-platform x86_64-pc-windows-gnu --features windows-build-identity-prototype,windows-tcp-owner-prototype > "$RUNNER_TEMP/identity-dependencies.json"
+          echo "CHROME_USE_MARKER_DEPENDENCIES=$RUNNER_TEMP/identity-dependencies.json" >> "$GITHUB_ENV"
+          python3 -c 'import secrets; print("CHROME_USE_BUILD_GENERATION=" + secrets.token_hex(16))' >> "$GITHUB_ENV"
+      - name: Compile actual GNU release product and metadata tests
+        shell: bash
+        run: |
+          cargo test --locked --release --manifest-path cli/Cargo.toml --target x86_64-pc-windows-gnu --features windows-build-identity-prototype,windows-tcp-owner-prototype --test windows_build_identity --test windows_tcp_owner --no-run --message-format=json > "$RUNNER_TEMP/identity-build.jsonl"
+          python3 scripts/identity-stage.py "$RUNNER_TEMP/identity-build.jsonl" identity-artifacts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-identity-gnu-${{ github.sha }}
+          path: identity-artifacts
+          retention-days: 7
+
+  identity-gnu-runtime:
+    needs: identity-gnu-build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-identity-gnu-${{ github.sha }}
+          path: identity-artifacts
+      - name: Verify archive and run its exact product without Chrome
+        shell: pwsh
+        run: |
+          $receipt = Get-Content identity-artifacts/receipt.json -Raw | ConvertFrom-Json
+          if ((Get-FileHash identity-artifacts/product.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant() -ne $receipt.archiveSha256) { throw 'Archive mismatch' }
+          if ($receipt.schema -ne 2) { throw 'Unknown identity receipt schema' }
+          foreach ($name in @('windows_build_identity', 'windows_tcp_owner')) {
+            if ((Get-FileHash "identity-artifacts/$name.exe" -Algorithm SHA256).Hash.ToLowerInvariant() -ne $receipt.testsSha256.$name) { throw 'Test binary mismatch' }
+          }
+          New-Item -ItemType Directory identity-artifacts/extracted | Out-Null
+          tar -xzf identity-artifacts/product.tar.gz -C identity-artifacts/extracted
+          if ($LASTEXITCODE -ne 0) { throw 'Archive extraction failed' }
+          $env:CHROME_USE_IDENTITY_BIN = (Resolve-Path identity-artifacts/extracted/chrome-use.exe).Path
+          if ((Get-FileHash $env:CHROME_USE_IDENTITY_BIN -Algorithm SHA256).Hash.ToLowerInvariant() -ne $receipt.productSha256) { throw 'Extracted product mismatch' }
+          $failed = $false
+          foreach ($name in @('windows_build_identity', 'windows_tcp_owner')) {
+            & "identity-artifacts/$name.exe" --test-threads=1 --nocapture 2>&1 | Tee-Object "identity-artifacts/runtime-$name.log"
+            if ($LASTEXITCODE -ne 0) { $failed = $true }
+          }
+          if ($failed) { throw 'GNU metadata composition fixture failed' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: windows-identity-gnu-runtime-${{ github.sha }}
+          path: identity-artifacts
+          retention-days: 7
+
+  identity-msvc:
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_windows_identity && inputs.identity_toolchain != 'gnu'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: cli
+          key: x86_64-pc-windows-msvc-ci-identity
+          cache-on-failure: true
+      - name: Prepare MSVC environment and actual dependency manifest
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$installation) { throw 'MSVC installation missing' }
+          $setup = Join-Path $installation 'Common7\Tools\VsDevCmd.bat'
+          $environment = cmd.exe /d /c "call `"$setup`" -no_logo -arch=x64 >nul && set"
+          if ($LASTEXITCODE -ne 0) { throw 'MSVC environment setup failed' }
+          $environment | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process') }
+          }
+          if (!$env:VCToolsInstallDir) { throw 'MSVC environment did not identify its tool directory' }
+          $linker = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/link.exe'
+          if (!(Test-Path $linker)) { throw 'Actual Microsoft linker missing' }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          foreach ($name in @('PATH', 'LIB', 'LIBPATH', 'INCLUDE')) { "$name=$([Environment]::GetEnvironmentVariable($name, 'Process'))" | Out-File $env:GITHUB_ENV -Append -Encoding utf8 }
+          cargo fetch --locked --manifest-path cli/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency fetch failed' }
+          cargo metadata --manifest-path cli/Cargo.toml --locked --offline --format-version 1 --filter-platform x86_64-pc-windows-msvc --features windows-build-identity-prototype,windows-tcp-owner-prototype > "$env:RUNNER_TEMP/identity-dependencies.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Metadata preparation failed' }
+          "CHROME_USE_MARKER_DEPENDENCIES=$env:RUNNER_TEMP/identity-dependencies.json" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "CHROME_USE_BUILD_GENERATION=$([guid]::NewGuid().ToString('N'))" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Run GUI-free actual MSVC product metadata checks
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory identity-artifacts | Out-Null
+          cargo test --profile ci --locked --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --features windows-build-identity-prototype,windows-tcp-owner-prototype --bin chrome-use --test windows_build_identity --test windows_tcp_owner -- --test-threads=1 --nocapture 2>&1 | Tee-Object identity-artifacts/runtime.log
+          if ($LASTEXITCODE -ne 0) { throw 'MSVC metadata fixture failed' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: windows-identity-msvc-${{ github.sha }}
+          path: identity-artifacts
           retention-days: 7

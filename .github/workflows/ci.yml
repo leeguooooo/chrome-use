@@ -295,6 +295,34 @@ jobs:
       - name: Run Rust tests
         run: cargo test --profile ci --manifest-path cli/Cargo.toml --target ${{ matrix.target }}
 
+      - name: Retain a verified Mac native-probe build
+        if: always() && runner.os == 'macOS' && github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          NATIVE_PROBE_TARGET: ${{ matrix.target }}
+          CHROME_USE_NO_UPDATE_CHECK: '1'
+        run: |
+          test -f cli/src/native/focus_recovery/macos_probe.rs
+          cargo build --profile ci --locked --manifest-path cli/Cargo.toml --target "$NATIVE_PROBE_TARGET" --bin chrome-use
+          python3 - <<'PYBUILD'
+          import hashlib,json,os,pathlib,shutil,subprocess
+          target=os.environ['NATIVE_PROBE_TARGET']
+          source=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert source==os.environ['GITHUB_SHA']
+          binary=pathlib.Path('cli/target')/target/'ci/chrome-use'
+          output=pathlib.Path('native-probe-build');output.mkdir(exist_ok=True)
+          shutil.copyfile(binary,output/'chrome-use')
+          receipt={'gitSha':source,'target':target,'profile':'ci','binarySha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'cargo':subprocess.check_output(['cargo','--version'],text=True).strip(),'rustc':subprocess.check_output(['rustc','--version'],text=True).strip(),'browserAcceptance':False,'nativeHostPermissionEvidence':False}
+          (output/'build.json').write_text(json.dumps(receipt,indent=2)+'\n')
+          PYBUILD
+      - name: Upload Mac native-probe build receipt
+        if: always() && runner.os == 'macOS' && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-probe-build-${{ matrix.target }}-${{ github.sha }}
+          path: native-probe-build
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Verify skill extraction with the built Windows CLI
         if: runner.os == 'Windows'
         shell: powershell

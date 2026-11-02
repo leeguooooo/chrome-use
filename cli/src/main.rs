@@ -50,6 +50,10 @@ mod test_utils;
 mod upgrade;
 mod upgrade_handoff;
 mod validation;
+#[cfg(feature = "windows-build-identity-prototype")]
+mod windows_build_identity;
+#[cfg(feature = "windows-tcp-owner-prototype")]
+mod windows_tcp_owner;
 
 use serde_json::{json, Value};
 use std::env;
@@ -2161,6 +2165,10 @@ fn run_close_all(flags: &Flags, force: bool) {
 }
 
 fn main() {
+    // Live static reference retains the private marker with release LTO/strip.
+    // No output, foreground permission, process inspection or input occurs here.
+    #[cfg(all(windows, feature = "windows-build-identity-prototype"))]
+    let _ = windows_build_identity::compiled_marker();
     // Rust ignores SIGPIPE by default, causing println! to panic on broken pipes.
     // Reset to SIG_DFL so the OS terminates the process cleanly instead.
     #[cfg(unix)]
@@ -3715,6 +3723,7 @@ fn main() {
             warning: None,
             timing: None,
             action_context: None,
+            native_focus: None,
         };
         let passive = || {
             inventory_response(diag::list_all_tabs(
@@ -3776,6 +3785,7 @@ fn main() {
                 warning: None,
                 timing: None,
                 action_context: None,
+                native_focus: None,
             },
             Err(e) => {
                 let metadata = error_envelope::classify_error(&e);
@@ -3788,6 +3798,7 @@ fn main() {
                     warning: None,
                     timing: None,
                     action_context: None,
+                    native_focus: None,
                 }
             }
         };

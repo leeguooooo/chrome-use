@@ -600,6 +600,11 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
 
 /// The per-command global flags `parse_command` stamps onto a parsed action.
 fn stamp_command_flags(result: &mut Value, flags: &Flags) {
+    // Permission travels on each request, including to an already-running daemon.
+    if flags.allow_focus_recovery {
+        result["allowFocusRecovery"] = json!(true);
+    }
+
     // Inject AGENT_BROWSER_DEFAULT_TIMEOUT into any wait-family command that
     // doesn't already carry an explicit timeout. Centralised here so that new
     // wait variants automatically inherit the default without per-variant wiring.
@@ -6514,6 +6519,7 @@ mod tests {
             provider: None,
             ignore_https_errors: false,
             allow_file_access: false,
+            allow_focus_recovery: false,
             hide_scrollbars: true,
             device: None,
             auto_connect: false,
@@ -10919,5 +10925,25 @@ mod tests {
                 assert!(error.contains("tab new"), "{error}");
             }
         }
+    }
+
+    #[test]
+    fn focus_recovery_permission_is_stamped_only_on_explicit_requests() {
+        let mut flags = default_flags();
+        let words = vec!["click".to_string(), "@e1".to_string()];
+        assert!(parse_command(&words, &flags)
+            .unwrap()
+            .get("allowFocusRecovery")
+            .is_none());
+        flags.allow_focus_recovery = true;
+        assert_eq!(
+            parse_command(&words, &flags).unwrap()["allowFocusRecovery"],
+            true
+        );
+        flags.allow_focus_recovery = false;
+        assert!(parse_command(&words, &flags)
+            .unwrap()
+            .get("allowFocusRecovery")
+            .is_none());
     }
 }

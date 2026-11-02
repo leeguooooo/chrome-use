@@ -22,6 +22,10 @@ pub(crate) struct PanelStamp {
 /// `_panelActionId`. Nested script and batch steps run below this and are
 /// never stamped.
 pub(crate) async fn execute_command_stamped(cmd: &Value, state: &mut DaemonState) -> Value {
+    super::focus_recovery::scope(cmd, execute_command_stamped_inner(cmd, state)).await
+}
+
+async fn execute_command_stamped_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let stamp = begin(cmd, state);
     let logged = log_start(cmd);
     let mut response = execute_command_recovering(cmd, state).await;
