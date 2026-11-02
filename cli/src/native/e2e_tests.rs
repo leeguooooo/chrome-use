@@ -16897,6 +16897,94 @@ async fn e2e_reads_leave_out_text_a_person_cannot_see() {
     assert_success(&closed);
 }
 
+/// #838: an Ant Design modal is portalled to the end of `body` inside a
+/// `position: fixed` wrapper, and opening it sets `overflow-y: hidden` on
+/// `body`. A fixed box is not clipped by its ancestors' overflow, so the
+/// modal's text and controls are visible even when `body` itself is short.
+#[tokio::test]
+#[ignore]
+async fn e2e_reads_keep_a_fixed_modal_under_a_clipped_body() {
+    let mut state = DaemonState::new();
+    let launched = execute_command(
+        &json!({"id":"1","action":"launch","headless":true}),
+        &mut state,
+    )
+    .await;
+    assert_success(&launched);
+    let page = execute_command(&json!({"id":"2","action":"setcontent","html":r##"<html><body style="margin:0;height:40px;overflow-y:hidden">
+        <div id="root" style="position:absolute;inset:0"><p>APP shell</p></div>
+        <div>
+          <div class="ant-modal-mask" style="position:fixed;inset:0;background:rgba(0,0,0,.45)"></div>
+          <div class="ant-modal-wrap" tabindex="-1" style="position:fixed;inset:0;overflow:auto">
+            <div role="dialog" aria-modal="true" class="ant-modal" style="position:relative;top:100px;width:520px;margin:0 auto;pointer-events:none">
+              <div tabindex="0" aria-hidden="true" style="width:0;height:0;overflow:hidden;outline:none"></div>
+              <div class="ant-modal-content" style="pointer-events:auto;background:#fff;padding:20px">
+                <button type="button" aria-label="Close">x</button>
+                <div class="ant-modal-title">MODAL title</div>
+                <input placeholder="Order number">
+                <button type="button">Cancel</button><button type="button">Confirm</button>
+              </div>
+              <div tabindex="0" aria-hidden="true" style="width:0;height:0;overflow:hidden;outline:none"></div>
+            </div>
+          </div>
+        </div>
+        <div style="position:absolute;top:100vh;left:0;width:200px;height:0"><p style="position:fixed;left:10px;bottom:10px;margin:0">BOTTOMEDGE visible</p></div>
+        <div style="position:absolute;left:100vw;top:0;width:0;height:50px"><p style="position:fixed;left:10px;top:200px;margin:0">RIGHTEDGE visible</p></div>
+        <div style="transform:translateZ(0);overflow:hidden;height:20px"><p style="position:fixed;top:300px;left:10px;margin:0">TRANSFORMCLIP hidden</p></div>
+        </body></html>"##}), &mut state).await;
+    assert_success(&page);
+
+    let snap = execute_command(
+        &json!({"id":"3","action":"snapshot","interactive":true,"compact":true}),
+        &mut state,
+    )
+    .await;
+    assert_success(&snap);
+    let tree = get_data(&snap)["snapshot"].as_str().unwrap().to_string();
+    for name in ["Cancel", "Confirm", "Order number"] {
+        let line = tree
+            .lines()
+            .find(|l| l.contains(name))
+            .unwrap_or_else(|| panic!("snapshot lost {name}:\n{tree}"));
+        assert!(!line.contains("hidden"), "{name} marked hidden:\n{tree}");
+    }
+
+    let read = execute_command(&json!({"id":"4","action":"read"}), &mut state).await;
+    assert_success(&read);
+    let content = get_data(&read)["content"].as_str().unwrap().to_string();
+    assert!(
+        content.contains("MODAL title"),
+        "read lost the modal:\n{content}"
+    );
+    // A zero-size wrapper that only touches the bottom or right edge keeps
+    // its fixed children; a transformed clipping ancestor still clips them.
+    for word in ["BOTTOMEDGE visible", "RIGHTEDGE visible"] {
+        assert!(content.contains(word), "read lost {word}:\n{content}");
+    }
+    assert!(!content.contains("TRANSFORMCLIP"), "{content}");
+    assert_ne!(
+        get_data(&read)["hiddenText"]["failed"],
+        json!(true),
+        "the visibility scan failed: {read}"
+    );
+
+    let text = execute_command(
+        &json!({"id":"5","action":"gettext","selector":"body"}),
+        &mut state,
+    )
+    .await;
+    assert_success(&text);
+    assert!(
+        get_data(&text)["text"]
+            .as_str()
+            .unwrap()
+            .contains("MODAL title"),
+        "{text}"
+    );
+    let closed = execute_command(&json!({"id":"6","action":"close"}), &mut state).await;
+    assert_success(&closed);
+}
+
 /// Exploratory event probe for #771, not a detector verdict or speed benchmark.
 /// The fixture owns the listeners; chrome-use's input path adds none.
 #[tokio::test]

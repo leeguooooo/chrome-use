@@ -105,16 +105,37 @@ function (mode) {
     var L = r.left + (fixed ? 0 : sx), T = r.top + (fixed ? 0 : sy);
     var R = r.right + (fixed ? 0 : sx), B = r.bottom + (fixed ? 0 : sy);
     var W = fixed ? vw : docW, H = fixed ? vh : docH;
-    if (R <= 0 || B <= 0 || L >= W || T >= H) return 'off-screen';
-    if (clip && cs.position !== 'absolute' && !fixed) {
-      if (R <= clip[0] || B <= clip[1] || L >= clip[2] || T >= clip[3]) return 'clipped';
+    // A box with no height (or width) that only touches an edge is not past
+    // it: a portal wrapper whose children are all fixed has a 0px box at
+    // top 0 and draws a full-screen modal (#838).
+    function outside(L, T, R, B, x0, y0, x1, y1) {
+      var flat = r.width === 0, low = r.height === 0;
+      return (flat ? R < x0 || L > x1 : R <= x0 || L >= x1) || (low ? B < y0 || T > y1 : B <= y0 || T >= y1);
     }
+    if (outside(L, T, R, B, 0, 0, W, H)) return 'off-screen';
+    // Clip boxes are in page coordinates, fixed boxes included.
+    if (clip && cs.position !== 'absolute'
+      && outside(r.left + sx, r.top + sy, r.right + sx, r.bottom + sy, clip[0], clip[1], clip[2], clip[3])) return 'clipped';
     return null;
   }
   function hasText(n) { return /\S/.test(n.textContent || ''); }
   function push(n, reason) { out.push(n); why.push(reason); }
 
-  function walk(el, clip) {
+  // A transform, filter, perspective or paint containment (also implied by
+  // `content-visibility: auto | hidden`) makes an element
+  // the containing block of its fixed descendants, so their clip comes from
+  // it and the overflow above it instead of being dropped.
+  function holdsFixed(cs) {
+    return (cs.transform && cs.transform !== 'none') || (cs.perspective && cs.perspective !== 'none')
+      || (cs.filter && cs.filter !== 'none') || (cs.backdropFilter && cs.backdropFilter !== 'none')
+      || /paint|layout|strict|content/.test(cs.contain || '') || /transform|perspective|filter/.test(cs.willChange || '')
+      || (!!cs.contentVisibility && cs.contentVisibility !== 'visible');
+  }
+
+  // `clip` applies to this element; `fixedClip` is what applies to a fixed
+  // descendant (ancestor overflow does not clip a fixed box unless a
+  // containing block for it sits in between).
+  function walk(el, clip, fixedClip) {
     if (truncated) return;
     if (--budget < 0) { truncated = true; return; }
     if (SKIP[el.tagName]) return;
@@ -125,7 +146,7 @@ function (mode) {
       return;
     }
     var r = el.getBoundingClientRect();
-    var reason = contents ? null : boxHidden(el, cs, r, clip);
+    var reason = contents ? null : boxHidden(el, cs, r, cs.position === 'fixed' ? fixedClip : clip);
     if (reason) {
       if (hasText(el) || (mode === 'ax' && el.hasAttribute('aria-label'))) push(el, reason);
       return;
@@ -139,26 +160,31 @@ function (mode) {
       if (!textChecked) { textChecked = true; textReason = own || textHidden(el, cs); }
       if (textReason && textReason !== 'skip') push(k, textReason);
     }
-    var next = clip;
+    // A fixed box is not clipped by its ancestors' overflow (an Ant Design
+    // modal portalled under a `body` that opening it set to overflow-y:
+    // hidden, #838), so what is under it starts from `fixedClip`.
+    var next = cs.position === 'fixed' ? fixedClip : clip;
     if (clipped(cs.overflowX) || clipped(cs.overflowY)) {
       var L = r.left + sx, T = r.top + sy, R = r.right + sx, B = r.bottom + sy;
       if (!clipped(cs.overflowX)) { L = -Infinity; R = Infinity; }
       if (!clipped(cs.overflowY)) { T = -Infinity; B = Infinity; }
-      next = clip ? [Math.max(clip[0], L), Math.max(clip[1], T), Math.min(clip[2], R), Math.min(clip[3], B)] : [L, T, R, B];
+      var base = next;
+      next = base ? [Math.max(base[0], L), Math.max(base[1], T), Math.min(base[2], R), Math.min(base[3], B)] : [L, T, R, B];
     }
-    for (var c = el.firstElementChild; c; c = c.nextElementSibling) walk(c, next);
+    var nextFixed = holdsFixed(cs) ? next : fixedClip;
+    for (var c = el.firstElementChild; c; c = c.nextElementSibling) walk(c, next, nextFixed);
     // Open shadow roots reach the AX tree but not innerText/outerHTML.
     if (mode === 'ax' && el.shadowRoot) {
-      for (var s = el.shadowRoot.firstElementChild; s; s = s.nextElementSibling) walk(s, next);
+      for (var s = el.shadowRoot.firstElementChild; s; s = s.nextElementSibling) walk(s, next, nextFixed);
     }
   }
 
   var start = root && root.nodeType === 9 ? (root.body || root.documentElement) : root;
   if (start && start.nodeType === 1) {
     if (start.tagName === 'HTML') {
-      for (var b = start.firstElementChild; b; b = b.nextElementSibling) walk(b, null);
+      for (var b = start.firstElementChild; b; b = b.nextElementSibling) walk(b, null, null);
     } else {
-      walk(start, null);
+      walk(start, null, null);
     }
   }
 
