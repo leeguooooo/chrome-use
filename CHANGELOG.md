@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.277
+## 1.5.278
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.103.
+
+### Fixes
+
+- **Modals no longer read as hidden.** `read`, `get text` and `snapshot` treated an Ant Design modal as hidden and marked its controls `[modal, hidden]`. Its portal wrapper is a 0px-tall box whose children are all `position: fixed`, and opening the modal sets `overflow-y: hidden` on `body`. A zero-size box that only touches a page or clip edge no longer counts as past it. A fixed box ignores ancestor overflow unless a containing block (transform, filter, perspective, containment, `content-visibility`) sits in between (#838, #840).
+- **macOS agent service:** when startup is not confirmed, the error now includes the launchd job's state, runs and last exit (#839).
+- **`google/search` site adapter** (chrome-use-sites, picked up by `chrome-use site update`): a results page it cannot parse is now an error with a hint instead of a silent `count: 0`. Every result has an absolute `url` plus `domain` and `display_url`, and `--count` up to 50 reads further pages (#836).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.277
+
 Works with extension ab-connect 0.5.103.
 
 ### Features
@@ -19,7 +34,6 @@ Works with extension ab-connect 0.5.103.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.276
 
