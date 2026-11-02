@@ -488,9 +488,24 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
         }
         std::thread::sleep(Duration::from_millis(40));
     }
+    // Whether launchd ever ran the job tells a slow start from one that
+    // never happened or exited at once.
+    #[cfg(target_os = "macos")]
+    let job = if launched {
+        let (target, _) = launchd_target(directory);
+        format!(
+            "; launchd job: {}",
+            crate::launchd::job_summary(&target)
+                .unwrap_or_else(|error| format!("unknown, {error}"))
+        )
+    } else {
+        String::new()
+    };
+    #[cfg(not(target_os = "macos"))]
+    let job = String::new();
     Err(format!(
         "Agent-service startup has not been confirmed after {} ms of readiness checks \
-         (launch {} ms; endpoint seen {}; matching build {}; health {}); its process was not restarted",
+         (launch {} ms; endpoint seen {}; matching build {}; health {}{job}); its process was not restarted",
         readiness_started.elapsed().as_millis(),
         launch_ms, endpoint_seen, matching_endpoint_seen, health_observation,
     ))

@@ -1008,8 +1008,12 @@ mod tests {
             bw.write_all(&req.reply(Decision::Admitted).unwrap())
                 .await
                 .unwrap();
+            // A real client keeps the connection open after its ack. Dropping
+            // it here would let a heartbeat tick, chosen by `select!` before
+            // the ready ack, fail its write and end the exchange as Transport.
+            (peer, bw)
         };
-        let (out, ()) = tokio::join!(
+        let (out, _connection) = tokio::join!(
             drive(
                 &mut r,
                 &mut aw,

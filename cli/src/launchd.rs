@@ -36,6 +36,79 @@ pub fn job_pid(target: &str) -> Option<u32> {
         .find_map(|line| line.trim().strip_prefix("pid = ")?.trim().parse().ok())
 }
 
+/// What launchd reports about a job (state, pid, runs, last exit), for an
+/// error that has to say whether the job ever ran. `not loaded` only when
+/// launchd says it has no such job; a query that fails or takes longer than
+/// two seconds is an error.
+pub fn job_summary(target: &str) -> Result<String, String> {
+    use std::io::Read;
+    let mut child = std::process::Command::new("/bin/launchctl")
+        .args(["print", target])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|error| format!("launchctl print did not start ({error})"))?;
+    // The report includes the job's environment, which the plist copies in
+    // full, so it can outgrow the pipe buffer: drain it while the child runs.
+    let stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        if let Some(mut stdout) = stdout {
+            let _ = stdout.read_to_string(&mut text);
+        }
+        text
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        let failure = match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            Ok(None) => "launchctl print timed out".to_string(),
+            Err(error) => format!("launchctl print could not be awaited ({error})"),
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = reader.join();
+        return Err(failure);
+    };
+    let text = reader.join().unwrap_or_default();
+    match status.code() {
+        Some(0) => Ok(summarize_print(&text)),
+        // EX_NOTFOUND-style 113: "Could not find service ... in domain".
+        Some(113) => Ok("not loaded".into()),
+        _ => Err(format!("launchctl print failed ({status})")),
+    }
+}
+
+/// The first `state`, `pid`, `runs` and last-exit lines of `launchctl print`.
+/// Nested sections repeat some keys; the job's own come first.
+fn summarize_print(text: &str) -> String {
+    const KEYS: [&str; 6] = [
+        "state = ",
+        "pid = ",
+        "runs = ",
+        "last exit code = ",
+        "last exit reason = ",
+        "last terminating signal = ",
+    ];
+    let mut found: Vec<Option<&str>> = vec![None; KEYS.len()];
+    for line in text.lines().map(str::trim) {
+        if let Some(i) = KEYS.iter().position(|key| line.starts_with(key)) {
+            found[i].get_or_insert(line);
+        }
+    }
+    let fields: Vec<&str> = found.into_iter().flatten().collect();
+    if fields.is_empty() {
+        "no state reported".into()
+    } else {
+        fields.join(", ")
+    }
+}
+
 /// `gui/<uid>`, the domain of the logged-in user's jobs.
 pub fn gui_domain() -> String {
     format!("gui/{}", unsafe { libc::getuid() })
@@ -125,4 +198,29 @@ pub fn plist(
 </plist>
 "#
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summarize_print;
+
+    #[test]
+    fn a_job_summary_keeps_the_jobs_own_state_and_last_exit() {
+        let print = "gui/501/com.chrome-use.panel-service.0123 = {\n\
+            \tactive count = 0\n\
+            \tstate = not running\n\
+            \tpid = 4242\n\
+            \tprogram = /tmp/chrome-use\n\
+            \truns = 1\n\
+            \tlast exit code = 78: EX_CONFIG\n\
+            \tendpoints = {\n\
+            \t\tstate = active\n\
+            \t}\n\
+            }\n";
+        assert_eq!(
+            summarize_print(print),
+            "state = not running, pid = 4242, runs = 1, last exit code = 78: EX_CONFIG"
+        );
+        assert_eq!(summarize_print("nothing useful\n"), "no state reported");
+    }
 }
