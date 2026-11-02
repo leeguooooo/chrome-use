@@ -90,13 +90,12 @@ jobs:
           - { name: Linux musl x64,   os: ubuntu-latest, target: x86_64-unknown-linux-musl,   asset: chrome-use-linux-musl-x64,   use_zigbuild: true,  ext: '' }
           - { name: Linux musl ARM64, os: ubuntu-latest, target: aarch64-unknown-linux-musl,  asset: chrome-use-linux-musl-arm64, use_zigbuild: true,  ext: '' }
           - { name: Windows x64,      os: ubuntu-latest, target: x86_64-pc-windows-gnu,       asset: chrome-use-win32-x64,        use_zigbuild: false, ext: '.exe' }
-          # The two macOS targets build on different runner pools, each
-          # cross-compiling the other's architecture: x64 on the ARM runner
-          # (the Intel one was the slowest leg, 14 minutes on a good day), and
-          # ARM64 on the Intel one, because hosted arm64 capacity ran out and
-          # cancelled the 1.5.278 ARM64 build eight times in a row on
-          # 2026-11-02 while x64 built. CI still runs the tests on both.
-          - { name: macOS x64,        os: macos-15,       target: x86_64-apple-darwin,         asset: chrome-use-darwin-x64,       use_zigbuild: false, ext: '' }
+          # Both macOS targets build on the Intel pool: hosted arm64 capacity
+          # ran out and cancelled the 1.5.278 builds a dozen times on
+          # 2026-11-02/03, ARM64 first and then x64. The Intel leg is slower
+          # (14 minutes on a good day) but it gets a runner. CI still runs
+          # the tests on both architectures.
+          - { name: macOS x64,        os: macos-15-intel, target: x86_64-apple-darwin,         asset: chrome-use-darwin-x64,       use_zigbuild: false, ext: '' }
           - { name: macOS ARM64,      os: macos-15-intel, target: aarch64-apple-darwin,        asset: chrome-use-darwin-arm64,     use_zigbuild: false, ext: '' }
     steps:
       - name: Checkout
