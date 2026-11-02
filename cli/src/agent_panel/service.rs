@@ -443,7 +443,11 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
     let mut child = if launched {
         None
     } else {
-        Some(spawn_detached(&executable, &arguments)?)
+        Some(spawn_detached(
+            &executable,
+            &arguments,
+            startup_log(directory),
+        )?)
     };
     // Waiting for ownership or launchd must not consume the new service's
     // readiness window. The process is started once; an unconfirmed start
@@ -505,22 +509,24 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
     let job = String::new();
     Err(format!(
         "Agent-service startup has not been confirmed after {} ms of readiness checks \
-         (launch {} ms; endpoint seen {}; matching build {}; health {}{job}); its process was not restarted",
+         (launch {} ms; endpoint seen {}; matching build {}; health {}{job}; {}); its process was not restarted",
         readiness_started.elapsed().as_millis(),
         launch_ms, endpoint_seen, matching_endpoint_seen, health_observation,
+        startup_evidence(directory),
     ))
 }
 
 fn spawn_detached(
     executable: &Path,
     arguments: &[std::ffi::OsString],
+    log: Option<std::fs::File>,
 ) -> Result<std::process::Child, String> {
     let mut command = std::process::Command::new(executable);
     command
         .args(arguments)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stderr(log.map_or_else(std::process::Stdio::null, Into::into));
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -542,6 +548,40 @@ fn spawn_detached(
     command
         .spawn()
         .map_err(|_| "Agent service could not be started".into())
+}
+
+/// `service.log` in the profile directory, emptied, for a starting service's
+/// stderr: a start that never writes `service.json` says why there.
+fn startup_log(directory: &Path) -> Option<std::fs::File> {
+    let file = private_open(&directory.join("service.log"), true).ok()?;
+    file.set_len(0).ok()?;
+    Some(file)
+}
+
+/// What a start that was never confirmed left behind: whether a process
+/// still owns the profile lock (a slow start) or not (it exited), and the end
+/// of its stderr.
+fn startup_evidence(directory: &Path) -> String {
+    let lock = match private_open(&directory.join("service.lock"), false) {
+        Ok(file) => match file.try_lock() {
+            Ok(()) => "free",
+            Err(_) => "held",
+        },
+        Err(_) => "absent",
+    };
+    let log = std::fs::read(directory.join("service.log")).unwrap_or_default();
+    let tail = String::from_utf8_lossy(&log[log.len().saturating_sub(400)..])
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "service lock {lock}; service log: {}",
+        if tail.is_empty() {
+            "empty".to_string()
+        } else {
+            format!("\"{tail}\"")
+        }
+    )
 }
 
 /// The launchd job (`gui/<uid>/<label>`) that starts the service of a data
@@ -3594,7 +3634,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
         let arguments: Vec<std::ffi::OsString> = std::iter::once("__panel-service".into())
             .chain(args.iter().map(Into::into))
             .collect();
-        spawn_detached(&executable, &arguments)?;
+        let log = profile_directory(&PathBuf::from(&args[3]), &args[1])
+            .ok()
+            .and_then(|directory| startup_log(&directory));
+        spawn_detached(&executable, &arguments, log)?;
         return Ok(());
     }
     let profile = args[1].clone();
@@ -6609,5 +6652,37 @@ mod old_build_tests {
         assert!(keeps_busy(&list, "12b6a0cd-eca8-4462-a809-16db0688704c"));
         assert!(!keeps_busy(&list, "700bb4d2-c4c8-49b9-9fbe-5a3a6a11245e"));
         assert!(!keeps_busy(&list, "e0c1b7f5-0000-4000-8000-000000000000"));
+    }
+}
+
+#[cfg(test)]
+mod startup_evidence_tests {
+    use super::*;
+
+    #[test]
+    fn an_unconfirmed_start_reports_the_lock_and_the_end_of_its_log() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path();
+        assert_eq!(
+            startup_evidence(directory),
+            "service lock absent; service log: empty"
+        );
+        let held = private_open(&directory.join("service.lock"), true).unwrap();
+        held.try_lock().unwrap();
+        let mut log = startup_log(directory).unwrap();
+        std::io::Write::write_all(
+            &mut log,
+            b"early line\nAnother agent service\n  owns this profile\n",
+        )
+        .unwrap();
+        assert_eq!(
+            startup_evidence(directory),
+            "service lock held; service log: \"early line Another agent service owns this profile\""
+        );
+        drop(held);
+        assert!(startup_evidence(directory).starts_with("service lock free;"));
+        // A new start empties the log of the previous one.
+        drop(startup_log(directory).unwrap());
+        assert!(startup_evidence(directory).ends_with("service log: empty"));
     }
 }
