@@ -1,8 +1,28 @@
 # Changelog
 
-## 1.5.276
+## 1.5.277
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.103.
+
+### Features
+
+- **Opt-in recovery from a Bitwarden menu that blocks the agent (Windows relay).** `--allow-focus-recovery` allows one native Escape for that command when a protected Bitwarden inline menu denies debugger access. It is off by default; environment variables, config and a reused daemon never grant it. The target must be an agent-created active tab in a non-minimized, agent-only window, with the same page and native menu verified first. The original operation runs only after a read-only probe confirms access, and an action with an unknown outcome is never replayed. JSON reports `nativeFocus`. macOS has a read-only probe only (#780, #834).
+- **Screenshots of a minimized window (Windows relay).** A known minimized target is refused before capture instead of hanging for 25 seconds; `--allow-window-restore` permits restoring that existing window to normal once, without activating a tab or taking focus on purpose. JSON includes `windowPreparation` (#798, #830).
+
+### Fixes
+
+- **Relay screenshots:** cleanup after a timed-out capture no longer resets the pending capture or a diagnostic read on the same attachment (#798, #828).
+- **Relay menu close:** the tab is rechecked for agent ownership right before closing a password manager's menu, including for legacy nested parameters (#831).
+- **Native service:** the newly launched service gets its own readiness budget, and failures report launch and readiness times (#833).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.276
+
 Works with extension ab-connect 0.5.100.
 
 ### Features
@@ -20,7 +40,6 @@ Works with extension ab-connect 0.5.100.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.275
 
