@@ -3119,7 +3119,7 @@ pub(crate) async fn verify_click_target(
     // Return JSON  → describes the occluding element.
     let function_decl = OCCLUSION_PROBE_JS;
 
-    let mut last_occ: Option<Occluder> = None;
+    let mut last_occ: Option<Occluder>;
     let mut moved_off: Option<(f64, f64)> = None;
     let mut retries_left = max_retries;
     loop {
