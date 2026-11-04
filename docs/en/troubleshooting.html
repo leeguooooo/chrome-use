@@ -269,6 +269,11 @@
         page—which Chrome forbids debugging). This loud error replaces the old silent behavior
         (which would run commands on <em>another</em> tab and return the wrong data).
       </p>
+      <p>
+        A tab left on <code>about:blank</code> (for example after <code>open about:blank</code> to reset the page) is re-attached
+        by the relay instead of failing this way. When the tab is still open but shows a page that cannot be debugged, the
+        error says <code>still open</code> and names the kind of page; continue in a new tab with <code>tab new &lt;url&gt;</code>.
+      </p>
 
       <div class="du-code">
         <div class="du-code-head">
