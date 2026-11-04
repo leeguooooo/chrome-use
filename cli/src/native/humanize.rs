@@ -296,8 +296,9 @@ pub fn move_path(
 /// - `Off` takes 3–6 eased reports with no added sleeps (each still waits for
 ///   Chrome's acknowledgement, about one frame on a page with pointer
 ///   listeners), sized toward 120 px each;
-/// - `Fast` takes 4–12 reports sized toward 80 px each, inside the same time
-///   budget as before (the delays are split finer, not added).
+/// - `Fast` takes 4–12 reports sized toward 80 px each; its sleeps shrink in
+///   proportion to the added reports, whose acknowledgements pace the move,
+///   so a click takes about as long as before.
 pub fn move_path_at_rest(
     from: (f64, f64),
     to: (f64, f64),
@@ -319,12 +320,18 @@ pub fn move_path_at_rest(
     let (steps, total_ms, arc) = match level {
         HumanizeLevel::Off => (steps_for_report_cap(dist, 120.0, 3, 6), 0.0, 0.03),
         HumanizeLevel::Fast => {
-            let s = if rest_path {
-                steps_for_report_cap(dist, 80.0, 4, 12)
+            let moving = ((dist / 120.0).round() as usize).clamp(3, 6);
+            let budget = (dist * 0.35).clamp(40.0, 130.0);
+            if rest_path {
+                // Every report waits for Chrome's acknowledgement (about a
+                // frame on a page with pointer listeners), so the extra
+                // reports already take time: shrink the sleeps in proportion
+                // to keep the move about as long as the in-motion path.
+                let s = steps_for_report_cap(dist, 80.0, 4, 12).max(moving);
+                (s, budget * moving as f64 / s as f64, 0.06)
             } else {
-                ((dist / 120.0).round() as usize).clamp(3, 6)
-            };
-            (s, (dist * 0.35).clamp(40.0, 130.0), 0.06)
+                (moving, budget, 0.06)
+            }
         }
         HumanizeLevel::Human => {
             let s = ((dist / 45.0).round() as usize).clamp(8, 24);
@@ -861,7 +868,7 @@ mod rest_path_tests {
     }
 
     #[test]
-    fn fast_from_rest_caps_each_report_within_the_same_time_budget() {
+    fn fast_from_rest_caps_each_report_and_scales_its_sleeps() {
         let from = (20.0_f64, 20.0_f64);
         for (to, seed) in [
             ((760.0_f64, 325.0_f64), 5),
@@ -886,9 +893,12 @@ mod rest_path_tests {
                 max_report(from, &rest)
             );
             assert!(first_report(from, &rest) < 30.0);
+            // Sleeps shrink by the step ratio: the added reports' own
+            // acknowledgements pay for the extra steps.
             let total = |p: &[MoveStep]| p.iter().map(|s| s.delay).sum::<Duration>();
             let (a, b) = (total(&moving), total(&rest));
-            assert!(a.abs_diff(b) <= Duration::from_millis(1), "{a:?} vs {b:?}");
+            let expected = a.mul_f64(moving.len() as f64 / rest.len() as f64);
+            assert!(b.abs_diff(expected) <= Duration::from_millis(1), "{a:?} vs {b:?}");
         }
     }
 
