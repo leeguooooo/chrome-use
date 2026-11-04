@@ -181,6 +181,7 @@ pub fn error_wants_note(error: &str) -> bool {
             || error.contains("Wait timed out after")
             || error.contains("Execution context was destroyed")
             || error.contains("Cannot find context with specified id")
+            || error.contains("CDP command timed out after")
             || super::browser::is_relay_timeout(error))
 }
 
@@ -193,10 +194,13 @@ pub fn action_navigates(action: &str) -> bool {
     )
 }
 
-/// `error` with the note appended, separated as a new sentence.
+/// `error` with the note appended: on a line of its own after a multi-line
+/// error (one already carrying hints), else as a new sentence.
 pub fn append_note(error: &str, note: &str) -> String {
     let trimmed = error.trim_end();
-    let sep = if trimmed.ends_with(['.', '!', '?']) {
+    let sep = if trimmed.contains('\n') {
+        "\n"
+    } else if trimmed.ends_with(['.', '!', '?']) {
         " "
     } else {
         ". "
@@ -356,6 +360,7 @@ mod tests {
             "isolation_unavailable: Runtime.evaluate requires an isolated execution context",
             "Wait timed out after 25000ms",
             "CDP error (Page.captureScreenshot): relay timeout after 25000ms: x",
+            "CDP command timed out after 30s: Page.captureScreenshot",
         ] {
             assert!(error_wants_note(e), "{e}");
             let noted = append_note(e, "Observed while it ran: the page reloaded once.");
@@ -368,6 +373,11 @@ mod tests {
             "Wait timed out after 5ms. N."
         );
         assert_eq!(append_note("Done.", "N."), "Done. N.");
+        // After hints on their own lines, the note gets a line too.
+        assert_eq!(
+            append_note("Wait timed out after 5ms\nHint: h.", "N."),
+            "Wait timed out after 5ms\nHint: h.\nN."
+        );
     }
 
     #[test]
