@@ -171,7 +171,7 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
         <code>screenY</code> 等于 <code>screen.height</code>，这是 headless 检测常看的特征。只有激活的标签页或显示出来的窗口才会有
         <code>outer &gt; inner</code>；改写尺寸或屏幕会改变别的指纹，关掉焦点模拟又会让标签页变成 hidden 并被节流（一次点击约 5 秒）。
         chrome-use 承诺不激活标签页、不开新窗口，所以这一点保持现状。我们测过的公开检测站都没有报它，Claude in Chrome 也有同样的特征。
-        遇到检查这一点的网站，那次任务用 <code>tab select --activate</code>。详见 #770。
+        遇到检查这一点的网站，那次任务用 <code>tab select --activate</code>。详见 <a href="https://github.com/leeguooooo/chrome-use/issues/770">#770</a>。
       </div>
 
       <hr class="du-divider" />
