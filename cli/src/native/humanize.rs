@@ -898,7 +898,10 @@ mod rest_path_tests {
             let total = |p: &[MoveStep]| p.iter().map(|s| s.delay).sum::<Duration>();
             let (a, b) = (total(&moving), total(&rest));
             let expected = a.mul_f64(moving.len() as f64 / rest.len() as f64);
-            assert!(b.abs_diff(expected) <= Duration::from_millis(1), "{a:?} vs {b:?}");
+            assert!(
+                b.abs_diff(expected) <= Duration::from_millis(1),
+                "{a:?} vs {b:?}"
+            );
         }
     }
 
