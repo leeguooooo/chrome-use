@@ -46,7 +46,7 @@ export function startPermissions({ document: doc, chrome }) {
     }
   }
 
-  function siteList(container, hosts, list) {
+  function siteList(container, hosts, list, kinds = {}) {
     container.replaceChildren();
     if (!hosts.length) {
       const li = doc.createElement('li'); li.className = 'hint'; li.textContent = t('options_perm_none'); container.append(li); return;
@@ -54,6 +54,11 @@ export function startPermissions({ document: doc, chrome }) {
     for (const host of hosts) {
       const li = doc.createElement('li');
       const name = doc.createElement('span'); name.className = 'grow mono'; name.textContent = host;
+      if (kinds[host]?.length) {
+        const also = doc.createElement('span'); also.className = 'hint';
+        also.textContent = ` · ${t('options_perm_also_kinds', kinds[host].map(k => t(KIND_KEYS[k])).join(', '))}`;
+        name.append(also);
+      }
       const remove = doc.createElement('button'); remove.type = 'button'; remove.className = 'btn ghost'; remove.textContent = t('options_perm_remove');
       remove.addEventListener('click', () => send({ op: 'sites', list, host, remove: true }).catch(e => status(e.message)));
       li.append(name, remove);
@@ -80,7 +85,7 @@ export function startPermissions({ document: doc, chrome }) {
     checks(el('permAsk'), KINDS, KIND_KEYS, settings.ask, locked.ask, toggle('ask', settings.ask));
     checks(el('permFirst'), CATEGORIES, CATEGORY_KEYS, settings.firstVisit, locked.firstVisit, toggle('firstVisit', settings.firstVisit));
 
-    siteList(el('permAllowList'), store.allow, 'allow');
+    siteList(el('permAllowList'), store.allow, 'allow', store.allowKinds);
     siteList(el('permBlockList'), store.block, 'block');
 
     const managedRows = [

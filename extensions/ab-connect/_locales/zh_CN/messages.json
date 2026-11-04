@@ -57,6 +57,7 @@
   "options_perm_history_removed_allow": { "message": "移除了允许的站点" },
   "options_perm_history_removed_block": { "message": "移除了屏蔽的站点" },
   "options_perm_none": { "message": "无。" },
+  "options_perm_also_kinds": { "message": "也不再询问：$KINDS$", "placeholders": { "kinds": { "content": "$1" } } },
   "options_perm_remove": { "message": "移除" },
   "options_perm_managed_allowed": { "message": "只允许这些站点" },
   "options_perm_managed_blocked": { "message": "已屏蔽" },

@@ -57,6 +57,7 @@
   "options_perm_history_removed_allow": { "message": "Approved site removed" },
   "options_perm_history_removed_block": { "message": "Blocked site removed" },
   "options_perm_none": { "message": "None." },
+  "options_perm_also_kinds": { "message": "also $KINDS$ without asking", "placeholders": { "kinds": { "content": "$1" } } },
   "options_perm_remove": { "message": "Remove" },
   "options_perm_managed_allowed": { "message": "Only these sites" },
   "options_perm_managed_blocked": { "message": "Blocked" },
