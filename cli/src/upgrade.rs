@@ -54,14 +54,19 @@ const EXPLICIT_CHECK_TIMEOUT_SECS: u64 = 10;
 
 /// Any of these disables both the daily check and the notice.
 /// `CI`, `CHROME_USE_NO_UPDATE_CHECK` and the family-wide `USE_NO_UPDATE_CHECK`
-/// come from the convention; the other two are this fork's older names and a
-/// daemon child, which must never print anything of its own.
+/// come from the convention; the next two are this fork's older names and a
+/// daemon child, which must never print anything of its own. `CU_BWU_CHILD`
+/// marks the child `auth login --bwu` runs under `bwu run`: the login's values
+/// are still in its environment when the check would run, so a background
+/// upgrade (or check worker) it started would inherit them, and on macOS write
+/// them into the upgrade's launchd plist.
 const CHECK_OPT_OUT_VARS: &[&str] = &[
     "CI",
     "CHROME_USE_NO_UPDATE_CHECK",
     "USE_NO_UPDATE_CHECK",
     "AGENT_BROWSER_NO_UPDATE_CHECK",
     "AGENT_BROWSER_DAEMON",
+    "CU_BWU_CHILD",
 ];
 
 /// These silence only the notice line; the daily check (and an opted-in
@@ -1494,6 +1499,7 @@ mod tests {
             "USE_NO_UPDATE_CHECK",
             "AGENT_BROWSER_NO_UPDATE_CHECK",
             "AGENT_BROWSER_DAEMON",
+            "CU_BWU_CHILD",
         ] {
             assert!(update_check_disabled(env_of(&[var])), "{var}");
         }
