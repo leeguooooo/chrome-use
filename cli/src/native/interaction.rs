@@ -5969,7 +5969,8 @@ async fn move_pointer_with(
     level: humanize::HumanizeLevel,
     seed: u64,
 ) -> Result<(), String> {
-    for step in humanize::move_path(humanize::last_cursor(), (x, y), level, seed) {
+    let at_rest = humanize::pointer_at_rest();
+    for step in humanize::move_path_at_rest(humanize::last_cursor(), (x, y), level, seed, at_rest) {
         client
             .send_command_typed::<_, Value>(
                 "Input.dispatchMouseEvent",
@@ -6017,8 +6018,8 @@ async fn dispatch_click_guarded(
     target: Option<&ClickTargetGuard>,
 ) -> Result<(), String> {
     // Move toward the target along a human-like path. At HumanizeLevel::Off this
-    // is a single zero-delay step to (x, y) — identical to the old teleport — so
-    // the default behaviour is unchanged. At Fast/Human it's a curved,
+    // is a single zero-delay step to (x, y), the old teleport, except from rest
+    // where a few unslept reports replace one long jump (#771). At Fast/Human it's a curved,
     // decelerating trajectory starting from where the cursor last landed, which
     // removes the "instant jump to exact centre, no prior movement" tell that
     // behavioural anti-bot systems flag.

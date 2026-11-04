@@ -17055,6 +17055,9 @@ for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.add
             assert_eq!(rest["trusted"], true, "{rest}");
             assert_eq!(rest["x"].as_f64(), Some(20.0), "{rest}");
             assert_eq!(rest["y"].as_f64(), Some(20.0), "{rest}");
+            // Leave the pointer idle past the rest threshold (300ms) so the
+            // click starts from rest, like a command after a model turn.
+            tokio::time::sleep(std::time::Duration::from_millis(450)).await;
             humanize::set_detected_level(level);
             let started = std::time::Instant::now();
             {
@@ -17078,6 +17081,21 @@ for(const type of ['pointermove','pointerrawupdate','pointerdown']) document.add
                 assert!(
                     sample["gap"].as_f64().is_some_and(|gap| gap >= 55.0),
                     "Human settling was not observed: {sample}"
+                );
+            }
+            // HUMANIZE_PROBE_BASELINE records a build without these checks.
+            if std::env::var_os("HUMANIZE_PROBE_BASELINE").is_none() {
+                if level == humanize::HumanizeLevel::Fast {
+                    assert!(
+                        sample["gap"].as_f64().is_some_and(|gap| gap >= 12.0),
+                        "Fast settling was not observed: {sample}"
+                    );
+                }
+                // From rest every level moves in several reports, the first small.
+                assert!(sample["moves"].as_u64().is_some_and(|n| n >= 3), "{sample}");
+                assert!(
+                    sample["firstJump"].as_f64().is_some_and(|j| j < 80.0),
+                    "jump from rest: {sample}"
                 );
             }
             sample["clickMs"] = json!(elapsed);
