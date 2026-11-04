@@ -163,6 +163,17 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
         CDP IME 提交产生的 <code>compositionend</code> 也可能被 Chrome 标记为 untrusted。
       </div>
 
+      <div class="du-callout note" id="background-tab-geometry">
+        <div class="du-callout-title">已知限制：后台 agent 标签页的窗口尺寸</div>
+        relay 模式下 agent 的标签页在后台打开，不会抢你的窗口。开着焦点模拟时，这种标签页报告
+        <code>visibilityState = visible</code>、<code>document.hasFocus() = true</code>，但
+        <code>outerWidth</code>/<code>outerHeight</code> 等于 <code>innerWidth</code>/<code>innerHeight</code>，
+        <code>screenY</code> 等于 <code>screen.height</code>，这是 headless 检测常看的特征。只有激活的标签页或显示出来的窗口才会有
+        <code>outer &gt; inner</code>；改写尺寸或屏幕会改变别的指纹，关掉焦点模拟又会让标签页变成 hidden 并被节流（一次点击约 5 秒）。
+        chrome-use 承诺不激活标签页、不开新窗口，所以这一点保持现状。我们测过的公开检测站都没有报它，Claude in Chrome 也有同样的特征。
+        遇到检查这一点的网站，那次任务用 <code>tab select --activate</code>。详见 #770。
+      </div>
+
       <hr class="du-divider" />
 
       <h2>三层防线</h2>

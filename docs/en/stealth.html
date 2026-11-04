@@ -180,6 +180,18 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
         Chrome may also mark CDP IME <code>compositionend</code> events untrusted.
       </div>
 
+      <div class="du-callout note" id="background-tab-geometry">
+        <div class="du-callout-title">Known limitation: window geometry of background agent tabs</div>
+        On the relay, agent tabs open in the background so the agent never takes your window. With focus emulation such a tab
+        reports <code>visibilityState = visible</code> and <code>document.hasFocus() = true</code>, but its
+        <code>outerWidth</code>/<code>outerHeight</code> equal <code>innerWidth</code>/<code>innerHeight</code> and
+        <code>screenY</code> equals <code>screen.height</code>, a pattern headless detectors look for. Only an active tab or a
+        shown window gives <code>outer &gt; inner</code>; overriding the metrics or the screen changes other fingerprints, and
+        dropping focus emulation makes the tab visibly hidden and throttled (a click takes ~5 s). chrome-use keeps its promise not
+        to activate tabs or open windows, so this stays as is. No public detector flagged it in our tests; Claude in Chrome shows the
+        same pattern. If a site checks it, run that task with <code>tab select --activate</code>. Details: #770.
+      </div>
+
       <hr class="du-divider" />
 
       <h2>Three lines of defense</h2>
