@@ -241,6 +241,11 @@ and runs in the main world: `const page = args.page || ((fn, ...a) => fn(...a))`
 from the isolated world sends cookies but skips the page's own wrapper, so sites that sign
 their requests in a fetch wrapper (Douyin's `/janus`, Xiaohongshu's client) need `args.page`.
 
+An argument the adapter declares always wins over a helper of the same name (1.5.279+): an
+adapter with its own `page` arg for pagination gets the number it was passed, and reaches the
+helpers as `args.cu.page`, `args.cu.ui`, `args.cu.progress`. `args.cu` holds every helper and
+is there for all adapters.
+
 Each call wheels the element into view first, lands on a point inside it, and rejects with a
 message when the element is gone, has no size, or is covered by something else (it names what).
 Each call costs a round trip to the daemon (~0.1-0.3s plus the human pacing), so keep pure reads

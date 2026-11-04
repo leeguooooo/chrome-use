@@ -588,8 +588,11 @@ pub const DEFAULT_RETRY_STATUSES: &[&str] = &["incomplete", "uploading"];
 /// [`poll_script`] (each poll is a quick read) until it settles or the
 /// command's timeout passes (#366).
 ///
-/// Adapters see three extras on `args`, all non-enumerable so an adapter that
-/// serializes its args is unaffected:
+/// Adapters see these extras on `args`, all non-enumerable so an adapter that
+/// serializes its args is unaffected. An extra never replaces an argument the
+/// adapter declares or the caller passed (#848: an adapter's own numeric
+/// `page` arg became the `args.page` helper); every extra is also on
+/// `args.cu` (`args.cu.page`, `args.cu.ui` ...), unless `cu` is itself an arg:
 /// - `args.budgetMs`: time this run may take, for adapters that pace themselves.
 /// - `args.progress(msg)`: a progress line, reported with the result.
 /// - for each `"type": "file"` arg, `args.<name>` is `{path, name, size,
@@ -606,6 +609,8 @@ pub fn build_start(
     let runner = build_runner_fn(adapter, args, helper_src);
     let args_json = serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string());
     let files_json = serde_json::to_string(files).unwrap_or_else(|_| "{}".to_string());
+    let declared_json =
+        serde_json::to_string(&adapter.arg_order).unwrap_or_else(|_| "[]".to_string());
     format!(
         "(() => {{\n\
          const run = {{ done: false, result: undefined, error: undefined, progress: [], requests: [], waiters: {{}}, seq: 0 }};\n\
@@ -614,7 +619,13 @@ pub fn build_start(
          run.requests.push(Object.assign({{ id, kind }}, payload));\n\
          }});\n\
          const a = {args_json};\n\
-         const hide = (name, value) => Object.defineProperty(a, name, {{ value, configurable: true, enumerable: false, writable: true }});\n\
+         const declared = new Set({declared_json});\n\
+         const helpers = {{}};\n\
+         const hide = (name, value) => {{\n\
+         helpers[name] = value;\n\
+         if (declared.has(name) || Object.prototype.hasOwnProperty.call(a, name)) return;\n\
+         Object.defineProperty(a, name, {{ value, configurable: true, enumerable: false, writable: true }});\n\
+         }};\n\
          const T = Object.create(null); let tn = 0;\n\
          Object.defineProperty(run, 'targets', {{ value: T }});\n\
          const pick = (t) => {{\n\
@@ -648,6 +659,7 @@ pub fn build_start(
          press: (key, o) => rpc('press', Object.assign({{}}, opts(o), {{ key: String(key) }})),\n\
          scroll: (t) => rpc('scroll', typeof t === 'number' ? {{ dy: t }} : pick(t)),\n\
          }}));\n\
+         if (!declared.has('cu') && !Object.prototype.hasOwnProperty.call(a, 'cu')) Object.defineProperty(a, 'cu', {{ value: Object.freeze(helpers), configurable: true, enumerable: false, writable: true }});\n\
          Promise.resolve().then(() => ({runner})(a)).then(\n\
          (r) => {{ run.result = r; run.done = true; }},\n\
          (e) => {{ run.error = String((e && e.stack) || e); run.done = true; }});\n\
@@ -3166,6 +3178,66 @@ async function(args) { return args; }"#;
             retry_statuses(&parse_adapter(raw, "x/y").unwrap()),
             vec!["processing"]
         );
+    }
+
+    /// #848: an adapter that declares its own `page` (or `ui`, `progress`)
+    /// arg gets the value it was passed, not the helper; the helpers stay
+    /// reachable on `args.cu`.
+    #[test]
+    fn declared_args_are_not_replaced_by_helpers_under_node() {
+        let Some(node) = std::env::var_os("PATH").and_then(|p| {
+            std::env::split_paths(&p)
+                .map(|d| d.join("node"))
+                .find(|n| n.is_file())
+        }) else {
+            return;
+        };
+        let raw = r#"/* @meta
+{"name":"demo/paging","domain":"example.com","readOnly":true,"args":{"page":{"default":"1"},"size":{"default":"100"}}}
+*/
+async function(args) {
+  const page = Number(args.page ?? 1);
+  const size = Number(args.size ?? 100);
+  if (![page, size].every(Number.isSafeInteger)) throw new Error('Invalid pagination');
+  return { page, size, cuPage: typeof args.cu.page, cuUi: typeof args.cu.ui.click, progress: typeof args.progress, keys: Object.keys(args) };
+}"#;
+        let a = parse_adapter(raw, "demo/paging").unwrap();
+        let run = |args: Value| -> Value {
+            let start =
+                build_start(&a, &args, None, &json!({})).replace(BUDGET_PLACEHOLDER, "1000");
+            let driver = format!(
+                "globalThis.window = globalThis; globalThis.location = new URL('https://example.com/');\n\
+                 (async () => {{\n\
+                 const run = {start};\n\
+                 await new Promise(r => setTimeout(r, 5));\n\
+                 console.log(JSON.stringify(({poll}).call(run)));\n\
+                 }})();",
+                poll = poll_script()
+            );
+            let out = std::process::Command::new(&node)
+                .arg("-e")
+                .arg(driver)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            serde_json::from_slice(&out.stdout).unwrap()
+        };
+        let v = run(json!({ "page": "2", "size": "100" }));
+        assert_eq!(v["state"], "done", "{v}");
+        assert!(v["error"].is_null(), "{v}");
+        assert_eq!(v["result"]["page"], 2);
+        assert_eq!(v["result"]["size"], 100);
+        assert_eq!(v["result"]["cuPage"], "function");
+        assert_eq!(v["result"]["cuUi"], "function");
+        assert_eq!(v["result"]["progress"], "function");
+        assert_eq!(v["result"]["keys"], json!(["page", "size"]));
+        // Declared but not passed: the adapter's own fallback, not the helper.
+        let v = run(json!({}));
+        assert_eq!(v["result"]["page"], 1, "{v}");
     }
 
     /// Drive the real start / poll / settle scripts under node, playing the
