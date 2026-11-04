@@ -3047,7 +3047,8 @@ moves keyboard focus like a real one, so `click <input>` followed by
 `press Meta+a` lands on that input.
 
 Human pointer clicks settle for a seeded 60-200ms before press, then recheck
-that the same live element owns the landing point. Fast/Off timing is unchanged.
+that the same live element owns the landing point. Fast settles 15-55ms; Off
+presses at once. From rest, Off and Fast move in several small steps, not one jump.
 A top-level @ref under a small fixed/sticky bar on a viewport edge (header,
 nav or toolbar, any tag) may get one trusted wheel gesture (10s cap, humanize
 pacing). The same handle
@@ -7197,7 +7198,7 @@ Options:
   --screenshot-quality <n>   JPEG quality 0-100; ignored for PNG (or AGENT_BROWSER_SCREENSHOT_QUALITY)
   --screenshot-format <fmt>  Screenshot format: png, jpeg (or AGENT_BROWSER_SCREENSHOT_FORMAT)
   --humanize <level>         off|fast|human; default fast with adaptive escalation
-                             Human regular pointer clicks settle 60-200ms before press
+                             Clicks settle before press: Human 60-200ms, Fast 15-55ms
                              off fails input-behavior checks; keep it out of watched sites
                              (also AGENT_BROWSER_HUMANIZE)
   --headed                   Always on (default). Headless is forbidden (bot-detection tell);

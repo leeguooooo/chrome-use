@@ -24,7 +24,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // ---- daemon-wide runtime state -------------------------------------------
 //
@@ -56,6 +56,26 @@ fn last_cursor_slot() -> &'static Mutex<(f64, f64)> {
     CURSOR.get_or_init(|| Mutex::new((0.0, 0.0)))
 }
 
+fn last_move_slot() -> &'static Mutex<Option<Instant>> {
+    static MOVED: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+    MOVED.get_or_init(|| Mutex::new(None))
+}
+
+/// A pointer chrome-use has not moved for this long is at rest: the next move
+/// starts a new reach, as when a hand goes back to the mouse. Commands arrive
+/// seconds apart, so nearly every command's first move starts from rest;
+/// moves inside one command (wheel-into-view loops, header recovery) do not.
+pub const REST_AFTER: Duration = Duration::from_millis(300);
+
+/// True when no pointer move has been recorded in this process for
+/// [`REST_AFTER`], or none ever was.
+pub fn pointer_at_rest() -> bool {
+    last_move_slot()
+        .lock()
+        .unwrap()
+        .is_none_or(|t| t.elapsed() >= REST_AFTER)
+}
+
 /// The level that should apply right now: the env override if set, else the
 /// level the detector last chose for the active page.
 pub fn active_level() -> HumanizeLevel {
@@ -74,9 +94,11 @@ pub fn last_cursor() -> (f64, f64) {
     *last_cursor_slot().lock().unwrap()
 }
 
-/// Record the cursor landing point after a move/click.
+/// Record the cursor landing point after a move/click. Also marks the pointer
+/// as just moved, for [`pointer_at_rest`].
 pub fn set_last_cursor(p: (f64, f64)) {
     *last_cursor_slot().lock().unwrap() = p;
+    *last_move_slot().lock().unwrap() = Some(Instant::now());
 }
 
 /// A fresh seed per action so repeated clicks on the same point still vary.
@@ -131,7 +153,8 @@ fn rank(level: HumanizeLevel) -> u8 {
 /// How human-like input motion should be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum HumanizeLevel {
-    /// Instant: a single move to the exact point, no delays. Original behaviour.
+    /// Instant: a single move to the exact point, no delays. From rest a
+    /// long move becomes a few unslept reports (see [`move_path_at_rest`]).
     #[default]
     Off,
     /// A few eased steps with small delays — cheap cover for ordinary sites.
@@ -240,25 +263,52 @@ pub fn landing_point(bbox: (f64, f64, f64, f64), level: HumanizeLevel, seed: u64
     )
 }
 
+/// Largest share of the distance one step of an `n`-step smootherstep path
+/// covers: the curve's peak slope, 15/8, over `n`.
+const EASE_PEAK_SLOPE: f64 = 1.875;
+
+/// Steps an eased path over `dist` needs so that no single report moves more
+/// than about `max_report_px`, within `min..=max`.
+fn steps_for_report_cap(dist: f64, max_report_px: f64, min: usize, max: usize) -> usize {
+    ((dist * EASE_PEAK_SLOPE / max_report_px).ceil() as usize).clamp(min, max)
+}
+
 /// Build the cursor path from `from` to `to`. The last [`MoveStep`] is the
 /// landing point. `Off` yields a single zero-delay step at `to` (today's
-/// teleport), so callers can use one code path for every level.
+/// teleport), so callers can use one code path for every level. This is the
+/// path for a pointer already in motion; see [`move_path_at_rest`].
 pub fn move_path(
     from: (f64, f64),
     to: (f64, f64),
     level: HumanizeLevel,
     seed: u64,
 ) -> Vec<MoveStep> {
-    if level.is_off() {
-        return vec![MoveStep {
-            x: to.0,
-            y: to.1,
-            delay: Duration::ZERO,
-        }];
-    }
+    move_path_at_rest(from, to, level, seed, false)
+}
 
+/// [`move_path`] for a pointer that may be at rest ([`pointer_at_rest`]).
+///
+/// From rest, a hand accelerates away: the first report is small and the
+/// distance is spread over several reports. `Human` already moves that way.
+/// `Off` used to teleport the whole distance in one report and `Fast`'s 3–6
+/// steps put up to ~29% of the distance in one report (#771), so from rest:
+///
+/// - `Off` takes 3–6 eased reports with no added sleeps (each still waits for
+///   Chrome's acknowledgement, about one frame on a page with pointer
+///   listeners), sized toward 120 px each;
+/// - `Fast` takes 4–12 reports sized toward 80 px each, inside the same time
+///   budget as before (the delays are split finer, not added).
+pub fn move_path_at_rest(
+    from: (f64, f64),
+    to: (f64, f64),
+    level: HumanizeLevel,
+    seed: u64,
+    at_rest: bool,
+) -> Vec<MoveStep> {
     let dist = (to.0 - from.0).hypot(to.1 - from.1);
-    if dist < 1.0 {
+    // A short hop is one report even from rest: a hand covers it in a frame.
+    let rest_path = at_rest && dist >= REST_SINGLE_REPORT_PX;
+    if (level.is_off() && !rest_path) || dist < 1.0 {
         return vec![MoveStep {
             x: to.0,
             y: to.1,
@@ -267,12 +317,16 @@ pub fn move_path(
     }
 
     let (steps, total_ms, arc) = match level {
+        HumanizeLevel::Off => (steps_for_report_cap(dist, 120.0, 3, 6), 0.0, 0.03),
         HumanizeLevel::Fast => {
-            let s = ((dist / 120.0).round() as usize).clamp(3, 6);
+            let s = if rest_path {
+                steps_for_report_cap(dist, 80.0, 4, 12)
+            } else {
+                ((dist / 120.0).round() as usize).clamp(3, 6)
+            };
             (s, (dist * 0.35).clamp(40.0, 130.0), 0.06)
         }
-        // Off handled above.
-        _ => {
+        HumanizeLevel::Human => {
             let s = ((dist / 45.0).round() as usize).clamp(8, 24);
             (s, (dist * 0.9).clamp(140.0, 650.0), 0.16)
         }
@@ -317,6 +371,9 @@ pub fn move_path(
     out
 }
 
+/// Below this distance a move from rest is still a single report.
+const REST_SINGLE_REPORT_PX: f64 = 40.0;
+
 /// Split a wheel scroll of (`total_dx`, `total_dy`) into eased segments. `Off`
 /// returns a single instant segment (today's one-shot scroll); `Fast`/`Human`
 /// break it into several accelerate-then-decelerate chunks with small,
@@ -353,13 +410,17 @@ pub fn scroll_segments(
 }
 
 /// Pause after the pointer arrives and before a regular click presses the
-/// button. Only Human adds this settling gap; other levels keep their timing.
+/// button. A hand settles on the target before pressing: `Human` waits
+/// 60–200 ms, `Fast` 15–55 ms (it used to press ~6 ms after the last move,
+/// faster than any hand). `Off` keeps its instant press. Seeded, never fixed.
 pub fn settle_before_press(level: HumanizeLevel, seed: u64) -> Duration {
-    if level != HumanizeLevel::Human {
-        return Duration::ZERO;
-    }
+    let (lo, span) = match level {
+        HumanizeLevel::Off => return Duration::ZERO,
+        HumanizeLevel::Fast => (15_000, 40_001),
+        HumanizeLevel::Human => (60_000, 140_001),
+    };
     let mut rng = Rng::new(seed ^ 0xD1B5_4A32_D192_ED03);
-    Duration::from_millis(60 + rng.next_u64() % 141)
+    Duration::from_micros(lo + rng.next_u64() % span)
 }
 
 /// Dwell between `mousePressed` and `mouseReleased` (a real click isn't
@@ -718,8 +779,9 @@ mod click_settle_tests {
     use super::*;
 
     #[test]
-    fn human_settle_is_seeded_and_bounded_while_other_levels_keep_timing() {
+    fn settle_is_seeded_jittered_and_bounded_per_level() {
         let mut gaps = std::collections::HashSet::new();
+        let mut fast_gaps = std::collections::HashSet::new();
         for seed in 0..100 {
             let gap = settle_before_press(HumanizeLevel::Human, seed);
             assert!((60..=200).contains(&gap.as_millis()));
@@ -729,11 +791,129 @@ mod click_settle_tests {
                 settle_before_press(HumanizeLevel::Off, seed),
                 Duration::ZERO
             );
-            assert_eq!(
-                settle_before_press(HumanizeLevel::Fast, seed),
-                Duration::ZERO
-            );
+            let fast = settle_before_press(HumanizeLevel::Fast, seed);
+            assert!((15..=55).contains(&fast.as_millis()), "{fast:?}");
+            assert_eq!(fast, settle_before_press(HumanizeLevel::Fast, seed));
+            fast_gaps.insert(fast);
         }
-        assert!(gaps.len() > 1);
+        assert!(gaps.len() > 50, "Human settle must be jittered");
+        assert!(fast_gaps.len() > 50, "Fast settle must be jittered");
+    }
+
+    #[test]
+    fn human_settle_median_is_well_above_a_frame() {
+        let mut gaps: Vec<u128> = (0..400)
+            .map(|seed| settle_before_press(HumanizeLevel::Human, seed).as_millis())
+            .collect();
+        gaps.sort_unstable();
+        let median = gaps[gaps.len() / 2];
+        assert!((100..=160).contains(&median), "median {median}ms");
+    }
+}
+
+#[cfg(test)]
+mod rest_path_tests {
+    use super::*;
+
+    fn max_report(from: (f64, f64), path: &[MoveStep]) -> f64 {
+        let mut prev = from;
+        let mut max = 0.0_f64;
+        for s in path {
+            max = max.max((s.x - prev.0).hypot(s.y - prev.1));
+            prev = (s.x, s.y);
+        }
+        max
+    }
+
+    fn first_report(from: (f64, f64), path: &[MoveStep]) -> f64 {
+        (path[0].x - from.0).hypot(path[0].y - from.1)
+    }
+
+    #[test]
+    fn off_from_rest_is_a_short_unslept_path_not_one_jump() {
+        let from = (20.0_f64, 20.0_f64);
+        for (to, seed) in [
+            ((760.0_f64, 325.0_f64), 1),
+            ((330.0, 180.0), 2),
+            ((1200.0, 700.0), 3),
+        ] {
+            let dist = (to.0 - from.0).hypot(to.1 - from.1);
+            let path = move_path_at_rest(from, to, HumanizeLevel::Off, seed, true);
+            assert!((3..=6).contains(&path.len()), "{} steps", path.len());
+            assert_eq!(*path.last().map(|s| (s.x, s.y)).as_ref().unwrap(), to);
+            assert!(path.iter().all(|s| s.delay.is_zero()), "Off must not sleep");
+            assert!(
+                first_report(from, &path) < dist * 0.1,
+                "first report {} of {dist}",
+                first_report(from, &path)
+            );
+            assert!(max_report(from, &path) < dist * 0.65);
+        }
+    }
+
+    #[test]
+    fn off_in_motion_or_short_hop_still_teleports() {
+        let path = move_path_at_rest((0.0, 0.0), (400.0, 300.0), HumanizeLevel::Off, 4, false);
+        assert_eq!(path.len(), 1);
+        let hop = move_path_at_rest((0.0, 0.0), (20.0, 25.0), HumanizeLevel::Off, 4, true);
+        assert_eq!(hop.len(), 1);
+        assert_eq!((hop[0].x, hop[0].y), (20.0, 25.0));
+    }
+
+    #[test]
+    fn fast_from_rest_caps_each_report_within_the_same_time_budget() {
+        let from = (20.0_f64, 20.0_f64);
+        for (to, seed) in [
+            ((760.0_f64, 325.0_f64), 5),
+            ((330.0, 180.0), 6),
+            ((380.0, 40.0), 7),
+        ] {
+            let dist = (to.0 - from.0).hypot(to.1 - from.1);
+            let moving = move_path_at_rest(from, to, HumanizeLevel::Fast, seed, false);
+            let rest = move_path_at_rest(from, to, HumanizeLevel::Fast, seed, true);
+            assert!((4..=12).contains(&rest.len()), "{} steps", rest.len());
+            assert!(rest.len() >= moving.len());
+            assert_eq!(*rest.last().map(|s| (s.x, s.y)).as_ref().unwrap(), to);
+            // The bow can stretch a report a little past the cap.
+            let cap = if dist * EASE_PEAK_SLOPE / 80.0 <= 12.0 {
+                95.0
+            } else {
+                dist * 0.18
+            };
+            assert!(
+                max_report(from, &rest) <= cap,
+                "{} > {cap}",
+                max_report(from, &rest)
+            );
+            assert!(first_report(from, &rest) < 30.0);
+            let total = |p: &[MoveStep]| p.iter().map(|s| s.delay).sum::<Duration>();
+            let (a, b) = (total(&moving), total(&rest));
+            assert!(a.abs_diff(b) <= Duration::from_millis(1), "{a:?} vs {b:?}");
+        }
+    }
+
+    #[test]
+    fn fast_in_motion_keeps_its_old_step_count() {
+        let path = move_path_at_rest((0.0, 0.0), (500.0, 500.0), HumanizeLevel::Fast, 7, false);
+        assert_eq!(
+            path,
+            move_path((0.0, 0.0), (500.0, 500.0), HumanizeLevel::Fast, 7)
+        );
+        assert!((3..=6).contains(&path.len()));
+    }
+
+    #[test]
+    fn human_path_does_not_depend_on_rest() {
+        let a = move_path_at_rest((1.0, 2.0), (600.0, 400.0), HumanizeLevel::Human, 9, true);
+        let b = move_path_at_rest((1.0, 2.0), (600.0, 400.0), HumanizeLevel::Human, 9, false);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn pointer_rests_after_the_threshold() {
+        *last_move_slot().lock().unwrap() = Some(Instant::now());
+        assert!(!pointer_at_rest());
+        *last_move_slot().lock().unwrap() = Instant::now().checked_sub(REST_AFTER);
+        assert!(pointer_at_rest());
     }
 }
