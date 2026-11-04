@@ -43,7 +43,7 @@ test('defaults: sensitive list on, payment fields and purchases ask; password fi
 
 test('the policy reply carries only what the person set, so the CLI can apply its own defaults', () => {
   const reply = sitePolicyReply({ allow: ['a.test'], settings: { sensitiveSites: false } }, { blockedDomains: ['b.test'] });
-  assert.deepEqual(reply, { version: 1, user: { allow: ['a.test'], block: [], sensitiveSites: false }, managed: { blockedDomains: ['b.test'] } });
+  assert.deepEqual(reply, { version: 1, user: { allow: ['a.test'], block: [], allowKinds: {}, sensitiveSites: false }, managed: { blockedDomains: ['b.test'] } });
 });
 
 test('requests: one pending per session, status, and expiry', () => {
@@ -169,4 +169,24 @@ test('the manifest declares the managed schema, and the schema covers every mana
   assert.deepEqual(Object.keys(schema.properties).sort(), ['actionPolicy', 'allowedDomains', 'ask', 'blockedDomains', 'confirmDomains', 'disabledAgents', 'firstVisit', 'sensitiveSites']);
   const all = Object.fromEntries(Object.keys(schema.properties).map(k => [k, schema.properties[k].type === 'boolean' ? true : schema.properties[k].type === 'object' ? { deny: ['upload'] } : ['download']]));
   assert.deepEqual(Object.keys(managedPolicy(all)).sort(), Object.keys(schema.properties).sort());
+});
+
+test('always on an always-ask kind remembers the kind for that site, and removing the site forgets it (#846)', () => {
+  const requests = addRequest([], { id: 's_k', host: 'signin.aliyun.com', category: 'typing', reason: 'payment_input', description: 'd', action: 'fill', session: 'a' }, 0);
+  const out = applyDecision({}, requests, 's_k', 'always', 10);
+  assert.deepEqual(out.store.allow, ['signin.aliyun.com']);
+  assert.deepEqual(out.store.allowKinds, { 'signin.aliyun.com': ['payment_input'] });
+  assert.deepEqual(sitePolicyReply(out.store, {}).user.allowKinds, { 'signin.aliyun.com': ['payment_input'] });
+
+  const once = applyDecision({}, requests, 's_k', 'once', 10);
+  assert.deepEqual(once.store.allowKinds, {}, 'allow once remembers nothing');
+  const site = applyDecision({}, addRequest([], { id: 's_s', host: 'bank.test', reason: 'sensitive_site', session: 'a' }, 0), 's_s', 'always', 10);
+  assert.deepEqual(site.store.allowKinds, {}, 'a site request does not allow any kind');
+
+  const removed = editSites(out.store, { list: 'allow', host: 'signin.aliyun.com', remove: true }, 20);
+  assert.deepEqual(removed.allowKinds, {});
+  const blocked = editSites(out.store, { list: 'block', host: 'signin.aliyun.com' }, 20);
+  assert.deepEqual(blocked.allowKinds, {});
+  // Unknown kinds, and kinds for a host no longer approved, are dropped.
+  assert.deepEqual(normalizeStore({ allow: ['a.test'], allowKinds: { 'a.test': ['payment_input', 'bogus'], 'b.test': ['purchase'] } }).allowKinds, { 'a.test': ['payment_input'] });
 });

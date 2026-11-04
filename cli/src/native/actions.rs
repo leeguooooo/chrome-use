@@ -786,6 +786,9 @@ pub struct DaemonState {
     /// Sites a terminal prompt allowed "always" when no extension could keep
     /// the decision; they last as long as this daemon.
     pub site_session_allow: Vec<String>,
+    /// `(host, kind)` pairs an "always" at a terminal prompt allowed the
+    /// same way (an always-ask kind asks even on an allowed site).
+    pub site_session_allow_kinds: Vec<(String, String)>,
     pub har_recording: bool,
     pub har_entries: Vec<HarEntry>,
     /// `teach start` .. `teach stop`: the user's actions being recorded.
@@ -958,6 +961,7 @@ impl DaemonState {
             pending_confirmation: None,
             site_policy_cache: None,
             site_session_allow: Vec::new(),
+            site_session_allow_kinds: Vec::new(),
             har_recording: false,
             har_entries: Vec::new(),
             teach: None,
@@ -26228,7 +26232,7 @@ async fn site_gate_kind(
     cmd: &Value,
     state: &DaemonState,
 ) -> Result<Option<&'static str>, String> {
-    use super::site_policy::{field_kind_from_attributes, field_kind_from_text, is_purchase_name};
+    use super::site_policy::{field_kind, field_kind_from_text, is_purchase_name};
     if category == "download" {
         return Ok(Some("download"));
     }
@@ -26274,8 +26278,6 @@ async fn site_gate_kind(
             if selector.is_empty() {
                 return Ok(None);
             }
-            let by_selector = field_kind_from_text(selector);
-            let by_name = entry.and_then(|e| field_kind_from_text(&e.name));
             let (_, effective_session) = super::element::resolve_ax_session(
                 entry.and_then(|e| e.frame_id.as_deref()),
                 &session,
@@ -26332,15 +26334,15 @@ async fn site_gate_kind(
                         .ok_or_else(|| unreadable("field attributes are malformed"))
                 })
                 .collect::<Result<_, _>>()?;
-            let by_dom = field_kind_from_attributes(&attrs);
-            // Payment wins across the exact field's DOM, name and selector.
-            Ok(
-                if [by_dom, by_name, by_selector].contains(&Some("payment_input")) {
-                    Some("payment_input")
-                } else {
-                    by_dom.or(by_name).or(by_selector)
-                },
-            )
+            // The exact field's DOM, accessible name and the agent's selector
+            // are judged together: a card mark anywhere wins, and a
+            // one-time-code mark anywhere keeps an ambiguous "security code"
+            // from reading as a card field (#846).
+            let mut names = vec![selector];
+            if let Some(e) = entry {
+                names.push(e.name.as_str());
+            }
+            Ok(field_kind(&attrs, &names))
         }
         "click" => {
             let name = entry.map(|e| e.name.as_str()).unwrap_or_else(|| {
@@ -26384,6 +26386,7 @@ async fn site_gate(cmd: &Value, action: &str, id: &str, state: &mut DaemonState)
         file: file.unwrap_or_default(),
         defaults: on_relay,
         session_allow: state.site_session_allow.clone(),
+        session_allow_kinds: state.site_session_allow_kinds.clone(),
     };
     let current_host = || {
         state
@@ -26597,6 +26600,11 @@ async fn record_site_decision(state: &mut DaemonState, site: &SitePending, decis
     }
     if decision == "always" && !stored {
         state.site_session_allow.push(site.host.clone());
+        if super::site_policy::KINDS.contains(&site.reason.as_str()) {
+            state
+                .site_session_allow_kinds
+                .push((site.host.clone(), site.reason.clone()));
+        }
     }
     state.site_policy_cache = None;
 }

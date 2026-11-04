@@ -52,14 +52,33 @@ const hostList = list => [...new Set((Array.isArray(list) ? list : []).filter(v 
 const pick = (list, allowed) => (Array.isArray(list) ? [...new Set(list.filter(v => allowed.includes(v)))] : undefined);
 
 export function emptyStore() {
-  return { allow: [], block: [], settings: {}, history: [] };
+  return { allow: [], block: [], allowKinds: {}, settings: {}, history: [] };
+}
+
+/**
+ * `{ host: [kind, ...] }`: the always-ask kinds (a payment field, a
+ * purchase ...) a person allowed for good on one site by choosing "Always
+ * allow on this site" on that kind's request (#846). Only for hosts that are
+ * still on the approved list.
+ */
+function kindMap(raw, allow) {
+  const out = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [key, kinds] of Object.entries(raw)) {
+    const host = normalizeHost(key);
+    if (!host || host === '*' || !allow.includes(host)) continue;
+    const list = pick(kinds, KINDS);
+    if (list?.length) out[host] = list;
+  }
+  return out;
 }
 
 /** What is in storage, made safe to use whatever an older build left there. */
 export function normalizeStore(raw) {
   const s = raw && typeof raw === 'object' ? raw : {};
   const settings = s.settings && typeof s.settings === 'object' ? s.settings : {};
-  const out = { allow: hostList(s.allow), block: hostList(s.block), settings: {}, history: Array.isArray(s.history) ? s.history.slice(-HISTORY_LIMIT) : [] };
+  const allow = hostList(s.allow);
+  const out = { allow, block: hostList(s.block), allowKinds: kindMap(s.allowKinds, allow), settings: {}, history: Array.isArray(s.history) ? s.history.slice(-HISTORY_LIMIT) : [] };
   if (typeof settings.sensitiveSites === 'boolean') out.settings.sensitiveSites = settings.sensitiveSites;
   const ask = pick(settings.ask, KINDS); if (ask) out.settings.ask = ask;
   const firstVisit = pick(settings.firstVisit, CATEGORIES); if (firstVisit) out.settings.firstVisit = firstVisit;
@@ -106,7 +125,7 @@ export function effectiveSettings(store, managed) {
 /** The `ABExt.sitePolicy` reply: raw layers; the daemon merges them. */
 export function sitePolicyReply(store, managed) {
   const s = normalizeStore(store);
-  return { version: 1, user: { allow: s.allow, block: s.block, ...s.settings }, managed: managed || {} };
+  return { version: 1, user: { allow: s.allow, block: s.block, allowKinds: s.allowKinds, ...s.settings }, managed: managed || {} };
 }
 
 /** Drop expired requests. */
@@ -162,6 +181,11 @@ export function applyDecision(store, requests, id, decision, now, by = 'panel') 
   if (decision === 'always' && request.host) {
     s.allow = hostList([...s.allow, request.host]);
     s.block = s.block.filter(h => h !== request.host);
+    // An always-ask kind asks even on an approved site, so "always" on its
+    // request has to remember the kind too, or the next fill asks again.
+    if (KINDS.includes(request.reason)) {
+      s.allowKinds = { ...s.allowKinds, [request.host]: [...new Set([...(s.allowKinds[request.host] || []), request.reason])] };
+    }
   }
   const entry = historyEntry(request, recorded, now, by);
   s.history = [...s.history, entry].slice(-HISTORY_LIMIT);
@@ -177,11 +201,14 @@ export function editSites(store, { list, host, remove = false }, now) {
   const h = normalizeHost(host);
   if (!h || h === '*') throw new Error('Enter a site such as example.com');
   const s = normalizeStore(store);
-  if (remove) s[list] = s[list].filter(x => x !== h);
-  else {
+  if (remove) {
+    s[list] = s[list].filter(x => x !== h);
+    if (list === 'allow') { const { [h]: _gone, ...rest } = s.allowKinds; s.allowKinds = rest; }
+  } else {
     s[list] = hostList([...s[list], h]);
     const other = list === 'allow' ? 'block' : 'allow';
     s[other] = s[other].filter(x => x !== h);
+    if (list === 'block') { const { [h]: _gone, ...rest } = s.allowKinds; s.allowKinds = rest; }
   }
   s.history = [...s.history, { at: now, host: h, decision: remove ? `removed:${list}` : `added:${list}`, by: 'options' }].slice(-HISTORY_LIMIT);
   return s;

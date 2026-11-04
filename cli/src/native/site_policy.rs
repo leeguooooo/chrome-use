@@ -41,6 +41,8 @@ const SENSITIVE_SITES_JSON: &str = include_str!("sensitive_sites.json");
 /// Kinds that ask every time by default (on the relay). `password_input` and
 /// `download` are opt-in.
 pub const DEFAULT_ASK: &[&str] = &["payment_input", "purchase"];
+/// Every kind (the extension's `KINDS`).
+pub const KINDS: &[&str] = &["payment_input", "purchase", "password_input", "download"];
 
 /// Lowercased `name` / `id` fragments of a payment field.
 const PAYMENT_IDENTIFIERS: &[&str] = &[
@@ -52,10 +54,6 @@ const PAYMENT_IDENTIFIERS: &[&str] = &[
     "cc_number",
     "cvc",
     "cvv",
-    "csc",
-    "securitycode",
-    "security-code",
-    "security_code",
     "exp-date",
     "expdate",
     "expiry",
@@ -68,16 +66,53 @@ const PAYMENT_NAMES: &[&str] = &[
     "card number",
     "credit card",
     "debit card",
-    "security code",
+    "card verification",
     "cvc",
     "cvv",
-    "csc",
     "expiration",
     "expiry",
     "卡号",
     "信用卡",
-    "安全码",
     "有效期",
+];
+/// Words a card's CVV field and a sign-in's one-time-code field share
+/// ("security code", 安全码): payment only when nothing marks the field as
+/// a one-time code (#846: Aliyun's MFA box says 请输入 6 位数字安全码).
+const PAYMENT_AMBIGUOUS: &[&str] = &[
+    "securitycode",
+    "security-code",
+    "security_code",
+    "security code",
+    "csc",
+    "安全码",
+];
+/// Fragments that mark a one-time code (MFA / 2FA / SMS code). A CVV is 3-4
+/// digits, so a 6-digit field is a code, not a card.
+const ONE_TIME_CODE_MARKERS: &[&str] = &[
+    "one-time-code",
+    "one-time",
+    "one time",
+    "otp",
+    "totp",
+    "mfa",
+    "2fa",
+    "two-factor",
+    "two factor",
+    "2-step",
+    "authenticator",
+    "verification",
+    "6-digit",
+    "6 digit",
+    "six-digit",
+    "six digit",
+    "验证码",
+    "动态码",
+    "动态口令",
+    "校验码",
+    "数字安全码",
+    "6 位",
+    "6位",
+    "六位",
 ];
 /// Lowercased `name` / `id` fragments of a password or one-time-code field.
 const PASSWORD_IDENTIFIERS: &[&str] = &["password", "passwd", "passcode", "otp", "one-time-code"];
@@ -106,12 +141,17 @@ pub fn field_kind_from_text(text: &str) -> Option<&'static str> {
     if t.trim().is_empty() {
         return None;
     }
+    let one_time_code = ONE_TIME_CODE_MARKERS.iter().any(|p| t.contains(p));
     if PAYMENT_IDENTIFIERS
         .iter()
         .chain(PAYMENT_NAMES)
         .any(|p| t.contains(p))
+        || (!one_time_code && PAYMENT_AMBIGUOUS.iter().any(|p| t.contains(p)))
     {
         return Some("payment_input");
+    }
+    if one_time_code {
+        return Some("password_input");
     }
     if t.contains("type=password")
         || t.contains("type=\"password\"")
@@ -128,8 +168,20 @@ pub fn field_kind_from_text(text: &str) -> Option<&'static str> {
 
 /// `payment_input` or `password_input` from a field's DOM attributes (a flat
 /// `[name, value, ...]` list, as CDP `DOM.describeNode` returns them).
+#[cfg(test)]
 pub fn field_kind_from_attributes(attrs: &[String]) -> Option<&'static str> {
+    field_kind(attrs, &[])
+}
+
+/// The kind of a typed-into field from its DOM attributes plus what else
+/// names it (the agent's selector, its accessible name), judged together:
+/// a one-time-code mark anywhere (`autocomplete=one-time-code`, a 6-digit
+/// `maxlength`, "验证码" in the placeholder) keeps an ambiguous "security
+/// code" from reading as a card field (#846). A card's own marks
+/// (`autocomplete=cc-*`, "card number", "cvv") still win.
+pub fn field_kind(attrs: &[String], names: &[&str]) -> Option<&'static str> {
     let mut password = false;
+    let mut text: Vec<String> = names.iter().map(|n| n.to_lowercase()).collect();
     for pair in attrs.chunks(2) {
         let [key, value] = pair else { continue };
         let value = value.to_lowercase();
@@ -142,23 +194,27 @@ pub fn field_kind_from_attributes(attrs: &[String]) -> Option<&'static str> {
                     if matches!(token, "current-password" | "new-password" | "one-time-code") {
                         password = true;
                     }
+                    if token == "one-time-code" {
+                        text.push("one-time-code".into());
+                    }
                 }
             }
             "type" if value == "password" => password = true,
+            "maxlength" if value.trim() == "6" => text.push("6-digit".into()),
             "name"
             | "id"
             | "data-elements-stable-field-name"
             | "aria-label"
             | "placeholder"
-            | "title" => match field_kind_from_text(&value) {
-                Some("payment_input") => return Some("payment_input"),
-                Some(_) => password = true,
-                None => {}
-            },
+            | "title" => text.push(value),
             _ => {}
         }
     }
-    password.then_some("password_input")
+    match field_kind_from_text(&text.join("\n")) {
+        Some("payment_input") => Some("payment_input"),
+        Some(_) => Some("password_input"),
+        None => password.then_some("password_input"),
+    }
 }
 
 /// The category of a daemon action, or `None` for actions that only read
@@ -359,6 +415,11 @@ pub struct SiteLayer {
     /// Kinds that ask every time.
     #[serde(default)]
     pub ask: Option<Vec<String>>,
+    /// Always-ask kinds a person allowed for good on one site, by choosing
+    /// "Always allow on this site" on that kind's request (#846):
+    /// `{ "signin.aliyun.com": ["payment_input"] }`.
+    #[serde(default)]
+    pub allow_kinds: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// What an administrator pinned through `chrome.storage.managed`.
@@ -419,6 +480,8 @@ pub struct SitePolicy {
     /// Sites allowed for the rest of this daemon's life (an "always" chosen
     /// at a terminal prompt when no extension could store it).
     pub session_allow: Vec<String>,
+    /// `(host, kind)` pairs allowed the same way.
+    pub session_allow_kinds: Vec<(String, String)>,
 }
 
 fn env_off(name: &str) -> bool {
@@ -482,6 +545,22 @@ impl SitePolicy {
             && !self.defaults
     }
 
+    /// Whether a person chose "Always allow on this site" for `kind` on a
+    /// site covering `host`.
+    fn kind_allowed(&self, host: &str, kind: &str) -> bool {
+        let layer = |l: &SiteLayer| {
+            l.allow_kinds
+                .iter()
+                .any(|(site, kinds)| host_matches(site, host) && kinds.iter().any(|k| k == kind))
+        };
+        layer(&self.user)
+            || layer(&self.file)
+            || self
+                .session_allow_kinds
+                .iter()
+                .any(|(site, k)| k == kind && host_matches(site, host))
+    }
+
     /// Decide one action on `host`. `kind` is `download`, `payment_input`,
     /// `password_input` or `purchase` when the action is one of those.
     pub fn decide(&self, host: &str, category: &str, kind: Option<&str>) -> SiteGate {
@@ -510,7 +589,7 @@ impl SitePolicy {
             };
         }
         if let Some(kind) = kind {
-            if self.ask().iter().any(|k| k == kind) {
+            if self.ask().iter().any(|k| k == kind) && !self.kind_allowed(host, kind) {
                 let what = match kind {
                     "download" => "download a file",
                     "payment_input" => "type into a payment card field",
@@ -757,6 +836,10 @@ mod tests {
             None
         );
         assert_eq!(field_kind_from_text("Card number"), Some("payment_input"));
+        assert_eq!(
+            field_kind_from_text("Card verification code"),
+            Some("payment_input")
+        );
         assert_eq!(field_kind_from_text("#password"), Some("password_input"));
         assert_eq!(field_kind_from_text("PIN"), Some("password_input"));
         assert_eq!(field_kind_from_text("Spinner"), None);
@@ -783,6 +866,89 @@ mod tests {
             p.decide("secure.chase.com", "typing", Some("payment_input")),
             SiteGate::Ask { .. }
         ));
+    }
+
+    #[test]
+    fn always_on_a_kind_request_stops_that_kind_asking_on_that_site_only() {
+        let mut p = relay();
+        p.user.allow = vec!["signin.aliyun.com".into()];
+        p.user
+            .allow_kinds
+            .insert("signin.aliyun.com".into(), vec!["payment_input".into()]);
+        assert_eq!(
+            p.decide("signin.aliyun.com", "typing", Some("payment_input")),
+            SiteGate::Allow
+        );
+        assert!(matches!(
+            p.decide("signin.aliyun.com", "click", Some("purchase")),
+            SiteGate::Ask { .. }
+        ));
+        assert!(matches!(
+            p.decide("shop.test", "typing", Some("payment_input")),
+            SiteGate::Ask { .. }
+        ));
+        let mut q = relay();
+        q.session_allow = vec!["a.test".into()];
+        q.session_allow_kinds = vec![("a.test".into(), "payment_input".into())];
+        assert_eq!(
+            q.decide("a.test", "typing", Some("payment_input")),
+            SiteGate::Allow
+        );
+        let reply: ExtensionSitePolicy = serde_json::from_value(json!({
+            "user": {"allow": ["a.test"], "allowKinds": {"a.test": ["payment_input"]}}
+        }))
+        .unwrap();
+        assert_eq!(reply.user.allow_kinds["a.test"], vec!["payment_input"]);
+    }
+
+    #[test]
+    fn one_time_code_fields_are_not_payment_fields() {
+        let attrs = |pairs: &[(&str, &str)]| -> Vec<String> {
+            pairs
+                .iter()
+                .flat_map(|(k, v)| [k.to_string(), v.to_string()])
+                .collect()
+        };
+        // Aliyun RAM MFA box (#846).
+        assert_eq!(
+            field_kind_from_attributes(&attrs(&[("placeholder", "请输入 6 位数字安全码")])),
+            Some("password_input")
+        );
+        assert_eq!(
+            field_kind_from_text("请输入 6 位数字安全码"),
+            Some("password_input")
+        );
+        assert_eq!(
+            field_kind(
+                &attrs(&[("autocomplete", "one-time-code")]),
+                &["Security code"]
+            ),
+            Some("password_input")
+        );
+        assert_eq!(
+            field_kind(&attrs(&[("maxlength", "6")]), &["安全码"]),
+            Some("password_input")
+        );
+        assert_eq!(
+            field_kind_from_text("Enter your MFA code"),
+            Some("password_input")
+        );
+        // Real card fields stay payment fields.
+        assert_eq!(field_kind_from_text("Security code"), Some("payment_input"));
+        assert_eq!(field_kind_from_text("安全码"), Some("payment_input"));
+        assert_eq!(
+            field_kind(&attrs(&[("autocomplete", "cc-csc")]), &["one-time code"]),
+            Some("payment_input")
+        );
+        assert_eq!(
+            field_kind(&attrs(&[("maxlength", "6"), ("name", "cvv")]), &[]),
+            Some("payment_input")
+        );
+        assert_eq!(field_kind_from_text("Card number"), Some("payment_input"));
+        assert_eq!(
+            field_kind_from_text("Card verification code"),
+            Some("payment_input")
+        );
     }
 
     #[test]
