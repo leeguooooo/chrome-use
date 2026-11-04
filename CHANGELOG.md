@@ -1,8 +1,22 @@
 # Changelog
 
-## 1.5.279
+## 1.5.280
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.104.
+
+### Fixes
+
+- **`auth login --bwu` never starts an update from the secret child.** The child that `bwu run` starts still had the login's values in its environment when the update check ran, so a background upgrade or check worker it spawned would inherit them, and on macOS write them into the upgrade's launchd plist. That child now skips the update check (#860, found in #859).
+
+### Contributors
+
+- @leeguooooo
+- @Jerryx333
+<!-- release:end -->
+
+## 1.5.279
+
 Works with extension ab-connect 0.5.104.
 
 ### Fixes
@@ -18,7 +32,6 @@ Works with extension ab-connect 0.5.104.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.278
 
