@@ -1,8 +1,27 @@
 # Changelog
 
-## 1.5.278
+## 1.5.279
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.104.
+
+### Fixes
+
+- **One-time-code fields no longer ask as card fields.** A field labelled "security code" or "安全码" that also carries one-time-code markers (`autocomplete=one-time-code`, `maxlength=6`, OTP, MFA, 2FA, 验证码, 动态码, "6 位") is a verification-code field, not a card's CSC, so Alibaba Cloud's MFA prompt no longer asks for payment approval. **Always allow on this site** for a payment-card or purchase confirmation now remembers that kind for that site (extension 0.5.104), so it stops asking there; removing or blocking the site clears it (#846).
+- **Site adapters:** an argument the adapter declares (such as `page`) is never replaced by a chrome-use helper of the same name. Every helper is also on `args.cu` (#848).
+- **A failed command says when the page reloaded under it.** When a command fails with a detached-node or lost-context error and the top frame navigated during it, the error says the page reloaded on its own (#837).
+- **Relay keeps a tab reset to `about:blank`.** After `open about:blank` the relay could never re-attach that tab, so every later command, `open <url>` included, failed with "its tab is gone" while the tab was open. A tab that is still open but cannot be re-attached now says so and why, and suggests `tab new <url>` (#847).
+- **Clicks move off hover tooltips.** When a `role=tooltip` / `popover=hint` layer covers a `@ref` click target, usually opened by the control the pointer still rests on, the click moves the pointer off it once (trusted, humanized) and checks again instead of failing as occluded. The sticky-bar wheel recovery also accepts a fixed/sticky edge bar of any tag, not only `header`/`nav` (#847, #771).
+- **Humanize:** Fast clicks settle a seeded 15–55 ms before pressing (they pressed about 6 ms after the last move). A move that starts from rest (no pointer move for 300 ms) reaches the target in several small reports at Off and Fast instead of one long jump (#771).
+- **Docs:** a background agent tab on the relay reports `outerWidth`/`outerHeight` equal to `innerWidth`/`innerHeight` and `screenY` equal to `screen.height`, a pattern headless detectors look for. The stealth page now lists this as a known limitation, with `tab select --activate` as the workaround (#770).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.278
+
 Works with extension ab-connect 0.5.103.
 
 ### Fixes
@@ -14,7 +33,6 @@ Works with extension ab-connect 0.5.103.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.277
 
