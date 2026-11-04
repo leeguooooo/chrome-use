@@ -35,6 +35,7 @@ mod monaco_model;
 #[allow(dead_code)]
 pub mod network;
 mod observation;
+pub mod page_reloads;
 pub(crate) mod panel_action;
 mod passkey_guard;
 #[allow(dead_code)]

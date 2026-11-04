@@ -778,6 +778,9 @@ pub struct DaemonState {
     pub tracing_state: TracingState,
     pub recording_state: RecordingState,
     event_rx: Option<broadcast::Receiver<CdpEvent>>,
+    /// The page's top-level navigations, from the events drained above, so an
+    /// error a reload explains can say one happened (#837).
+    navigations: super::page_reloads::NavigationLog,
     pub screencasting: bool,
     pub policy: Option<ActionPolicy>,
     pub pending_confirmation: Option<PendingConfirmation>,
@@ -953,6 +956,7 @@ impl DaemonState {
             tracing_state: TracingState::new(),
             recording_state: RecordingState::new(),
             event_rx: None,
+            navigations: Default::default(),
             screencasting: false,
             policy: ActionPolicy::load_if_exists(),
             pending_confirmation: None,
@@ -1685,6 +1689,14 @@ impl DaemonState {
                         _ => {}
                     }
 
+                    if let Some((url, loader)) =
+                        super::page_reloads::top_level_navigation(&event.method, &event.params)
+                    {
+                        if session_matches {
+                            self.navigations.record(event.received_at, url, loader);
+                        }
+                    }
+
                     match event.method.as_str() {
                         "Runtime.consoleAPICalled" => {
                             let level = event
@@ -2007,6 +2019,7 @@ impl DaemonState {
                 }
                 Err(broadcast::error::TryRecvError::Empty) => break,
                 Err(broadcast::error::TryRecvError::Lagged(n)) => {
+                    self.navigations.note_lag(std::time::Instant::now());
                     eprintln!("[chrome-use] Warning: CDP event buffer overflowed, {} events dropped. Network requests may be missing from HAR output.", n);
                     continue;
                 }
@@ -2174,7 +2187,9 @@ async fn execute_command_noted(cmd: &Value, state: &mut DaemonState) -> Value {
         disarm_stale_popup_guard(state).await;
     }
     let before = context(state);
+    let started = std::time::Instant::now();
     let mut response = Box::pin(execute_command_inner(cmd, state)).await;
+    note_observed_reloads(cmd, state, started, &mut response).await;
     if let Some(outcome) = state.capture_outcome.take() {
         annotate_capture_outcome(&mut response, &outcome);
     }
@@ -2202,6 +2217,42 @@ async fn execute_command_noted(cmd: &Value, state: &mut DaemonState) -> Value {
         state.progress.reset();
     }
     response
+}
+
+/// Append what the page did under a failed command when it explains the
+/// error: a top-level navigation received since the previous command ended
+/// (#837). Nothing is added when none was received. Then mark this command's
+/// end, which starts the next one's window.
+async fn note_observed_reloads(
+    cmd: &Value,
+    state: &mut DaemonState,
+    started: std::time::Instant,
+    response: &mut Value,
+) {
+    let action = cmd.get("action").and_then(Value::as_str).unwrap_or("");
+    let wants_note = response["success"] == false
+        && !super::page_reloads::action_navigates(action)
+        && response["error"]
+            .as_str()
+            .is_some_and(super::page_reloads::error_wants_note);
+    if wants_note {
+        // The events of the command's own run are still queued.
+        state.drain_cdp_events_background().await;
+        if let (Some(note), Some(error)) = (
+            state.navigations.note_for(started),
+            response["error"].as_str(),
+        ) {
+            response["error"] = json!(super::page_reloads::append_note(error, &note));
+        }
+    }
+    let url = state
+        .browser
+        .as_ref()
+        .map(|b| b.cached_active_url())
+        .unwrap_or_default();
+    state
+        .navigations
+        .command_ended(std::time::Instant::now(), url);
 }
 
 async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
@@ -30356,3 +30407,92 @@ mod device_emulation_tests;
 #[cfg(test)]
 #[path = "scroll_deadline_tests.rs"]
 mod scroll_deadline_tests;
+
+#[cfg(test)]
+mod observed_reload_note_tests {
+    use super::{note_observed_reloads, DaemonState};
+    use serde_json::json;
+    use std::time::{Duration, Instant};
+
+    fn failed(error: &str) -> serde_json::Value {
+        json!({"id": "1", "success": false, "error": error})
+    }
+
+    #[tokio::test]
+    async fn a_reload_seen_under_a_failed_wait_is_appended_to_its_error() {
+        let mut state = DaemonState::new();
+        // In the past, so every navigation below precedes this command's end.
+        let base = Instant::now() - Duration::from_secs(5);
+        state
+            .navigations
+            .command_ended(base, "http://127.0.0.1:3919/".into());
+        let started = base + Duration::from_millis(1);
+        for (i, ms) in [5u64, 1005].into_iter().enumerate() {
+            state.navigations.record(
+                base + Duration::from_millis(ms),
+                "http://127.0.0.1:3919/".into(),
+                Some(format!("L{i}")),
+            );
+        }
+        let mut response = failed("Wait timed out after 25000ms");
+        note_observed_reloads(
+            &json!({"action": "wait"}),
+            &mut state,
+            started,
+            &mut response,
+        )
+        .await;
+        let error = response["error"].as_str().unwrap();
+        assert!(
+            error.starts_with(
+                "Wait timed out after 25000ms. Observed while it ran: the page reloaded 2 \
+                 times during this command (last: /)."
+            ),
+            "{error}"
+        );
+        // That command's end starts the next window: the same reloads are not
+        // reported again under the next command.
+        let mut next = failed("Wait timed out after 25000ms");
+        note_observed_reloads(
+            &json!({"action": "wait"}),
+            &mut state,
+            Instant::now(),
+            &mut next,
+        )
+        .await;
+        assert_eq!(next, failed("Wait timed out after 25000ms"));
+    }
+
+    #[tokio::test]
+    async fn without_an_observed_reload_or_for_a_navigation_the_error_is_untouched() {
+        let mut state = DaemonState::new();
+        let drift = "screenshot target drifted: this session is driving http://h/, but its CDP \
+                     session is attached to an unknown target — the capture would be a blank \
+                     image. Re-pin the tab (`chrome-use tab <ref>` or `chrome-use adopt <url>`) \
+                     and retry.";
+        let mut response = failed(drift);
+        note_observed_reloads(
+            &json!({"action": "screenshot"}),
+            &mut state,
+            Instant::now(),
+            &mut response,
+        )
+        .await;
+        assert_eq!(response, failed(drift));
+
+        // `open` navigates on purpose: its own navigation explains nothing.
+        let started = Instant::now();
+        state
+            .navigations
+            .record(started, "http://h/".into(), Some("L9".into()));
+        let mut response = failed("Wait timed out after 25000ms");
+        note_observed_reloads(
+            &json!({"action": "navigate"}),
+            &mut state,
+            started,
+            &mut response,
+        )
+        .await;
+        assert_eq!(response, failed("Wait timed out after 25000ms"));
+    }
+}

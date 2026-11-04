@@ -199,13 +199,33 @@ impl CloseReport {
                 ));
             }
             if self.unverified.iter().any(|t| t.get("tabId").is_none()) {
-                parts.push("for an untracked ownership record, `close --forget-untracked` can explicitly abandon it after two valid registry absence reads; this does not close or verify its original Chrome tab".into());
+                parts.push(
+                    "an (untracked tab) is a tab this session's ownership record still lists \
+                     but no open tab of this session matches, so only its target id is known \
+                     and there is no Chrome tab id to check it by; retrying `close` cannot \
+                     confirm it. When its reason says the target is not listed, Chrome's \
+                     target registry no longer has it: `chrome-use close --forget-untracked` \
+                     reads that registry twice and drops the record only if both reads omit \
+                     the target. It closes nothing and does not prove the tab is gone; \
+                     `chrome-use tab list` shows what is still open"
+                        .into(),
+                );
             }
         }
+        // Retrying cannot confirm a record without a tab id; say so rather than
+        // send the agent round the same `close` again.
+        let only_untracked =
+            self.still_open.is_empty() && self.unverified.iter().all(|t| t.get("tabId").is_none());
+        let next = if only_untracked {
+            "The session and its tab ownership were kept: run `chrome-use close \
+             --forget-untracked` as above, which then finishes the close."
+        } else {
+            "The session and its tab ownership were kept: retry `chrome-use close`; run \
+             `chrome-use tab list` to see the tabs, or `chrome-use tab <id>` then \
+             `chrome-use keep` to leave one to the user."
+        };
         format!(
-            "close incomplete: {}. {} closed and verified absent. The session and its tab \
-             ownership were kept: retry `chrome-use close`; run `chrome-use tab list` to see \
-             the tabs, or `chrome-use tab <id>` then `chrome-use keep` to leave one to the user.",
+            "close incomplete: {}. {} closed and verified absent. {next}",
             parts.join("; "),
             self.tabs_closed.len()
         )
@@ -11639,6 +11659,35 @@ mod honest_close_tests {
         let empty = CloseReport::default().to_json();
         assert_eq!(empty["verifiedAbsent"], true);
         assert_eq!(empty["tabsClosed"], json!([]));
+    }
+
+    #[test]
+    fn an_untracked_record_alone_points_at_forget_untracked_not_another_close() {
+        // #837: after a dead connection, one tab closed and the other was a
+        // record with only a target id that Chrome no longer listed.
+        let report = CloseReport {
+            tabs_closed: vec![json!({"tabId": "t1", "targetId": "A"})],
+            unverified: vec![json!({"targetId": "C",
+                "reason": "the target is not listed and no tab id was given to confirm it"})],
+            verified_by: Some("extension-tabs"),
+            ..Default::default()
+        };
+        let e = report.incomplete_error();
+        assert!(
+            e.contains("1 of the 2 tab(s) could not be confirmed closed (unverified): (untracked tab) (targetId C, the target is not listed"),
+            "{e}"
+        );
+        assert!(e.contains("only its target id is known"), "{e}");
+        assert!(e.contains("retrying `close` cannot confirm it"), "{e}");
+        assert!(
+            e.contains("It closes nothing and does not prove the tab is gone"),
+            "{e}"
+        );
+        assert!(
+            e.ends_with("run `chrome-use close --forget-untracked` as above, which then finishes the close."),
+            "{e}"
+        );
+        assert!(!e.contains("retry `chrome-use close`"), "{e}");
     }
 
     #[test]
