@@ -315,12 +315,15 @@ pub async fn click_reporting(
     // which security-sensitive buttons and forms require. If coordinate resolution fails
     // or the target is occluded, execution automatically falls back to DOM dispatch below.
 
-    let resolved = resolve_element_center(
+    // A pointer click may move the pointer off a hover tooltip that covers
+    // the target (#847) before the occlusion check gives up.
+    let resolved = super::element::resolve_element_center_with(
         client,
         session_id,
         ref_map,
         selector_or_ref,
         iframe_sessions,
+        true,
     )
     .await;
 
@@ -888,7 +891,7 @@ const SCROLL_AND_PROBE_DISABLED_JS: &str = r#"function(allowHeader,wheelX,wheelY
     if(hit===el||el.contains(hit))return recheck?'ready':'';
     if(!hit||el.closest(modal)||hit.closest(modal))return recheck?{blocked:true}:'';
     for(let bar=hit;bar;bar=bar.parentElement){
-        if(!bar.matches('header,nav,[role="banner"],[role="navigation"]')||bar.contains(el))continue;
+        if(bar.contains(el))continue;
         const style=w.getComputedStyle(bar),b=bar.getBoundingClientRect();
         const edge=(b.top<=1&&b.bottom>0)||(b.bottom>=w.innerHeight-1&&b.top<w.innerHeight);
         if(!['sticky','fixed'].includes(style.position)||!edge||b.width<w.innerWidth*.6||b.height>w.innerHeight*.35)continue;

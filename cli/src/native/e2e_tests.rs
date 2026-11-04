@@ -17253,3 +17253,126 @@ new MutationObserver(rs=>targetMutations.push(...rs)).observe(document.documentE
     }
     run_cmd(&mut state, json!({"id":"close","action":"close"})).await;
 }
+
+/// #847: the previous click left the pointer on "Download All", whose hover
+/// tooltip covers "Calculate". The next `click @ref` moves the pointer off the
+/// tooltip (trusted, humanized) and clicks Calculate, instead of failing three
+/// retries as occluded. #771: a sticky toolbar that is a plain `div` (not a
+/// semantic header) covering the target after a scroll is wheeled clear of
+/// it. Neither adds anything a page can see.
+#[tokio::test]
+#[ignore]
+async fn e2e_click_clears_hover_tooltip_and_sticky_div_bar() {
+    let tooltip = r##"<!doctype html><style>
+body{margin:0;height:1200px;font:14px sans-serif}
+button{position:absolute;left:80px;width:160px;height:36px}
+#dl{top:200px}#calc{top:250px}
+#tip{position:absolute;left:60px;top:236px;width:240px;height:60px;background:#333;color:#fff;z-index:5}
+</style><button id="dl">Download All</button><button id="calc">Calculate</button>
+<div id="tip" role="tooltip" hidden>Download full data according to current view.</div>
+<script>
+window.out={dl:0,calc:0,trusted:true,shown:0};
+const dl=document.getElementById('dl'),calc=document.getElementById('calc'),tip=document.getElementById('tip');
+let overDl=false,overTip=false,hide=null;
+const sync=()=>{clearTimeout(hide);if(overDl||overTip){if(tip.hidden){tip.hidden=false;out.shown++}}else hide=setTimeout(()=>{tip.hidden=true},100)};
+dl.addEventListener('mouseenter',()=>{overDl=true;sync()});dl.addEventListener('mouseleave',()=>{overDl=false;sync()});
+tip.addEventListener('mouseenter',()=>{overTip=true;sync()});tip.addEventListener('mouseleave',()=>{overTip=false;sync()});
+dl.onclick=e=>{out.dl++;out.trusted=out.trusted&&e.isTrusted};calc.onclick=e=>{out.calc++;out.trusted=out.trusted&&e.isTrusted};
+</script>"##;
+    let (port, server) = spawn_html_server(tooltip.to_string()).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    assert_success(
+        &run_cmd(
+            &mut state,
+            json!({"id":"snapshot","action":"snapshot","interactive":true,"settleMs":0}),
+        )
+        .await,
+    );
+    let named = |state: &DaemonState, name: &str| {
+        state
+            .ref_map
+            .entries_sorted()
+            .into_iter()
+            .find(|(_, e)| e.name == name)
+            .map(|(r, _)| r)
+            .unwrap_or_else(|| panic!("no ref named {name}"))
+    };
+    let (dl, calc) = (named(&state, "Download All"), named(&state, "Calculate"));
+    let names = eval_in(&mut state, "Object.getOwnPropertyNames(window).sort()").await;
+    assert_success(
+        &run_cmd(
+            &mut state,
+            json!({"id":"click-dl","action":"click","selector":format!("@{dl}")}),
+        )
+        .await,
+    );
+    let before = eval_in(&mut state, "({out,hidden:tip.hidden})").await;
+    assert_eq!(
+        before["hidden"], false,
+        "fixture: the pointer resting on Download All shows its tooltip: {before}"
+    );
+    let response = run_cmd(
+        &mut state,
+        json!({"id":"click-calc","action":"click","selector":format!("@{calc}")}),
+    )
+    .await;
+    let after = eval_in(&mut state, "({out,hidden:tip.hidden})").await;
+    assert_success(&response);
+    assert_eq!(after["out"]["calc"], 1, "{response} {after}");
+    assert_eq!(after["out"]["dl"], 1, "{response} {after}");
+    assert_eq!(after["out"]["trusted"], true, "{after}");
+    assert_ne!(
+        response["data"]["dispatch"].as_str(),
+        Some("dom"),
+        "the click must stay trusted pointer input: {response}"
+    );
+    assert_eq!(
+        eval_in(&mut state, "Object.getOwnPropertyNames(window).sort()").await,
+        names,
+        "no page-visible globals"
+    );
+    server.abort();
+
+    let sticky = r##"<!doctype html><style>body{margin:0;height:2200px}.toolbar{position:sticky;top:0;height:110px;width:100%;z-index:9;background:#ccc}button{position:absolute;top:600px;left:80px;width:140px;height:50px}</style><div class="toolbar">Query toolbar</div><button>Run query</button><script>window.out={target:0,bar:0,wheels:0,trusted:true};document.querySelector('button').onclick=e=>{out.target++;out.trusted=out.trusted&&e.isTrusted};document.querySelector('.toolbar').onclick=()=>out.bar++;document.addEventListener('wheel',e=>{out.wheels++;out.trusted=out.trusted&&e.isTrusted},{capture:true,passive:true});</script>"##;
+    let (port, server) = spawn_html_server(sticky.to_string()).await;
+    assert_success(
+        &run_cmd(
+            &mut state,
+            json!({"id":"open","action":"navigate","url":format!("http://127.0.0.1:{port}/")}),
+        )
+        .await,
+    );
+    assert_success(
+        &run_cmd(
+            &mut state,
+            json!({"id":"snapshot","action":"snapshot","interactive":true,"settleMs":0}),
+        )
+        .await,
+    );
+    let target = named(&state, "Run query");
+    // As after `scroll down 500`: the target now sits under the sticky bar.
+    eval_in(&mut state, "scrollTo(0,580)").await;
+    let names = eval_in(&mut state, "Object.getOwnPropertyNames(window).sort()").await;
+    let response = run_cmd(
+        &mut state,
+        json!({"id":"click","action":"click","selector":format!("@{target}")}),
+    )
+    .await;
+    let after = eval_in(&mut state, "({out,scrollY})").await;
+    assert_success(&response);
+    assert_eq!(after["out"]["target"], 1, "{response} {after}");
+    assert_eq!(after["out"]["bar"], 0, "{response} {after}");
+    assert_eq!(after["out"]["trusted"], true, "{after}");
+    assert!(
+        after["out"]["wheels"].as_u64().unwrap_or(0) > 0,
+        "cleared with trusted wheel input: {after}"
+    );
+    assert_eq!(
+        eval_in(&mut state, "Object.getOwnPropertyNames(window).sort()").await,
+        names,
+        "no page-visible globals"
+    );
+    server.abort();
+    run_cmd(&mut state, json!({"id":"close","action":"close"})).await;
+}

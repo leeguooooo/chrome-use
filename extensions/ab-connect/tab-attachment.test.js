@@ -179,6 +179,7 @@ function detachWorker(sequence) {
     releasedTabs: new Set(), attachmentHealth: { isRecovering: () => false },
     tabs: new Map(), nativeDuplicateTabs: new Set(), port: {},
     detachTab() {}, eligible: tab => tab.url?.startsWith('https:'),
+    reattachable: tab => tab.url?.startsWith('https:'),
     attachTab: async () => { attaches++ },
     isPermanentAttachError: () => false,
     setTimeout: fn => { timers++; fn() },

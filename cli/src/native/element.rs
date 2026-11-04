@@ -2314,6 +2314,30 @@ pub async fn resolve_element_center(
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<(f64, f64, f64, f64, String), String> {
+    resolve_element_center_with(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        iframe_sessions,
+        false,
+    )
+    .await
+}
+
+/// [`resolve_element_center`] for a pointer click. `clear_hover_layer`: when
+/// a hover tooltip covers a top-frame `@ref`, the pointer is moved off it
+/// once (trusted, humanized `mouseMoved`) before the occlusion check gives up
+/// — see [`verify_click_target`]. Other callers (drag, tap, hover) keep the
+/// pointer where it is.
+pub(crate) async fn resolve_element_center_with(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    iframe_sessions: &HashMap<String, String>,
+    clear_hover_layer: bool,
+) -> Result<(f64, f64, f64, f64, String), String> {
     if semantic_pin_active(selector_or_ref) {
         let object = resolve_semantic_pin(client, session_id).await?;
         let reply = client.send_command("Runtime.callFunctionOn", Some(json!({"objectId":object,"functionDeclaration":"function(){const r=this.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,w:r.width,h:r.height}}","returnByValue":true})),Some(session_id)).await?;
@@ -2384,8 +2408,16 @@ pub async fn resolve_element_center(
                 //
                 // Set AGENT_BROWSER_VERIFY_CLICK_TARGET=0 to skip.
                 if std::env::var("AGENT_BROWSER_VERIFY_CLICK_TARGET").as_deref() != Ok("0") {
-                    verify_click_target(client, effective_session_id, active_id, &ref_id, x, y)
-                        .await?;
+                    verify_click_target(
+                        client,
+                        effective_session_id,
+                        active_id,
+                        &ref_id,
+                        x,
+                        y,
+                        clear_hover_layer && entry.frame_id.is_none(),
+                    )
+                    .await?;
                 }
                 return Ok((x, y, w, h, effective_session_id.to_string()));
             }
@@ -2994,13 +3026,23 @@ const REF_RECOVERY_HINT: &str =
 /// backendNodeId to a remote object, then run a function on it that
 /// compares with elementFromPoint. The function returns null when the
 /// click is safe and a JSON string with diagnostic info when it isn't.
-async fn verify_click_target(
+///
+/// A hover tooltip (`role=tooltip`, `popover=hint`) is shown because the
+/// pointer still rests on the control it describes, often the neighbour the
+/// previous action clicked (#847); waiting never clears it. With
+/// `clear_hover_layer` the pointer is moved once, through the ordinary
+/// humanized trusted `Input.dispatchMouseEvent` path, to a point the probe
+/// found outside the tooltip, the target and that control, then the check
+/// runs again. The probe only reads layout (isolated world, as every
+/// `DOM.resolveNode` object is); nothing is written to the page.
+pub(crate) async fn verify_click_target(
     client: &CdpClient,
     session_id: &str,
     backend_node_id: i64,
     ref_id: &str,
     x: f64,
     y: f64,
+    clear_hover_layer: bool,
 ) -> Result<(), String> {
     use serde::Deserialize;
 
@@ -3059,33 +3101,33 @@ async fn verify_click_target(
         aria_label: Option<String>,
         text: Option<String>,
         reason: Option<String>,
+        /// The occluder is (inside) a hover layer such as a tooltip.
+        #[serde(default)]
+        hover: bool,
+        /// Where the pointer can rest off that layer, when the probe found one.
+        rest: Option<RestPoint>,
+    }
+    #[derive(Deserialize)]
+    struct RestPoint {
+        x: f64,
+        y: f64,
     }
 
-    // function(x, y) { ... } where `this` is the target element.
+    // function(x, y, px, py) { ... } where `this` is the target element and
+    // (px, py) is where the pointer last landed.
     // Return null  → click is safe.
     // Return JSON  → describes the occluding element.
-    let function_decl = "function(x, y) { \
-        const at = document.elementFromPoint(x, y); \
-        if (!at) return JSON.stringify({reason:'no-element-at-point'}); \
-        if (at === this || this.contains(at) || at.contains(this)) return null; \
-        return JSON.stringify({ \
-            tag: at.tagName, \
-            testid: (at.dataset && at.dataset.testid) || null, \
-            role: at.getAttribute('role'), \
-            ariaLabel: at.getAttribute('aria-label'), \
-            text: ((at.textContent||'').trim().slice(0, 60)) \
-        }); \
-    }";
+    let function_decl = OCCLUSION_PROBE_JS;
 
     let mut last_occ: Option<Occluder> = None;
-    for attempt in 0..=max_retries {
-        if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(retry_delay_ms)).await;
-        }
+    let mut moved_off: Option<(f64, f64)> = None;
+    let mut retries_left = max_retries;
+    loop {
+        let (px, py) = super::humanize::last_cursor();
         let call_params = serde_json::json!({
             "objectId": object_id,
             "functionDeclaration": function_decl,
-            "arguments": [{"value": x}, {"value": y}],
+            "arguments": [{"value": x}, {"value": y}, {"value": px}, {"value": py}],
             "returnByValue": true,
         });
         let call_fut = client.send_command_typed::<_, serde_json::Value>(
@@ -3111,7 +3153,29 @@ async fn verify_click_target(
             Ok(v) => v,
             Err(_) => return Ok(()),
         };
+        let rest = occ.rest.as_ref().map(|p| (p.x, p.y));
+        let hover = occ.hover;
         last_occ = Some(occ);
+        if let (true, true, None, Some((rx, ry))) = (clear_hover_layer, hover, moved_off, rest) {
+            super::interaction::move_pointer(client, session_id, rx, ry)
+                .await
+                .map_err(|e| {
+                    format!(
+                        "click stopped before press: moving the pointer off the tooltip over \
+                         {ref_id} failed ({e}); no mouse button was sent"
+                    )
+                })?;
+            moved_off = Some((rx, ry));
+            // The tooltip hides on its own leave delay and fade.
+            retries_left = max_retries.max(1);
+            tokio::time::sleep(std::time::Duration::from_millis(retry_delay_ms)).await;
+            continue;
+        }
+        if retries_left == 0 {
+            break;
+        }
+        retries_left -= 1;
+        tokio::time::sleep(std::time::Duration::from_millis(retry_delay_ms)).await;
     }
 
     // All retries exhausted — overlay is sticky. Build the descriptive error.
@@ -3139,14 +3203,68 @@ async fn verify_click_target(
         }
     }
     let waited_ms = (max_retries as u64) * retry_delay_ms;
+    let moved = match moved_off {
+        Some((rx, ry)) => format!(
+            " The pointer was moved off it to ({rx:.0}, {ry:.0}) first and it stayed, so it \
+             is not just a hover tooltip of the control under the pointer."
+        ),
+        None => String::new(),
+    };
     Err(format!(
         "Ref {} is occluded by {} at the click point (still occluded after \
-         {} retries / {}ms). A persistent overlay is in the way — \
+         {} retries / {}ms).{} A persistent overlay is in the way — \
          re-run snapshot, dismiss the overlay, or set \
          AGENT_BROWSER_VERIFY_CLICK_TARGET=0 to bypass.",
-        ref_id, desc, max_retries, waited_ms,
+        ref_id, desc, max_retries, waited_ms, moved,
     ))
 }
+
+/// The occlusion probe run on the target (`this`) by [`verify_click_target`].
+/// Read-only: `elementFromPoint` and layout reads, no DOM writes, no listeners.
+/// For an occluder inside a hover layer it also reports `hover` and, when it
+/// finds one, a `rest` point for the pointer: inside the viewport, outside the
+/// layer, the target and the control under the last pointer position, and on
+/// nothing interactive (which could open another tooltip).
+pub(crate) const OCCLUSION_PROBE_JS: &str = r#"function(x, y, px, py) {
+    const doc = this.ownerDocument || document;
+    const at = doc.elementFromPoint(x, y);
+    if (!at) return JSON.stringify({reason:'no-element-at-point'});
+    if (at === this || this.contains(at) || at.contains(this)) return null;
+    const out = {
+        tag: at.tagName,
+        testid: (at.dataset && at.dataset.testid) || null,
+        role: at.getAttribute('role'),
+        ariaLabel: at.getAttribute('aria-label'),
+        text: ((at.textContent||'').trim().slice(0, 60))
+    };
+    const hoverSel = '[role="tooltip"],[popover="hint"]';
+    const layer = at.closest(hoverSel);
+    const el = this.nodeType === 1 ? this : this.parentElement;
+    if (!layer || !el || layer.contains(el)) return JSON.stringify(out);
+    out.hover = true;
+    const w = doc.defaultView, vw = w.innerWidth, vh = w.innerHeight;
+    const t = layer.getBoundingClientRect(), r = el.getBoundingClientRect();
+    const controls = 'a,button,input,select,textarea,summary,label,iframe,[contenteditable],[tabindex],[title],[aria-describedby],[role="button"],[role="link"],[role="menuitem"],[role="tab"],[role="option"],[role="checkbox"],[role="radio"],[role="switch"],[role="slider"]';
+    let trigger = null;
+    if (Number.isFinite(px) && Number.isFinite(py)) {
+        const under = doc.elementFromPoint(px, py);
+        if (under && under !== doc.body && under !== doc.documentElement) trigger = (under.closest(controls) || under).getBoundingClientRect();
+    }
+    const inside = (q, qx, qy, pad) => !!q && qx >= q.left - pad && qx <= q.right + pad && qy >= q.top - pad && qy <= q.bottom + pad;
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const dirs = [[0,1],[0,-1],[1,0],[-1,0],[1,1],[-1,1],[1,-1],[-1,-1]];
+    for (const d of [24, 48, 96, 160]) for (const [dx, dy] of dirs) {
+        const qx = dx ? (dx > 0 ? r.right + d : r.left - d) : cx;
+        const qy = dy ? (dy > 0 ? r.bottom + d : r.top - d) : cy;
+        if (qx < 2 || qy < 2 || qx > vw - 2 || qy > vh - 2) continue;
+        if (inside(t, qx, qy, 8) || inside(r, qx, qy, 4) || inside(trigger, qx, qy, 8)) continue;
+        const hit = doc.elementFromPoint(qx, qy);
+        if (!hit || hit.closest(controls) || hit.closest(hoverSel) || hit.closest('[popover],dialog')) continue;
+        out.rest = {x: qx, y: qy};
+        break;
+    }
+    return JSON.stringify(out);
+}"#;
 
 /// Re-query the accessibility tree to find a node matching role+name+nth,
 /// returning its fresh backendDOMNodeId. This uses the same data source
@@ -6235,3 +6353,7 @@ mod derived_identity_tests {
         assert!(xp.contains(r#""//li""#), "{xp}");
     }
 }
+
+#[cfg(test)]
+#[path = "click_tooltip_tests.rs"]
+mod click_tooltip_tests;

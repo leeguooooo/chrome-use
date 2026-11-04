@@ -252,6 +252,10 @@
         或它的 debugger 脱离了（例如落到了 <code>chrome://</code> 或 Chrome 应用商店页面——这些 Chrome 禁止调试）。
         这个大声报错替代了旧的静默行为（旧行为会在<em>别的</em>标签页上跑命令、返回错误数据）。
       </p>
+      <p>
+        标签页停在 <code>about:blank</code>（比如用 <code>open about:blank</code> 重置页面）时，中继会重新 attach 同一个标签页，不再报这个错。
+        标签页还开着、但显示的是不能调试的页面时，错误会写明 <code>still open</code> 和页面类型，用 <code>tab new &lt;url&gt;</code> 在新标签页继续。
+      </p>
 
       <div class="du-code">
         <div class="du-code-head">

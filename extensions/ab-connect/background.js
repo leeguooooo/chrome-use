@@ -1330,7 +1330,7 @@ async function recoverSessionTab(sessionId, beforeRecoveryTarget = () => {}) {
   if (tabId != null) {
     for (let i = 0; i < 3; i++) {
       const tab = await chrome.tabs.get(tabId).catch(() => null);
-      if (!eligible(tab)) break; // tabId is gone — fall through to targetId recovery
+      if (!reattachable(tab)) break; // tabId is gone — fall through to targetId recovery
       beforeRecoveryTarget(tabId);
       try {
         await attachTab(tabId);
@@ -1357,12 +1357,12 @@ async function recoverSessionTab(sessionId, beforeRecoveryTarget = () => {}) {
     const replacement = followReplacement(replacedTabs, tabId);
     if (replacement !== tabId) {
       let tab = await chrome.tabs.get(replacement).catch(() => null);
-      if (eligible(tab)) beforeRecoveryTarget(replacement);
-      if (eligible(tab) && tab.discarded) {
+      if (reattachable(tab)) beforeRecoveryTarget(replacement);
+      if (reattachable(tab) && tab.discarded) {
         await reviveDiscardedTab(chrome.tabs, replacement).catch(() => false);
         tab = await chrome.tabs.get(replacement).catch(() => null);
       }
-      if (eligible(tab)) {
+      if (reattachable(tab)) {
         beforeRecoveryTarget(replacement);
         try {
           await attachTab(replacement);
@@ -1403,7 +1403,7 @@ async function recoverSessionTab(sessionId, beforeRecoveryTarget = () => {}) {
       const t = targets && targets.find((x) => x.id === targetId && x.tabId != null);
       if (t && t.tabId != null) {
         const tab = await chrome.tabs.get(t.tabId).catch(() => null);
-        if (eligible(tab)) {
+        if (reattachable(tab)) {
           beforeRecoveryTarget(t.tabId);
           // Preserve the diagnostic before attach yields; commits during the
           // replacement window must contribute to the same reload history.
@@ -2162,7 +2162,7 @@ async function handleForwardCdpCommand(msg) {
         return null;
       });
       if (!missing) {
-        if (!eligible(live)) throw new Error(`Chrome tab ${tabId} is not a navigable web tab`);
+        if (!reattachable(live)) throw new Error(`Chrome tab ${tabId} is not a navigable web tab`);
         browserNavigationReady = true;
       }
       // Only a confirmed missing id enters the existing replacement recovery.
@@ -2176,11 +2176,7 @@ async function handleForwardCdpCommand(msg) {
         // A dead tab's host record goes now, so the next getTargets does not
         // list it and attaching to it fails (#519).
         await reportTabIfGone(tabId);
-        throw new Error(
-          `stale sessionId ${sessionId} for ${method}: its tab is gone (closed, ` +
-            `navigated across processes, or lost after an extension restart). ` +
-            `Re-attach by re-opening your target URL before retrying.`
-        );
+        throw new Error(await staleSessionMessage(sessionId, method, tabId));
       }
       tabId = recovered;
       guardTab(tabId, agentSession);
@@ -2521,6 +2517,45 @@ function eligible(tab) {
   return !!tab && !!tab.id && typeof tab.url === 'string' && !SKIP_URL.test(tab.url);
 }
 
+// A blank document. chrome.debugger attaches to it (the daemon's own scratch
+// tab is one), but `eligible` refuses every `about:` page so that discovery and
+// adoption never pick up a stray blank tab.
+const BLANK_URL = /^about:blank(?:[?#].*)?$/i;
+
+// Whether a tab the relay was already driving may be re-attached. Wider than
+// `eligible` by exactly about:blank: an agent that resets its page with
+// `open about:blank` keeps its tab. Before #847 every recovery path used
+// `eligible`, so once that tab's attachment was dropped it could never be
+// re-attached, and every later command — `open <url>` included — failed with
+// "stale sessionId … its tab is gone" while the tab sat there open.
+function reattachable(tab) {
+  return eligible(tab) || (!!tab && !!tab.id && typeof tab.url === 'string' && BLANK_URL.test(tab.url));
+}
+
+// The error for a session whose tab could not be re-attached. A tab Chrome
+// still has is said to be open, with why the re-attach could not work when the
+// page shows it: "its tab is gone" for a tab that is still there sends the
+// agent looking for a closed tab (#847). Only the URL scheme is named.
+async function staleSessionMessage(sessionId, method, tabId) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (tab && tab.id != null) {
+    return `stale sessionId ${sessionId} for ${method}: its tab ${tabId} is still open, but the ` +
+      `debugger could not re-attach to it (${unattachableReason(tab)}). Nothing was sent to ` +
+      `another tab.`;
+  }
+  return `stale sessionId ${sessionId} for ${method}: its tab is gone (closed, ` +
+    `navigated across processes, or lost after an extension restart). ` +
+    `Re-attach by re-opening your target URL before retrying.`;
+}
+
+function unattachableReason(tab) {
+  const url = typeof tab?.url === 'string' && tab.url ? tab.url : String(tab?.pendingUrl || '');
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase();
+  if (!scheme) return 'its page has no URL yet';
+  if (SKIP_URL.test(`${scheme}:`)) return `it shows a ${scheme}: page, which extensions may not debug`;
+  return 'Chrome refused the re-attach or did not finish it';
+}
+
 // Re-attach ONLY the tabs this extension owns (agent-created / adopted) — never
 // the user's own tabs. This is what keeps the debugger banner off the user's
 // foreground pages. Runs on (re)connect and from the keepalive alarm, so an
@@ -2753,14 +2788,14 @@ chrome.debugger.onDetach.addListener(
       if (!port) return;
       if (nativeDuplicateTabs.has(tabId)) return;
       const detached = await chrome.tabs.get(tabId).catch(() => null);
-      if (!detached || !eligible(detached) || detached.discarded) return;
+      if (!detached || !reattachable(detached) || detached.discarded) return;
       // The swapped-in process needs a moment to settle; retry with backoff.
       for (let i = 0; i < 6; i++) {
         await new Promise((r) => setTimeout(r, 250 + i * 200));
         if (tabs.get(tabId)?.attached) return; // already re-attached (e.g. via onUpdated)
         if (nativeDuplicateTabs.has(tabId)) return;
         const tab = await chrome.tabs.get(tabId).catch(() => null);
-        if (!tab || !eligible(tab) || tab.discarded) return; // gone, restricted or discarded
+        if (!tab || !reattachable(tab) || tab.discarded) return; // gone, restricted or discarded
         try {
           await attachTab(tabId);
           return;

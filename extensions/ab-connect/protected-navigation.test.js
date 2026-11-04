@@ -9,6 +9,8 @@ import { canUseBrowserNavigationFallback, navigateTabWithBrowserFallback } from 
 
 const source = readFileSync(new URL('./background.js', import.meta.url), 'utf8')
 const part = (from, to) => source.slice(source.indexOf(from), source.indexOf(to, source.indexOf(from)))
+const staleMessageSource = source.match(/^const SKIP_URL = .*$/m)[0] + '\n' +
+  part('// The error for a session whose tab could not be re-attached.', '// Re-attach ONLY the tabs this extension owns')
 
 function fixture(failure, takenBack = false) {
   const calls = []
@@ -25,6 +27,7 @@ function fixture(failure, takenBack = false) {
       navigationStarted: () => calls.push('navigationStarted'),
     },
     eligible: tab => !!tab && /^https?:/.test(tab.url),
+    reattachable: tab => !!tab && /^https?:/.test(tab.url),
     recoverSessionTab: async () => { throw new Error('debugger_access_denied: protected extension') },
     tabCommandDependencies: () => ({}), resetReloadLoop() {}, activeReloadLoop: () => null,
     reattachTab: async () => { calls.push('attach'); throw new Error('debugger_access_denied: protected extension') },
@@ -34,6 +37,7 @@ function fixture(failure, takenBack = false) {
     chrome: { tabs: { get: async id => { calls.push(['get', id]); return { id, url: 'https://fixture.invalid/blocked' } }, update: async (id, properties) => { calls.push(['navigate', id, properties.url]); return { pendingUrl: properties.url } } } },
   }
   vm.createContext(context)
+  vm.runInContext(staleMessageSource, context)
   vm.runInContext('async function forward(method, params, sessionId, agentSession) {\n' + part('  // Everything else → chrome.debugger', '\nasync function dispatchToTab'), context)
   vm.runInContext(part('async function dispatchToTab(', '// ---- attach / detach'), context)
   return context

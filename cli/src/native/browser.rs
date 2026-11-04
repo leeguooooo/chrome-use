@@ -1804,6 +1804,19 @@ pub(crate) fn is_stale_target_error(error: &str) -> bool {
         || lower.contains("can no longer be resolved")
 }
 
+/// The relay's reason when the session's tab is still open but could not be
+/// re-attached (#847), e.g. `it shows a chrome: page,
+/// which extensions may not debug`. `None` for every other error, including a
+/// tab that is really gone.
+fn still_open_unattachable_reason(error: &str) -> Option<&str> {
+    const MARK: &str = "is still open, but the debugger could not re-attach to it (";
+    if !error.to_ascii_lowercase().contains("stale sessionid") {
+        return None;
+    }
+    let rest = &error[error.find(MARK)? + MARK.len()..];
+    rest.find(')').map(|end| &rest[..end])
+}
+
 /// A Chrome access decision is not a lost tab and cannot be fixed by reattachment.
 pub(crate) fn is_debugger_access_denied(error: &str) -> bool {
     let lower = error.to_ascii_lowercase();
@@ -2892,6 +2905,13 @@ pub fn to_ai_friendly_error(error: &str) -> String {
     // silently retarget onto the wrong tab (#8.1). The raw CDP text ("stale
     // sessionId … its tab is gone") tells the agent nothing actionable, so spell
     // out the recovery instead.
+    if let Some(reason) = still_open_unattachable_reason(error) {
+        return format!(
+            "the tab this command was driving is still open, but the relay could not \
+             re-attach the debugger to it ({reason}). The session did NOT silently retarget, \
+             and nothing was sent to another tab. Run `tab new <url>` to continue in a new tab."
+        );
+    }
     if is_stale_target_error(error) {
         return "the tab this command was driving is gone — it navigated across processes (e.g. \
                 an OAuth/SSO redirect), was closed, or the relay lost it. The session did NOT \
@@ -14041,6 +14061,41 @@ mod tests {
         assert!(m.contains("open <url>") && m.contains("adopt"));
         assert!(m.contains("did NOT") || m.contains("not silently"));
         assert_ne!(m, raw, "should rewrite the cryptic CDP text");
+    }
+
+    #[test]
+    fn stale_target_for_an_open_tab_says_it_is_open_and_names_one_recovery() {
+        // #847: a tab the relay could not re-attach while it is still open is
+        // not "gone"; the agent was sent hunting for a closed tab.
+        let raw = "CDP error (Runtime.evaluate): stale sessionId cb-tab-7 for Runtime.evaluate: \
+                   its tab 7 is still open, but the debugger could not re-attach to it (it \
+                   shows a chrome: page, which extensions may not debug). Nothing was sent to \
+                   another tab.";
+        assert!(
+            is_stale_target_error(raw),
+            "still a stale target for recovery paths"
+        );
+        let m = to_ai_friendly_error(raw);
+        assert!(m.contains("still open"), "{m}");
+        assert!(m.contains("it shows a chrome: page"), "{m}");
+        assert!(m.contains("`tab new <url>`"), "{m}");
+        assert!(!m.contains("is gone"), "{m}");
+        // The closed-tab wording keeps the existing guidance.
+        let gone = to_ai_friendly_error(
+            "stale sessionId cb-tab-7 for Runtime.evaluate: its tab is gone (closed, navigated \
+             across processes, or lost after an extension restart).",
+        );
+        assert!(
+            gone.contains("tab list") && gone.contains("open <url>"),
+            "{gone}"
+        );
+        assert_eq!(
+            still_open_unattachable_reason(
+                "is still open, but the debugger could not re-attach to it (x)"
+            ),
+            None,
+            "only a relay stale-session error carries the reason"
+        );
     }
 
     #[test]
