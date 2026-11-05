@@ -204,6 +204,12 @@ jobs:
           security list-keychain -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
           rm -f "$RUNNER_TEMP/cert.p12"
 
+          # Stapling fetches the ticket from Apple's CloudKit, which drops
+          # connections now and then (Error 68 after an Accepted notarization).
+          # The notarization itself was accepted, so an unstapled file still
+          # passes Gatekeeper online; only the offline check needs the ticket.
+          staple() { for i in 1 2 3 4 5; do xcrun stapler staple "$1" && return 0; echo "staple attempt $i failed; retrying"; sleep $((i * 20)); done; echo "::warning::could not staple $1 (notarized, but checked online only)"; }
+
           # `--options runtime` is required for notarization. Verified locally
           # that the daemon still starts and drives a browser under it.
           codesign --force --options runtime --timestamp \
@@ -233,7 +239,7 @@ jobs:
             # Verified: `spctl -a` goes from `rejected` to
             # `accepted / source=Notarized Developer ID`. The bundle holds its
             # ticket, so it passes offline too.
-            xcrun stapler staple "$app"
+            staple "$app"
             spctl -a -vv "$app" || echo "::warning::spctl did not accept the stapled ChromeUse.app"
             echo "notarized (bundle stapled; the bare executable cannot hold a ticket)"
           else
@@ -256,7 +262,7 @@ jobs:
               --key "$RUNNER_TEMP/asc.p8" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
               --wait --timeout 30m
             rm -f "$RUNNER_TEMP/asc.p8"
-            xcrun stapler staple "$RUNNER_TEMP/${{ matrix.asset }}.dmg"
+            staple "$RUNNER_TEMP/${{ matrix.asset }}.dmg"
             spctl -a -t open --context context:primary-signature -vv "$RUNNER_TEMP/${{ matrix.asset }}.dmg" \
               || echo "::warning::spctl did not accept the stapled disk image"
           fi
