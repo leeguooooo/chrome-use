@@ -11,6 +11,7 @@ Works with extension ab-connect 0.5.106.
   - `session handoff --wait --note "<text>"` sets what the box asks the user to do (up to 300 characters).
   - While an agent drives the tab, the panel checks every 4 s, so a handoff and its end show up without switching tabs.
   - An older CLI does not offer Done; the box then shows without the button.
+  - The box shows on tabs the session opened. A tab the user granted to the agent is not matched yet; there `session done` still ends the wait.
 
 ### Fixes
 
