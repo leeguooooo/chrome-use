@@ -340,6 +340,9 @@ pub struct SitePolicyCache {
     pub at: std::time::Instant,
     pub on_relay: bool,
     pub extension: Option<super::site_policy::ExtensionSitePolicy>,
+    /// How long this answer stands: [`SITE_POLICY_TTL`], or
+    /// [`SITE_POLICY_UNANSWERED_TTL`] when the extension did not answer.
+    pub ttl: std::time::Duration,
 }
 
 /// Captured request/response metadata used to export HAR 1.2 files.
@@ -26209,6 +26212,11 @@ fn take_pending_confirmation(
 
 /// How long the extension's site layers are reused before asking again.
 const SITE_POLICY_TTL: Duration = Duration::from_secs(2);
+/// An extension that did not answer `ABExt.sitePolicy` is not asked again for
+/// this long: extensions up to 0.5.104 could leave it unanswered on every call
+/// (their `storage.managed` read never settled), and each ask cost a command
+/// timeout.
+const SITE_POLICY_UNANSWERED_TTL: Duration = Duration::from_secs(60);
 /// How long `confirm` waits for the person's choice. Stays under the client's
 /// per-read budget so the reply is never cut off.
 const SITE_APPROVAL_WAIT: Duration = Duration::from_secs(40);
@@ -26240,7 +26248,7 @@ async fn site_policy_layers(
     if let Some(cache) = state
         .site_policy_cache
         .as_ref()
-        .filter(|c| c.at.elapsed() < SITE_POLICY_TTL)
+        .filter(|c| c.at.elapsed() < c.ttl)
     {
         return (cache.on_relay, cache.extension.clone());
     }
@@ -26249,24 +26257,27 @@ async fn site_policy_layers(
     };
     let on_relay = mgr.on_relay();
     let mut extension = None;
+    let mut ttl = SITE_POLICY_TTL;
     if on_relay
         && relay_capabilities(mgr)
             .await
             .iter()
             .any(|c| c == "sitePolicy")
     {
-        if let Ok(reply) = mgr
+        match mgr
             .client
             .send_command_no_params("ABExt.sitePolicy", None)
             .await
         {
-            extension = serde_json::from_value(reply).ok();
+            Ok(reply) => extension = serde_json::from_value(reply).ok(),
+            Err(_) => ttl = SITE_POLICY_UNANSWERED_TTL,
         }
     }
     state.site_policy_cache = Some(SitePolicyCache {
         at: std::time::Instant::now(),
         on_relay,
         extension: extension.clone(),
+        ttl,
     });
     (on_relay, extension)
 }

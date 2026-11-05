@@ -190,3 +190,21 @@ test('always on an always-ask kind remembers the kind for that site, and removin
   // Unknown kinds, and kinds for a host no longer approved, are dropped.
   assert.deepEqual(normalizeStore({ allow: ['a.test'], allowKinds: { 'a.test': ['payment_input', 'bogus'], 'b.test': ['purchase'] } }).allowKinds, { 'a.test': ['payment_input'] });
 });
+
+test('a managed storage read that never settles does not hold sitePolicy (relay clicks waited 30 s)', async () => {
+  const area = data => ({ get: async k => (k == null ? { ...data } : { [k]: data[k] }), set: async v => Object.assign(data, v) });
+  const storage = { local: area({}), session: area({}), managed: { get: () => new Promise(() => {}) } };
+  const sp = createSitePermissions({ storage, notifications: { create() {}, clear() {} }, t: k => k, now: () => 1, managedTimeoutMs: 20 });
+  const started = Date.now();
+  const reply = await sp.policy();
+  assert.ok(Date.now() - started < 1000, 'policy answered without the managed read');
+  assert.deepEqual(reply.managed, {});
+  assert.equal(reply.version, 1);
+})
+
+test('a managed read that answers in time is used', async () => {
+  const area = data => ({ get: async k => (k == null ? { ...data } : { [k]: data[k] }), set: async v => Object.assign(data, v) });
+  const storage = { local: area({}), session: area({}), managed: area({ sensitiveSites: false }) };
+  const sp = createSitePermissions({ storage, notifications: { create() {}, clear() {} }, t: k => k, now: () => 1 });
+  assert.deepEqual((await sp.policy()).managed, { sensitiveSites: false });
+})

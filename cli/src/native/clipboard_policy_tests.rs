@@ -165,7 +165,7 @@ async fn file_confirmation_cannot_bypass_fresh_managed_clipboard_denial() {
     let path = temp.path().join("policy.json");
     fs::write(&path, r#"{"confirm":["fill"]}"#).unwrap();
     state.policy = Some(ActionPolicy::load(path.to_str().unwrap()).unwrap());
-    state.site_policy_cache=Some(SitePolicyCache {at:std::time::Instant::now(),on_relay:true,extension:Some(serde_json::from_value(json!({"user":{"ask":[]},"managed":{"actionPolicy":{"allow":["fill","clipboard"]}}})).unwrap())});
+    state.site_policy_cache=Some(SitePolicyCache {at:std::time::Instant::now(),ttl:std::time::Duration::from_secs(2),on_relay:true,extension:Some(serde_json::from_value(json!({"user":{"ask":[]},"managed":{"actionPolicy":{"allow":["fill","clipboard"]}}})).unwrap())});
     let cmd = json!({"id":"file-first","action":"fill","selector":"#editor","value":"synthetic","allowClipboardFallback":true});
     let first = execute_command(&cmd, &mut state).await;
     assert_eq!(first["data"]["confirmation_required"], true, "{first}");
