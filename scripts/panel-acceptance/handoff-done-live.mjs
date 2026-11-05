@@ -72,8 +72,10 @@ try {
   if (fs.existsSync(ownerFile) && fs.readFileSync(ownerFile, 'utf8').trim() === 'user') throw new Error('owner sidecar still user');
   await waitFor(() => panel.run(`document.getElementById('handoffBox').hidden`), { timeout: 15000, label: 'card cleared after resume' });
   s = await b.send('Page.captureScreenshot', { format: 'png' }, panel.sid); fs.writeFileSync(path.join(out, 'after-done.png'), Buffer.from(s.data, 'base64'));
-  const page = await A.attach(tab.targetId);
-  if (await A.evaluate(page, `document.documentElement.outerHTML.match(/Approve the sign-in|operator-handoff/i)?.[0] ?? null`)) throw new Error('page was changed');
+  // The page itself carries nothing of the card (read over the rig's CDP).
+  const within = (p, ms, label) => Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error(label + ' timed out')), ms))]);
+  const page = await within(A.attach(tab.targetId), 15000, 'page attach');
+  if (await within(A.evaluate(page, `document.documentElement.outerHTML.match(/Approve the sign-in|operator-handoff/i)?.[0] ?? null`), 15000, 'page read')) throw new Error('page was changed');
   console.log('[handoff] PASS', out);
 } finally {
   if (waiter && waiter.exitCode === null) waiter.kill();
