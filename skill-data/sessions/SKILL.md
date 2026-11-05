@@ -93,6 +93,9 @@ handoff` is only for the one step the agent genuinely can't do (a device 2FA
 prompt, a CAPTCHA the humanizer can't clear), not a login method.
 
 ```bash
+chrome-use session handoff --until-url "**/home"   # hand off AND block until done (run in background)
+chrome-use session handoff --until-gone "#captcha" # …or until an element leaves the page
+chrome-use session handoff --wait                  # …or until the user runs `session done`
 chrome-use session handoff       # give THIS session to the user; agent driving commands refuse (exit 1)
 chrome-use session status        # who owns each session (agent | user)
 chrome-use session list          # all sessions + owners
@@ -103,3 +106,13 @@ While a session is handed off, its owner sidecar (`.owner`) flips to the user an
 every driving command (`click`/`type`/`eval`/…) refuses with a loud exit-1 error
 so the agent can't fight the human for the page. `resume` returns control. Ownership
 is per-session, so other sessions keep working normally.
+
+**Don't hand off and then stop.** A plain `handoff` tells nobody when the user
+finishes, and your refs are stale by then. Use `handoff --wait` / `--until-*`
+in the background (Claude Code `run_in_background`; other agents: a long
+foreground call): it watches the address bar and, for text/selector conditions,
+one isolated-world check per ~1.5 s — nothing the page can see. When it returns
+it prints URL/title before → after and a fresh `snapshot -i` (a diff if the
+page didn't navigate). Exit 0 = the condition held or the user ran `session
+done`, and the session is yours again; exit 2 = `--until-change` fired or it
+timed out, and the session is still the user's (`--timeout`, default 30m).

@@ -5539,6 +5539,19 @@ Operations:
   list                 List active sessions and their owners
   status               Show the current session owner
   handoff              Hand control to the user
+  handoff --wait       Hand off and block until the user is done, then take the
+                       session back and print what changed (URL/title before →
+                       after, fresh snapshot). Run it in the background so the
+                       agent is woken when it returns. Ends on:
+    --until-url <pat>    the URL matches (substring, or glob like **/home)
+    --until-text <t>     the text appears on the page
+    --until-gone <sel>   the element leaves the DOM (e.g. the captcha frame)
+    --until-change       the URL/title moved and settled (does NOT take the
+                         session back: the user may be mid-step)
+    (any form)           the user runs `session done`
+    --timeout <dur>      give up after <dur> (default 30m); --settle <dur> (3s)
+                       Exit 0 = agent has the session back; 2 = still the user's.
+  done                 (for the human) the handed-off step is finished
   resume               Return control to the agent
   stop [name]          Stop one session daemon (default: current)
   prune                Stop all session daemons
@@ -5556,6 +5569,9 @@ Examples:
   chrome-use session status
   chrome-use session last --json
   chrome-use session handoff
+  chrome-use session handoff --until-url "**/dashboard"
+  chrome-use session handoff --until-gone "iframe[src*=captcha]" --timeout 10m
+  chrome-use session done
   chrome-use session resume
   chrome-use session stop
   chrome-use session stop test
@@ -6983,6 +6999,9 @@ Sessions:
   session status             Show current session owner
   session last               What happened to the session's recent commands (read-only)
   session handoff            Hand control to the user
+    --wait / --until-url|--until-text|--until-gone|--until-change <…>
+                             Block until the user is done, take it back, print the change
+  session done               (human) Mark the handed-off step finished
   session resume             Return control to the agent
   session stop [name]        Stop one session daemon (default: current) — graceful,
                              closes the tabs it created

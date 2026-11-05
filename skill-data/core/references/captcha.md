@@ -102,6 +102,7 @@ repeat submission. Never print passwords, SMS codes, or credential-bearing forms
 
 If attempts fail, targets remain ambiguous, or the step requires a hardware key,
 phone approval, or another unavailable capability, keep the page and report the
-specific blocker and attempts. Use `session handoff` as the fallback. Stop driving
-that session; resume only after the user confirms they have finished. Preserve
+specific blocker and attempts. Use `session handoff --until-gone <captcha selector>` (in the background)
+as the fallback. Stop driving that session; it returns and resumes once the
+captcha is gone, or when the user runs `session done`. Preserve
 other sessions and tabs throughout.

@@ -21,6 +21,7 @@ mod flags;
 mod friction;
 mod group_lifecycle;
 mod gui_setup;
+mod handoff_wait;
 mod install;
 mod jev;
 #[cfg(target_os = "macos")]
@@ -915,10 +916,93 @@ fn run_session_last(session: &str, json_mode: bool) {
 
 /// `session <handoff|resume|status|list>` — ownership + human handoff (#89,
 /// ported from ego-lite). CLI-local: only touches the `.owner` sidecar.
-fn run_session_ownership(sub: Option<&str>, session: &str, json_mode: bool) {
+fn run_session_ownership(sub: Option<&str>, rest: &[String], session: &str, json_mode: bool) {
     use ownership::{hand_off, owner_of, resume, session_flag_suffix, Owner};
     let zh = connect::ui_zh();
     match sub {
+        // `session handoff --wait [--until-*]`: hand off and block until the
+        // user is done, then report what changed on the page.
+        Some("handoff") if !rest.is_empty() => {
+            let spec = match handoff_wait::parse_args(rest) {
+                Ok(Some(spec)) => spec,
+                Ok(None) => unreachable!("non-empty handoff args without --wait are rejected"),
+                Err(e) => {
+                    if json_mode {
+                        print_json_error(format!("handoff: {e}"));
+                    } else {
+                        eprintln!("{}", color::red(&format!("handoff: {e}")));
+                    }
+                    exit(1);
+                }
+            };
+            if !json_mode {
+                let hint = if zh {
+                    format!(
+                        "… 会话 '{session}' 已交接给用户，等待完成（做完后在终端跑 chrome-use session done{}）",
+                        session_flag_suffix(session)
+                    )
+                } else {
+                    format!(
+                        "… Session '{session}' handed off — waiting for the user (they can run chrome-use session done{} when finished)",
+                        session_flag_suffix(session)
+                    )
+                };
+                eprintln!("{hint}");
+            }
+            match handoff_wait::run(session, &spec) {
+                Ok(v) => {
+                    let resumed = v["owner"] == "agent";
+                    if json_mode {
+                        println!("{v}");
+                    } else {
+                        handoff_wait::print_human(&v, session, zh);
+                    }
+                    // Exit 0 when the agent has the session back; 2 when the
+                    // wait ended with the user still owning it.
+                    if !resumed {
+                        exit(2);
+                    }
+                }
+                Err(e) => {
+                    if json_mode {
+                        print_json_error(format!("handoff --wait failed: {e}"));
+                    } else {
+                        eprintln!("{}", color::red(&format!("handoff --wait failed: {e}")));
+                    }
+                    exit(1);
+                }
+            }
+        }
+        // `session done`: the human says the handed-off step is finished.
+        Some("done") => {
+            if owner_of(session) != Owner::User {
+                let msg = format!("session '{session}' is not handed off — nothing to finish");
+                if json_mode {
+                    print_json_error(msg);
+                } else {
+                    eprintln!("{}", color::red(&msg));
+                }
+                exit(1);
+            }
+            if let Err(e) = handoff_wait::mark_done(session) {
+                if json_mode {
+                    print_json_error(format!("done failed: {e}"));
+                } else {
+                    eprintln!("{}", color::red(&format!("done failed: {e}")));
+                }
+                exit(1);
+            }
+            if json_mode {
+                println!(
+                    "{}",
+                    serde_json::json!({"ok": true, "session": session, "done": true})
+                );
+            } else if zh {
+                println!("✓ 已告诉 agent 这一步做完了。");
+            } else {
+                println!("✓ Told the agent the step is done.");
+            }
+        }
         // `session name [title]` — label this session's tab group with
         // something the human can read in their own browser, instead of the
         // routing id. With no argument it reports the current label.
@@ -941,13 +1025,13 @@ fn run_session_ownership(sub: Option<&str>, session: &str, json_mode: bool) {
             } else if zh {
                 println!("✓ 会话 '{session}' 已交接给用户——你现在可以登录 / 过验证码 / 手动操作。");
                 println!(
-                    "  期间 agent 不会驱动这个会话。完事后跑：chrome-use session resume{}",
+                    "  期间 agent 不会驱动这个会话。等用户做完：chrome-use session handoff --wait{0}（后台跑）；确认做完后：chrome-use session resume{0}",
                     session_flag_suffix(session)
                 );
             } else {
                 println!("✓ Session '{session}' handed off to you — log in / solve the captcha / do the manual step.");
                 println!(
-                    "  The agent won't drive this session meanwhile. When done: chrome-use session resume{}",
+                    "  The agent won't drive this session meanwhile. Wait for the user: chrome-use session handoff --wait{0} (in the background); once they confirm: chrome-use session resume{0}",
                     session_flag_suffix(session)
                 );
             }
@@ -3020,9 +3104,12 @@ fn main() {
             SessionCommandRoute::Lifecycle => {
                 run_session_lifecycle(&clean, &flags.session, flags.json)
             }
-            SessionCommandRoute::Ownership => {
-                run_session_ownership(sub, &flags.session, flags.json)
-            }
+            SessionCommandRoute::Ownership => run_session_ownership(
+                sub,
+                clean.get(2..).unwrap_or(&[]),
+                &flags.session,
+                flags.json,
+            ),
         }
         return;
     }
@@ -5602,6 +5689,7 @@ mod tests {
         for sub in [
             None,
             Some("handoff"),
+            Some("done"),
             Some("resume"),
             Some("status"),
             Some("list"),

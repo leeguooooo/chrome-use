@@ -210,5 +210,6 @@ sign-in is waiting on a second, security-verification scan (Xiaohongshu's
 "Security Verification" / 安全验证 dialog): give the user that QR code
 (`screenshot`, or `loginVerification.qrSrc`) and do not reload, navigate or
 sign in again until they have scanned it (`core/authentication`).
-For a step only the human can do, `session handoff`, explain it, and wait
-for them before `session resume`.
+For a step only the human can do, explain it and run `session handoff --wait`
+(with an `--until-*` condition when you know the finished page) in the
+background; it returns when they are done (`core/authentication`).

@@ -606,16 +606,30 @@ hardware-key tap, a bank's "approve on your phone" prompt. Try autonomously
 first; hand off only as a last resort:
 
 ```bash
-chrome-use session handoff        # last resort: mark user-owned; tell the user exactly what to do
-# … the human does the one thing the agent truly can't …
-chrome-use session resume         # take control back — ONLY after they confirm they're done
+# last resort: tell the user exactly what to do, then hand off AND wait —
+# run this in the background (Claude Code: run_in_background) so you are woken
+# the moment it returns; don't end your turn waiting for the user to type.
+chrome-use session handoff --until-url "**/dashboard" --timeout 15m
 ```
+
+`--until-url <pat>` / `--until-text <t>` / `--until-gone <sel>` is you
+declaring up front what "done" looks like; when it holds, the command takes the
+session back (exit 0) and prints URL/title before → after plus a fresh
+snapshot, so you continue from the new page instead of stale refs. Pick a
+condition that only the *finished* state meets — not an intermediate OAuth hop
+or the 2FA page that follows the password page. When you can't name one, use a
+bare `--wait`: it ends when the user runs `chrome-use session done` (tell them
+so). `--until-change` returns as soon as the page moved and settled but leaves
+the session with the user (exit 2) — look, then wait again or `session resume`
+once they confirm. A timeout also exits 2 with the session still theirs; re-run
+`session handoff --wait` to keep waiting (the before/after baseline is kept).
 
 While handed off, **any browser-driving command on that session is refused**
 (loud error with the exact `session resume` line), so the agent can't fight the
 user for the tab. It's **zero-impact until you call `handoff`** — the agent owns
 and drives every session by default, autonomous login included. Check state with
 `chrome-use session status`; `chrome-use session list` shows every session's owner.
-Never call `session resume` on your own to grab control back — wait for the user.
+Never call `session resume` on your own to grab control back — wait for the user
+(`handoff --wait` resumes for you once its condition holds or they run `session done`).
 A handed-off session is also **never reaped by the idle timer** — the window the
 human is working in stays open however long they take.
