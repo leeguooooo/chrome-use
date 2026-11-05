@@ -1,0 +1,22 @@
+{
+  "label": "lifecycle",
+  "transport": "relay",
+  "firstTab": 784,
+  "firstTabAfterSwitch": 0,
+  "secondTab": 784,
+  "daemonPid": 84684,
+  "stoppedDaemonClearedAfterMs": 3899,
+  "afterHang": 0,
+  "status": {
+    "daemon": {
+      "enabled": true,
+      "lastMs": 7791,
+      "marks": 8,
+      "reason": "clearing the marker: no reply in time",
+      "setting": "AGENT_BROWSER_SHOW_POSITION",
+      "state": "unconfirmed",
+      "suppressed": 0
+    },
+    "enabled": true
+  }
+}

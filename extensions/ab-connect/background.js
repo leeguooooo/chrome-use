@@ -45,6 +45,7 @@ import { SITE_ACCESS_NOTIFICATION, SITE_ACCESS_OPTIONS_PAGE, hasSiteAccess, isSi
 import { DWELL_MS, UserTouchedTabs } from './user-touched.js';
 import { removeAgentTab } from './remove-agent-tab.js';
 import { shouldForwardEvent } from './cdp-event-filter.js';
+import { createMarkerWatchdog } from './position-marker-watchdog.js';
 import { clearDownloads, listDownloads, startDownload } from './download-manager.js';
 import { isRelayTimeoutError, relayUnresolvedOperations, withRelayTimeout } from './relay-timeout.js';
 import {
@@ -105,6 +106,15 @@ import {
   recordReplacement,
   reviveDiscardedTab,
 } from './tab-replacement.js';
+
+// The position marker's backstop (#850): clear a marker the daemon drew and
+// can no longer clear (stopped, hung, gone). Only on an existing attachment
+// that is still attached; never attaches or recovers a tab for it.
+const markerWatchdog = createMarkerWatchdog({
+  clear: (tabId) => tabs.get(tabId)?.attached === true
+    ? withRelayTimeout(chrome.debugger.sendCommand({ tabId }, 'Overlay.setShowHinge', {}), 'position marker watchdog')
+    : undefined,
+});
 
 let userTabOrganizer;
 async function getUserTabOrganizer() {
@@ -2268,6 +2278,7 @@ async function dispatchToTab(tabId, method, params, childSid, agentSession = '')
   }
   // Mirror agent mouse activity to the friendly on-page cursor (opt-in; best-effort).
   maybeDriveCursor(tabId, method, params);
+  markerWatchdog.observe(tabId, method, params, childSid);
   if (canUseBrowserNavigationFallback(method, params, childSid)) {
     return await navigateTabWithBrowserFallback(params, {
       navigateWithDebugger: () => sendCdpToTab(tabId, method, params),
@@ -2643,6 +2654,7 @@ async function announceAttachedTab(tabId, entry, targetInfo, scopeHints) {
     if (!removedTabs.has(tabId)) {
       removedTabs.add(tabId);
       cursorOverlay.forget(tabId);
+      markerWatchdog.forget(tabId);
       forgetTab(tabId);
     }
     return verdict;
@@ -2914,6 +2926,7 @@ chrome.tabs.onReplaced.addListener(
       // naming it follows replacedTabs to the new tab on its next command.
       removedTabs.add(removedTabId);
       cursorOverlay.forget(removedTabId);
+      markerWatchdog.forget(removedTabId);
       forgetTab(removedTabId);
     })
 );
@@ -2926,6 +2939,7 @@ chrome.tabs.onRemoved.addListener(
       removedTabs.add(tabId);
       nativeDuplicateTabs.delete(tabId);
       cursorOverlay.forget(tabId);
+      markerWatchdog.forget(tabId);
       void forgetAgentPopup(tabId);
       // Keep a short tombstone for stable-target recovery after onRemoved.
       // Genuine closed tabs expire, while a replacement can transfer the state.

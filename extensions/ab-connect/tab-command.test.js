@@ -284,6 +284,7 @@ async function backgroundCleanupFixture() {
   let pending
   const context = {
     cursorOverlay: { forget() {} },
+    markerWatchdog: { forget() {}, observe() {} },
     tabGrants: { load: async () => {}, isRefused: () => false, removed: async () => null, get: () => null }, forgetTabPanel() {},    attachmentHealth: createAttachmentHealth(),
     tabs: new Map([[1, { sessionId: 'cb-tab-1', attached: true }]]),
     sessionToTab: new Map([['cb-tab-1', 1]]),

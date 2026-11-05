@@ -2479,6 +2479,11 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
         if timing_disabled(std::env::var("AGENT_BROWSER_TIMING").ok().as_deref()) {
             obj.insert("_timing".to_string(), Value::Bool(false));
         }
+        // The position marker (#849): `--show-position` or the env var, so a
+        // running daemon follows this command's setting, not its spawn env.
+        if let Ok(v) = std::env::var("AGENT_BROWSER_SHOW_POSITION") {
+            obj.insert("_showPosition".to_string(), Value::String(v));
+        }
         if let Ok(h) = std::env::var("AGENT_BROWSER_HUMANIZE") {
             // Only forward a recognized level; warn once (like the --humanize flag
             // does) when the env var is set to garbage, instead of silently

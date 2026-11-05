@@ -31,7 +31,7 @@ function fixture(failure, takenBack = false) {
     recoverSessionTab: async () => { throw new Error('debugger_access_denied: protected extension') },
     tabCommandDependencies: () => ({}), resetReloadLoop() {}, activeReloadLoop: () => null,
     reattachTab: async () => { calls.push('attach'); throw new Error('debugger_access_denied: protected extension') },
-    rememberReplayable() {}, maybeDriveCursor() {}, conversationWindows: { observe: async () => {} },
+    rememberReplayable() {}, maybeDriveCursor() {}, markerWatchdog: { forget() {}, observe() {} }, conversationWindows: { observe: async () => {} },
     withRelayTimeout: promise => promise,
     sendCdpToTab: async () => { calls.push('debugger'); throw new Error('debugger_access_denied: protected extension') },
     chrome: { tabs: { get: async id => { calls.push(['get', id]); return { id, url: 'https://fixture.invalid/blocked' } }, update: async (id, properties) => { calls.push(['navigate', id, properties.url]); return { pendingUrl: properties.url } } } },

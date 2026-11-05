@@ -24,6 +24,7 @@ function worker(tabGrants, { onSend = async () => ({}) } = {}) {
     canUseBrowserNavigationFallback, navigateTabWithBrowserFallback,
     withRelayTimeout: p => p,
     maybeDriveCursor() {},
+    markerWatchdog: { forget() {}, observe() {} },
     sendCdpToTab: async (tabId, method) => { sent.push(method); return onSend(method); },
     chrome: { tabs: { update: async (tabId, props) => { updated.push(props.url); return {}; } } },
     resolveSessionTab: sessionId => Number(/cb-tab-(\d+)/.exec(sessionId)?.[1] ?? NaN),

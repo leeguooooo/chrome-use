@@ -399,6 +399,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 
 | 命令 | 用途 |
 |---|---|
+| `--show-position` | 显示 agent 点击、悬停和滚动的位置：一个橙色小方块，由 Chrome 自己的覆盖层画出，不在页面里（没有 DOM、脚本、输入或请求）。最后一次操作约 2 秒后消失；`screenshot` 截图时隐藏，`record` 录制里保留。默认关闭；也可用 `AGENT_BROWSER_SHOW_POSITION=1` 或 `~/.chrome-use/config.json` 里的 `"showPosition": true` |
 | `--humanize off\|fast\|human` | 默认 Fast；Human 常规指针点击增加按种子变化的 60–200ms 停顿，并在按下前回查存活目标。`off` 插入文字时没有按键事件，滚动时没有滚轮事件，行为检测会标记 |
 | `--allow-focus-recovery` | 仅为本次命令允许一次 Windows 中继原生 Escape 恢复，可能切换焦点 |
 | `chrome-use extension install --user-data-dir <path>` | macOS/Linux：为已有的自定义 Chrome 数据目录注册 host，可重复指定，也接受等号形式；还会自动扫描正在运行的自定义目录。Windows 使用 HKCU，不支持此选项。 |
@@ -580,6 +581,8 @@ chrome-use jev run --goal "查苏黎世到伦敦的航班" --url https://www.goo
 ## 反检测
 
 带 session 的内部 DOM 读取要求隔离执行上下文；创建、重建或节点解析无法保持隔离时返回 `isolation_unavailable`，不再静默重试页面主世界。隔离上下文创建失败只缓存一秒；之后的读取可重新尝试创建，无需刷新页面，也不会回退到主世界。等待导航稳定后重新观察；部分同进程 iframe 操作可能仍不支持。用户主动执行的脚本、站点适配器、明确的编辑器模型访问和显式上下文保留现有语义。已有的 `AGENT_BROWSER_MAIN_WORLD=1` 兼容开关会取消默认隔离要求，不是保持隐身的解决办法。此策略独立于扩展的光标设置。
+
+**位置指示器**（`--show-position`，默认关闭）：在 agent 最后一次点击、悬停或滚动的位置显示一个橙色小方块，方便你在窗口里跟着看。它由 Chrome 显示折叠屏铰链用的覆盖层画出（`Overlay.setShowHinge`，不调用 `Overlay.enable`），页面拿不到任何 DOM、脚本、监听器、输入或请求，所以隐身模式、`--launch` 和扩展 relay 下都能用。2026-11-05 在 Chrome 156 上开、关对比实测：页面全局变量、DOM、事件及其可信标记、指针移动合并、帧节奏、焦点、视口和请求数都不变；botcheck 两种情况都是 18/19；点击耗时不变；方块显示期间每次点击浏览器多用约 70–90ms CPU。`screenshot` 截图前隐藏、截完放回，`record` 录制里保留，`stream` 投屏里没有，桌面录屏里有。最后一次操作 2 秒后、页面导航时、另一个标签页有新操作时都会消失；relay 下守护进程无法再清除时，扩展会在约 4 秒内自己清掉。双指缩放的页面、视口外的点和跨进程 iframe 里的点不画。`chrome-use status` 会显示它的状态（`acknowledged`、`suppressed`、`unsupported` 等）。[实测证据](https://chrome-use.leeguoo.com/stealth.html#position-indicator-research)
 
 在扩展设置中开启**隐身模式**或关闭 **Agent 光标**时，扩展会通过现有调试连接移除已有的光标浮层及其页面全局变量。对于已断开或无法访问的标签页，设置页会提示清理尚未确认；依赖隐身模式前请重新加载相关页面。Agent 正常重新连接该标签页时会重试清理，不会为了清理强制建立连接。
 

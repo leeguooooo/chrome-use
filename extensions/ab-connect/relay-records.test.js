@@ -146,6 +146,7 @@ function workerFixture() {
     removedTabs: createRemovedTabs(),
     attachmentHealth: { clear() {} },
     cursorOverlay: { forget() {}, attached: async () => true },
+    markerWatchdog: { forget() {}, observe() {} },
     port: {},
     RELOAD_LOOP_WINDOW_MS: 1000,
     isMissingTabError,

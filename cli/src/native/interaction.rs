@@ -912,6 +912,39 @@ const SCROLL_AND_PROBE_DISABLED_JS: &str = r#"function(allowHeader,wheelX,wheelY
     return recheck?{blocked:true}:'';
 }"#;
 
+/// A click dispatched in the DOM sends no mouse event for the position marker
+/// to follow, so give it the element's centre. Only when the marker is on:
+/// the rectangle read is the one extra call it costs, and it runs in the
+/// isolated world like every other chrome-use read.
+async fn mark_element_centre(client: &CdpClient, session_id: &str, object_id: &str) {
+    if !client.position_marker().is_enabled() {
+        return;
+    }
+    let centre = client
+        .send_command_typed::<_, Value>(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: "function() { const r = this.getBoundingClientRect(); \
+                     return [r.left + r.width / 2, r.top + r.height / 2]; }"
+                    .to_string(),
+                object_id: Some(object_id.to_string()),
+                arguments: None,
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await;
+    if let Ok(v) = centre {
+        if let (Some(x), Some(y)) = (
+            v["result"]["value"][0].as_f64(),
+            v["result"]["value"][1].as_f64(),
+        ) {
+            client.position_marker().mark(session_id, x, y);
+        }
+    }
+}
+
 /// Dispatch a click through the DOM (`element.click()`) instead of via screen
 /// coordinates. Targets the intended element directly, so it works when a
 /// floating layer occludes the click point or the element sits in a portal that
@@ -933,6 +966,9 @@ async fn dom_click(
     )
     .await?;
     show_cursor_travelling_to(client, session_id, &effective_session_id, &object_id).await;
+    if effective_session_id == session_id {
+        mark_element_centre(client, session_id, &object_id).await;
+    }
     client
         .send_command_typed::<_, Value>(
             "Runtime.callFunctionOn",
@@ -1674,6 +1710,7 @@ pub async fn hover_reporting(
                 Some(session_id),
             )
             .await?;
+        client.position_marker().mark(session_id, mx, my);
         last = (mx, my);
         *moved_to = Some(last);
         let Some(rec) = recorder.as_deref() else {
@@ -1816,6 +1853,7 @@ pub async fn hover_point(
                 Some(session_id),
             )
             .await?;
+        client.position_marker().mark(session_id, mx, my);
     }
     let mut read = Value::Null;
     if let Some(recorder) = recorder.as_deref() {

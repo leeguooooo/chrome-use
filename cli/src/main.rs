@@ -1649,6 +1649,22 @@ fn run_status(session: &str, json_mode: bool) {
         }
     }
     let current = inventory.sessions.iter().find(|item| item.name == session);
+    // The position marker (#849): the setting this CLI resolves, and what the
+    // session's daemon last saw when it is running.
+    let marker_setting = native::position_marker::read_setting_from_environment();
+    let marker_live = current.and_then(|_| {
+        connection::send_command(
+            json!({ "id": commands::gen_id(), "action": "position_marker" }),
+            session,
+        )
+        .ok()
+        .filter(|r| r.success)
+        .and_then(|r| r.data)
+    });
+    let position_marker = json!({
+        "enabled": marker_setting.0,
+        "daemon": marker_live,
+    });
     // A downloaded extension update, and what holds it back (#524).
     let update = health.update_notice();
     if let Some(notice) = update.as_ref().filter(|n| n.blocked) {
@@ -1717,6 +1733,7 @@ fn run_status(session: &str, json_mode: bool) {
                     })),
                 },
                 "currentSession": current_session,
+                "positionMarker": position_marker,
                 "sessions": sessions,
             }
         }));
@@ -1799,6 +1816,20 @@ fn run_status(session: &str, json_mode: bool) {
         recorded,
         if recorded == 1 { "" } else { "s" }
     );
+    if marker_setting.0 || marker_live.is_some() {
+        let live = marker_live.as_ref();
+        let state = live
+            .and_then(|v| v["state"].as_str())
+            .unwrap_or("not started");
+        let reason = live
+            .and_then(|v| v["reason"].as_str())
+            .map(|r| format!(": {r}"))
+            .unwrap_or_default();
+        println!(
+            "  position marker: {} ({state}{reason})",
+            if marker_setting.0 { "on" } else { "off" }
+        );
+    }
 
     if inventory.sessions.is_empty() {
         println!("Session daemons: none");

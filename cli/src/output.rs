@@ -7201,6 +7201,11 @@ Options:
                              Clicks settle before press: Human 60-200ms, Fast 15-55ms
                              off fails input-behavior checks; keep it out of watched sites
                              (also AGENT_BROWSER_HUMANIZE)
+  --show-position            Show where the agent clicks: a small orange square the browser
+                             draws itself (no page DOM, script, input or requests). It stays
+                             about 2s, is hidden for `screenshot` and kept in `record`.
+                             Off by default (also AGENT_BROWSER_SHOW_POSITION=1, or
+                             "showPosition": true in ~/.chrome-use/config.json)
   --headed                   Always on (default). Headless is forbidden (bot-detection tell);
                              display-less servers can opt back in with AGENT_BROWSER_ALLOW_HEADLESS=1
   --cdp <port>               Connect via CDP (Chrome DevTools Protocol)

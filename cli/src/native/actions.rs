@@ -2279,6 +2279,18 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         }
         _ => std::env::remove_var("AGENT_BROWSER_CLICK_MODE"),
     }
+    // Position marker: this command's `--show-position` / env, else the
+    // config file (read by the marker itself). Mirrored like CLICK_MODE.
+    let show_position = cmd.get("_showPosition").and_then(|v| v.as_str());
+    if std::env::var("AGENT_BROWSER_SHOW_POSITION").ok().as_deref() != show_position {
+        match show_position {
+            Some(v) => std::env::set_var("AGENT_BROWSER_SHOW_POSITION", v),
+            None => std::env::remove_var("AGENT_BROWSER_SHOW_POSITION"),
+        }
+        if let Some(mgr) = state.browser.as_ref() {
+            mgr.client.position_marker().reload_setting();
+        }
+    }
     // Humanize: set the session level from the client's --humanize / env. Only
     // set when provided (don't clear — the adaptive per-navigation detector also
     // owns this level between explicit overrides).
@@ -3052,6 +3064,10 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             "press" => handle_press(cmd, state).await,
             "pick" => handle_pick(cmd, state).await,
             "hover" => handle_hover(cmd, state).await,
+            "position_marker" => Ok(match state.browser.as_ref() {
+                Some(mgr) => mgr.client.position_marker().status(),
+                None => json!({ "state": "no-browser" }),
+            }),
             "scroll" => handle_scroll(cmd, state).await,
             "select" => handle_select(cmd, state).await,
             "check" => handle_check(cmd, state).await,
@@ -9417,6 +9433,12 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // so the stamp names the target that was actually captured.
     if !live_url.is_empty() {
         response["origin"] = json!(live_url);
+    }
+    if let Some(m) = result.marker_warning {
+        capture_warning = Some(match capture_warning {
+            Some(w) => format!("{w}; {m}"),
+            None => m.to_string(),
+        });
     }
     if let Some(w) = capture_warning {
         response["warning"] = json!(w);
@@ -27047,6 +27069,7 @@ async fn handle_mousemove(cmd: &Value, state: &mut DaemonState) -> Result<Value,
     mgr.client
         .send_command_typed::<_, Value>("Input.dispatchMouseEvent", &params, Some(&session_id))
         .await?;
+    mgr.client.position_marker().mark(&session_id, x, y);
     Ok(json!({ "moved": true }))
 }
 

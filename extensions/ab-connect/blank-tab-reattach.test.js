@@ -51,7 +51,7 @@ function relay(url, { missing = false } = {}) {
     tabForTarget: () => null, anyConnectedTab: () => null, guardTab() {},
     attachmentHealth: { recover: async () => false, navigationStarted: () => calls.push('navigationStarted') },
     tabCommandDependencies: () => ({}), resetReloadLoop() {}, activeReloadLoop: () => null,
-    reattachTab: async () => {}, rememberReplayable() {}, maybeDriveCursor() {},
+    reattachTab: async () => {}, rememberReplayable() {}, maybeDriveCursor() {}, markerWatchdog: { forget() {}, observe() {} },
     conversationWindows: { observe: async () => {} },
     withRelayTimeout: promise => promise,
     loadReplacedTabs: async () => {}, saveReplacedTabs() {}, transferReloadState() {},
