@@ -1,8 +1,26 @@
 # Changelog
 
-## 1.5.281
+## 1.5.282
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.105.
+
+### Features
+
+- **`session handoff --wait` returns when the user is done.** A plain `session handoff` only marked the session as the user's: the agent stopped, the user finished on the page, and nothing told the agent, whose refs were stale by then. `session handoff --wait` blocks until the user is done, takes the session back and prints what changed: URL and title before → after and a fresh `snapshot -i` (a diff when the page did not navigate). Run it in the background (Claude Code `run_in_background`) and the agent is woken when it returns.
+  - `--until-url <pat>` (substring or glob, as `wait --url`), `--until-text <t>` or `--until-gone <sel>` says up front what "done" looks like. When it holds, the session comes back to the agent (exit 0).
+  - `chrome-use session done` (new, for the human) ends a bare `--wait` the same way.
+  - `--until-change` returns once the URL or title moved and settled (`--settle`, 3 s), but leaves the session with the user (exit 2): a page change is not proof they finished. A `--timeout` (default 30m) also exits 2; re-running `--wait` keeps the original before/after baseline.
+  - Watching reads the address bar through the extension and, for text and selector conditions, makes one isolated-world check per ~1.5 s tick. The page sees nothing, so stealth mode is unchanged. Driving commands stay refused while the user owns the session, and a slow read during a handoff never stops that session's daemon.
+  - `--content-boundaries` wraps the reported snapshot.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.281
+
 Works with extension ab-connect 0.5.105.
 
 ### Features
@@ -23,7 +41,6 @@ Works with extension ab-connect 0.5.105.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.280
 
