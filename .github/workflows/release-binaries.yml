@@ -206,7 +206,9 @@ jobs:
 
           # Stapling fetches the ticket from Apple's CloudKit, which drops
           # connections now and then (Error 68 after an Accepted notarization).
-          staple() { for i in 1 2 3 4 5; do xcrun stapler staple "$1" && return 0; echo "staple attempt $i failed; retrying"; sleep $((i * 20)); done; return 1; }
+          # The notarization itself was accepted, so an unstapled file still
+          # passes Gatekeeper online; only the offline check needs the ticket.
+          staple() { for i in 1 2 3 4 5; do xcrun stapler staple "$1" && return 0; echo "staple attempt $i failed; retrying"; sleep $((i * 20)); done; echo "::warning::could not staple $1 (notarized, but checked online only)"; }
 
           # `--options runtime` is required for notarization. Verified locally
           # that the daemon still starts and drives a browser under it.
