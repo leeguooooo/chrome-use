@@ -2010,17 +2010,18 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
   if (tabs?.onRemoved) tabs.onRemoved.addListener(() => { if (tabMode) void refreshPage().catch(() => {}); });
   // Who drives the tab this panel looks at; extension UI only, stealth-safe.
   const operatorNode = id => document.getElementById?.(id);
-  let operatorTarget = null, operatorEpoch = 0, operatorPoll = null;
+  let operatorTarget = null, operatorEpoch = 0, operatorPoll = null, operatorBusy = false, shownHandoff = null;
   // While an agent drives the tab, look again every few seconds so a handoff
   // (and its end) shows without switching tabs.
   function pollOperator(on) {
-    if (on && !operatorPoll) operatorPoll = setInterval(() => { if (document.visibilityState !== 'hidden') void refreshOperator().catch(() => {}); }, 4000);
+    if (on && !operatorPoll) operatorPoll = setInterval(() => { if (document.visibilityState !== 'hidden' && !operatorBusy) void refreshOperator().catch(() => {}); }, 4000);
     if (!on && operatorPoll) { clearInterval(operatorPoll); operatorPoll = null; }
   }
   function renderHandoff(info) {
     const box = operatorNode('handoffBox');
     if (!box) return;
     const handoff = handoffSummary(info, t);
+    shownHandoff = handoff ? info.handoff.since ?? null : null;
     box.hidden = !handoff;
     if (!handoff) return;
     operatorNode('handoffTitle').textContent = handoff.title;
@@ -2038,12 +2039,16 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     const target = operatorTarget, done = operatorNode('handoffDone');
     if (!target || done.disabled) return;
     done.disabled = true;
-    try { await api('tabHandoffDone', { targetId: target }); }
+    try { await api('tabHandoffDone', { targetId: target, since: shownHandoff }); }
     catch (failure) { done.disabled = false; throw failure; }
     await refreshOperator();
   }
   operatorNode('handoffDone')?.addEventListener('click', () => void handoffDone().catch(error));
   async function refreshOperator() {
+    operatorBusy = true;
+    try { await refreshOperatorOnce(); } finally { operatorBusy = false; }
+  }
+  async function refreshOperatorOnce() {
     const card = operatorNode('operatorCard');
     if (!card) return;
     const epoch = ++operatorEpoch;

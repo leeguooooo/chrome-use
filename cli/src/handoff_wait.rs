@@ -418,7 +418,7 @@ pub fn run(session: &str, spec: &WaitSpec, on_handed_off: impl FnOnce()) -> Resu
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
         .and_then(|v| v["since"].as_u64())
         .unwrap_or_else(now_ms);
-    let _ = std::fs::write(
+    std::fs::write(
         baseline_path(session),
         json!({
             "url": baseline.url,
@@ -428,7 +428,8 @@ pub fn run(session: &str, spec: &WaitSpec, on_handed_off: impl FnOnce()) -> Resu
             "note": spec.note,
         })
         .to_string(),
-    );
+    )
+    .map_err(|e| format!("could not record the handoff: {e}"))?;
     if !already_handed_off {
         let _ = std::fs::remove_file(done_path(session));
         ownership::hand_off(session)?;

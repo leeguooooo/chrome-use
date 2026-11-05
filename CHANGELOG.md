@@ -37,7 +37,6 @@ Works with extension ab-connect 0.5.105.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.281
 

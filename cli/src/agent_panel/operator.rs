@@ -98,13 +98,19 @@ fn handoff(dir: &Path, session: &str) -> Value {
 
 /// The panel's Done button: the user finished the handed-off step on this
 /// tab. Writes the marker a running `handoff --wait` polls (as `session done`).
-pub(super) fn handoff_done(dir: &Path, target: &str) -> Result<Value, String> {
+/// `since` is the handoff the card showed: a stale card cannot end a later
+/// handoff of the same session.
+pub(super) fn handoff_done(dir: &Path, target: &str, since: &Value) -> Result<Value, String> {
     if !valid_target(target) {
         return Err("tabHandoffDone requires a Chrome target id".into());
     }
     let session = owner_of(dir, target).ok_or("No agent session drives this tab")?;
-    if handoff(dir, &session).is_null() {
+    let current = handoff(dir, &session);
+    if current.is_null() {
         return Err("This tab is not handed off to you".into());
+    }
+    if current["since"] != *since {
+        return Err("This handoff has changed; look at the panel again".into());
     }
     let millis = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -166,7 +172,7 @@ mod tests {
             lookup(d.path(), "AB12", &[]).unwrap()["handoff"],
             Value::Null
         );
-        assert!(handoff_done(d.path(), "AB12").is_err());
+        assert!(handoff_done(d.path(), "AB12", &Value::Null).is_err());
         fs::write(d.path().join("cu-a-1.owner"), "user").unwrap();
         fs::write(
             d.path().join("cu-a-1.handoff.json"),
@@ -177,14 +183,20 @@ mod tests {
         assert_eq!(h["note"], "Sign in");
         assert_eq!(h["until"]["kind"], "url");
         assert_eq!(h["done"], false);
-        assert_eq!(handoff_done(d.path(), "AB12").unwrap()["session"], "cu-a-1");
+        // A card from another handoff (or none) is refused.
+        assert!(handoff_done(d.path(), "AB12", &json!(4)).is_err());
+        assert!(!d.path().join("cu-a-1.handoff-done").exists());
+        assert_eq!(
+            handoff_done(d.path(), "AB12", &json!(5)).unwrap()["session"],
+            "cu-a-1"
+        );
         assert!(d.path().join("cu-a-1.handoff-done").exists());
         assert_eq!(
             lookup(d.path(), "AB12", &[]).unwrap()["handoff"]["done"],
             true
         );
-        assert!(handoff_done(d.path(), "FFFF").is_err());
-        assert!(handoff_done(d.path(), "../x").is_err());
+        assert!(handoff_done(d.path(), "FFFF", &json!(5)).is_err());
+        assert!(handoff_done(d.path(), "../x", &json!(5)).is_err());
     }
 
     #[test]

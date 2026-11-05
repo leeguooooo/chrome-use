@@ -3804,11 +3804,11 @@
   "panel_operator_last": {"message": "最近：$VALUE$", "placeholders": {"value": {"content": "$1"}}},
   "panel_operator_loading": {"message": "读取中…"},
   "panel_operator_no_context": {"message": "这个对话没有可读取的上下文。"},
-  "panel_handoff_title": {"message": "已交给你操作，智能体在等你"},
+  "panel_handoff_title": {"message": "已交给你操作"},
   "panel_handoff_until_url": {"message": "地址变成 $VALUE$ 后它会自动继续", "placeholders": {"value": {"content": "$1"}}},
   "panel_handoff_until_text": {"message": "页面出现“$VALUE$”后它会自动继续", "placeholders": {"value": {"content": "$1"}}},
   "panel_handoff_until_gone": {"message": "页面上的 $VALUE$ 消失后它会自动继续", "placeholders": {"value": {"content": "$1"}}},
   "panel_handoff_until_change": {"message": "页面变化后它会再看一眼"},
   "panel_handoff_done": {"message": "完成，交还给智能体"},
-  "panel_handoff_sent": {"message": "已通知，智能体继续"}
+  "panel_handoff_sent": {"message": "已标记完成"}
 }
