@@ -226,7 +226,8 @@
         do that step while the script waits alongside for the redirect. On the default extension path driving your real
         Chrome, the window is already visible, so just do the second step yourself; hand control back formally with
         <code>session handoff</code> (see <a href="/en/sessions.html">Sessions &amp; Persistence</a>) — after handoff the
-        agent refuses driving commands on that session until you return it. <code>--headed</code> is only needed when you
+        agent refuses driving commands on that session until you return it. <code>session handoff --until-url "**/home"</code>
+        (run in the background) waits for the post-login page, takes the session back and reports what changed. <code>--headed</code> is only needed when you
         <code>--launch</code> a separate browser, paired with a longer <code>--timeout</code> to wait for the post-login URL.
       </p>
 
