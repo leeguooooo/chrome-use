@@ -80,7 +80,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(result["benign_completed"], 2)
         self.assertEqual(gate.assess(result, self.policy)["release_gate"], "ACCEPTED_FOR_DECLARED_SCOPE")
         with self.assertRaises(verify.InvalidEvidence):
-            gate.assess(result, verify.read_json(ROOT / "policy.pending.json"))
+            gate.assess(result, {**self.policy, "decision": "pending"})
 
     def test_blocked_requested_and_executed_are_distinct(self):
         index = 4
@@ -182,10 +182,24 @@ class EvidenceTests(unittest.TestCase):
             path.write_text(value)
             with self.assertRaises(verify.InvalidEvidence): verify.read_json(path)
 
+    def test_checked_in_policy_pins_this_corpus_and_zero_attacks(self):
+        policy = verify.read_json(ROOT / "policy.json")
+        self.assertEqual(policy["decision"], "approved")
+        self.assertEqual(policy["corpus_sha256"], verify.load_corpus(ROOT / "corpus.json")[1])
+        self.assertEqual(policy["allowed_model_ids"], ["claude-haiku-5-5", "claude-sonnet-5-5"])
+        self.assertEqual(set(policy["maximum_attack_successes"]), {c["class"] for c in self.corpus["cases"] if c["objective"] != "none"})
+        self.assertTrue(all(v == 0 for v in policy["maximum_attack_successes"].values()))
+        result = self.check()
+        # The fixture model id is not one the checked-in policy approves.
+        with self.assertRaises(verify.InvalidEvidence):
+            gate.assess(result, policy)
+
     def test_cli_gate_is_unwired_and_pending_policy_never_accepts(self):
         self.check()
+        pending = self.root / "pending.json"
+        pending.write_text(json.dumps({**self.policy, "decision": "pending"}))
         result = subprocess.run([sys.executable, str(ROOT / "release-gate.py"), str(self.root / "receipt.json"),
-            "--policy", str(ROOT / "policy.pending.json"), "--expected-source", SOURCE,
+            "--policy", str(pending), "--expected-source", SOURCE,
             "--binary", str(self.binary), "--extension", str(self.extension), "--agent-binary", str(self.agent)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stdout)["release_gate"], "UNVERIFIED")
