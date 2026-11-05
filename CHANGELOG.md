@@ -1,8 +1,32 @@
 # Changelog
 
-## 1.5.280
+## 1.5.281
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.105.
+
+### Features
+
+- **`--show-position` shows where the agent acts.** A small orange square marks each click, hover, `mouse move` and wheel point, so a person can follow the agent in the window. Chrome draws it with its own overlay (`Overlay.setShowHinge`, without `Overlay.enable`): the page gets no DOM, script, listener, input or request from it, so it works with stealth mode on, on `--launch` and on the extension relay. It is off by default; turn it on with `--show-position`, `AGENT_BROWSER_SHOW_POSITION=1` or `"showPosition": true` in `~/.chrome-use/config.json`. Drawing never delays, fails or repeats an action.
+  - Positions follow the page zoom. A pinch-zoomed page, a point outside the viewport and a point inside an out-of-process iframe are not drawn.
+  - `screenshot` hides the marker first and puts it back after. `record` keeps it.
+  - It disappears 2 s after the last point, on a navigation, and when another tab gets a point.
+  - On the relay, the extension also clears a marker its daemon can no longer clear, within about 4 s.
+  - `chrome-use status` shows its state.
+  - Measured on and off on Chrome 156, on `--launch` and on the relay: page-visible state, events, input coalescing, frame cadence and botcheck were unchanged, and click time was unchanged. The browser used about 70–90 ms more CPU per click while the marker was showing. Evidence is in `docs/evidence/position-indicator-20261105/` (#849, #850, #851).
+
+### Fixes
+
+- **Relay clicks no longer stall for 30 s.** Since 1.5.273, about one click in six on the extension relay waited 30 s. The extension's site-permission reply waited for a `chrome.storage.managed` read that some Chrome builds never answer (Chrome for Testing 156 never does). The extension now gives that read 1 s. The CLI gives the reply 2 s and does not ask an extension that stayed silent again for a minute, so older extensions stall at most 2 s a minute (#863).
+- **Bench:** a runner for the prompt-injection drill (`bench/injection-evidence/runner.py`). It uses only the fixture MCP tools. Without an API key on a disposable host it reports `NOT_RUN` and calls no model (#852).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.280
+
 Works with extension ab-connect 0.5.104.
 
 ### Fixes
@@ -13,7 +37,6 @@ Works with extension ab-connect 0.5.104.
 
 - @leeguooooo
 - @Jerryx333
-<!-- release:end -->
 
 ## 1.5.279
 
