@@ -58,7 +58,7 @@ try {
   const card = await waitFor(() => panel.run(`document.getElementById('handoffBox').hidden ? null : document.getElementById('handoffBox').innerText`), { timeout: 20000, label: 'handoff card' });
   console.log('[handoff] card', JSON.stringify(card));
   if (!card.includes('Approve the sign-in on your phone')) throw new Error('card lacks the note');
-  if (await panel.run(`document.getElementById('handoffDone').hidden`)) throw new Error('Done button hidden');
+  await waitFor(() => panel.run(`!document.getElementById('handoffDone').hidden`), { timeout: 10000, label: 'Done button' });
   let s = await b.send('Page.captureScreenshot', { format: 'png' }, panel.sid); fs.writeFileSync(path.join(out, 'handoff-card.png'), Buffer.from(s.data, 'base64'));
   // The wait is still running until Done.
   if (waiter.exitCode !== null) throw new Error('wait ended before Done: ' + stdout + stderr);

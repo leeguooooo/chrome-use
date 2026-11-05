@@ -264,7 +264,10 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
   function renderConnection(state) {
     renderVersions(state);
     connected = state?.connected === true;
+    const hadHandoffDone = Boolean(panelSupport?.handoffDone);
     panelSupport = state?.agentPanel?.schemaVersion === 1 ? state.agentPanel : null;
+    // The handoff card's Done button depends on the host; redraw it once known.
+    if (hadHandoffDone !== Boolean(panelSupport?.handoffDone)) setTimeout(() => { try { void refreshOperator().catch(() => {}); } catch {} }, 0);
     nodes.connection.classList.toggle('disconnected', !connected);
     nodes.connection.classList.toggle('ok', connected && panelSupport?.mode === 'full');
     nodes.connection.textContent = connected ? t('panel_connection_connected') : state?.connectionState === 'connecting' ? t('panel_connection_waiting') : state?.connectionError || t('panel_connection_unavailable');
