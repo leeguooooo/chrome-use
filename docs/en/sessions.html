@@ -382,7 +382,8 @@
 <span class="du-prompt">$</span> chrome-use session handoff --until-url "**/dashboard"   <span class="du-cmt"># or --until-text / --until-gone / --wait</span>
 <span class="du-cmt"># … the human does the one thing the agent truly can't …</span>
 <span class="du-cmt"># → returns, takes the session back, prints URL/title before → after + a fresh snapshot</span>
-<span class="du-prompt">$</span> chrome-use session done --session &lt;name&gt;  <span class="du-cmt"># (the human) ends a bare --wait; use the session name the agent gives</span></code></pre>
+<span class="du-prompt">$</span> chrome-use session handoff --wait --note "Approve the sign-in on your phone"  <span class="du-cmt"># the side panel shows this with a Done button</span>
+<span class="du-prompt">$</span> chrome-use session done --session &lt;name&gt;  <span class="du-cmt"># (the human) ends a bare --wait, as does Done in the side panel</span></code></pre>
       </div>
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ The agent is locked out during handoff</div>

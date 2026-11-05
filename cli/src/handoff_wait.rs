@@ -41,7 +41,24 @@ pub struct WaitSpec {
     pub timeout: Duration,
     pub poll: Duration,
     pub settle: Duration,
+    /// What the user is asked to do, shown in the side panel's handoff card.
+    pub note: Option<String>,
 }
+
+impl Until {
+    /// The condition as the side panel shows it.
+    fn describe(&self) -> Value {
+        match self {
+            Until::Url(v) => json!({"kind": "url", "value": v}),
+            Until::Text(v) => json!({"kind": "text", "value": v}),
+            Until::Gone(v) => json!({"kind": "gone", "value": v}),
+            Until::Change => json!({"kind": "change"}),
+        }
+    }
+}
+
+/// Longest `--note` kept; the panel shows it on one card.
+const MAX_NOTE_CHARS: usize = 300;
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const DEFAULT_POLL: Duration = Duration::from_millis(1500);
@@ -59,6 +76,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<WaitSpec>, String> {
     let mut timeout = DEFAULT_TIMEOUT;
     let mut poll = DEFAULT_POLL;
     let mut settle = DEFAULT_SETTLE;
+    let mut note: Option<String> = None;
     let mut wait_option = false;
     let set_until = |u: Until, until: &mut Option<Until>| -> Result<(), String> {
         if until.is_some() {
@@ -106,13 +124,19 @@ pub fn parse_args(args: &[String]) -> Result<Option<WaitSpec>, String> {
                 settle = parse_duration(&value(i)?)?;
                 i += 1;
             }
+            "--note" => {
+                wait_option = true;
+                let text = value(i)?;
+                note = Some(text.trim().chars().take(MAX_NOTE_CHARS).collect());
+                i += 1;
+            }
             other => return Err(format!("unknown option for session handoff: {other}")),
         }
         i += 1;
     }
     if !wait && until.is_none() {
         if wait_option {
-            return Err("--timeout/--poll/--settle only apply with --wait".to_string());
+            return Err("--timeout/--poll/--settle/--note only apply with --wait".to_string());
         }
         return Ok(None);
     }
@@ -121,6 +145,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<WaitSpec>, String> {
         timeout,
         poll,
         settle,
+        note,
     }))
 }
 
@@ -347,7 +372,9 @@ fn jittered(poll: Duration, tick: u64) -> Duration {
 
 /// Run the whole `handoff --wait`. Returns the JSON result (`ok` false only
 /// on a hard failure before the handoff took effect).
-pub fn run(session: &str, spec: &WaitSpec) -> Result<Value, String> {
+/// `on_handed_off` runs once the session belongs to the user, so a caller's
+/// "waiting" notice never prints ahead of a failure to hand off.
+pub fn run(session: &str, spec: &WaitSpec, on_handed_off: impl FnOnce()) -> Result<Value, String> {
     if !crate::connection::daemon_ready(session) {
         return Err(format!(
             "no running browser session '{session}' to watch — open the page first"
@@ -380,17 +407,34 @@ pub fn run(session: &str, spec: &WaitSpec) -> Result<Value, String> {
                 json!({"id": "hw-snap0", "action": "snapshot", "interactive": true}),
                 session,
             );
-            let _ = std::fs::write(
-                baseline_path(session),
-                json!({"url": b.url, "title": b.title, "since": now_ms()}).to_string(),
-            );
             b
         }
     };
+    // The panel's handoff card reads the note and condition from here; a
+    // re-wait keeps the original baseline and since, with its own ask.
+    let since = std::fs::read_to_string(baseline_path(session))
+        .ok()
+        .filter(|_| !fresh_baseline)
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v["since"].as_u64())
+        .unwrap_or_else(now_ms);
+    std::fs::write(
+        baseline_path(session),
+        json!({
+            "url": baseline.url,
+            "title": baseline.title,
+            "since": since,
+            "until": spec.until.as_ref().map(Until::describe),
+            "note": spec.note,
+        })
+        .to_string(),
+    )
+    .map_err(|e| format!("could not record the handoff: {e}"))?;
     if !already_handed_off {
         let _ = std::fs::remove_file(done_path(session));
         ownership::hand_off(session)?;
     }
+    on_handed_off();
 
     let start = Instant::now();
     let mut change = ChangeWatch::new(baseline.clone());
@@ -577,6 +621,21 @@ mod tests {
         // Even an option equal to its default needs --wait (was a panic).
         assert!(parse_args(&args(&["--timeout", "30m"])).is_err());
         assert!(parse_args(&args(&["--poll", "1500ms"])).is_err());
+    }
+
+    #[test]
+    fn note_needs_wait_and_is_kept_short() {
+        assert!(parse_args(&args(&["--note", "Sign in"])).is_err());
+        let s = parse_args(&args(&["--wait", "--note", "  Sign in  "]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.note.as_deref(), Some("Sign in"));
+        let long = "x".repeat(MAX_NOTE_CHARS + 50);
+        let s = parse_args(&args(&["--wait", "--note", &long]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.note.unwrap().chars().count(), MAX_NOTE_CHARS);
+        assert!(parse_args(&args(&["--wait", "--note"])).is_err());
     }
 
     #[test]

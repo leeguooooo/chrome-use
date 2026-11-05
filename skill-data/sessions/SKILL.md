@@ -95,7 +95,7 @@ prompt, a CAPTCHA the humanizer can't clear), not a login method.
 ```bash
 chrome-use session handoff --until-url "**/home"   # hand off AND block until done (run in background)
 chrome-use session handoff --until-text "Welcome"  # …or until the finished page's text shows
-chrome-use session handoff --wait                  # …or until the user runs `session done`
+chrome-use session handoff --wait --note "Approve the sign-in on your phone"  # …or until they click Done in the side panel / run `session done`
 chrome-use session handoff       # give THIS session to the user; agent driving commands refuse (exit 1)
 chrome-use session status        # who owns each session (agent | user)
 chrome-use session list          # all sessions + owners

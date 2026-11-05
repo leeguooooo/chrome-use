@@ -6,7 +6,7 @@ import { parseCliStatus } from './version-notice.js'
 // Host feature flags the panel may rely on. Boolean ones are `true`; versioned
 // ones are positive integers so a later host can raise the version.
 const BOOLEAN_FEATURES = ['conversationOptions','imageAttachments','heicConvert','skillLibrary','schedules','inspect','inspectResolve'];
-const VERSIONED_FEATURES = ['requestRevision','turnEvidence','artifacts','recovery','recording','inspectReplies','sessionResume','projectDirectory','tabGrant','teach'];
+const VERSIONED_FEATURES = ['requestRevision','turnEvidence','artifacts','recovery','recording','inspectReplies','sessionResume','projectDirectory','tabGrant','teach','handoffDone'];
 
 export class HostConnectionState {
   constructor() {

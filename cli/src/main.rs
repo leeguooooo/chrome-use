@@ -943,7 +943,10 @@ fn run_session_ownership(
                     exit(1);
                 }
             };
-            if !json_mode {
+            let notify = || {
+                if json_mode {
+                    return;
+                }
                 let hint = if zh {
                     format!(
                         "… 会话 '{session}' 已交接给用户，等待完成（做完后在终端跑 chrome-use session done{}）",
@@ -956,8 +959,8 @@ fn run_session_ownership(
                     )
                 };
                 eprintln!("{hint}");
-            }
-            match handoff_wait::run(session, &spec) {
+            };
+            match handoff_wait::run(session, &spec, notify) {
                 Ok(mut v) => {
                     let resumed = v["owner"] == "agent";
                     if json_mode {

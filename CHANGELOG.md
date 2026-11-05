@@ -1,8 +1,29 @@
 # Changelog
 
-## 1.5.282
+## 1.5.283
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.106.
+
+### Features
+
+- **A Done button in the side panel for a handed-off tab.** Until now a bare `session handoff --wait` ended only when the user typed `chrome-use session done` in a terminal. While a session belongs to the user, the operator card in the chrome-use side panel on its tab now shows a handoff box: what the agent asked for, what the wait ends on, and a **Done** button. Done ends the wait the same way `session done` does, so the agent gets the session back and the change report. The box is extension UI only; the page sees nothing, so stealth mode is unchanged (#866).
+  - `session handoff --wait --note "<text>"` sets what the box asks the user to do (up to 300 characters).
+  - While an agent drives the tab, the panel checks every 4 s, so a handoff and its end show up without switching tabs.
+  - An older CLI does not offer Done; the box then shows without the button.
+  - The box shows on tabs the session opened. A tab the user granted to the agent is not matched yet; there `session done` still ends the wait.
+
+### Fixes
+
+- `session handoff --wait` prints its "waiting for the user" notice only after the handoff took effect, not before a "no running browser session" error.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.282
+
 Works with extension ab-connect 0.5.105.
 
 ### Features
@@ -17,7 +38,6 @@ Works with extension ab-connect 0.5.105.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.281
 

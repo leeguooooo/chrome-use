@@ -75,7 +75,53 @@ pub(super) fn lookup(dir: &Path, target: &str, live: &[String]) -> Result<Value,
         "live": live.contains(&session),
         "origin": origin,
         "actions": recent_actions(dir, &session),
+        "handoff": handoff(dir, &session),
     }))
+}
+
+/// The handoff the user is asked to finish, while the session is theirs
+/// (`session handoff`). `--wait` adds what it waits for and the agent's note.
+fn handoff(dir: &Path, session: &str) -> Value {
+    let owned = fs::read_to_string(dir.join(format!("{session}.owner")))
+        .is_ok_and(|s| s.trim().eq_ignore_ascii_case("user"));
+    if !owned {
+        return Value::Null;
+    }
+    let wait = read_json(&dir.join(format!("{session}.handoff.json"))).unwrap_or(Value::Null);
+    json!({
+        "since": wait["since"],
+        "until": wait["until"],
+        "note": wait["note"],
+        "done": dir.join(format!("{session}.handoff-done")).exists(),
+    })
+}
+
+/// The panel's Done button: the user finished the handed-off step on this
+/// tab. Writes the marker a running `handoff --wait` polls (as `session done`).
+/// `since` is the handoff the card showed: a stale card cannot end a later
+/// handoff of the same session.
+pub(super) fn handoff_done(dir: &Path, target: &str, since: &Value) -> Result<Value, String> {
+    if !valid_target(target) {
+        return Err("tabHandoffDone requires a Chrome target id".into());
+    }
+    let session = owner_of(dir, target).ok_or("No agent session drives this tab")?;
+    let current = handoff(dir, &session);
+    if current.is_null() {
+        return Err("This tab is not handed off to you".into());
+    }
+    if current["since"] != *since {
+        return Err("This handoff has changed; look at the panel again".into());
+    }
+    let millis = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    fs::write(
+        dir.join(format!("{session}.handoff-done")),
+        millis.to_string(),
+    )
+    .map_err(|e| format!("Could not record that you are done: {e}"))?;
+    Ok(json!({"schemaVersion": 1, "session": session, "done": true}))
 }
 
 pub(super) fn socket_dir() -> PathBuf {
@@ -117,6 +163,40 @@ mod tests {
             v["actions"][0],
             json!({"action":"fill","at":1,"state":"completed"})
         );
+    }
+
+    #[test]
+    fn a_handed_off_tab_shows_the_ask_and_done_marks_it() {
+        let d = dir();
+        assert_eq!(
+            lookup(d.path(), "AB12", &[]).unwrap()["handoff"],
+            Value::Null
+        );
+        assert!(handoff_done(d.path(), "AB12", &Value::Null).is_err());
+        fs::write(d.path().join("cu-a-1.owner"), "user").unwrap();
+        fs::write(
+            d.path().join("cu-a-1.handoff.json"),
+            r#"{"url":"u","since":5,"until":{"kind":"url","value":"**/home"},"note":"Sign in"}"#,
+        )
+        .unwrap();
+        let h = &lookup(d.path(), "AB12", &[]).unwrap()["handoff"];
+        assert_eq!(h["note"], "Sign in");
+        assert_eq!(h["until"]["kind"], "url");
+        assert_eq!(h["done"], false);
+        // A card from another handoff (or none) is refused.
+        assert!(handoff_done(d.path(), "AB12", &json!(4)).is_err());
+        assert!(!d.path().join("cu-a-1.handoff-done").exists());
+        assert_eq!(
+            handoff_done(d.path(), "AB12", &json!(5)).unwrap()["session"],
+            "cu-a-1"
+        );
+        assert!(d.path().join("cu-a-1.handoff-done").exists());
+        assert_eq!(
+            lookup(d.path(), "AB12", &[]).unwrap()["handoff"]["done"],
+            true
+        );
+        assert!(handoff_done(d.path(), "FFFF", &json!(5)).is_err());
+        assert!(handoff_done(d.path(), "../x", &json!(5)).is_err());
     }
 
     #[test]
