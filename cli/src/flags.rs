@@ -42,6 +42,9 @@ pub(crate) const GLOBAL_BOOL_FLAGS: &[&str] = &[
     // Compact replies: leave the per-reply `timing` object out (the
     // timing.jsonl log is unaffected). Surfaced as AGENT_BROWSER_TIMING=0.
     "--no-timing",
+    // Draw the action-position marker for this command (#849). Surfaced as
+    // AGENT_BROWSER_SHOW_POSITION=1 and forwarded per command.
+    "--show-position",
     "--as-strict",
     "-v",
     "--verbose",
@@ -1530,6 +1533,15 @@ pub fn parse_flags(args: &[String]) -> Flags {
             }
             "--no-settle" => {
                 flags.settle_ms = Some(0);
+            }
+            "--show-position" => {
+                // Forwarded per command as `_showPosition` (see
+                // `connection::send_command`), so it reaches a running daemon.
+                let (val, consumed) = parse_bool_arg(args, i);
+                std::env::set_var("AGENT_BROWSER_SHOW_POSITION", if val { "1" } else { "0" });
+                if consumed {
+                    i += 1;
+                }
             }
             "--no-timing" => {
                 // Forwarded per command as `_timing:false` (see

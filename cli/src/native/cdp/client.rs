@@ -21,6 +21,16 @@ use super::types::{CdpCommand, CdpEvent, CdpMessage};
 mod focus_transport;
 
 type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<CdpMessage>>>>;
+type WsSink = Arc<
+    Mutex<
+        futures_util::stream::SplitSink<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+            Message,
+        >,
+    >,
+>;
 
 /// Interval between WebSocket ping frames sent to keep the connection alive
 /// through intermediate proxies (reverse proxies, load balancers, service meshes).
@@ -79,18 +89,11 @@ pub struct CdpClient {
     ))]
     #[allow(dead_code)] // Prototype awaits the separately verified root control adapter.
     focus_transport: Option<focus_transport::FocusTransport>,
-    ws_tx: Arc<
-        Mutex<
-            futures_util::stream::SplitSink<
-                tokio_tungstenite::WebSocketStream<
-                    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-                >,
-                Message,
-            >,
-        >,
-    >,
-    next_id: AtomicU64,
+    ws_tx: WsSink,
+    next_id: Arc<AtomicU64>,
     pending: PendingMap,
+    /// The optional action-position marker (#849–#851); off unless enabled.
+    marker: crate::native::position_marker::Marker,
     pub(crate) quiet_worlds: Arc<crate::native::quiet_dom::WorldCache>,
     // Only the reader owns strong senders: a dead transport must close event
     // subscriptions even while a BrowserManager or inspector holds this client.
@@ -146,6 +149,64 @@ pub(crate) fn command_timeout(method: &str, params: Option<&Value>) -> std::time
     let scaled = CDP_COMMAND_TIMEOUT
         + std::time::Duration::from_micros(len.saturating_mul(CDP_PAYLOAD_MICROS_PER_BYTE));
     scaled.min(CDP_PAYLOAD_MAX_TIMEOUT)
+}
+
+/// The position marker's way onto this connection's socket: plain commands
+/// with their own ids from the client's counter, no timing or isolation.
+struct RawLink {
+    ws_tx: WsSink,
+    pending: PendingMap,
+    next_id: Arc<AtomicU64>,
+}
+
+impl crate::native::position_marker::Link for RawLink {
+    fn call<'a>(
+        &'a self,
+        method: &'a str,
+        params: Value,
+        session: &'a str,
+        timeout: std::time::Duration,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<Value, crate::native::position_marker::LinkError>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        use crate::native::position_marker::LinkError;
+        Box::pin(async move {
+            let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+            let cmd = CdpCommand {
+                id,
+                method: method.to_string(),
+                params: Some(params),
+                session_id: Some(session.to_string()).filter(|s| !s.is_empty()),
+            };
+            let json = serde_json::to_string(&cmd).map_err(|_| LinkError::Closed)?;
+            let (tx, rx) = oneshot::channel();
+            self.pending.lock().await.insert(id, tx);
+            let sent = self.ws_tx.lock().await.send(Message::Text(json)).await;
+            if sent.is_err() {
+                self.pending.lock().await.remove(&id);
+                return Err(LinkError::Closed);
+            }
+            match tokio::time::timeout(timeout, rx).await {
+                Ok(Ok(resp)) => match resp.error {
+                    Some(e) => Err(LinkError::Protocol {
+                        code: e.code,
+                        message: e.message,
+                    }),
+                    None => Ok(resp.result.unwrap_or(Value::Null)),
+                },
+                Ok(Err(_)) => Err(LinkError::Closed),
+                Err(_) => {
+                    self.pending.lock().await.remove(&id);
+                    Err(LinkError::Timeout)
+                }
+            }
+        })
+    }
 }
 
 impl CdpClient {
@@ -335,6 +396,16 @@ impl CdpClient {
             }
         });
 
+        let next_id = Arc::new(AtomicU64::new(1));
+        let marker = crate::native::position_marker::Marker::start(
+            Arc::new(RawLink {
+                ws_tx: ws_tx.clone(),
+                pending: pending.clone(),
+                next_id: next_id.clone(),
+            }),
+            Some(event_tx.subscribe()),
+            crate::native::position_marker::read_setting_from_environment,
+        );
         Ok(Self {
             #[cfg(all(
                 windows,
@@ -343,8 +414,9 @@ impl CdpClient {
             ))]
             focus_transport,
             ws_tx,
-            next_id: AtomicU64::new(1),
+            next_id,
             pending,
+            marker,
             quiet_worlds,
             event_tx: event_tx.downgrade(),
             raw_tx: raw_tx.downgrade(),
@@ -401,6 +473,9 @@ impl CdpClient {
     ) -> Result<Value, String> {
         // Charged to the command being served, for its `timing` summary.
         let started = std::time::Instant::now();
+        // Queues the point of a press/release/wheel for the position marker
+        // (a lock and a cached setting when it is off); never awaited.
+        self.marker.note_input(method, params.as_ref(), session_id);
         let out = match method {
             "Runtime.evaluate" | "DOM.resolveNode" => {
                 self.send_quietly(method, params, session_id).await
@@ -561,6 +636,11 @@ impl CdpClient {
         }
 
         Ok(response.result.unwrap_or(Value::Null))
+    }
+
+    /// The action-position marker on this connection.
+    pub fn position_marker(&self) -> &crate::native::position_marker::Marker {
+        &self.marker
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<CdpEvent> {

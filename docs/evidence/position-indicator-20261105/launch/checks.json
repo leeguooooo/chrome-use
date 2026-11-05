@@ -1,0 +1,20 @@
+{
+  "noNewGlobals": true,
+  "sameSymbols": true,
+  "sameNodes": true,
+  "sameMutations": true,
+  "sameEvents": true,
+  "sameFocus": true,
+  "sameVisibility": true,
+  "viewportUnchanged": true,
+  "sameRequests": true,
+  "markerDrawn": true,
+  "markerNotInScreenshot": true,
+  "markerRestored": true,
+  "markerExpired": true,
+  "hoverDrawn": true,
+  "clearedByNavigation": true,
+  "offDrawsNothing": true,
+  "clearedOnTabSwitch": true,
+  "clearedAfterRendererHang": true
+}

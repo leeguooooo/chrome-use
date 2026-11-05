@@ -1,0 +1,698 @@
+[
+  {
+    "label": "z0.5-d1",
+    "zoom": 0.5,
+    "dsf": 1,
+    "page": {
+      "dpr": 0.5,
+      "inner": [
+        2000,
+        1200
+      ],
+      "vv": [
+        1,
+        2000
+      ]
+    },
+    "cssVisual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 2000,
+      "clientHeight": 1200,
+      "scale": 1,
+      "zoom": 0.5
+    },
+    "visual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 1000,
+      "clientHeight": 600,
+      "scale": 1,
+      "zoom": 0.5
+    },
+    "clicks": [
+      [
+        300,
+        220,
+        true
+      ]
+    ],
+    "image": [
+      1000,
+      600
+    ],
+    "marker": {
+      "count": 400,
+      "bounds": [
+        290,
+        210,
+        309,
+        229
+      ],
+      "center": [
+        299.5,
+        219.5
+      ]
+    },
+    "dot": {
+      "count": 0
+    },
+    "offsetPx": null,
+    "scrolled": {
+      "scrollY": 1200,
+      "marker": {
+        "count": 400,
+        "bounds": [
+          290,
+          210,
+          309,
+          229
+        ],
+        "center": [
+          299.5,
+          219.5
+        ]
+      },
+      "dot": {
+        "count": 0
+      },
+      "offsetPx": null
+    },
+    "screencast": {
+      "markerPixels": 0
+    }
+  },
+  {
+    "label": "z0.5-d2",
+    "zoom": 0.5,
+    "dsf": 2,
+    "page": {
+      "dpr": 1,
+      "inner": [
+        2000,
+        1200
+      ],
+      "vv": [
+        1,
+        2000
+      ]
+    },
+    "cssVisual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 2000,
+      "clientHeight": 1200,
+      "scale": 1,
+      "zoom": 0.5
+    },
+    "visual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 2000,
+      "clientHeight": 1200,
+      "scale": 1,
+      "zoom": 0.5
+    },
+    "clicks": [
+      [
+        300,
+        220,
+        true
+      ]
+    ],
+    "image": [
+      2000,
+      1200
+    ],
+    "marker": {
+      "count": 1600,
+      "bounds": [
+        580,
+        420,
+        619,
+        459
+      ],
+      "center": [
+        599.5,
+        439.5
+      ]
+    },
+    "dot": {
+      "count": 0
+    },
+    "offsetPx": null,
+    "scrolled": {
+      "scrollY": 1200,
+      "marker": {
+        "count": 1600,
+        "bounds": [
+          580,
+          420,
+          619,
+          459
+        ],
+        "center": [
+          599.5,
+          439.5
+        ]
+      },
+      "dot": {
+        "count": 0
+      },
+      "offsetPx": null
+    },
+    "screencast": {
+      "markerPixels": 0
+    }
+  },
+  {
+    "label": "z1-d1",
+    "zoom": 1,
+    "dsf": 1,
+    "page": {
+      "dpr": 1,
+      "inner": [
+        1000,
+        600
+      ],
+      "vv": [
+        1,
+        1000
+      ]
+    },
+    "cssVisual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 1000,
+      "clientHeight": 600,
+      "scale": 1,
+      "zoom": 1
+    },
+    "visual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 1000,
+      "clientHeight": 600,
+      "scale": 1,
+      "zoom": 1
+    },
+    "clicks": [
+      [
+        300,
+        220,
+        true
+      ]
+    ],
+    "image": [
+      1000,
+      600
+    ],
+    "marker": {
+      "count": 400,
+      "bounds": [
+        290,
+        210,
+        309,
+        229
+      ],
+      "center": [
+        299.5,
+        219.5
+      ]
+    },
+    "dot": {
+      "count": 0
+    },
+    "offsetPx": null,
+    "scrolled": {
+      "scrollY": 1200,
+      "marker": {
+        "count": 400,
+        "bounds": [
+          290,
+          210,
+          309,
+          229
+        ],
+        "center": [
+          299.5,
+          219.5
+        ]
+      },
+      "dot": {
+        "count": 0
+      },
+      "offsetPx": null
+    },
+    "screencast": {
+      "markerPixels": 0
+    }
+  },
+  {
+    "label": "z1-d2",
+    "zoom": 1,
+    "dsf": 2,
+    "page": {
+      "dpr": 2,
+      "inner": [
+        1000,
+        600
+      ],
+      "vv": [
+        1,
+        1000
+      ]
+    },
+    "cssVisual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 1000,
+      "clientHeight": 600,
+      "scale": 1,
+      "zoom": 1
+    },
+    "visual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 2000,
+      "clientHeight": 1200,
+      "scale": 1,
+      "zoom": 1
+    },
+    "clicks": [
+      [
+        300,
+        220,
+        true
+      ]
+    ],
+    "image": [
+      2000,
+      1200
+    ],
+    "marker": {
+      "count": 1600,
+      "bounds": [
+        580,
+        420,
+        619,
+        459
+      ],
+      "center": [
+        599.5,
+        439.5
+      ]
+    },
+    "dot": {
+      "count": 0
+    },
+    "offsetPx": null,
+    "scrolled": {
+      "scrollY": 1200,
+      "marker": {
+        "count": 1600,
+        "bounds": [
+          580,
+          420,
+          619,
+          459
+        ],
+        "center": [
+          599.5,
+          439.5
+        ]
+      },
+      "dot": {
+        "count": 0
+      },
+      "offsetPx": null
+    },
+    "screencast": {
+      "markerPixels": 0
+    }
+  },
+  {
+    "label": "z1.5-d1",
+    "zoom": 1.5,
+    "dsf": 1,
+    "page": {
+      "dpr": 1.5,
+      "inner": [
+        667,
+        400
+      ],
+      "vv": [
+        1,
+        666.6666870117188
+      ]
+    },
+    "cssVisual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 666.6666870117188,
+      "clientHeight": 400,
+      "scale": 1,
+      "zoom": 1.5
+    },
+    "visual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 1000,
+      "clientHeight": 600,
+      "scale": 1,
+      "zoom": 1.5
+    },
+    "clicks": [
+      [
+        300,
+        220,
+        true
+      ]
+    ],
+    "image": [
+      1000,
+      600
+    ],
+    "marker": {
+      "count": 400,
+      "bounds": [
+        290,
+        210,
+        309,
+        229
+      ],
+      "center": [
+        299.5,
+        219.5
+      ]
+    },
+    "dot": {
+      "count": 0
+    },
+    "offsetPx": null,
+    "scrolled": {
+      "scrollY": 1200,
+      "marker": {
+        "count": 400,
+        "bounds": [
+          290,
+          210,
+          309,
+          229
+        ],
+        "center": [
+          299.5,
+          219.5
+        ]
+      },
+      "dot": {
+        "count": 0
+      },
+      "offsetPx": null
+    },
+    "screencast": {
+      "markerPixels": 0
+    }
+  },
+  {
+    "label": "z1.5-d2",
+    "zoom": 1.5,
+    "dsf": 2,
+    "page": {
+      "dpr": 3,
+      "inner": [
+        666,
+        400
+      ],
+      "vv": [
+        1,
+        666.6666870117188
+      ]
+    },
+    "cssVisual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 666.6666870117188,
+      "clientHeight": 400,
+      "scale": 1,
+      "zoom": 1.5
+    },
+    "visual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 2000,
+      "clientHeight": 1200,
+      "scale": 1,
+      "zoom": 1.5
+    },
+    "clicks": [
+      [
+        300,
+        220,
+        true
+      ]
+    ],
+    "image": [
+      2000,
+      1200
+    ],
+    "marker": {
+      "count": 1600,
+      "bounds": [
+        580,
+        420,
+        619,
+        459
+      ],
+      "center": [
+        599.5,
+        439.5
+      ]
+    },
+    "dot": {
+      "count": 0
+    },
+    "offsetPx": null,
+    "scrolled": {
+      "scrollY": 1200,
+      "marker": {
+        "count": 1600,
+        "bounds": [
+          580,
+          420,
+          619,
+          459
+        ],
+        "center": [
+          599.5,
+          439.5
+        ]
+      },
+      "dot": {
+        "count": 0
+      },
+      "offsetPx": null
+    },
+    "screencast": {
+      "markerPixels": 0
+    }
+  },
+  {
+    "label": "z2-d1",
+    "zoom": 2,
+    "dsf": 1,
+    "page": {
+      "dpr": 2,
+      "inner": [
+        500,
+        300
+      ],
+      "vv": [
+        1,
+        500
+      ]
+    },
+    "cssVisual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 500,
+      "clientHeight": 300,
+      "scale": 1,
+      "zoom": 2
+    },
+    "visual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 1000,
+      "clientHeight": 600,
+      "scale": 1,
+      "zoom": 2
+    },
+    "clicks": [
+      [
+        300,
+        220,
+        true
+      ]
+    ],
+    "image": [
+      1000,
+      600
+    ],
+    "marker": {
+      "count": 400,
+      "bounds": [
+        290,
+        210,
+        309,
+        229
+      ],
+      "center": [
+        299.5,
+        219.5
+      ]
+    },
+    "dot": {
+      "count": 0
+    },
+    "offsetPx": null,
+    "scrolled": {
+      "scrollY": 1200,
+      "marker": {
+        "count": 400,
+        "bounds": [
+          290,
+          210,
+          309,
+          229
+        ],
+        "center": [
+          299.5,
+          219.5
+        ]
+      },
+      "dot": {
+        "count": 0
+      },
+      "offsetPx": null
+    },
+    "screencast": {
+      "markerPixels": 0
+    }
+  },
+  {
+    "label": "z2-d2",
+    "zoom": 2,
+    "dsf": 2,
+    "page": {
+      "dpr": 4,
+      "inner": [
+        500,
+        300
+      ],
+      "vv": [
+        1,
+        500
+      ]
+    },
+    "cssVisual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 500,
+      "clientHeight": 300,
+      "scale": 1,
+      "zoom": 2
+    },
+    "visual": {
+      "offsetX": 0,
+      "offsetY": 0,
+      "pageX": 0,
+      "pageY": 0,
+      "clientWidth": 2000,
+      "clientHeight": 1200,
+      "scale": 1,
+      "zoom": 2
+    },
+    "clicks": [
+      [
+        300,
+        220,
+        true
+      ]
+    ],
+    "image": [
+      2000,
+      1200
+    ],
+    "marker": {
+      "count": 1600,
+      "bounds": [
+        580,
+        420,
+        619,
+        459
+      ],
+      "center": [
+        599.5,
+        439.5
+      ]
+    },
+    "dot": {
+      "count": 0
+    },
+    "offsetPx": null,
+    "scrolled": {
+      "scrollY": 1200,
+      "marker": {
+        "count": 1600,
+        "bounds": [
+          580,
+          420,
+          619,
+          459
+        ],
+        "center": [
+          599.5,
+          439.5
+        ]
+      },
+      "dot": {
+        "count": 0
+      },
+      "offsetPx": null
+    },
+    "screencast": {
+      "markerPixels": 0
+    }
+  }
+]

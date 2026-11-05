@@ -52,6 +52,8 @@ pub struct ScreenshotResult {
     pub path: String,
     pub base64: String,
     pub annotations: Vec<ScreenshotAnnotation>,
+    /// Set when the position marker could not be confirmed hidden first.
+    pub marker_warning: Option<&'static str>,
 }
 
 #[derive(Debug, Clone)]
@@ -205,8 +207,11 @@ pub async fn take_screenshot(
         (Vec::new(), None, None)
     };
 
-    // Hide the non-stealth cursor around the raw capture as before.
+    // Hide the non-stealth cursor around the raw capture as before, and the
+    // position marker (#849): an agent reasons about the page, not about
+    // where it last clicked. Waited for, at most CAPTURE_HIDE_TIMEOUT.
     set_cursor_visible(client, session_id, false).await;
+    let marker = client.position_marker().hide_for_capture(session_id).await;
     let captured = capture_screenshot_base64(
         client,
         session_id,
@@ -215,6 +220,9 @@ pub async fn take_screenshot(
         iframe_sessions,
     )
     .await;
+    client
+        .position_marker()
+        .restore_after_capture(session_id, marker);
     set_cursor_visible(client, session_id, true).await;
     let mut base64 = captured?;
     if let (Some(region), Some(raster_region)) = (region, raster_region) {
@@ -237,6 +245,7 @@ pub async fn take_screenshot(
         path,
         base64,
         annotations,
+        marker_warning: marker.warning(),
     })
 }
 

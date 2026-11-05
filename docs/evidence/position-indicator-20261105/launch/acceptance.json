@@ -1,0 +1,734 @@
+[
+  {
+    "label": "off",
+    "marker": false,
+    "zoom": 1,
+    "transport": "launch",
+    "cpuClicks": {
+      "browser": 0.6199999999999994,
+      "daemon": 0.15999999999999998,
+      "byType": {
+        "browser#80571": 0.23,
+        "gpu-process#80578": 0.15,
+        "utility/network.mojom.NetworkService#80579": 0.03,
+        "utility/storage.mojom.StorageService#80580": 0,
+        "renderer#80582": 0,
+        "renderer#80583": 0.14,
+        "renderer#80584": 0.01,
+        "renderer#80585": 0.01,
+        "renderer#80586": 0,
+        "renderer#80587": 0,
+        "renderer#80588": 0,
+        "renderer#80610": 0.05
+      }
+    },
+    "afterClick": {
+      "count": 0
+    },
+    "rafShown": {
+      "frames": 121,
+      "maxGap": 10,
+      "medianGap": 8.3
+    },
+    "screenshotWarning": null,
+    "inCuScreenshot": {
+      "count": 0
+    },
+    "afterScreenshot": {
+      "count": 0
+    },
+    "afterExpiry": {
+      "count": 0
+    },
+    "rafAfterExpiry": {
+      "frames": 122,
+      "maxGap": 10.3,
+      "medianGap": 8.3
+    },
+    "afterHover": {
+      "count": 0
+    },
+    "afterNavigation": {
+      "count": 0
+    },
+    "cpu": {
+      "browser": 1.2299999999999993,
+      "daemon": 0.21000000000000002
+    },
+    "status": {
+      "daemon": {
+        "enabled": false,
+        "lastMs": null,
+        "marks": 0,
+        "reason": null,
+        "setting": "AGENT_BROWSER_SHOW_POSITION",
+        "state": "disabled",
+        "suppressed": 0
+      },
+      "enabled": false
+    },
+    "page": {
+      "baseline": {
+        "coalesced": 0,
+        "events": [],
+        "focus": "BODY",
+        "hasFocus": true,
+        "moves": 0,
+        "mutations": 0,
+        "newGlobals": [],
+        "nodes": 11,
+        "symbols": [],
+        "viewport": [
+          1200,
+          685,
+          2,
+          1
+        ],
+        "visibility": "visible",
+        "webdriver": false
+      },
+      "final": {
+        "coalesced": 72,
+        "events": [
+          "mouseover:true:BODY",
+          "mouseover:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "focus:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "mouseover:true:BODY",
+          "mouseover:true:field",
+          "mouseover:true:BODY",
+          "mouseover:true:hov"
+        ],
+        "focus": "target",
+        "hasFocus": true,
+        "moves": 72,
+        "mutations": 0,
+        "newGlobals": [],
+        "nodes": 11,
+        "symbols": [],
+        "viewport": [
+          1200,
+          685,
+          2,
+          1
+        ],
+        "visibility": "visible",
+        "webdriver": false
+      },
+      "requests": 2
+    },
+    "clickMs": {
+      "median": 333.40675,
+      "p90": 354.257292,
+      "min": 304.291625,
+      "max": 371.558625
+    }
+  },
+  {
+    "label": "on",
+    "marker": true,
+    "zoom": 1,
+    "transport": "launch",
+    "cpuClicks": {
+      "browser": 1.9699999999999998,
+      "daemon": 0.15000000000000002,
+      "byType": {
+        "browser#80708": 0.19,
+        "gpu-process#80714": 0.64,
+        "utility/network.mojom.NetworkService#80715": 0.02,
+        "utility/storage.mojom.StorageService#80716": 0,
+        "renderer#80718": 0.01,
+        "renderer#80719": 0.99,
+        "renderer#80720": 0.01,
+        "renderer#80724": 0.01,
+        "renderer#80727": 0.01,
+        "renderer#80728": 0,
+        "renderer#80731": 0.01,
+        "renderer#80767": 0.07
+      }
+    },
+    "afterClick": {
+      "count": 784,
+      "bounds": [
+        632,
+        418,
+        659,
+        445
+      ],
+      "center": [
+        645.5,
+        431.5
+      ]
+    },
+    "rafShown": {
+      "frames": 122,
+      "maxGap": 9.5,
+      "medianGap": 8.3
+    },
+    "screenshotWarning": null,
+    "inCuScreenshot": {
+      "count": 0
+    },
+    "afterScreenshot": {
+      "count": 784,
+      "bounds": [
+        632,
+        418,
+        659,
+        445
+      ],
+      "center": [
+        645.5,
+        431.5
+      ]
+    },
+    "afterExpiry": {
+      "count": 0
+    },
+    "rafAfterExpiry": {
+      "frames": 122,
+      "maxGap": 10.3,
+      "medianGap": 8.3
+    },
+    "afterHover": {
+      "count": 784,
+      "bounds": [
+        1146,
+        406,
+        1173,
+        433
+      ],
+      "center": [
+        1159.5,
+        419.5
+      ]
+    },
+    "afterNavigation": {
+      "count": 0
+    },
+    "cpu": {
+      "browser": 3.28,
+      "daemon": 0.20999999999999996
+    },
+    "status": {
+      "daemon": {
+        "enabled": true,
+        "lastMs": 702,
+        "marks": 48,
+        "reason": null,
+        "setting": "AGENT_BROWSER_SHOW_POSITION",
+        "state": "acknowledged",
+        "suppressed": 0
+      },
+      "enabled": true
+    },
+    "page": {
+      "baseline": {
+        "coalesced": 0,
+        "events": [],
+        "focus": "BODY",
+        "hasFocus": true,
+        "moves": 0,
+        "mutations": 0,
+        "newGlobals": [],
+        "nodes": 11,
+        "symbols": [],
+        "viewport": [
+          1200,
+          685,
+          2,
+          1
+        ],
+        "visibility": "visible",
+        "webdriver": false
+      },
+      "final": {
+        "coalesced": 70,
+        "events": [
+          "mouseover:true:BODY",
+          "mouseover:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "focus:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "mouseover:true:BODY",
+          "mouseover:true:field",
+          "mouseover:true:BODY",
+          "mouseover:true:hov"
+        ],
+        "focus": "target",
+        "hasFocus": true,
+        "moves": 70,
+        "mutations": 0,
+        "newGlobals": [],
+        "nodes": 11,
+        "symbols": [],
+        "viewport": [
+          1200,
+          685,
+          2,
+          1
+        ],
+        "visibility": "visible",
+        "webdriver": false
+      },
+      "requests": 2
+    },
+    "clickMs": {
+      "median": 333.994708,
+      "p90": 358.0275,
+      "min": 285.52125,
+      "max": 360.901625
+    }
+  },
+  {
+    "label": "on-zoom150",
+    "marker": true,
+    "zoom": 1.5,
+    "transport": "launch",
+    "cpuClicks": {
+      "browser": 2.08,
+      "daemon": 0.15000000000000002,
+      "byType": {
+        "browser#80866": 0.21,
+        "gpu-process#80872": 0.67,
+        "utility/network.mojom.NetworkService#80873": 0.02,
+        "utility/storage.mojom.StorageService#80874": 0,
+        "renderer#80876": 0.01,
+        "renderer#80877": 1.03,
+        "renderer#80878": 0.01,
+        "renderer#80879": 0.03,
+        "renderer#80880": 0.01,
+        "renderer#80881": 0,
+        "renderer#80882": 0.02,
+        "renderer#80906": 0.06
+      }
+    },
+    "afterClick": {
+      "count": 784,
+      "bounds": [
+        976,
+        640,
+        1003,
+        667
+      ],
+      "center": [
+        989.5,
+        653.5
+      ]
+    },
+    "rafShown": {
+      "frames": 122,
+      "maxGap": 10.2,
+      "medianGap": 8.3
+    },
+    "screenshotWarning": null,
+    "inCuScreenshot": {
+      "count": 0
+    },
+    "afterScreenshot": {
+      "count": 784,
+      "bounds": [
+        976,
+        640,
+        1003,
+        667
+      ],
+      "center": [
+        989.5,
+        653.5
+      ]
+    },
+    "afterExpiry": {
+      "count": 0
+    },
+    "rafAfterExpiry": {
+      "frames": 123,
+      "maxGap": 10.4,
+      "medianGap": 8.3
+    },
+    "afterHover": {
+      "count": 784,
+      "bounds": [
+        1726,
+        616,
+        1753,
+        643
+      ],
+      "center": [
+        1739.5,
+        629.5
+      ]
+    },
+    "afterNavigation": {
+      "count": 0
+    },
+    "cpu": {
+      "browser": 3.4499999999999984,
+      "daemon": 0.20999999999999996
+    },
+    "status": {
+      "daemon": {
+        "enabled": true,
+        "lastMs": 698,
+        "marks": 48,
+        "reason": null,
+        "setting": "AGENT_BROWSER_SHOW_POSITION",
+        "state": "acknowledged",
+        "suppressed": 0
+      },
+      "enabled": true
+    },
+    "page": {
+      "baseline": {
+        "coalesced": 0,
+        "events": [],
+        "focus": "BODY",
+        "hasFocus": true,
+        "moves": 0,
+        "mutations": 0,
+        "newGlobals": [],
+        "nodes": 11,
+        "symbols": [],
+        "viewport": [
+          800,
+          456,
+          3,
+          1
+        ],
+        "visibility": "visible",
+        "webdriver": false
+      },
+      "final": {
+        "coalesced": 73,
+        "events": [
+          "mouseover:true:BODY",
+          "mouseover:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "focus:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "pointerdown:true:target",
+          "mousedown:true:target",
+          "pointerup:true:target",
+          "mouseup:true:target",
+          "click:true:target",
+          "mouseover:true:BODY",
+          "mouseover:true:field",
+          "mouseover:true:BODY",
+          "mouseover:true:hov"
+        ],
+        "focus": "target",
+        "hasFocus": true,
+        "moves": 73,
+        "mutations": 0,
+        "newGlobals": [],
+        "nodes": 11,
+        "symbols": [],
+        "viewport": [
+          800,
+          456,
+          3,
+          1
+        ],
+        "visibility": "visible",
+        "webdriver": false
+      },
+      "requests": 2
+    },
+    "clickMs": {
+      "median": 331.767833,
+      "p90": 352.507,
+      "min": 298.137416,
+      "max": 358.018709
+    }
+  }
+]

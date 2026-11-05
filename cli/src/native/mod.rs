@@ -41,6 +41,7 @@ mod passkey_guard;
 #[allow(dead_code)]
 pub mod policy;
 pub mod popup_guard;
+pub mod position_marker;
 pub mod progress;
 #[allow(dead_code)]
 pub mod providers;
