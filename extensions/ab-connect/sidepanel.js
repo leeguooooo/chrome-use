@@ -3,7 +3,7 @@ import { createPanelOnboarding } from './onboarding.js';
 import { PanelTimeline, phaseLabels, assessmentLabel, outcomeLabel, stepVerdict, verdictLabels, stepActions, actingPages, notStarted } from './panel-state.js';
 import { heifConverter, isHeif, prepareImage } from './image-attachment.js';
 import { renderMarkdown } from './markdown.js';
-import { operatorSummary, targetIdOfTab } from './tab-operator.js';
+import { handoffSummary, operatorSummary, targetIdOfTab } from './tab-operator.js';
 import { oldBuildBlocking } from './panel-errors.js';
 import { t, messageMap, applyI18n, i18nReady } from './i18n.js';
 import { renderReplies, validReplies } from './inspect-replies.js';
@@ -2007,7 +2007,39 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
   if (tabs?.onRemoved) tabs.onRemoved.addListener(() => { if (tabMode) void refreshPage().catch(() => {}); });
   // Who drives the tab this panel looks at; extension UI only, stealth-safe.
   const operatorNode = id => document.getElementById?.(id);
-  let operatorTarget = null, operatorEpoch = 0;
+  let operatorTarget = null, operatorEpoch = 0, operatorPoll = null;
+  // While an agent drives the tab, look again every few seconds so a handoff
+  // (and its end) shows without switching tabs.
+  function pollOperator(on) {
+    if (on && !operatorPoll) operatorPoll = setInterval(() => { if (document.visibilityState !== 'hidden') void refreshOperator().catch(() => {}); }, 4000);
+    if (!on && operatorPoll) { clearInterval(operatorPoll); operatorPoll = null; }
+  }
+  function renderHandoff(info) {
+    const box = operatorNode('handoffBox');
+    if (!box) return;
+    const handoff = handoffSummary(info, t);
+    box.hidden = !handoff;
+    if (!handoff) return;
+    operatorNode('handoffTitle').textContent = handoff.title;
+    operatorNode('handoffNote').textContent = handoff.note;
+    operatorNode('handoffNote').hidden = !handoff.note;
+    operatorNode('handoffCondition').textContent = handoff.condition;
+    operatorNode('handoffCondition').hidden = !handoff.condition;
+    const done = operatorNode('handoffDone');
+    // An older CLI has no way to take the answer; it finishes in the terminal.
+    done.hidden = !panelSupport?.handoffDone;
+    done.disabled = handoff.done;
+    done.textContent = t(handoff.done ? 'panel_handoff_sent' : 'panel_handoff_done');
+  }
+  async function handoffDone() {
+    const target = operatorTarget, done = operatorNode('handoffDone');
+    if (!target || done.disabled) return;
+    done.disabled = true;
+    try { await api('tabHandoffDone', { targetId: target }); }
+    catch (failure) { done.disabled = false; throw failure; }
+    await refreshOperator();
+  }
+  operatorNode('handoffDone')?.addEventListener('click', () => void handoffDone().catch(error));
   async function refreshOperator() {
     const card = operatorNode('operatorCard');
     if (!card) return;
@@ -2019,6 +2051,8 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     if (epoch !== operatorEpoch) return;
     const summary = operatorSummary(info, t);
     card.hidden = !summary;
+    pollOperator(Boolean(info?.operated && info.live));
+    renderHandoff(info);
     if (!summary) return;
     operatorNode('operatorTitle').textContent = summary.title;
     operatorNode('operatorDetail').textContent = summary.detail;

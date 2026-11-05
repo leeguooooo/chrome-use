@@ -2197,6 +2197,10 @@ async fn dispatch(
             result
         }
         "tabOperator" => tab_operator(params).await,
+        "tabHandoffDone" => super::operator::handoff_done(
+            &super::operator::socket_dir(),
+            params["targetId"].as_str().unwrap_or_default(),
+        ),
         "agentInspect" => {
             let root = engine.lock().await.store.directory.clone();
             super::inspection::inspect(params, &root).await

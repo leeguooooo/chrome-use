@@ -618,8 +618,10 @@ session back (exit 0) and prints URL/title before → after plus a fresh
 snapshot, so you continue from the new page instead of stale refs. Pick a
 condition that only the *finished* state meets — not an intermediate OAuth hop
 or the 2FA page that follows the password page. When you can't name one, use a
-bare `--wait`: it ends when the user runs `chrome-use session done` (tell them
-so). `--until-change` returns as soon as the page moved and settled but leaves
+bare `--wait`: it ends when the user clicks **Done** in the chrome-use side
+panel on that tab or runs `chrome-use session done` (tell them so). Add
+`--note "<what to do>"` and the side panel shows it on the handoff card next to
+the Done button. `--until-change` returns as soon as the page moved and settled but leaves
 the session with the user (exit 2) — look, then wait again or `session resume`
 once they confirm. A timeout also exits 2 with the session still theirs; re-run
 `session handoff --wait` to keep waiting (the before/after baseline is kept).

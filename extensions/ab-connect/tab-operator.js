@@ -8,6 +8,21 @@ export async function targetIdOfTab(tabId, debuggerApi) {
   return targets.find(target => target.tabId === tabId)?.id ?? null;
 }
 
+// The handoff card: what the agent asked for and when it carries on by
+// itself. `info.handoff` is set only while the session belongs to the user.
+export function handoffSummary(info, t) {
+  const handoff = info?.operated ? info.handoff : null;
+  if (!handoff) return null;
+  const until = handoff.until, value = String(until?.value ?? '');
+  const condition = { url: 'panel_handoff_until_url', text: 'panel_handoff_until_text', gone: 'panel_handoff_until_gone', change: 'panel_handoff_until_change' }[until?.kind];
+  return {
+    title: t('panel_handoff_title'),
+    note: typeof handoff.note === 'string' ? handoff.note : '',
+    condition: condition ? t(condition, value) : '',
+    done: handoff.done === true,
+  };
+}
+
 export function operatorSummary(info, t) {
   if (!info?.operated) return null;
   const agent = AGENT_NAMES[info.origin?.agent] || t('panel_operator_unknown_agent');

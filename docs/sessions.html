@@ -355,7 +355,8 @@
 <span class="du-prompt">$</span> chrome-use session handoff --until-url "**/dashboard"   <span class="du-cmt"># 或 --until-text / --until-gone / --wait</span>
 <span class="du-cmt"># …… 用户做那件 agent 真做不了的事 ……</span>
 <span class="du-cmt"># → 命令返回，自动取回会话，打印 URL/标题前后对比和新快照</span>
-<span class="du-prompt">$</span> chrome-use session done --session &lt;名字&gt;  <span class="du-cmt"># （用户）结束不带条件的 --wait；名字用 agent 给的会话名</span></code></pre>
+<span class="du-prompt">$</span> chrome-use session handoff --wait --note "在手机上确认登录"  <span class="du-cmt"># 侧边栏显示这句话和「完成」按钮</span>
+<span class="du-prompt">$</span> chrome-use session done --session &lt;名字&gt;  <span class="du-cmt"># （用户）结束不带条件的 --wait，或点侧边栏的「完成」</span></code></pre>
       </div>
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ 交接期间 agent 被挡在门外</div>

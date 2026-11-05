@@ -574,4 +574,8 @@ html[data-mode="tab"] .conversation-menu { left:auto; right:auto; width:min(calc
 .operator-detail { margin-top:2px; color:var(--muted); overflow-wrap:anywhere; }
 .operator-transcript { margin-top:6px; max-height:40vh; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }
 .operator-turn { margin-top:6px; }
+.operator-handoff { margin-top:8px; padding-top:8px; border-top:1px solid var(--line, rgba(127,127,127,.25)); display:grid; gap:4px; }
+.operator-handoff-title { font-weight:600; }
+.operator-handoff button { justify-self:start; margin-top:4px; padding:4px 10px; border-radius:6px; border:1px solid currentColor; background:transparent; color:var(--ink); cursor:pointer; font-size:12px; }
+.operator-handoff button:disabled { opacity:.6; cursor:default; }
 .operator-turn b { display:block; color:var(--muted); font-weight:600; }

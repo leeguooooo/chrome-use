@@ -5548,7 +5548,9 @@ Operations:
     --until-gone <sel>   the element leaves the DOM (e.g. the captcha frame)
     --until-change       the URL/title moved and settled (does NOT take the
                          session back: the user may be mid-step)
-    (any form)           the user runs `session done`
+    (any form)           the user runs `session done`, or clicks Done in the
+                         chrome-use side panel
+    --note <text>        what the user should do; shown in the side panel
     --timeout <dur>      give up after <dur> (default 30m); --settle <dur> (3s)
                        Exit 0 = agent has the session back; 2 = still the user's.
   done                 (for the human) the handed-off step is finished
@@ -5569,7 +5571,7 @@ Examples:
   chrome-use session status
   chrome-use session last --json
   chrome-use session handoff
-  chrome-use session handoff --until-url "**/dashboard"
+  chrome-use session handoff --until-url "**/dashboard" --note "Sign in, then approve the 2FA prompt"
   chrome-use session handoff --until-gone "iframe[src*=captcha]" --timeout 10m
   chrome-use session done
   chrome-use session resume
@@ -7002,7 +7004,8 @@ Sessions:
     --wait / --until-url|--until-text|--until-gone <…>
                              Block until the user is done, take it back, print the change
     --until-change           Return once the page moved and settled; the user keeps it
-  session done               (human) Mark the handed-off step finished
+    --note <text>            What the user should do (shown in the side panel)
+  session done               (human) Mark the handed-off step finished (or Done in the side panel)
   session resume             Return control to the agent
   session stop [name]        Stop one session daemon (default: current) — graceful,
                              closes the tabs it created

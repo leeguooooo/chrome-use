@@ -3803,5 +3803,12 @@
   "panel_operator_unknown_agent": {"message": "an agent"},
   "panel_operator_last": {"message": "last: $VALUE$", "placeholders": {"value": {"content": "$1"}}},
   "panel_operator_loading": {"message": "Loading…"},
-  "panel_operator_no_context": {"message": "No readable context for this conversation."}
+  "panel_operator_no_context": {"message": "No readable context for this conversation."},
+  "panel_handoff_title": {"message": "Handed to you — the agent is waiting"},
+  "panel_handoff_until_url": {"message": "It continues once the address matches $VALUE$", "placeholders": {"value": {"content": "$1"}}},
+  "panel_handoff_until_text": {"message": "It continues once the page shows “$VALUE$”", "placeholders": {"value": {"content": "$1"}}},
+  "panel_handoff_until_gone": {"message": "It continues once $VALUE$ is gone from the page", "placeholders": {"value": {"content": "$1"}}},
+  "panel_handoff_until_change": {"message": "It looks again when the page changes"},
+  "panel_handoff_done": {"message": "Done, hand back"},
+  "panel_handoff_sent": {"message": "Sent — the agent continues"}
 }
