@@ -68,7 +68,8 @@ try {
   if (code !== 0) throw new Error('wait did not end with exit 0: ' + stderr);
   const result = JSON.parse(stdout.trim().split('\n').pop());
   if (result.data?.owner !== 'agent' && result.owner !== 'agent') throw new Error('session not taken back');
-  if (fs.readFileSync(path.join(sock, `${session}.owner`), 'utf8').trim() !== 'agent' && fs.existsSync(path.join(sock, `${session}.owner`))) throw new Error('owner sidecar still user');
+  const ownerFile = path.join(sock, `${session}.owner`);
+  if (fs.existsSync(ownerFile) && fs.readFileSync(ownerFile, 'utf8').trim() === 'user') throw new Error('owner sidecar still user');
   await waitFor(() => panel.run(`document.getElementById('handoffBox').hidden`), { timeout: 15000, label: 'card cleared after resume' });
   s = await b.send('Page.captureScreenshot', { format: 'png' }, panel.sid); fs.writeFileSync(path.join(out, 'after-done.png'), Buffer.from(s.data, 'base64'));
   const page = await A.attach(tab.targetId);
