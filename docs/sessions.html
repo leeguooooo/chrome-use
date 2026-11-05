@@ -351,9 +351,11 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">交接 → 用户操作 → 取回</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use session handoff   <span class="du-cmt"># 最后手段：标记会话归用户；告诉用户具体要做什么</span>
+<pre><code><span class="du-cmt"># 最后手段：先告诉用户具体要做什么，再交接并等待（放后台跑）</span>
+<span class="du-prompt">$</span> chrome-use session handoff --until-url "**/dashboard"   <span class="du-cmt"># 或 --until-text / --until-gone / --wait</span>
 <span class="du-cmt"># …… 用户做那件 agent 真做不了的事 ……</span>
-<span class="du-prompt">$</span> chrome-use session resume    <span class="du-cmt"># 取回控制——务必等用户确认做完再执行</span></code></pre>
+<span class="du-cmt"># → 命令返回，自动取回会话，打印 URL/标题前后对比和新快照</span>
+<span class="du-prompt">$</span> chrome-use session done --session &lt;名字&gt;  <span class="du-cmt"># （用户）结束不带条件的 --wait；名字用 agent 给的会话名</span></code></pre>
       </div>
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ 交接期间 agent 被挡在门外</div>

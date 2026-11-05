@@ -14,6 +14,16 @@
 
 use crate::connection::get_socket_dir;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set only by `session handoff --wait` in its own process while it watches a
+/// handed-off page. Not reachable from argv or the daemon protocol, so an
+/// agent command can never claim it.
+static WATCHING: AtomicBool = AtomicBool::new(false);
+
+pub fn set_watching(on: bool) {
+    WATCHING.store(on, Ordering::SeqCst);
+}
 
 /// Who currently controls a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,14 +69,25 @@ pub fn owner_of(session: &str) -> Owner {
 pub fn hand_off(session: &str) -> Result<(), String> {
     let dir = get_socket_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    std::fs::write(owner_path(session), "user\n").map_err(|e| e.to_string())
+    // Write a per-process temp file and rename it, so a concurrent reader
+    // (a `handoff --wait` poll) never sees a truncated, empty `.owner` — which
+    // would read as agent-owned.
+    let tmp = dir.join(format!("{session}.owner.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, "user\n").map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, owner_path(session)).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })
 }
 
 /// Resume agent control: remove the `.owner` sidecar (absence ⇒ agent).
 /// Idempotent — resuming an already-agent-owned session is a no-op success.
 pub fn resume(session: &str) -> Result<(), String> {
     match std::fs::remove_file(owner_path(session)) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            crate::handoff_wait::clear_sidecars(session);
+            Ok(())
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.to_string()),
     }
@@ -76,10 +97,23 @@ pub fn resume(session: &str) -> Result<(), String> {
 /// lifecycle / introspection that never drives the page.
 const HANDOFF_EXEMPT_ACTIONS: &[&str] = &["status", "ping", "version"];
 
+/// Read-only actions `handoff --wait` uses to watch the user's page. Allowed
+/// only while that watcher runs in this process ([`set_watching`]).
+const HANDOFF_WATCH_ACTIONS: &[&str] = &["url", "title", "wait", "snapshot"];
+
 /// The guard applied at the send chokepoint. `Err(msg)` means the agent tried
 /// to drive a handed-off session and must wait for `session resume`. Pure and
 /// unit-testable: takes the resolved owner + the command's action.
 pub fn guard(session: &str, owner: Owner, action: Option<&str>) -> Result<(), String> {
+    guard_with(session, owner, action, WATCHING.load(Ordering::SeqCst))
+}
+
+fn guard_with(
+    session: &str,
+    owner: Owner,
+    action: Option<&str>,
+    watching: bool,
+) -> Result<(), String> {
     if owner != Owner::User {
         return Ok(());
     }
@@ -87,9 +121,12 @@ pub fn guard(session: &str, owner: Owner, action: Option<&str>) -> Result<(), St
     match action {
         None => Ok(()),
         Some(a) if HANDOFF_EXEMPT_ACTIONS.contains(&a) => Ok(()),
+        Some(a) if watching && HANDOFF_WATCH_ACTIONS.contains(&a) => Ok(()),
         Some(_) => Err(format!(
             "session '{session}' is handed off to the user — the agent must not drive it. \
-             Run `chrome-use session resume{}` once they confirm they're done.",
+             Wait for them with `chrome-use session handoff --wait{}` (run it in the \
+             background), or run `chrome-use session resume{}` once they confirm they're done.",
+            session_flag_suffix(session),
             session_flag_suffix(session)
         )),
     }
@@ -116,6 +153,17 @@ mod tests {
         assert_eq!(Owner::parse("agent"), Owner::Agent);
         assert_eq!(Owner::parse(""), Owner::Agent);
         assert_eq!(Owner::parse("garbage"), Owner::Agent);
+    }
+
+    #[test]
+    fn watcher_reads_pass_only_while_watching() {
+        for a in ["url", "title", "wait", "snapshot"] {
+            assert!(guard_with("s", Owner::User, Some(a), true).is_ok(), "{a}");
+            assert!(guard_with("s", Owner::User, Some(a), false).is_err(), "{a}");
+        }
+        for a in ["click", "type", "eval", "open", "fill", "press"] {
+            assert!(guard_with("s", Owner::User, Some(a), true).is_err(), "{a}");
+        }
     }
 
     #[test]

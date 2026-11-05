@@ -378,9 +378,11 @@
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
           <span class="du-code-name">handoff → user acts → resume</span>
         </div>
-<pre><code><span class="du-prompt">$</span> chrome-use session handoff   <span class="du-cmt"># last resort: mark user-owned; tell the user exactly what to do</span>
+<pre><code><span class="du-cmt"># last resort: tell the user exactly what to do, then hand off AND wait (run it in the background)</span>
+<span class="du-prompt">$</span> chrome-use session handoff --until-url "**/dashboard"   <span class="du-cmt"># or --until-text / --until-gone / --wait</span>
 <span class="du-cmt"># … the human does the one thing the agent truly can't …</span>
-<span class="du-prompt">$</span> chrome-use session resume    <span class="du-cmt"># take control back — ONLY after they confirm they're done</span></code></pre>
+<span class="du-cmt"># → returns, takes the session back, prints URL/title before → after + a fresh snapshot</span>
+<span class="du-prompt">$</span> chrome-use session done --session &lt;name&gt;  <span class="du-cmt"># (the human) ends a bare --wait; use the session name the agent gives</span></code></pre>
       </div>
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ The agent is locked out during handoff</div>

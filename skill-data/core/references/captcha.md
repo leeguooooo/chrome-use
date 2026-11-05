@@ -102,6 +102,10 @@ repeat submission. Never print passwords, SMS codes, or credential-bearing forms
 
 If attempts fail, targets remain ambiguous, or the step requires a hardware key,
 phone approval, or another unavailable capability, keep the page and report the
-specific blocker and attempts. Use `session handoff` as the fallback. Stop driving
-that session; resume only after the user confirms they have finished. Preserve
+specific blocker and attempts. Use `session handoff --wait` (in the background) as the fallback, or
+`--until-url` / `--until-text` naming the page that only appears once the step
+is *verified* — not `--until-gone` on the captcha, which also holds for a
+hardware-key or phone prompt that has no captcha element, or a captcha that
+closed without passing. Stop driving that session; the wait returns when the
+condition holds or the user runs `session done --session <name>`. Preserve
 other sessions and tabs throughout.
