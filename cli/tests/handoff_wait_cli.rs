@@ -112,7 +112,7 @@ setTimeout(() => {{ location.href = location.href.replace('a.html', 'b.html'); }
 
     #[test]
     fn until_url_resumes_and_reports_the_change() {
-        let s = Session::new("url", 1000);
+        let s = Session::new("url", 3000);
         let (code, v) = s.handoff(&["--until-url", "**/b.html", "--timeout", "60s"]);
         assert_eq!(code, 0, "{v}");
         assert_eq!(v["outcome"], "condition", "{v}");
@@ -134,11 +134,11 @@ setTimeout(() => {{ location.href = location.href.replace('a.html', 'b.html'); }
 
     #[test]
     fn until_text_and_until_gone_see_in_page_changes() {
-        let s = Session::new("text", 1000);
+        let s = Session::new("text", 3000);
         let (code, v) = s.handoff(&["--until-text", "Verified", "--timeout", "60s"]);
         assert_eq!((code, v["outcome"].as_str()), (0, Some("condition")), "{v}");
 
-        let s = Session::new("gone", 1000);
+        let s = Session::new("gone", 3000);
         let (code, v) = s.handoff(&["--until-gone", "#captcha", "--timeout", "60s"]);
         assert_eq!((code, v["outcome"].as_str()), (0, Some("condition")), "{v}");
     }
@@ -168,7 +168,7 @@ setTimeout(() => {{ location.href = location.href.replace('a.html', 'b.html'); }
 
     #[test]
     fn change_and_timeout_leave_the_session_with_the_user() {
-        let s = Session::new("change", 500);
+        let s = Session::new("change", 3000);
         let (code, v) = s.handoff(&["--until-change", "--settle", "1s", "--timeout", "60s"]);
         assert_eq!(code, 2, "{v}");
         assert_eq!(v["outcome"], "changed", "{v}");

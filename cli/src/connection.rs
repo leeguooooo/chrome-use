@@ -1240,6 +1240,7 @@ fn cleanup_stale_runtime_files(session: &str) {
     // silently blocked. Absence ⇒ agent-owned, the right default.
     let owner_path = get_socket_dir().join(format!("{}.owner", session));
     let _ = fs::remove_file(&owner_path);
+    crate::handoff_wait::clear_sidecars(session);
     // The tab-group label is deliberately NOT removed here. `cleanup_stale_files`
     // also runs when a daemon is merely found stale — including on the very
     // first command of a session, before any daemon exists — so deleting the
@@ -2522,6 +2523,13 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
                 if is_transient_error(&e) {
                     last_error = e;
                     continue;
+                }
+                if is_session_unresponsive_error(&e)
+                    && crate::ownership::owner_of(session) == crate::ownership::Owner::User
+                {
+                    // The human is working in this session's tabs: stopping the
+                    // daemon could close them and lose their input. Report only.
+                    return Err(e);
                 }
                 if is_session_unresponsive_error(&e) {
                     kill_stale_daemon(session);

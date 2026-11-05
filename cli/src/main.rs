@@ -916,8 +916,14 @@ fn run_session_last(session: &str, json_mode: bool) {
 
 /// `session <handoff|resume|status|list>` — ownership + human handoff (#89,
 /// ported from ego-lite). CLI-local: only touches the `.owner` sidecar.
-fn run_session_ownership(sub: Option<&str>, rest: &[String], session: &str, json_mode: bool) {
+fn run_session_ownership(
+    sub: Option<&str>,
+    rest: &[String],
+    session: &str,
+    out_opts: &OutputOptions,
+) {
     use ownership::{hand_off, owner_of, resume, session_flag_suffix, Owner};
+    let json_mode = out_opts.json;
     let zh = connect::ui_zh();
     match sub {
         // `session handoff --wait [--until-*]`: hand off and block until the
@@ -925,8 +931,10 @@ fn run_session_ownership(sub: Option<&str>, rest: &[String], session: &str, json
         Some("handoff") if !rest.is_empty() => {
             let spec = match handoff_wait::parse_args(rest) {
                 Ok(Some(spec)) => spec,
-                Ok(None) => unreachable!("non-empty handoff args without --wait are rejected"),
-                Err(e) => {
+                parsed => {
+                    let e = parsed
+                        .err()
+                        .unwrap_or_else(|| "these options need --wait".to_string());
                     if json_mode {
                         print_json_error(format!("handoff: {e}"));
                     } else {
@@ -950,12 +958,15 @@ fn run_session_ownership(sub: Option<&str>, rest: &[String], session: &str, json
                 eprintln!("{hint}");
             }
             match handoff_wait::run(session, &spec) {
-                Ok(v) => {
+                Ok(mut v) => {
                     let resumed = v["owner"] == "agent";
                     if json_mode {
+                        if out_opts.content_boundaries {
+                            handoff_wait::add_boundary(&mut v);
+                        }
                         println!("{v}");
                     } else {
-                        handoff_wait::print_human(&v, session, zh);
+                        handoff_wait::print_human(&v, session, zh, out_opts);
                     }
                     // Exit 0 when the agent has the session back; 2 when the
                     // wait ended with the user still owning it.
@@ -3108,7 +3119,7 @@ fn main() {
                 sub,
                 clean.get(2..).unwrap_or(&[]),
                 &flags.session,
-                flags.json,
+                &OutputOptions::from_flags(&flags),
             ),
         }
         return;

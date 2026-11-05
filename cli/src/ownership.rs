@@ -69,7 +69,15 @@ pub fn owner_of(session: &str) -> Owner {
 pub fn hand_off(session: &str) -> Result<(), String> {
     let dir = get_socket_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    std::fs::write(owner_path(session), "user\n").map_err(|e| e.to_string())
+    // Write a per-process temp file and rename it, so a concurrent reader
+    // (a `handoff --wait` poll) never sees a truncated, empty `.owner` — which
+    // would read as agent-owned.
+    let tmp = dir.join(format!("{session}.owner.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, "user\n").map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, owner_path(session)).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })
 }
 
 /// Resume agent control: remove the `.owner` sidecar (absence ⇒ agent).

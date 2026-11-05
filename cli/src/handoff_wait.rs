@@ -46,6 +46,8 @@ pub struct WaitSpec {
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const DEFAULT_POLL: Duration = Duration::from_millis(1500);
 const DEFAULT_SETTLE: Duration = Duration::from_secs(3);
+/// Longest sleep between checks, so `session done` and the timeout are seen promptly.
+const MAX_POLL: Duration = Duration::from_secs(5);
 /// Consecutive failed polls before the wait gives up on the daemon.
 const MAX_POLL_FAILURES: u32 = 20;
 
@@ -57,6 +59,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<WaitSpec>, String> {
     let mut timeout = DEFAULT_TIMEOUT;
     let mut poll = DEFAULT_POLL;
     let mut settle = DEFAULT_SETTLE;
+    let mut wait_option = false;
     let set_until = |u: Until, until: &mut Option<Until>| -> Result<(), String> {
         if until.is_some() {
             return Err("give only one --until-* condition".to_string());
@@ -89,14 +92,17 @@ pub fn parse_args(args: &[String]) -> Result<Option<WaitSpec>, String> {
             }
             "--until-change" => set_until(Until::Change, &mut until)?,
             "--timeout" => {
+                wait_option = true;
                 timeout = parse_duration(&value(i)?)?;
                 i += 1;
             }
             "--poll" => {
-                poll = parse_duration(&value(i)?)?.max(Duration::from_millis(250));
+                wait_option = true;
+                poll = parse_duration(&value(i)?)?.clamp(Duration::from_millis(250), MAX_POLL);
                 i += 1;
             }
             "--settle" => {
+                wait_option = true;
                 settle = parse_duration(&value(i)?)?;
                 i += 1;
             }
@@ -105,7 +111,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<WaitSpec>, String> {
         i += 1;
     }
     if !wait && until.is_none() {
-        if timeout != DEFAULT_TIMEOUT || poll != DEFAULT_POLL || settle != DEFAULT_SETTLE {
+        if wait_option {
             return Err("--timeout/--poll/--settle only apply with --wait".to_string());
         }
         return Ok(None);
@@ -198,7 +204,18 @@ fn now_ms() -> u64 {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct PageState {
     url: String,
-    title: String,
+    title: Option<String>,
+}
+
+impl PageState {
+    /// Same page as `other`, ignoring a title either side failed to read.
+    fn same_as(&self, other: &PageState) -> bool {
+        self.url == other.url
+            && match (&self.title, &other.title) {
+                (Some(a), Some(b)) => a == b,
+                _ => true,
+            }
+    }
 }
 
 fn read_page(session: &str) -> Result<PageState, String> {
@@ -206,11 +223,11 @@ fn read_page(session: &str) -> Result<PageState, String> {
         send_command(json!({"id": "hw-url", "action": "url"}), session)?,
         "url",
     )?;
-    let title = data_str(
-        send_command(json!({"id": "hw-title", "action": "title"}), session)?,
-        "title",
-    )
-    .unwrap_or_default();
+    // A failed title read must not look like a page change: keep the URL as
+    // the only signal for that tick (`None` title compares as "unknown").
+    let title = send_command(json!({"id": "hw-title", "action": "title"}), session)
+        .and_then(|r| data_str(r, "title"))
+        .ok();
     Ok(PageState { url, title })
 }
 
@@ -303,12 +320,12 @@ impl ChangeWatch {
     }
 
     fn observe(&mut self, now: Instant, page: &PageState, settle: Duration) -> bool {
-        if *page == self.baseline {
+        if page.same_as(&self.baseline) {
             self.last = None;
             self.stable_since = None;
             return false;
         }
-        if self.last.as_ref() != Some(page) {
+        if !self.last.as_ref().is_some_and(|l| l.same_as(page)) {
             self.last = Some(page.clone());
             self.stable_since = Some(now);
         }
@@ -348,11 +365,12 @@ pub fn run(session: &str, spec: &WaitSpec) -> Result<Value, String> {
             .and_then(|s| serde_json::from_str::<Value>(&s).ok())
             .map(|v| PageState {
                 url: v["url"].as_str().unwrap_or_default().to_string(),
-                title: v["title"].as_str().unwrap_or_default().to_string(),
+                title: v["title"].as_str().map(str::to_string),
             })
     } else {
         None
     };
+    let fresh_baseline = stored.is_none();
     let baseline = match stored {
         Some(b) => b,
         None => {
@@ -390,7 +408,13 @@ pub fn run(session: &str, spec: &WaitSpec) -> Result<Value, String> {
             break Outcome::Timeout;
         }
         let polled: Result<bool, String> = match &spec.until {
-            None => Ok(false),
+            None => {
+                if crate::connection::daemon_ready(session) {
+                    Ok(false)
+                } else {
+                    Err("the session's daemon is not answering".to_string())
+                }
+            }
             Some(Until::Url(p)) => read_page(session).map(|pg| url_matches(&pg.url, p)),
             Some(Until::Change) => {
                 read_page(session).map(|pg| change.observe(Instant::now(), &pg, spec.settle))
@@ -419,14 +443,15 @@ pub fn run(session: &str, spec: &WaitSpec) -> Result<Value, String> {
             }
         }
         tick += 1;
-        std::thread::sleep(jittered(spec.poll, tick));
+        let left = spec.timeout.saturating_sub(start.elapsed());
+        std::thread::sleep(jittered(spec.poll, tick).min(left));
     };
 
     if outcome.resumes() {
         ownership::resume(session)?;
         clear_sidecars(session);
     }
-    let report = change_report(session, &baseline);
+    let report = change_report(session, &baseline, fresh_baseline);
     ownership::set_watching(false);
 
     let mut out = json!({
@@ -445,7 +470,7 @@ pub fn run(session: &str, spec: &WaitSpec) -> Result<Value, String> {
 
 /// URL/title before → after plus a fresh interactive snapshot (a diff when the
 /// page did not navigate). Best effort: a failed read leaves fields out.
-fn change_report(session: &str, baseline: &PageState) -> Value {
+fn change_report(session: &str, baseline: &PageState, diff: bool) -> Value {
     let now = read_page(session).ok();
     let mut out = json!({
         "urlBefore": baseline.url,
@@ -453,11 +478,15 @@ fn change_report(session: &str, baseline: &PageState) -> Value {
     });
     if let Some(now) = &now {
         out["url"] = json!(now.url);
-        out["title"] = json!(now.title);
+        if let Some(t) = &now.title {
+            out["title"] = json!(t);
+        }
         out["navigated"] = json!(now.url != baseline.url);
     }
     if let Ok(resp) = send_command(
-        json!({"id": "hw-snap1", "action": "snapshot", "interactive": true, "diff": true}),
+        // Diff only against the snapshot this run took; after a re-wait the
+        // daemon's diff base is the previous report, so send the full tree.
+        json!({"id": "hw-snap1", "action": "snapshot", "interactive": true, "diff": diff}),
         session,
     ) {
         if let Some(d) = resp.data.filter(|_| resp.success) {
@@ -472,7 +501,7 @@ fn change_report(session: &str, baseline: &PageState) -> Value {
 }
 
 /// Human-readable rendering of [`run`]'s result.
-pub fn print_human(v: &Value, session: &str, zh: bool) {
+pub fn print_human(v: &Value, session: &str, zh: bool, opts: &crate::output::OutputOptions) {
     let outcome = v["outcome"].as_str().unwrap_or("");
     let suffix = ownership::session_flag_suffix(session);
     let headline = match (outcome, zh) {
@@ -515,8 +544,22 @@ pub fn print_human(v: &Value, session: &str, zh: bool) {
         println!("  snapshot diff:");
     }
     if let Some(s) = c["snapshot"].as_str() {
-        println!("{s}");
+        crate::output::print_with_boundaries(s, c["url"].as_str(), opts);
     }
+}
+
+/// `--json --content-boundaries`: mark the result as carrying page content,
+/// the same `_boundary` field other page output gets.
+pub fn add_boundary(v: &mut Value) {
+    let origin = v["changed"]["url"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
+    v["_boundary"] = json!({
+        "nonce": crate::output::get_boundary_nonce(),
+        "origin": origin,
+        "notice": crate::output::BOUNDARY_NOTICE,
+    });
 }
 
 #[cfg(test)]
@@ -531,6 +574,9 @@ mod tests {
     fn plain_handoff_has_no_wait() {
         assert_eq!(parse_args(&[]).unwrap(), None);
         assert!(parse_args(&args(&["--timeout", "5m"])).is_err());
+        // Even an option equal to its default needs --wait (was a panic).
+        assert!(parse_args(&args(&["--timeout", "30m"])).is_err());
+        assert!(parse_args(&args(&["--poll", "1500ms"])).is_err());
     }
 
     #[test]
@@ -590,7 +636,7 @@ mod tests {
     fn change_watch_waits_for_a_settled_change() {
         let base = PageState {
             url: "https://x/login".into(),
-            title: "Login".into(),
+            title: Some("Login".into()),
         };
         let mut w = ChangeWatch::new(base.clone());
         let t0 = Instant::now();
@@ -598,12 +644,12 @@ mod tests {
         assert!(!w.observe(t0, &base, settle));
         let p2 = PageState {
             url: "https://x/2fa".into(),
-            title: "2FA".into(),
+            title: Some("2FA".into()),
         };
         assert!(!w.observe(t0 + Duration::from_secs(1), &p2, settle));
         let p3 = PageState {
             url: "https://x/home".into(),
-            title: "Home".into(),
+            title: Some("Home".into()),
         };
         assert!(
             !w.observe(t0 + Duration::from_secs(3), &p3, settle),
@@ -616,6 +662,30 @@ mod tests {
         assert!(!w.observe(t0, &p2, settle));
         assert!(!w.observe(t0 + Duration::from_secs(4), &base, settle));
         assert!(!w.observe(t0 + Duration::from_secs(8), &base, settle));
+    }
+
+    #[test]
+    fn a_failed_title_read_is_not_a_change() {
+        let base = PageState {
+            url: "https://x/a".into(),
+            title: Some("A".into()),
+        };
+        let mut w = ChangeWatch::new(base);
+        let t0 = Instant::now();
+        let no_title = PageState {
+            url: "https://x/a".into(),
+            title: None,
+        };
+        assert!(!w.observe(t0, &no_title, Duration::ZERO));
+        assert!(!w.observe(t0 + Duration::from_secs(9), &no_title, Duration::ZERO));
+    }
+
+    #[test]
+    fn poll_is_capped() {
+        let s = parse_args(&args(&["--wait", "--poll", "1m"]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.poll, MAX_POLL);
     }
 
     #[test]
