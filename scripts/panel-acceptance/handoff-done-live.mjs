@@ -24,7 +24,7 @@ async function openPanelFor(tab) {
   return { sid: psid, run: expression => A.evaluate(psid, expression) };
 }
 const session = 'hw-live';
-let waiter = null;
+let waiter = null, passed = false;
 try {
   const opened = cli('--session', session, 'open', rig.site + '/?handoff');
   console.log('[handoff] open', opened.status, (opened.stderr || '').trim().slice(-300));
@@ -77,8 +77,11 @@ try {
   const page = await within(A.attach(tab.targetId), 15000, 'page attach');
   if (await within(A.evaluate(page, `document.documentElement.outerHTML.match(/Approve the sign-in|operator-handoff/i)?.[0] ?? null`), 15000, 'page read')) throw new Error('page was changed');
   console.log('[handoff] PASS', out);
+  passed = true;
 } finally {
   if (waiter && waiter.exitCode === null) waiter.kill();
-  cli('--session', session, 'close');
+  spawnSync(rig.hostBin, ['--session', session, 'close'], { env, stdio: 'ignore', timeout: 20000 });
   cleanup(rig);
+  // The relay-attached session can keep handles open; the result is decided.
+  process.exit(passed ? 0 : 1);
 }
