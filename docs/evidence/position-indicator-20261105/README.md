@@ -74,7 +74,9 @@ Taking the marker down during pointer travel was tried and saved little
 (1.94 → 1.71 s) for two extra commands per click, so it was not kept.
 
 The relay "off" run had one click of 30.4 s (p90 in `relay/acceptance.json`)
-with the marker off; it is not the marker's, and is tracked separately.
+with the marker off. It is not the marker's: `ABExt.sitePolicy` waited for a
+`chrome.storage.managed` read that never settles, about every sixth click on
+the relay, on 1.5.280 too; fixed in #863.
 
 ## Rerun
 

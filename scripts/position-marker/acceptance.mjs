@@ -186,6 +186,7 @@ async function run(label, { marker, zoom = 1 }) {
   result.cpu = { browser: cpuSeconds(bp) - cpu0.browser, daemon: cpuSeconds(CU) - cpu0.daemon };
   result.status = cu(session, ['status'], env).json?.data?.positionMarker ?? null;
   result.page = { baseline, final, requests: (await requestCount()) - reqBefore };
+  result.clickTimes = times.map(t => Math.round(t));
   times.sort((a, b) => a - b);
   result.clickMs = { median: times[times.length >> 1], p90: times[Math.floor(times.length * 0.9)], min: times[0], max: times[times.length - 1] };
   cu(session, ['close'], env);
@@ -242,12 +243,14 @@ async function lifecycle() {
 const results = [];
 let life = null;
 try {
-  const modes = [['off', { marker: false }], ['on', { marker: true }]];
+  let modes = [['off', { marker: false }], ['on', { marker: true }]];
   if (transport === 'launch') modes.push(['on-zoom150', { marker: true, zoom: 1.5 }]);
+  // MODES=off,on picks runs; SKIP_LIFECYCLE=1 skips the #850 phase.
+  if (process.env.MODES) modes = modes.filter(([l]) => process.env.MODES.split(',').includes(l));
   for (const [label, opts] of modes) {
     try { results.push(await run(label, opts)); } catch (e) { results.push({ label, error: String(e.stack || e) }); }
   }
-  try { life = await lifecycle(); } catch (e) { life = { error: String(e.stack || e) }; }
+  if (!process.env.SKIP_LIFECYCLE) try { life = await lifecycle(); } catch (e) { life = { error: String(e.stack || e) }; }
   writeFileSync(join(out, 'lifecycle.json'), JSON.stringify(life, null, 2));
 } finally {
   server.kill(); rmSync(serverDir, { recursive: true, force: true });
