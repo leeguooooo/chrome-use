@@ -117,10 +117,18 @@ const CDP_PAYLOAD_MICROS_PER_BYTE: u64 = 4_000;
 /// with the extension's in #315.
 const CDP_PAYLOAD_MAX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(360);
 
+/// `ABExt.sitePolicy` budget (see [`command_timeout`]).
+const SITE_POLICY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Budget for one CDP command. Pure so the scaling rule is testable without a
 /// browser. Anything without a size-proportional payload keeps the flat budget,
 /// so an ordinary hung command still fails as fast as it used to.
 pub(crate) fn command_timeout(method: &str, params: Option<&Value>) -> std::time::Duration {
+    // A read of the extension's own settings: it answers in milliseconds or
+    // not at all, and every gated action waits for it.
+    if method == "ABExt.sitePolicy" {
+        return SITE_POLICY_TIMEOUT;
+    }
     if method != "Input.insertText" {
         return CDP_COMMAND_TIMEOUT;
     }
@@ -682,6 +690,8 @@ mod timeout_tests {
         // An ordinary command keeps the flat 30s — scaling must never slow the
         // failure of a genuinely hung round trip.
         assert_eq!(command_timeout("Runtime.evaluate", None).as_secs(), 30);
+        // The extension's settings read fails fast instead of holding a click.
+        assert_eq!(command_timeout("ABExt.sitePolicy", None).as_secs(), 2);
         let big_eval = json!({ "expression": "x".repeat(50_000) });
         assert_eq!(
             command_timeout("Runtime.evaluate", Some(&big_eval)).as_secs(),

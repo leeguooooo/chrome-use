@@ -224,6 +224,10 @@ export function updateSettings(store, patch, managed) {
   return normalizeStore({ ...s, settings: { ...s.settings, ...patch } });
 }
 
+
+/** How long the worker waits for `chrome.storage.managed` before going on without it. */
+export const MANAGED_READ_TIMEOUT_MS = 1000;
+
 /**
  * The worker's side: storage, notifications and the relay methods.
  * `api` carries `storage` (local, session, managed), `notifications`
@@ -241,8 +245,18 @@ export function createSitePermissions(api) {
   // The toolbar badge belongs to finished turns and attached tabs; a request
   // shows as a notification and in the side panel instead.
   const saveRequests = requests => api.storage.session.set({ [SITE_REQUESTS_KEY]: requests });
+  // Chrome can leave `storage.managed.get` unanswered (Chrome for Testing
+  // 156 never settles it), and every `ABExt.sitePolicy` waited on it until
+  // the daemon's 30 s timeout. No answer in time means no managed policy;
+  // a later `onChanged` for the managed area reads it again.
+  const managedTimeoutMs = api.managedTimeoutMs ?? MANAGED_READ_TIMEOUT_MS;
   async function refreshManaged() {
-    try { managed = managedPolicy(await api.storage.managed.get(null)); } catch { managed = {}; }
+    let timer;
+    const late = new Promise(resolve => { timer = setTimeout(() => resolve(null), managedTimeoutMs); });
+    try {
+      const read = await Promise.race([api.storage.managed.get(null), late]);
+      managed = read === null ? {} : managedPolicy(read);
+    } catch { managed = {}; } finally { clearTimeout(timer); }
     return managed;
   }
   const ready = refreshManaged();
