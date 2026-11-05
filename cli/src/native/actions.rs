@@ -23988,9 +23988,50 @@ async fn mark_usable_auth_element(
     strict: bool,
     origin: Option<&str>,
 ) -> Result<String, String> {
+    mark_auth_element(
+        client, scope, selectors, tag, timeout_ms, strict, origin, false,
+    )
+    .await
+}
+
+/// How many containers above a password field outside any form or dialog the
+/// broad username guess looks in.
+const AUTH_USER_BESIDE_PASSWORD_LEVELS: usize = 4;
+
+/// [`mark_usable_auth_element`] for the broad username guess: of the usable
+/// matches that come before the first usable password field, the last one in
+/// the password field's own form or dialog, and nothing when that holds none
+/// (a page that remembers the account shows only the password). Outside a
+/// form or dialog, the closest of the password field's containers, at most
+/// [`AUTH_USER_BESIDE_PASSWORD_LEVELS`] up and never `<body>`. A text box
+/// elsewhere on the page (a site search in the header) is never taken for the
+/// username.
+async fn mark_auth_user_beside_password(
+    client: &super::cdp::client::CdpClient,
+    scope: &AuthScope,
+    selectors: &[&str],
+    tag: &str,
+    strict: bool,
+    origin: Option<&str>,
+) -> Result<String, String> {
+    mark_auth_element(client, scope, selectors, tag, 0, strict, origin, true).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn mark_auth_element(
+    client: &super::cdp::client::CdpClient,
+    scope: &AuthScope,
+    selectors: &[&str],
+    tag: &str,
+    timeout_ms: u64,
+    strict: bool,
+    origin: Option<&str>,
+    beside_password: bool,
+) -> Result<String, String> {
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
     let sels = serde_json::to_string(selectors).unwrap_or_default();
     let origin_json = serde_json::to_string(&origin).unwrap_or_default();
+    let levels = AUTH_USER_BESIDE_PASSWORD_LEVELS;
     let expression = format!(
         r#"(() => {{
             const origin = {origin_json};
@@ -24005,6 +24046,32 @@ async fn mark_usable_auth_element(
                 if (el instanceof HTMLInputElement && el.type === 'hidden') return false;
                 return true;
             }};
+            if ({beside_password}) {{
+                const pw = [...document.querySelectorAll('input[type=password]')].find(usable);
+                if (!pw) return false;
+                const before = (a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+                const cands = [];
+                for (const sel of {sels}) {{
+                    let found;
+                    try {{ found = document.querySelectorAll(sel); }} catch (e) {{ continue; }}
+                    for (const el of found) {{
+                        if (!cands.includes(el) && usable(el) && before(el, pw)) cands.push(el);
+                    }}
+                }}
+                cands.sort((a, b) => (before(a, b) ? -1 : 1));
+                const own = pw.closest('form, dialog, [role=dialog], [role=alertdialog], [aria-modal=true]');
+                if (own) {{
+                    const inside = cands.filter((el) => own.contains(el));
+                    return inside.length ? inside[inside.length - 1] : false;
+                }}
+                let box = pw.parentElement;
+                for (let up = 0; box && up < {levels}; up++, box = box.parentElement) {{
+                    if (box === document.body || box === document.documentElement) break;
+                    const inside = cands.filter((el) => box.contains(el));
+                    if (inside.length) return inside[inside.length - 1];
+                }}
+                return false;
+            }}
             for (const sel of {sels}) {{
                 let found;
                 try {{ found = document.querySelectorAll(sel); }} catch (e) {{ continue; }}
@@ -24876,14 +24943,15 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             let found = if auto && step == "username" {
                 // A page that remembers the account shows only the password.
                 // The broad text-input guess only next to a password field,
-                // so a one-time-code field is never taken for the username.
+                // so a one-time-code field or a site search box is never
+                // taken for the username.
                 match unblocked!(mark_usable_auth_element(&mgr.client, &scope, AUTH_USER_SELECTORS, &tag, AUTH_BWU_PROBE_MS, strict, pin).await) {
                     Ok(sel) => Some(sel),
                     Err(e) if e.starts_with("the page moved") => return Err(e),
                     Err(_) => {
                         let probe = format!("bwupw-{marker}");
                         if unblocked!(mark_usable_auth_element(&mgr.client, &scope, &["input[type=password]"], &probe, 0, true, pin).await).is_ok() {
-                            unblocked!(mark_usable_auth_element(&mgr.client, &scope, AUTH_USER_FALLBACK_SELECTORS, &tag, 0, strict, pin).await)
+                            unblocked!(mark_auth_user_beside_password(&mgr.client, &scope, AUTH_USER_FALLBACK_SELECTORS, &tag, strict, pin).await)
                                 .ok()
                         } else {
                             None
@@ -25265,6 +25333,85 @@ fn left_sign_in_page(login_url: &str, url: &str) -> bool {
     moved && !super::login_wall::login_ish(&b)
 }
 
+/// Words in a path segment of a page that checks the account after the
+/// password: a code sent to the phone or mail, an identity check (a site can
+/// send a correct password on to `/service/identity/verifyPhone`).
+/// Matched as whole words of a segment (`verifyPhone` is `verify` + `phone`),
+/// so a signed-in `/challenges` page is not one.
+const VERIFY_SEGMENT_WORDS: &[&str] = &[
+    "verify",
+    "verification",
+    "challenge",
+    "checkpoint",
+    "captcha",
+    "2fa",
+    "mfa",
+    "twofactor",
+];
+
+/// The words of a path segment: split at anything not a letter or digit and
+/// where a lowercase letter meets an uppercase one, lowercased.
+fn segment_words(seg: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut prev_lower = false;
+    for c in seg.chars() {
+        if !c.is_ascii_alphanumeric() {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+            prev_lower = false;
+            continue;
+        }
+        if c.is_ascii_uppercase() && prev_lower && !word.is_empty() {
+            words.push(std::mem::take(&mut word));
+        }
+        prev_lower = c.is_ascii_lowercase();
+        word.push(c.to_ascii_lowercase());
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// Whether `url` looks like a verification step rather than a signed-in page.
+fn verification_page(url: &str) -> bool {
+    let Ok(u) = url::Url::parse(url) else {
+        return false;
+    };
+    u.path_segments().into_iter().flatten().any(|seg| {
+        let words = segment_words(seg);
+        words
+            .iter()
+            .any(|w| VERIFY_SEGMENT_WORDS.contains(&w.as_str()))
+            || words.windows(2).any(|p| p[0] == "two" && p[1] == "factor")
+    })
+}
+
+/// Whether a page after the submit is a verification step: never the sign-in
+/// page itself, whose own URL may carry such a word.
+fn verification_step(login_url: &str, url: &str) -> bool {
+    let same = match (url::Url::parse(login_url), url::Url::parse(url)) {
+        (Ok(a), Ok(b)) => {
+            a.origin() == b.origin()
+                && a.path().trim_end_matches('/') == b.path().trim_end_matches('/')
+        }
+        _ => false,
+    };
+    !same && verification_page(url)
+}
+
+/// The failure for a login whose form went away onto a verification page.
+fn sign_in_needs_verification(url: &str) -> String {
+    format!(
+        "auth login --bwu: the sign-in was not confirmed: the sign-in form is gone, but the tab \
+         is on {url}, which looks like a verification step (a code sent to the phone or mail, \
+         an identity check). Nothing is reported as signed in. Read the page (`snapshot -i`); \
+         a code sent by SMS or mail has to come from the user or their messages."
+    )
+}
+
 fn sign_in_evidence(login_url: &str, now: &SignInObservation) -> String {
     if left_sign_in_page(login_url, &now.url) {
         format!(
@@ -25360,6 +25507,8 @@ async fn confirm_sign_in(
     let deadline = started + Duration::from_millis(AUTH_BWU_CONFIRM_MS);
     let mut prev: Option<SignInObservation> = None;
     let mut last: Option<SignInObservation> = None;
+    // The verification page the last confirmed reading was on.
+    let mut verifying: Option<String> = None;
     loop {
         let top = if scope.in_frame() {
             scope_eval_once(&mgr.client, &top_scope, &top_observer, true).await
@@ -25383,6 +25532,7 @@ async fn confirm_sign_in(
         };
         // The fields of a sign-in frame count too; a frame that went away
         // took its form with it.
+        let mut frame_url: Option<String> = None;
         if scope.in_frame() {
             if let Some(o) = now.as_mut() {
                 if let Ok(r) = scope_eval(&mgr.client, scope, &observer, true).await {
@@ -25391,18 +25541,34 @@ async fn confirm_sign_in(
                         if o.message.is_empty() {
                             o.message = f.message;
                         }
+                        frame_url = Some(f.url);
                     }
                 }
             }
         }
         if let Some(o) = &now {
             if sign_in_confirmed(login_url, prev.as_ref(), o) {
-                return Ok(sign_in_evidence(login_url, o));
+                // A verification page (the tab's, or the sign-in frame's) is
+                // watched to the deadline: one that moves on by itself to
+                // the signed-in page is not the end of the login.
+                match [Some(o.url.as_str()), frame_url.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .find(|u| verification_step(login_url, u))
+                {
+                    None => return Ok(sign_in_evidence(login_url, o)),
+                    Some(u) => verifying = Some(u.to_string()),
+                }
+            } else if o.form {
+                verifying = None;
             }
             last = Some(o.clone());
         }
         prev = now;
         if tokio::time::Instant::now() >= deadline {
+            if let Some(u) = &verifying {
+                return Err(sign_in_needs_verification(u));
+            }
             return Err(sign_in_not_confirmed(
                 last.as_ref(),
                 AUTH_BWU_CONFIRM_MS,
@@ -27463,6 +27629,36 @@ mod tests {
             login,
             "https://zentao.example.com/zentao/my.html"
         ));
+    }
+
+    // A correct password that lands on a phone check is not a sign-in.
+    #[test]
+    fn verification_step_is_not_a_sign_in() {
+        assert!(verification_page(
+            "https://account.example.com/fe/service/identity/verifyPhone?sid=x"
+        ));
+        assert!(verification_page("https://example.com/account/2fa"));
+        assert!(verification_page("https://example.com/checkpoint/"));
+        assert!(!verification_page("https://example.com/dashboard"));
+        assert!(!verification_page("https://example.com/?next=/verify"));
+        assert!(!verification_page("https://example.com/challenges"));
+        assert!(!verification_page("https://example.com/verifying-the-news"));
+        assert!(verification_page(
+            "https://example.com/account/verify-email"
+        ));
+        assert!(verification_page("https://example.com/two-factor"));
+        assert!(verification_page("https://example.com/TwoFactorAuth"));
+        // Only a page after the sign-in page counts, never the sign-in page.
+        let login = "https://example.com/challenge/login";
+        assert!(!verification_step(login, login));
+        assert!(verification_step(
+            login,
+            "https://example.com/challenge/verifyPhone"
+        ));
+        assert_eq!(segment_words("verifyPhone"), ["verify", "phone"]);
+        assert_eq!(segment_words("2FA-Setup"), ["2fa", "setup"]);
+        let e = sign_in_needs_verification("https://example.com/2fa");
+        assert!(e.contains("not confirmed") && e.contains("/2fa"), "{e}");
     }
 
     #[test]
