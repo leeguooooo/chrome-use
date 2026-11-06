@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.283
+## 1.5.284
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.106.
+
+### Fixes
+
+- **The side panel's handoff box also shows on tabs the agent did not open.** In 1.5.283 the box and its **Done** button appeared only on tabs the session had opened. A tab you lent to a side-panel conversation, or one the agent adopted with `tab adopt`, showed nothing, and the wait could only be ended with `chrome-use session done`. `session handoff` now records which tab it hands over, with or without `--wait`, and the panel finds the handoff by that tab (#866).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.283
+
 Works with extension ab-connect 0.5.106.
 
 ### Features
@@ -11,7 +24,7 @@ Works with extension ab-connect 0.5.106.
   - `session handoff --wait --note "<text>"` sets what the box asks the user to do (up to 300 characters).
   - While an agent drives the tab, the panel checks every 4 s, so a handoff and its end show up without switching tabs.
   - An older CLI does not offer Done; the box then shows without the button.
-  - The box shows on tabs the session opened. A tab the user granted to the agent is not matched yet; there `session done` still ends the wait.
+  - The box shows on tabs the session opened. A tab the user granted to the agent is not matched yet; there `session done` still ends the wait (fixed in 1.5.284).
 
 ### Fixes
 
@@ -20,7 +33,6 @@ Works with extension ab-connect 0.5.106.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.282
 
