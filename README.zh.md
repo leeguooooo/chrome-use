@@ -431,6 +431,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use session list` · `session stop [name]` | 管理会话 worker |
 | `chrome-use auth login --bwu [--item <id\|name>]` | 从 Bitwarden 填写当前登录页，处理 TOTP 和支持的 passkey 两步验证 |
 | `chrome-use auth login --bwu --passkey` | 在 `--launch` 浏览器中用 passkey 登录（bwu 0.9.0+） |
+| `chrome-use auth login --1password [--item <id\|name>]` | 从 1Password 填写当前登录页（用户名、密码和 TOTP；不含 passkey） |
 | `chrome-use status` | 中继传输、近期 debugger 超时、重复扩展、版本偏差与会话健康总览。ab-connect 0.5.50+ 的 host 断线后首次重试定时为 1 秒，连续失败逐步退避到 30 秒。旧 socket 的命令与事件等待会结束，旧回复不重放；发送失败或回复丢失报告 action_outcome_unknown 和 retryable: false；中断的写操作须先检查页面再决定是否重复 |
 | `chrome-use close --forget-untracked` | 显式恢复：仅放弃没有标签身份、且两次有效 Chrome registry 查询都未列出的旧归属记录。返回 ownershipDropped，不声称原来的标签已关闭。不能与单个标签或 --all 合用 |
 
@@ -532,6 +533,17 @@ chrome-use --session passkey-demo --launch open https://github.com/login
 chrome-use --session passkey-demo --launch auth login --bwu --item github.com --passkey
 chrome-use --session passkey-demo --launch snapshot -i
 ```
+
+### 用 1Password 登录
+
+`chrome-use auth login --1password` 用 1Password 做同样的事：选账号的规则、`--item`、`--totp`、`--no-submit`、登录后再取动态码、确认登录成功，都和 `--bwu` 一样。它直接调用 PATH 里的官方 1Password 命令行 `op`：
+
+- `op item list --categories Login --format json` 列出登录条目（不含值），chrome-use 留下网址属于当前网站的那些。
+- `op run -- chrome-use …` 启动子进程，环境变量里放 `op://<库>/<条目>/username`、`…/password`，要验证码时再放 `…/one-time password?attribute=otp`；值由 `op` 填进去，本进程看不到。
+
+`op` 照常登录：经 1Password App（可能弹窗确认），或用 `OP_SERVICE_ACCOUNT_TOKEN`。登录前不读取条目，所以 `_autotype` 只有 Bitwarden 支持；条目没有一次性密码字段时，会停在验证码那一步。1Password 不能交出 passkey，`--passkey` 只能配 `--bwu`。每个主机上次登录成功的条目记在 `~/.chrome-use/1password-items.json`，和 Bitwarden 的分开。
+
+登录墙和错误提示里用哪个密码管理器：先看 `AGENT_BROWSER_PASSWORD_MANAGER=bwu|1password`，再看写了管理器名的 `AGENT_BROWSER_AUTO_LOGIN`，再看 `~/.chrome-use/config.json` 里的 `"auth": {"passwordManager": "1password"}` 和写了管理器名的 `auth.autoLogin`，都没有就用 Bitwarden。写了 `--bwu` 或 `--1password` 时总是用写明的那个。
 
 命令落到登录页，或者 `site` 适配器发现站点没登录（返回 `loginRequired: true`，或运行失败且请求拿到过 HTTP 401）时，会输出 `login wall: …`，`--json` 里带 `loginWall`。
 某个站点第一次遇到登录墙时，chrome-use 会问要不要用密码库登录：这次登录、以后这个站点都自动登录、不登录也不再问（终端里直接提问；agent 调用时 `loginWall.ask` 里给出问题和每个选项对应的命令，由 agent 转问你）。选了「以后都自动登录」后会自己登录，并把没登录的适配器命令重跑一次。`chrome-use auth autologin status` 查看，`auth autologin off <host>` 撤销。

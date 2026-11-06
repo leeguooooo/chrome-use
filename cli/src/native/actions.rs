@@ -22988,7 +22988,7 @@ fn auth_frame_origin(top_url: &str, frame_url: &str) -> Option<String> {
     if !web(&top) || !web(&frame) || (top.scheme() == "https" && frame.scheme() != "https") {
         return None;
     }
-    if !super::login_wall::related(top.host_str()?, frame.host_str()?) {
+    if !super::login_wall::same_login_site(top.host_str()?, frame.host_str()?) {
         return None;
     }
     Some(frame.origin().ascii_serialization())
@@ -27336,6 +27336,20 @@ mod tests {
             auth_frame_origin("https://example.com/", "https://accounts.google.com/x").is_none()
         );
         assert!(auth_frame_origin("https://shop.example.co.uk/", "https://evil.co.uk/").is_none());
+        // Two tenants of a shared suffix are two sites.
+        assert!(auth_frame_origin(
+            "https://alice.github.io/",
+            "https://mallory.github.io/login"
+        )
+        .is_none());
+        assert!(auth_frame_origin(
+            "https://alice.github.io/",
+            "https://www.alice.github.io/login"
+        )
+        .is_some());
+        assert!(
+            auth_frame_origin("https://github.io/", "https://mallory.github.io/login").is_none()
+        );
         assert!(auth_frame_origin("https://a.example.com/", "http://b.example.com/").is_none());
         assert!(auth_frame_origin("https://a.example.com/", "about:blank").is_none());
         assert!(

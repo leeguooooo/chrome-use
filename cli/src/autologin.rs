@@ -2,7 +2,8 @@
 //! never, or ask.
 //!
 //! A login wall (a redirect to a sign-in page, #434, or a site adapter that
-//! finds its site signed out, #479) is signed in with `auth login --bwu` only
+//! finds its site signed out, #479) is signed in with `auth login --bwu` (or
+//! `--1password`, whichever `bwu_login::Manager::configured` names) only
 //! when the user decided so. The decision is per host, stored in
 //! `~/.chrome-use/autologin.json`:
 //!
@@ -14,7 +15,7 @@
 //! it asks" is consent about one site and one vault login; `--all` exists for
 //! someone who wants it everywhere. The order, most specific first:
 //!
-//! 1. `AGENT_BROWSER_AUTO_LOGIN`: `bwu` / `always` = always, `ask` = ask,
+//! 1. `AGENT_BROWSER_AUTO_LOGIN`: `bwu` / `1password` / `always` = always, `ask` = ask,
 //!    anything else non-empty (`off`, `0`, `never`) = never. It overrides all
 //!    stored decisions, for scripts and CI.
 //! 2. The host's entry in `autologin.json`.
@@ -112,8 +113,9 @@ pub fn resolve(
 ) -> (Policy, String) {
     if let Some(v) = env.map(str::trim).filter(|v| !v.is_empty()) {
         let p = match v.to_ascii_lowercase().as_str() {
-            "bwu" | "always" => Policy::Always,
+            "always" => Policy::Always,
             "ask" => Policy::Ask,
+            v if crate::bwu_login::Manager::from_name(v).is_some() => Policy::Always,
             _ => Policy::Never,
         };
         return (p, format!("AGENT_BROWSER_AUTO_LOGIN={v}"));
@@ -147,13 +149,30 @@ fn shell_quote(s: &str) -> String {
 /// (none when the tab is already on it); `rerun` says whether the original
 /// command should be run again after signing in.
 pub fn ask_payload(host: &str, session: &str, login_url: Option<&str>, rerun: bool) -> Value {
+    ask_payload_for(
+        crate::bwu_login::Manager::configured(),
+        host,
+        session,
+        login_url,
+        rerun,
+    )
+}
+
+fn ask_payload_for(
+    manager: crate::bwu_login::Manager,
+    host: &str,
+    session: &str,
+    login_url: Option<&str>,
+    rerun: bool,
+) -> Value {
     let s = shell_quote(session);
+    let flag = manager.flag();
     let once = match login_url {
         Some(u) => format!(
-            "chrome-use --session {s} open {} && chrome-use --session {s} auth login --bwu",
+            "chrome-use --session {s} open {} && chrome-use --session {s} auth login {flag}",
             shell_quote(u)
         ),
-        None => format!("chrome-use --session {s} auth login --bwu"),
+        None => format!("chrome-use --session {s} auth login {flag}"),
     };
     let then = if rerun {
         "then run the command again"
@@ -162,9 +181,10 @@ pub fn ask_payload(host: &str, session: &str, login_url: Option<&str>, rerun: bo
     };
     json!({
         "question": format!(
-            "{host} needs you to sign in. Should chrome-use sign in with your Bitwarden \
+            "{host} needs you to sign in. Should chrome-use sign in with your {} \
              login for {host}? (1) yes, this time  (2) yes, and always for {host} from now \
-             on without asking  (3) no, and don't ask again for {host}"
+             on without asking  (3) no, and don't ask again for {host}",
+            manager.label()
         ),
         "options": [
             { "choice": "once", "label": "Sign in this time", "command": once, "then": then },
@@ -222,8 +242,9 @@ pub fn can_prompt(json_mode: bool) -> bool {
 fn prompt(host: &str) -> Choice {
     use std::io::Write;
     eprintln!(
-        "{} {host} needs you to sign in. Sign in with your Bitwarden login for it?",
-        crate::color::warning_indicator()
+        "{} {host} needs you to sign in. Sign in with your {} login for it?",
+        crate::color::warning_indicator(),
+        crate::bwu_login::Manager::configured().label()
     );
     eprintln!("  1) yes, this time");
     eprintln!("  2) yes, and always for {host} from now on (no more asking)");
@@ -386,17 +407,19 @@ pub fn run_cli(args: &[String], json_mode: bool) -> i32 {
     }
     if config_on {
         notes.push(
-            "\"auth\": {\"autoLogin\": \"bwu\"} in ~/.chrome-use/config.json signs in to every \
+            "\"auth\": {\"autoLogin\": ...} in ~/.chrome-use/config.json signs in to every \
              site without a decision here; remove it there to be asked instead"
                 .into(),
         );
     }
+    let manager = crate::bwu_login::Manager::configured();
     let data = json!({
         "file": path,
         "all": store.get("all").cloned().unwrap_or(Value::Null),
         "hosts": store.get("hosts").cloned().unwrap_or_else(|| json!({})),
         "env": env,
         "configAutoLogin": config_on,
+        "passwordManager": manager.label(),
         "notes": notes,
     });
     if json_mode {
@@ -452,6 +475,7 @@ pub fn run_cli(args: &[String], json_mode: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bwu_login::Manager;
 
     #[test]
     fn resolve_order() {
@@ -492,7 +516,8 @@ mod tests {
 
     #[test]
     fn ask_payload_gives_one_command_per_answer() {
-        let a = ask_payload(
+        let a = ask_payload_for(
+            Manager::Bitwarden,
             "z.example.com",
             "zt 1",
             Some("https://z.example.com/login?x=1&y"),
@@ -522,11 +547,27 @@ mod tests {
         assert!(t.starts_with("login wall: z.example.com needs a sign-in. Ask the user"));
         assert!(t.lines().last().unwrap().contains("do not choose for them"));
         // Already on the sign-in page: just log in.
-        let a = ask_payload("z.example.com", "default", None, false);
+        let a = ask_payload_for(Manager::Bitwarden, "z.example.com", "default", None, false);
         assert_eq!(
             a["options"][0]["command"],
             "chrome-use --session default auth login --bwu"
         );
+        // 1Password configured: its flag, and the question names it.
+        let a = ask_payload_for(
+            Manager::OnePassword,
+            "z.example.com",
+            "default",
+            None,
+            false,
+        );
+        assert_eq!(
+            a["options"][0]["command"],
+            "chrome-use --session default auth login --1password"
+        );
+        assert!(a["question"]
+            .as_str()
+            .unwrap()
+            .contains("your 1Password login"));
     }
 
     #[test]

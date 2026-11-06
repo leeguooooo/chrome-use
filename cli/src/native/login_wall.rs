@@ -98,6 +98,39 @@ pub fn related(a: &str, b: &str) -> bool {
     !a.is_empty() && site(a) == site(b)
 }
 
+/// The registrable domain of `host` when the Public Suffix List (with its
+/// private section) knows its suffix: `alice.github.io` for
+/// `www.alice.github.io`. `None` for hosts it does not know (localhost, IPs).
+pub fn registrable_domain(host: &str) -> Option<&str> {
+    let h = host.trim_end_matches('.');
+    psl::suffix(h.as_bytes())
+        .filter(|s| s.is_known())
+        .and_then(|_| psl::domain_str(h))
+}
+
+/// Whether a frame on `b` may get the credentials of a login on `a`: the same
+/// site by `related`, and never two tenants of a shared suffix the Public
+/// Suffix List names (`alice.github.io` and `mallory.github.io`).
+pub fn same_login_site(a: &str, b: &str) -> bool {
+    let known =
+        |h: &str| psl::suffix(h.trim_end_matches('.').as_bytes()).is_some_and(|s| s.is_known());
+    if a.trim_end_matches('.')
+        .eq_ignore_ascii_case(b.trim_end_matches('.'))
+    {
+        return true;
+    }
+    if !known(a) && !known(b) {
+        return related(a, b);
+    }
+    // A host the list knows is the same site only by an equal registrable
+    // domain; a bare suffix (`github.io`) has none and matches only itself.
+    related(a, b)
+        && matches!(
+            (registrable_domain(a), registrable_domain(b)),
+            (Some(x), Some(y)) if x.eq_ignore_ascii_case(y)
+        )
+}
+
 /// Whether the URL itself looks like a sign-in page.
 pub fn login_ish(u: &url::Url) -> bool {
     let host = u.host_str().unwrap_or("").to_ascii_lowercase();
@@ -205,8 +238,9 @@ pub fn report(current: &str, signal: &Signal, from_host: Option<&str>) -> Value 
 pub fn hint(host: &str) -> String {
     format!(
         "login wall: {host} redirected to its sign-in page; sign in with `chrome-use auth login \
-         --bwu` (add --item <name> if the vault has several logins for it), then continue — ask \
-         the user only if no vault item matches, 2FA needs them, or login fails"
+         {}` (add --item <name> if the vault has several logins for it), then continue — ask \
+         the user only if no vault item matches, 2FA needs them, or login fails",
+        crate::bwu_login::Manager::configured().flag()
     )
 }
 

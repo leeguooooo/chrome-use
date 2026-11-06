@@ -8,6 +8,7 @@ Login flows, session persistence, OAuth, 2FA, and authenticated browsing.
 
 - [Import Auth from Your Browser](#import-auth-from-your-browser)
 - [Credentials & Passkeys from Bitwarden](#credentials--passkeys-from-bitwarden)
+- [Credentials from 1Password](#credentials-from-1password)
 - [Persistent Profiles](#persistent-profiles)
 - [Session Persistence](#session-persistence)
 - [Basic Login Flow](#basic-login-flow)
@@ -28,6 +29,8 @@ and the host's safety rules.
 On a login page, `auth login --bwu` uses a Bitwarden account; add `--item`
 when several match. In a `--launch` browser, `--passkey` signs in with only
 a vault passkey (bwu 0.9.0+); passkeys are unsupported on the extension relay.
+`auth login --1password` does the same from 1Password (no passkeys); a
+login-wall hint names whichever one the user configured.
 
 Never print secrets or put passwords in shell arguments/history. Use an
 authorized vault and stdin, and protect saved state files as credentials.
@@ -260,9 +263,12 @@ chrome-use auth autologin off <host>|--all    # forget: ask again next time
 
 Decisions live in `~/.chrome-use/autologin.json`, per host so that agreeing
 for one site does not sign in to every site. `AGENT_BROWSER_AUTO_LOGIN`
-overrides them all (`bwu`/`always`, `ask`, or anything else for never), and
-the older `"auth": {"autoLogin": "bwu"}` in `~/.chrome-use/config.json` still
-counts as `always --all` for hosts without a decision of their own.
+overrides them all (`bwu`/`1password`/`always`, `ask`, or anything else for
+never), and the older `"auth": {"autoLogin": "bwu"}` in
+`~/.chrome-use/config.json` still counts as `always --all` for hosts without a
+decision of their own. Which password manager a wall signs in with, and which
+flag its hint and `ask` commands name: `AGENT_BROWSER_PASSWORD_MANAGER=bwu|1password`,
+else `"auth": {"passwordManager": "1password"}` in `config.json`, else Bitwarden.
 
 A site adapter that finds the site signed out (`chrome-use site …`) reports
 the same kind of wall: `login wall: <host> is not signed in (site …)` and
@@ -340,6 +346,30 @@ gets in the way. Filling through `bwu run` does not need that menu at all.
 
 This pairs with the local auth vault (`chrome-use auth`) above: keep credentials
 in Bitwarden, pull them at login time, and never put a password in shell history.
+
+## Credentials from 1Password
+
+`auth login --1password` is `auth login --bwu` with the values coming from
+1Password: the same account choice (`--item`, the item remembered per host in
+`~/.chrome-use/1password-items.json`, the one named for the host), `--totp`,
+`--no-submit`, deferred TOTP and the same `signedIn` check (no `_autotype`:
+the item is not read before the login). No `--passkey`: 1Password cannot hand a passkey out,
+so passkey sign-ins stay with `--bwu`.
+
+```bash
+chrome-use auth login --1password                 # the only 1Password login for this site
+chrome-use auth login --1password --item <id>     # one of several; the error lists them
+chrome-use auth login --1password --totp --item <id>
+```
+
+It uses the official `op` CLI on PATH: `op item list --categories Login`
+(no values; chrome-use keeps the items with a website on the page's site),
+then `op run -- chrome-use …` with `op://<vault>/<item>/username`,
+`…/password` and `…/one-time password?attribute=otp` references in the
+child's environment. Unless `op` runs with `OP_SERVICE_ACCOUNT_TOKEN`, an
+approval in the 1Password app may appear on the user's Mac; wait for it rather
+than retrying, and tell the user if it times out. An item without a one-time
+password field stops at the code step.
 
 ## Persistent Profiles
 

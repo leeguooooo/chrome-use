@@ -100,8 +100,9 @@ flag it to the user. Sending, buying, deleting, uploading or entering
 personal data needs the user's authorization. Never print secrets or put
 passwords in shell arguments (`core/authentication`). Monaco clipboard fallback is opt-in (`core/commands`). An ordinary CAPTCHA in
 an authorized task is a step to try (`core/captcha`). On a login wall
-(`loginWall`), relay its `ask` question if present, else try
-`auth login --bwu`. Already on a TOTP challenge: use `auth login --bwu --totp --item <id>`
+(`loginWall`), relay its `ask` question if present, else run the command its
+hint names (`auth login --bwu`, or `auth login --1password` when the user's
+passwords are in 1Password). Already on a TOTP challenge: add `--totp --item <id>`
 (`core/authentication`); the vault must hold its setup key. Unrecognized/short code fields stay pending. For a step only the human can do: explain it, then
 `session handoff --until-url <done-page>` in the background (it returns when they finish, resumes, prints the change). Full text, including QR
 `loginVerification`: `core/trust-boundaries`.

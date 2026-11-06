@@ -565,9 +565,10 @@ pub fn site_login_hint(
         _ if !adapter_error.is_empty() => format!("reported {adapter_error}"),
         _ => "reported that it is not signed in".to_string(),
     };
+    let flag = crate::bwu_login::Manager::configured().flag();
     let how = match login_url {
-        Some(u) => format!("sign in with `chrome-use open {u}` and `chrome-use auth login --bwu`"),
-        None => "open its sign-in page and sign in with `chrome-use auth login --bwu`".to_string(),
+        Some(u) => format!("sign in with `chrome-use open {u}` and `chrome-use auth login {flag}`"),
+        None => format!("open its sign-in page and sign in with `chrome-use auth login {flag}`"),
     };
     format!(
         "login wall: {host} is not signed in (site {spec} {why}); {how} (add --item <name> if \

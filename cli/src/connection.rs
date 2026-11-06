@@ -1630,6 +1630,9 @@ pub struct DaemonOptions<'a> {
 fn apply_daemon_env(cmd: &mut Command, session: &str, opts: &DaemonOptions) {
     cmd.env("AGENT_BROWSER_DAEMON", "1")
         .env("AGENT_BROWSER_SESSION", session)
+        // For `op` only (`auth login --1password`): the daemon never runs it,
+        // and must not keep a token that reads the user's vault.
+        .env_remove("OP_SERVICE_ACCOUNT_TOKEN")
         // Who started this daemon, for `~/.chrome-use/connect-mode.log`: a
         // detached daemon's own parent is init, which names nobody.
         .env(

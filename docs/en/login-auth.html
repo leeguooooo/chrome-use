@@ -217,6 +217,20 @@
       <p><code>--no-submit</code> fills only, skips TOTP and installs no passkey authenticator; it cannot be combined with <code>--passkey</code> or <code>--totp</code>. A signed assertion does not prove site acceptance: check the authenticated destination with <code>snapshot</code> or the site's authenticated state.</p>
       <p>A password login is reported only when the site took it: after submitting, it waits until the sign-in form is gone from a loaded page (read twice in a row) and returns <code>signedIn: true</code> with the <code>evidence</code>; when the form is still there after about 12 s it fails with <code>the sign-in was not confirmed</code>, quoting the page's own message. The Enter is checked too: on a background tab of your own Chrome a key can be accepted by Chrome and never reach the page, so nothing was submitted, and the form's sign-in button is clicked instead (<code>submittedWith</code> says so).</p>
 
+      <h2>Sign in with 1Password</h2>
+      <p><code>auth login --1password</code> does what <code>--bwu</code> does with the values coming from 1Password: the same account choice and <code>--item</code>, <code>--totp</code>, <code>--no-submit</code>, deferred TOTP and the same <code>signedIn</code> check (no <code>_autotype</code>: the item is not read before the login). The item that signed in to each host is remembered in <code>~/.chrome-use/1password-items.json</code>. 1Password cannot hand out passkeys, so <code>--passkey</code> needs <code>--bwu</code>.</p>
+      <p>It uses the official 1Password CLI, <code>op</code>, on PATH. <code>op item list --categories Login --format json</code> lists the Login items without values, and chrome-use keeps those with a website on the page's site. <code>op run -- chrome-use …</code> then starts the child with <code>op://&lt;vault&gt;/&lt;item&gt;/username</code>, <code>…/password</code> and, for a code, <code>…/one-time password?attribute=otp</code> in its environment, so the values reach only the child. <code>op</code> signs in through the 1Password app, which may ask for approval, or with <code>OP_SERVICE_ACCOUNT_TOKEN</code>. An item without a one-time password field stops at the code step.</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">auth login --1password</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open https://github.com/login
+<span class="du-prompt">$</span> chrome-use auth login <span class="du-flag">--1password</span>
+<span class="du-prompt">$</span> chrome-use auth login <span class="du-flag">--1password --totp --item</span> &lt;id&gt;</code></pre>
+      </div>
+      <p>Login walls and the hints in errors use one password manager: <code>AGENT_BROWSER_PASSWORD_MANAGER=bwu|1password</code>, else <code>"auth": {"passwordManager": "1password"}</code> in <code>~/.chrome-use/config.json</code>, else Bitwarden. <code>--bwu</code> and <code>--1password</code> always use their own.</p>
+
       <hr class="du-divider" />
 
       <!-- ============ Two-factor ======= -->
