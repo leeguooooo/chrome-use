@@ -24536,9 +24536,9 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
 /// An input whose placeholder or aria-label (`$attr`) contains `$word`, for a
 /// code field that only its text describes (Aliyun RAM's MFA box is just
 /// `请输入 6 位数字安全码`, #864). Never a password or mail field, nor one of a
-/// row of one-digit inputs. `guarded`: nor a field whose text also names a
-/// code sent by SMS or mail, a phone number or an image captcha, for words
-/// that fit those too (a six-digit code, a security code).
+/// row of one-digit inputs. `guarded`: nor a field whose placeholder or
+/// aria-label names a code sent by SMS or mail, a phone number or an image
+/// captcha, for words that fit those too (a six-digit code, a security code).
 macro_rules! auth_code_label {
     (plain $attr:literal, $word:literal) => {
         concat!(
@@ -24549,6 +24549,12 @@ macro_rules! auth_code_label {
     (guarded $attr:literal, $word:literal) => {
         concat!(
             auth_code_label!(plain $attr, $word),
+            auth_code_label!(exclude "placeholder"),
+            auth_code_label!(exclude "aria-label"),
+        )
+    };
+    (exclude $attr:literal) => {
+        concat!(
             ":not([", $attr, "*=\"短信\"]):not([", $attr, "*=\"手机\"])",
             ":not([", $attr, "*=\"邮箱\"]):not([", $attr, "*=\"邮件\"])",
             ":not([", $attr, "*=\"图形\"]):not([", $attr, "*=\"图片\"])",
@@ -24668,6 +24674,10 @@ const AUTH_CODE_HINT_SELECTORS: &[&str] = &[
     "input[placeholder*=动态码]",
     "input[aria-label*=\"mfa\" i]",
     "input[placeholder*=\"mfa\" i]",
+    "input[aria-label*=\"authenticator\" i]",
+    "input[placeholder*=\"authenticator\" i]",
+    "input[aria-label*=验证器]",
+    "input[placeholder*=验证器]",
 ];
 
 /// How long a step waits for a field the page may not have rendered yet
@@ -25023,7 +25033,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                     pending.clear();
                     submitted = true;
                     if std::mem::take(&mut code_pending) {
-                        unblocked!(check_code_accepted(&mgr.client, &scope, here).await)?;
+                        unblocked!(check_code_accepted(&mgr.client, &scope, here, &auth_otp_asked_selectors()).await)?;
                     }
                     continue;
                 }
@@ -25102,7 +25112,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                     submitted = true;
                     skip_enter = true;
                     pending.clear();
-                    unblocked!(check_code_accepted(&mgr.client, &scope, here).await)?;
+                    unblocked!(check_code_accepted(&mgr.client, &scope, here, &auth_otp_asked_selectors()).await)?;
                 } else {
                     pending.push((tag, value.encode_utf16().count()));
                     code_pending = true;
@@ -25208,7 +25218,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                         submitted = true;
                     }
                     if submitted {
-                        unblocked!(check_code_accepted(&mgr.client, &scope, here).await)?;
+                        unblocked!(check_code_accepted(&mgr.client, &scope, here, AUTH_OTP_SELECTORS).await)?;
                     }
                 }
             }
@@ -26267,13 +26277,14 @@ async fn type_code_once(
     }
 }
 
-/// After a code was submitted: if the page still asks for one, the site
-/// rejected it. Report that with the page's own message, not a selector
+/// After a code was submitted: if the page still asks for one (an empty field
+/// of `selectors`, those the code was looked for with), the site rejected it. Report that with the page's own message, not a selector
 /// error from the re-rendered form.
 async fn check_code_accepted(
     client: &super::cdp::client::CdpClient,
     scope: &AuthScope,
     origin: &str,
+    selectors: &[&str],
 ) -> Result<(), String> {
     tokio::time::sleep(Duration::from_millis(2_500)).await;
     let expression = format!(
@@ -26288,7 +26299,7 @@ async fn check_code_accepted(
             return alert ? alert.slice(0, 160) : '';
         }})()"#,
         origin = serde_json::to_string(origin).unwrap_or_default(),
-        sels = serde_json::to_string(AUTH_OTP_SELECTORS).unwrap_or_default(),
+        sels = serde_json::to_string(selectors).unwrap_or_default(),
     );
     let r = scope_eval(client, scope, &expression, true).await;
     match r {
@@ -27871,6 +27882,11 @@ mod tests {
             )],
             vec![("aria-label", "Security code sent to your email")],
             vec![("type", "text"), ("placeholder", "搜索动态")],
+            vec![("placeholder", "安全码"), ("aria-label", "短信验证")],
+            vec![
+                ("aria-label", "Security code"),
+                ("placeholder", "Sent by SMS"),
+            ],
             vec![("aria-label", "Verification code sent by SMS")],
             vec![(
                 "placeholder",
@@ -27889,6 +27905,10 @@ mod tests {
         assert!(takes_code(
             AUTH_CODE_HINT_SELECTORS,
             &[("placeholder", "请输入 6 位数字安全码")]
+        ));
+        assert!(takes_code(
+            AUTH_CODE_HINT_SELECTORS,
+            &[("aria-label", "Authenticator code")]
         ));
     }
 
