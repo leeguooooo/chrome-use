@@ -96,7 +96,7 @@ import {
 import { attachedTargetsFrom } from './attached-targets.js';
 import { executeCall, policySummary, POLICY_VERSION } from './api-passthrough.js';
 import { createSitePermissions } from './site-permissions.js';
-import { createUserTabOrganizer, USER_TAB_GROUPS_VERSION, USER_TAB_GROUPS_JOIN } from './user-tab-organizer.js';
+import { createUserTabOrganizer, USER_TAB_GROUPS_VERSION, USER_TAB_GROUPS_JOIN, USER_TAB_GROUPS_RENAME } from './user-tab-organizer.js';
 import { createTabGrants, LENT_TAB_CLOSE } from './tab-grant.js';
 import { bindingsFrom, openTabPanel, panelTabKey, PANEL_TAB_PREFIX, tabForConversation } from './panel-tabs.js';
 import { FrontTabGuard } from './front-tab-guard.js';
@@ -1955,8 +1955,9 @@ async function handleForwardCdpCommand(msg) {
     })) };
   }
 
-  if (method === 'ABExt.organizeUserTabs' || method === 'ABExt.undoOrganizeUserTabs') {
+  if (method === 'ABExt.organizeUserTabs' || method === 'ABExt.undoOrganizeUserTabs' || method === 'ABExt.renameUserTabGroups') {
     const organizer = await getUserTabOrganizer();
+    if (method === 'ABExt.renameUserTabGroups') return organizer.rename(params);
     return method === 'ABExt.organizeUserTabs' ? organizer.organize(params) : organizer.undo(params);
   }
 
@@ -1994,6 +1995,7 @@ async function handleForwardCdpCommand(msg) {
       policy: policySummary(),
       userTabGroupsVersion: USER_TAB_GROUPS_VERSION,
       userTabGroupsJoin: USER_TAB_GROUPS_JOIN,
+      userTabGroupsRename: USER_TAB_GROUPS_RENAME,
       connected: port != null,
       attachedTargets: attachedTargetsFrom(tabs.entries()),
       ownedTabs: [...ownedTabs],
