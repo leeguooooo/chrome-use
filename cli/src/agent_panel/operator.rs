@@ -46,6 +46,37 @@ fn owner_of(dir: &Path, target: &str) -> Option<String> {
     best.map(|(_, session)| session)
 }
 
+/// The session that handed `target` to the user, when the session did not
+/// create it: a tab the user lent it in the panel, or one it adopted. Its
+/// handoff record names the tab; the newest handoff wins.
+fn handed_off_at(dir: &Path, target: &str) -> Option<String> {
+    const SUFFIX: &str = ".handoff.json";
+    let mut best: Option<(u64, String)> = None;
+    for entry in fs::read_dir(dir).ok()?.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(session) = name.strip_suffix(SUFFIX) else {
+            continue;
+        };
+        let Some(record) = read_json(&entry.path()) else {
+            continue;
+        };
+        if record["target"].as_str() != Some(target) || handoff(dir, session).is_null() {
+            continue;
+        }
+        let since = record["since"].as_u64().unwrap_or(0);
+        if best.as_ref().is_none_or(|(at, _)| since > *at) {
+            best = Some((since, session.to_string()));
+        }
+    }
+    best.map(|(_, session)| session)
+}
+
+/// Who drives `target`: a session that handed it to the user first, since
+/// that is what the user is looking at, else the session that created it.
+fn driver_of(dir: &Path, target: &str) -> Option<String> {
+    handed_off_at(dir, target).or_else(|| owner_of(dir, target))
+}
+
 fn recent_actions(dir: &Path, session: &str) -> Vec<Value> {
     let records = read_json(&dir.join(format!("{session}.last-commands.json")));
     let records = records.as_ref().and_then(Value::as_array);
@@ -65,7 +96,7 @@ pub(super) fn lookup(dir: &Path, target: &str, live: &[String]) -> Result<Value,
     if !valid_target(target) {
         return Err("tabOperator requires a Chrome target id".into());
     }
-    let Some(session) = owner_of(dir, target) else {
+    let Some(session) = driver_of(dir, target) else {
         return Ok(json!({"operated": false}));
     };
     let origin = read_json(&dir.join(format!("{session}.origin.json")));
@@ -104,7 +135,7 @@ pub(super) fn handoff_done(dir: &Path, target: &str, since: &Value) -> Result<Va
     if !valid_target(target) {
         return Err("tabHandoffDone requires a Chrome target id".into());
     }
-    let session = owner_of(dir, target).ok_or("No agent session drives this tab")?;
+    let session = driver_of(dir, target).ok_or("No agent session drives this tab")?;
     let current = handoff(dir, &session);
     if current.is_null() {
         return Err("This tab is not handed off to you".into());
@@ -197,6 +228,35 @@ mod tests {
         );
         assert!(handoff_done(d.path(), "FFFF", &json!(5)).is_err());
         assert!(handoff_done(d.path(), "../x", &json!(5)).is_err());
+    }
+
+    #[test]
+    fn a_lent_tab_shows_the_handoff_of_the_session_that_handed_it_over() {
+        let d = dir();
+        // panel-c1 drives a tab the user lent it: it created nothing.
+        let record = r#"{"since":7,"target":"CD34","note":"Pay"}"#;
+        fs::write(d.path().join("panel-c1.handoff.json"), record).unwrap();
+        // Not handed off (the session took it back): the record is stale.
+        assert_eq!(lookup(d.path(), "CD34", &[]).unwrap()["operated"], false);
+        assert!(handoff_done(d.path(), "CD34", &json!(7)).is_err());
+        fs::write(d.path().join("panel-c1.owner"), "user").unwrap();
+        let v = lookup(d.path(), "CD34", &["panel-c1".into()]).unwrap();
+        assert_eq!(v["session"], "panel-c1");
+        assert_eq!(v["live"], true);
+        assert_eq!(v["handoff"]["note"], "Pay");
+        assert_eq!(
+            handoff_done(d.path(), "CD34", &json!(7)).unwrap()["session"],
+            "panel-c1"
+        );
+        assert!(d.path().join("panel-c1.handoff-done").exists());
+        // A created tab another session handed off shows that handoff.
+        fs::write(
+            d.path().join("cu-b.handoff.json"),
+            r#"{"since":9,"target":"AB12"}"#,
+        )
+        .unwrap();
+        fs::write(d.path().join("cu-b.owner"), "user").unwrap();
+        assert_eq!(lookup(d.path(), "AB12", &[]).unwrap()["session"], "cu-b");
     }
 
     #[test]
