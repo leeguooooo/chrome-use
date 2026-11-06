@@ -24558,19 +24558,121 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
     Ok(out)
 }
 
-/// Fields a one-time code goes into, most specific first.
-const AUTH_OTP_SELECTORS: &[&str] = &[
-    "input[autocomplete=one-time-code]",
-    "input[name*=otp i]",
-    "input[id*=otp i]",
-    "input[name*=totp i]",
-    "input[id*=totp i]",
-    "input[name*=mfa i]",
-    "input[name*=\"2fa\" i]",
-    "input[name*=code i]",
-    "input[id*=code i]",
-    "input[inputmode=numeric]",
-];
+/// An input whose placeholder or aria-label (`$attr`) contains `$word`, for a
+/// code field that only its text describes (Aliyun RAM's MFA box is just
+/// `请输入 6 位数字安全码`, #864). Never a password or mail field, nor one of a
+/// row of one-digit inputs. `guarded`: nor a field whose placeholder or
+/// aria-label names a code sent by SMS or mail, a phone number or an image
+/// captcha, for words that fit those too (a six-digit code, a security code).
+macro_rules! auth_code_label {
+    (plain $attr:literal, $word:literal) => {
+        concat!(
+            "input[", $attr, "*=\"", $word, "\" i]",
+            ":not([type=password]):not([type=email]):not([maxlength=\"1\"])",
+        )
+    };
+    (guarded $attr:literal, $word:literal) => {
+        concat!(
+            auth_code_label!(plain $attr, $word),
+            auth_code_label!(exclude "placeholder"),
+            auth_code_label!(exclude "aria-label"),
+        )
+    };
+    (exclude $attr:literal) => {
+        concat!(
+            ":not([", $attr, "*=\"短信\"]):not([", $attr, "*=\"手机\"])",
+            ":not([", $attr, "*=\"邮箱\"]):not([", $attr, "*=\"邮件\"])",
+            ":not([", $attr, "*=\"图形\"]):not([", $attr, "*=\"图片\"])",
+            ":not([", $attr, "*=\"sms\" i]):not([", $attr, "*=\"mail\" i])",
+            ":not([", $attr, "*=\"phone\" i]):not([", $attr, "*=\"mobile\" i])",
+            ":not([", $attr, "*=\"captcha\" i]):not([", $attr, "*=\"image\" i])",
+        )
+    };
+}
+
+/// `[$($sel),* <label selectors> $($tail),*]`: each word is looked for in the
+/// placeholder and in the aria-label, `plain` words before `guarded` ones.
+macro_rules! auth_code_selectors {
+    (
+        [$($sel:literal),* $(,)?],
+        plain [$($plain:literal),* $(,)?],
+        guarded [$($guarded:literal),* $(,)?],
+        [$($tail:literal),* $(,)?]
+    ) => {
+        [
+            $($sel,)*
+            $(
+                auth_code_label!(plain "placeholder", $plain),
+                auth_code_label!(plain "aria-label", $plain),
+            )*
+            $(
+                auth_code_label!(guarded "placeholder", $guarded),
+                auth_code_label!(guarded "aria-label", $guarded),
+            )*
+            $($tail,)*
+        ]
+    };
+}
+
+/// Fields a one-time code goes into, most specific first. A field described
+/// only by its text counts when that text names an authenticator code (an
+/// authenticator or MFA anywhere; a security or dynamic code, two-step
+/// verification or six digits unless it also names SMS, mail, a phone or a
+/// captcha). A bare "verification code" may be one sent by SMS or mail,
+/// which a TOTP must not go into.
+const AUTH_OTP_SELECTORS: &[&str] = &auth_code_selectors!(
+    [
+        "input[autocomplete=one-time-code]",
+        "input[name*=otp i]",
+        "input[id*=otp i]",
+        "input[name*=totp i]",
+        "input[id*=totp i]",
+        "input[name*=mfa i]",
+        "input[name*=\"2fa\" i]",
+        "input[name*=code i]",
+        "input[id*=code i]",
+    ],
+    plain["验证器", "authenticator", "mfa"],
+    guarded[
+        "安全码",
+        "动态码",
+        "动态口令",
+        "动态验证码",
+        "两步验证",
+        "二次验证",
+        "6 位数字",
+        "6位数字",
+        "六位数字",
+        "2fa",
+        "two-factor",
+        "security code",
+        "authentication code",
+        "one-time",
+        "6-digit",
+        "6 digit",
+        "six-digit",
+    ],
+    ["input[inputmode=numeric]"]
+);
+
+/// Fields that also take the code when it was asked for (`--totp`, or a
+/// `totp` step in the item's `_autotype`): the page is known to want the
+/// authenticator's code, so a bare "verification code" box is that one.
+const AUTH_OTP_ASKED_SELECTORS: &[&str] = &auth_code_selectors!(
+    [],
+    plain[],
+    guarded["验证码", "校验码", "verification code"],
+    []
+);
+
+/// [`AUTH_OTP_SELECTORS`] and [`AUTH_OTP_ASKED_SELECTORS`].
+fn auth_otp_asked_selectors() -> Vec<&'static str> {
+    AUTH_OTP_SELECTORS
+        .iter()
+        .chain(AUTH_OTP_ASKED_SELECTORS)
+        .copied()
+        .collect()
+}
 
 /// Fields that ask for a verification code, for saying so after a login that
 /// has no code to give (#449). Wider than [`AUTH_OTP_SELECTORS`]: Apple's
@@ -24588,8 +24690,19 @@ const AUTH_CODE_HINT_SELECTORS: &[&str] = &[
     "input[class*=security-code i]",
     "input[aria-label*=\"verification code\" i]",
     "input[aria-label*=\"security code\" i]",
+    "input[placeholder*=\"security code\" i]",
     "input[aria-label*=验证码]",
     "input[placeholder*=验证码]",
+    "input[aria-label*=安全码]",
+    "input[placeholder*=安全码]",
+    "input[aria-label*=动态码]",
+    "input[placeholder*=动态码]",
+    "input[aria-label*=\"mfa\" i]",
+    "input[placeholder*=\"mfa\" i]",
+    "input[aria-label*=\"authenticator\" i]",
+    "input[placeholder*=\"authenticator\" i]",
+    "input[aria-label*=验证器]",
+    "input[placeholder*=验证器]",
 ];
 
 /// How long a step waits for a field the page may not have rendered yet
@@ -24866,7 +24979,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             .any(|s| matches!(s.as_str(), "username" | "password" | "totp"));
         if auto || fills_fields {
             let any: Vec<&str> = if totp_only {
-                AUTH_OTP_SELECTORS.to_vec()
+                auth_otp_asked_selectors()
             } else {
                 AUTH_USER_SELECTORS.iter()
                     .chain(&["input[type=password]"])
@@ -24917,7 +25030,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             let (value, selectors, strict): (Option<&String>, Vec<&str>, bool) = match step.as_str() {
                 "username" => (username.as_ref(), user_selectors.clone(), true),
                 "password" => (password.as_ref(), vec!["input[type=password]"], true),
-                "totp" => (otp.as_ref(), AUTH_OTP_SELECTORS.to_vec(), true),
+                "totp" => (otp.as_ref(), auth_otp_asked_selectors(), true),
                 "tab" => {
                     interaction::press_key(&mgr.client, &session_id, "Tab").await?;
                     continue;
@@ -24945,7 +25058,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                     pending.clear();
                     submitted = true;
                     if std::mem::take(&mut code_pending) {
-                        unblocked!(check_code_accepted(&mgr.client, &scope, here).await)?;
+                        unblocked!(check_code_accepted(&mgr.client, &scope, here, &auth_otp_asked_selectors()).await)?;
                     }
                     continue;
                 }
@@ -25024,7 +25137,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                     submitted = true;
                     skip_enter = true;
                     pending.clear();
-                    unblocked!(check_code_accepted(&mgr.client, &scope, here).await)?;
+                    unblocked!(check_code_accepted(&mgr.client, &scope, here, &auth_otp_asked_selectors()).await)?;
                 } else {
                     pending.push((tag, value.encode_utf16().count()));
                     code_pending = true;
@@ -25130,7 +25243,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                         submitted = true;
                     }
                     if submitted {
-                        unblocked!(check_code_accepted(&mgr.client, &scope, here).await)?;
+                        unblocked!(check_code_accepted(&mgr.client, &scope, here, AUTH_OTP_SELECTORS).await)?;
                     }
                 }
             }
@@ -26191,13 +26304,14 @@ async fn type_code_once(
     }
 }
 
-/// After a code was submitted: if the page still asks for one, the site
-/// rejected it. Report that with the page's own message, not a selector
+/// After a code was submitted: if the page still asks for one (an empty field
+/// of `selectors`, those the code was looked for with), the site rejected it. Report that with the page's own message, not a selector
 /// error from the re-rendered form.
 async fn check_code_accepted(
     client: &super::cdp::client::CdpClient,
     scope: &AuthScope,
     origin: &str,
+    selectors: &[&str],
 ) -> Result<(), String> {
     tokio::time::sleep(Duration::from_millis(2_500)).await;
     let expression = format!(
@@ -26212,7 +26326,7 @@ async fn check_code_accepted(
             return alert ? alert.slice(0, 160) : '';
         }})()"#,
         origin = serde_json::to_string(origin).unwrap_or_default(),
-        sels = serde_json::to_string(AUTH_OTP_SELECTORS).unwrap_or_default(),
+        sels = serde_json::to_string(selectors).unwrap_or_default(),
     );
     let r = scope_eval(client, scope, &expression, true).await;
     match r {
@@ -27678,6 +27792,150 @@ mod tests {
         assert!(left_sign_in_page(
             login,
             "https://zentao.example.com/zentao/my.html"
+        ));
+    }
+
+    /// Whether `sel` matches an `<input>` with `attrs`. Understands only the
+    /// forms the code-field selectors use: `input`, `[a=v]`, `[a*=v]` with an
+    /// optional quoted value and `i` flag, and `:not([...])`.
+    fn input_matches(sel: &str, attrs: &[(&str, &str)]) -> bool {
+        fn attr_matches(cond: &str, attrs: &[(&str, &str)]) -> bool {
+            let (name, rest, contains) = match cond.find("*=") {
+                Some(i) => (&cond[..i], &cond[i + 2..], true),
+                None => {
+                    let i = cond
+                        .find('=')
+                        .unwrap_or_else(|| panic!("unsupported {cond}"));
+                    (&cond[..i], &cond[i + 1..], false)
+                }
+            };
+            let (value, fold) = match rest.strip_suffix(" i") {
+                Some(v) => (v, true),
+                None => (rest, false),
+            };
+            let value = value.trim_matches('"');
+            let Some((_, have)) = attrs.iter().find(|(k, _)| *k == name) else {
+                return false;
+            };
+            let (have, value) = if fold {
+                (have.to_lowercase(), value.to_lowercase())
+            } else {
+                (have.to_string(), value.to_string())
+            };
+            if contains {
+                have.contains(&value)
+            } else {
+                have == value
+            }
+        }
+        let mut rest = sel
+            .strip_prefix("input")
+            .unwrap_or_else(|| panic!("unsupported {sel}"));
+        while !rest.is_empty() {
+            let (negate, body) = match rest.strip_prefix(":not(") {
+                Some(r) => (true, r),
+                None => (false, rest),
+            };
+            let body = body
+                .strip_prefix('[')
+                .unwrap_or_else(|| panic!("unsupported {sel}"));
+            let end = body
+                .find(']')
+                .unwrap_or_else(|| panic!("unsupported {sel}"));
+            if attr_matches(&body[..end], attrs) == negate {
+                return false;
+            }
+            rest = &body[end + 1..];
+            if negate {
+                rest = rest
+                    .strip_prefix(')')
+                    .unwrap_or_else(|| panic!("unsupported {sel}"));
+            }
+        }
+        true
+    }
+
+    fn takes_code(selectors: &[&str], attrs: &[(&str, &str)]) -> bool {
+        selectors.iter().any(|s| input_matches(s, attrs))
+    }
+
+    // #864: Aliyun RAM's MFA box is described only by its text.
+    #[test]
+    fn six_digit_security_code_fields_take_the_code() {
+        let asked = auth_otp_asked_selectors();
+        for attrs in [
+            vec![("type", "text"), ("placeholder", "请输入 6 位数字安全码")],
+            vec![("aria-label", "请输入 6 位数字安全码")],
+            vec![("placeholder", "请输入MFA动态码")],
+            vec![("placeholder", "请输入虚拟 MFA 设备上的 6 位数字")],
+            vec![(
+                "placeholder",
+                "Enter the 6-digit code from your authenticator app",
+            )],
+            vec![("aria-label", "Security code")],
+            vec![("placeholder", "MFA code")],
+            vec![("placeholder", "请输入手机上验证器显示的 6 位数字")],
+            vec![(
+                "placeholder",
+                "Enter the code from your phone's authenticator app",
+            )],
+            vec![("placeholder", "请输入动态验证码")],
+            vec![("name", "otp")],
+            vec![("autocomplete", "one-time-code")],
+        ] {
+            assert!(takes_code(AUTH_OTP_SELECTORS, &attrs), "{attrs:?}");
+            assert!(takes_code(&asked, &attrs), "{attrs:?}");
+        }
+        // A bare "verification code" is taken only when the code was asked for.
+        for attrs in [
+            vec![("placeholder", "请输入验证码")],
+            vec![("aria-label", "Verification code")],
+        ] {
+            assert!(!takes_code(AUTH_OTP_SELECTORS, &attrs), "{attrs:?}");
+            assert!(takes_code(&asked, &attrs), "{attrs:?}");
+        }
+        // Never a phone number, a code sent by SMS or mail, an image captcha,
+        // a password, a search box or one of a row of one-digit inputs.
+        for attrs in [
+            vec![("type", "tel"), ("placeholder", "请输入手机号")],
+            vec![("placeholder", "请输入短信验证码")],
+            vec![("placeholder", "请输入手机验证码")],
+            vec![("placeholder", "请输入图形验证码")],
+            vec![("placeholder", "请输入邮箱验证码")],
+            vec![("placeholder", "请输入邮箱收到的 6 位数字验证码")],
+            vec![(
+                "placeholder",
+                "Enter the 6-digit code we texted to your phone",
+            )],
+            vec![("aria-label", "Security code sent to your email")],
+            vec![("type", "text"), ("placeholder", "搜索动态")],
+            vec![("placeholder", "安全码"), ("aria-label", "短信验证")],
+            vec![
+                ("aria-label", "Security code"),
+                ("placeholder", "Sent by SMS"),
+            ],
+            vec![("aria-label", "Verification code sent by SMS")],
+            vec![(
+                "placeholder",
+                "Enter the verification code sent to your email",
+            )],
+            vec![("placeholder", "Enter the characters in the image (captcha)")],
+            vec![("type", "password"), ("placeholder", "6 位数字支付密码")],
+            vec![("type", "email"), ("placeholder", "MFA account email")],
+            vec![("maxlength", "1"), ("aria-label", "Security code digit 1")],
+            vec![("type", "text"), ("placeholder", "Search")],
+            vec![("type", "text"), ("placeholder", "用户名/邮箱/手机号")],
+        ] {
+            assert!(!takes_code(&asked, &attrs), "{attrs:?}");
+        }
+        // A field the code cannot go into is still reported as asking for one.
+        assert!(takes_code(
+            AUTH_CODE_HINT_SELECTORS,
+            &[("placeholder", "请输入 6 位数字安全码")]
+        ));
+        assert!(takes_code(
+            AUTH_CODE_HINT_SELECTORS,
+            &[("aria-label", "Authenticator code")]
         ));
     }
 
