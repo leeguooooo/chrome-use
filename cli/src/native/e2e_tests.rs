@@ -8076,6 +8076,64 @@ document.getElementById('f').addEventListener('submit', (e) => {{
 }});
 </script></body></html>"#
                     ),
+                    "/to-phone-check" => format!(
+                        r#"<!doctype html><html><body>{form}<script>
+document.getElementById('f').addEventListener('submit', (e) => {{
+  e.preventDefault();
+  setTimeout(() => {{ location.href = '/fe/service/identity/verifyPhone?sid=e2e'; }}, 300);
+}});
+</script></body></html>"#
+                    ),
+                    "/to-passing-check" => format!(
+                        r#"<!doctype html><html><body>{form}<script>
+document.getElementById('f').addEventListener('submit', (e) => {{
+  e.preventDefault();
+  setTimeout(() => {{ location.href = '/identity/verifyPhone/passing'; }}, 300);
+}});
+</script></body></html>"#
+                    ),
+                    // A check that lets the browser through by itself.
+                    "/identity/verifyPhone/passing" => r#"<!doctype html><html><body><h1>Checking</h1>
+<script>setTimeout(() => { location.href = '/home'; }, 1500);</script></body></html>"#
+                        .to_string(),
+                    // A site that remembers the account: its form has only the
+                    // password, and a header search box comes before it.
+                    "/remembered" => r#"<!doctype html><html><body>
+<header><input type="text" id="search" placeholder="Search"></header>
+<form id="f"><input type="password" id="pw"><button type="submit">Log in</button></form>
+<p id="err" role="alert"></p><script>
+document.getElementById('f').addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (document.getElementById('search').value !== '' || document.getElementById('pw').value !== 'super-secret') {
+    document.getElementById('err').textContent = 'Wrong field';
+    return;
+  }
+  document.getElementById('f').remove();
+  document.body.insertAdjacentHTML('beforeend', '<h1 id="welcome">Welcome</h1>');
+});
+</script></body></html>"#
+                        .to_string(),
+                    // A header search box before a sign-in dialog whose account
+                    // field has no name, id or autocomplete to go by.
+                    "/dialog" => r#"<!doctype html><html><body>
+<header><input type="text" id="search" placeholder="Search"></header>
+<main><p>Feed</p></main>
+<div class="modal"><div class="tabs"><span>Account</span></div>
+<div class="fields"><input type="text" id="phone" placeholder="Phone">
+<input type="password" id="pw"><button id="go">Log in</button></div>
+<p id="err" role="alert"></p></div><script>
+const done = () => {
+  const ok = document.getElementById('search').value === ''
+    && document.getElementById('phone').value === 'user@example.com'
+    && document.getElementById('pw').value === 'super-secret';
+  if (!ok) { document.getElementById('err').textContent = 'Wrong field'; return; }
+  document.querySelector('.modal').remove();
+  document.body.insertAdjacentHTML('beforeend', '<h1 id="welcome">Welcome</h1>');
+};
+document.getElementById('go').addEventListener('click', done);
+document.getElementById('pw').addEventListener('keydown', (e) => { if (e.key === 'Enter') done(); });
+</script></body></html>"#
+                        .to_string(),
                     _ => "<!doctype html><html><body><h1>Home</h1></body></html>".to_string(),
                 };
                 let response = format!(
@@ -8845,6 +8903,91 @@ async fn e2e_auth_login_bwu_create_guard_covers_out_of_process_frames() {
     );
     server.abort();
     oopif_server.abort();
+}
+
+/// A sign-in form that goes away onto a phone check is not reported as a
+/// sign-in.
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_does_not_confirm_a_verification_step() {
+    let (base_url, _server) = start_bwu_confirm_server().await;
+    let mut state = DaemonState::new();
+    let launch = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&launch);
+
+    let login = bwu_login_on(&mut state, &base_url, "/to-phone-check").await;
+    assert_eq!(login["success"], false, "{login}");
+    let e = login["error"].as_str().unwrap_or_default();
+    assert!(
+        e.contains("verification step") && e.contains("verifyPhone"),
+        "{e}"
+    );
+}
+
+/// A verification page that moves on by itself to the signed-in page within
+/// the confirmation window is a sign-in.
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_confirms_after_a_passing_verification_page() {
+    let (base_url, _server) = start_bwu_confirm_server().await;
+    let mut state = DaemonState::new();
+    let launch = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&launch);
+
+    let login = bwu_login_on(&mut state, &base_url, "/to-passing-check").await;
+    assert_success(&login);
+    let data = get_data(&login);
+    assert_eq!(data["signedIn"], true, "{data}");
+    assert!(
+        data["url"].as_str().unwrap_or_default().ends_with("/home"),
+        "{data}"
+    );
+}
+
+/// A form with only the password: the username goes nowhere, least of all
+/// into a search box outside the form.
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_never_puts_the_username_outside_the_form() {
+    let (base_url, _server) = start_bwu_confirm_server().await;
+    let mut state = DaemonState::new();
+    let launch = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&launch);
+
+    let login = bwu_login_on(&mut state, &base_url, "/remembered").await;
+    assert_success(&login);
+    assert_eq!(get_data(&login)["signedIn"], true, "{login}");
+}
+
+/// The broad username guess takes the text box beside the password field, not
+/// a site search box earlier on the page.
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_skips_a_search_box_before_the_dialog() {
+    let (base_url, _server) = start_bwu_confirm_server().await;
+    let mut state = DaemonState::new();
+    let launch = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&launch);
+
+    let login = bwu_login_on(&mut state, &base_url, "/dialog").await;
+    assert_success(&login);
+    assert_eq!(get_data(&login)["signedIn"], true, "{login}");
 }
 
 /// #482: a submit that navigates is judged by where the page ends up.

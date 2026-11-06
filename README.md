@@ -546,7 +546,12 @@ is unavailable, ordinary login keeps the password flow; passkey-only login fails
 A login is reported only when the site took it: after submitting, `auth login
 --bwu` waits until the sign-in form is gone from the page and returns
 `signedIn: true` with the `evidence`, or fails with `the sign-in was not
-confirmed: …` and what the page shows instead. It checks that its Enter reached
+confirmed: …` and what the page shows instead. A form that went away onto a
+verification page (a URL path with `verify`, `challenge`, `checkpoint`,
+`captcha`, `2fa` or `mfa`, such as a phone check) fails the same way, naming
+the page. When no field matches a username selector, the broad text-box guess
+takes only the one beside the password field, never a site search box. It
+checks that its Enter reached
 the page; one that did not is replaced by a click on the form's sign-in button.
 
 Default password login fetches TOTP only after a code field appears, then continues
