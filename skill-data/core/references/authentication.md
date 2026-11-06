@@ -207,7 +207,18 @@ expires, inspect the page and use `--totp` on its authenticator challenge.
   and the tab left the sign-in page for …/my.html"). When the form is still
   there after about 12 s it fails with `the sign-in was not confirmed: …`,
   quoting the page's own message when it shows one; a page it cannot read is
-  a failure too. Pressing a key is never reported as a login.
+  a failure too. A form that went away onto a verification page (a URL path
+  with `verify`, `challenge`, `checkpoint`, `captcha`, `2fa` or `mfa`, such as
+  a phone check) and still on it after those 12 s fails with `the sign-in was
+  not confirmed`, naming that page: the code it wants comes from the user. A
+  check that moves on by itself to the signed-in page within that time is a
+  sign-in (`signedIn: true`). Pressing a key is never reported as a login.
+- **The username guess stays beside the password.** When no field matches a
+  username selector, the broad guess (`input[type=text]`) takes only a text
+  box before the password field in that field's own form or dialog, and
+  nothing when that holds none (a site that remembers the account). Outside a
+  form or dialog it looks only a few containers up, never page-wide, so a site
+  search box is never filled with the username.
 - **The Enter is checked.** The page records whether the Enter arrived. On a
   background tab of your own Chrome (extension relay) the key can be accepted
   by Chrome and never reach the page; then nothing was submitted, and the

@@ -18047,7 +18047,8 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
         Err(reason) => {
             let mut out = first;
             if let Some(Value::String(e)) = out.get_mut("error") {
-                e.push_str(&no_recovery_note(&reason));
+                let note = no_recovery_note(&reason, e);
+                e.push_str(&note);
             }
             return out;
         }
@@ -18094,9 +18095,8 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
     }
     if is_denied(&second) {
         if let Some(Value::String(e)) = second.get_mut("error") {
-            e.push_str(&no_recovery_note(
-                "the menu opened again when the command was repeated",
-            ));
+            let note = no_recovery_note("the menu opened again when the command was repeated", e);
+            e.push_str(&note);
         }
     }
     second
@@ -18120,12 +18120,34 @@ fn with_menu_warning(mut out: Value, what: &str, note: Option<String>) -> Value 
 /// The tail of a blocked command's error when chrome-use could not close the
 /// menu: a safe next step, so the agent does not reach for `close --all` or a
 /// `--launch` profile (both lose the user's tabs or session, #373).
-fn no_recovery_note(reason: &str) -> String {
+///
+/// `error` is the blocked command's error: the extension it lists (or the one
+/// password manager installed) decides the advice. Escape closes Bitwarden's
+/// inline menu, but 1Password can block the tab with a frame that shows
+/// nothing, where there is no menu to press Escape on (#872).
+fn no_recovery_note(reason: &str, error: &str) -> String {
+    no_recovery_note_for(reason, super::browser::blocking_inline_menu_manager(error))
+}
+
+fn no_recovery_note_for(reason: &str, manager: Option<&str>) -> String {
+    let next = match manager {
+        Some(name) => format!(
+            "Next: run the command again; if it is still blocked, ask the user to deal with \
+             the frame (most likely {name}'s), then repeat it. {}",
+            super::browser::inline_menu_fix(name)
+        ),
+        None => format!(
+            "Next: run the command again; if it is still blocked and a password manager's \
+             menu or save bar is visible in that tab, ask the user to close it (Escape, or a \
+             click on the page outside the field), then repeat it. If nothing is visible, an \
+             extension keeps a hidden frame in the page: the user turns that extension off \
+             for this site. For 1Password, which does this: {}",
+            super::browser::ONE_PASSWORD_HIDE
+        ),
+    };
     format!(
         "\n(No automatic recovery: {reason}.) The tab and what was typed into it are intact: \
-         do not close tabs, stop the session or relaunch Chrome over this. Next: run the \
-         command again; if it is still blocked, ask the user to press Escape in that tab \
-         (or click the page outside the field) to close the menu, then repeat it."
+         do not close tabs, stop the session or relaunch Chrome over this. {next}"
     )
 }
 
@@ -23932,13 +23954,16 @@ async fn auth_close_menu(
     if *closed >= AUTH_MENU_CLOSE_LIMIT {
         return Err(format!(
             "{cause}{}",
-            no_recovery_note("the password manager's menu kept reopening during the login")
+            no_recovery_note(
+                "the password manager's menu kept reopening during the login",
+                cause
+            )
         ));
     }
     mgr.cycle_pinned_tab_visibility(true)
         .await
         .map(|_| *closed += 1)
-        .map_err(|why| format!("{cause}{}", no_recovery_note(&why)))
+        .map_err(|why| format!("{cause}{}", no_recovery_note(&why, cause)))
 }
 
 /// After a login: a password manager's menu that opened on the next page's
@@ -23988,9 +24013,50 @@ async fn mark_usable_auth_element(
     strict: bool,
     origin: Option<&str>,
 ) -> Result<String, String> {
+    mark_auth_element(
+        client, scope, selectors, tag, timeout_ms, strict, origin, false,
+    )
+    .await
+}
+
+/// How many containers above a password field outside any form or dialog the
+/// broad username guess looks in.
+const AUTH_USER_BESIDE_PASSWORD_LEVELS: usize = 4;
+
+/// [`mark_usable_auth_element`] for the broad username guess: of the usable
+/// matches that come before the first usable password field, the last one in
+/// the password field's own form or dialog, and nothing when that holds none
+/// (a page that remembers the account shows only the password). Outside a
+/// form or dialog, the closest of the password field's containers, at most
+/// [`AUTH_USER_BESIDE_PASSWORD_LEVELS`] up and never `<body>`. A text box
+/// elsewhere on the page (a site search in the header) is never taken for the
+/// username.
+async fn mark_auth_user_beside_password(
+    client: &super::cdp::client::CdpClient,
+    scope: &AuthScope,
+    selectors: &[&str],
+    tag: &str,
+    strict: bool,
+    origin: Option<&str>,
+) -> Result<String, String> {
+    mark_auth_element(client, scope, selectors, tag, 0, strict, origin, true).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn mark_auth_element(
+    client: &super::cdp::client::CdpClient,
+    scope: &AuthScope,
+    selectors: &[&str],
+    tag: &str,
+    timeout_ms: u64,
+    strict: bool,
+    origin: Option<&str>,
+    beside_password: bool,
+) -> Result<String, String> {
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
     let sels = serde_json::to_string(selectors).unwrap_or_default();
     let origin_json = serde_json::to_string(&origin).unwrap_or_default();
+    let levels = AUTH_USER_BESIDE_PASSWORD_LEVELS;
     let expression = format!(
         r#"(() => {{
             const origin = {origin_json};
@@ -24005,6 +24071,32 @@ async fn mark_usable_auth_element(
                 if (el instanceof HTMLInputElement && el.type === 'hidden') return false;
                 return true;
             }};
+            if ({beside_password}) {{
+                const pw = [...document.querySelectorAll('input[type=password]')].find(usable);
+                if (!pw) return false;
+                const before = (a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+                const cands = [];
+                for (const sel of {sels}) {{
+                    let found;
+                    try {{ found = document.querySelectorAll(sel); }} catch (e) {{ continue; }}
+                    for (const el of found) {{
+                        if (!cands.includes(el) && usable(el) && before(el, pw)) cands.push(el);
+                    }}
+                }}
+                cands.sort((a, b) => (before(a, b) ? -1 : 1));
+                const own = pw.closest('form, dialog, [role=dialog], [role=alertdialog], [aria-modal=true]');
+                if (own) {{
+                    const inside = cands.filter((el) => own.contains(el));
+                    return inside.length ? inside[inside.length - 1] : false;
+                }}
+                let box = pw.parentElement;
+                for (let up = 0; box && up < {levels}; up++, box = box.parentElement) {{
+                    if (box === document.body || box === document.documentElement) break;
+                    const inside = cands.filter((el) => box.contains(el));
+                    if (inside.length) return inside[inside.length - 1];
+                }}
+                return false;
+            }}
             for (const sel of {sels}) {{
                 let found;
                 try {{ found = document.querySelectorAll(sel); }} catch (e) {{ continue; }}
@@ -24466,19 +24558,121 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
     Ok(out)
 }
 
-/// Fields a one-time code goes into, most specific first.
-const AUTH_OTP_SELECTORS: &[&str] = &[
-    "input[autocomplete=one-time-code]",
-    "input[name*=otp i]",
-    "input[id*=otp i]",
-    "input[name*=totp i]",
-    "input[id*=totp i]",
-    "input[name*=mfa i]",
-    "input[name*=\"2fa\" i]",
-    "input[name*=code i]",
-    "input[id*=code i]",
-    "input[inputmode=numeric]",
-];
+/// An input whose placeholder or aria-label (`$attr`) contains `$word`, for a
+/// code field that only its text describes (Aliyun RAM's MFA box is just
+/// `请输入 6 位数字安全码`, #864). Never a password or mail field, nor one of a
+/// row of one-digit inputs. `guarded`: nor a field whose placeholder or
+/// aria-label names a code sent by SMS or mail, a phone number or an image
+/// captcha, for words that fit those too (a six-digit code, a security code).
+macro_rules! auth_code_label {
+    (plain $attr:literal, $word:literal) => {
+        concat!(
+            "input[", $attr, "*=\"", $word, "\" i]",
+            ":not([type=password]):not([type=email]):not([maxlength=\"1\"])",
+        )
+    };
+    (guarded $attr:literal, $word:literal) => {
+        concat!(
+            auth_code_label!(plain $attr, $word),
+            auth_code_label!(exclude "placeholder"),
+            auth_code_label!(exclude "aria-label"),
+        )
+    };
+    (exclude $attr:literal) => {
+        concat!(
+            ":not([", $attr, "*=\"短信\"]):not([", $attr, "*=\"手机\"])",
+            ":not([", $attr, "*=\"邮箱\"]):not([", $attr, "*=\"邮件\"])",
+            ":not([", $attr, "*=\"图形\"]):not([", $attr, "*=\"图片\"])",
+            ":not([", $attr, "*=\"sms\" i]):not([", $attr, "*=\"mail\" i])",
+            ":not([", $attr, "*=\"phone\" i]):not([", $attr, "*=\"mobile\" i])",
+            ":not([", $attr, "*=\"captcha\" i]):not([", $attr, "*=\"image\" i])",
+        )
+    };
+}
+
+/// `[$($sel),* <label selectors> $($tail),*]`: each word is looked for in the
+/// placeholder and in the aria-label, `plain` words before `guarded` ones.
+macro_rules! auth_code_selectors {
+    (
+        [$($sel:literal),* $(,)?],
+        plain [$($plain:literal),* $(,)?],
+        guarded [$($guarded:literal),* $(,)?],
+        [$($tail:literal),* $(,)?]
+    ) => {
+        [
+            $($sel,)*
+            $(
+                auth_code_label!(plain "placeholder", $plain),
+                auth_code_label!(plain "aria-label", $plain),
+            )*
+            $(
+                auth_code_label!(guarded "placeholder", $guarded),
+                auth_code_label!(guarded "aria-label", $guarded),
+            )*
+            $($tail,)*
+        ]
+    };
+}
+
+/// Fields a one-time code goes into, most specific first. A field described
+/// only by its text counts when that text names an authenticator code (an
+/// authenticator or MFA anywhere; a security or dynamic code, two-step
+/// verification or six digits unless it also names SMS, mail, a phone or a
+/// captcha). A bare "verification code" may be one sent by SMS or mail,
+/// which a TOTP must not go into.
+const AUTH_OTP_SELECTORS: &[&str] = &auth_code_selectors!(
+    [
+        "input[autocomplete=one-time-code]",
+        "input[name*=otp i]",
+        "input[id*=otp i]",
+        "input[name*=totp i]",
+        "input[id*=totp i]",
+        "input[name*=mfa i]",
+        "input[name*=\"2fa\" i]",
+        "input[name*=code i]",
+        "input[id*=code i]",
+    ],
+    plain["验证器", "authenticator", "mfa"],
+    guarded[
+        "安全码",
+        "动态码",
+        "动态口令",
+        "动态验证码",
+        "两步验证",
+        "二次验证",
+        "6 位数字",
+        "6位数字",
+        "六位数字",
+        "2fa",
+        "two-factor",
+        "security code",
+        "authentication code",
+        "one-time",
+        "6-digit",
+        "6 digit",
+        "six-digit",
+    ],
+    ["input[inputmode=numeric]"]
+);
+
+/// Fields that also take the code when it was asked for (`--totp`, or a
+/// `totp` step in the item's `_autotype`): the page is known to want the
+/// authenticator's code, so a bare "verification code" box is that one.
+const AUTH_OTP_ASKED_SELECTORS: &[&str] = &auth_code_selectors!(
+    [],
+    plain[],
+    guarded["验证码", "校验码", "verification code"],
+    []
+);
+
+/// [`AUTH_OTP_SELECTORS`] and [`AUTH_OTP_ASKED_SELECTORS`].
+fn auth_otp_asked_selectors() -> Vec<&'static str> {
+    AUTH_OTP_SELECTORS
+        .iter()
+        .chain(AUTH_OTP_ASKED_SELECTORS)
+        .copied()
+        .collect()
+}
 
 /// Fields that ask for a verification code, for saying so after a login that
 /// has no code to give (#449). Wider than [`AUTH_OTP_SELECTORS`]: Apple's
@@ -24496,8 +24690,19 @@ const AUTH_CODE_HINT_SELECTORS: &[&str] = &[
     "input[class*=security-code i]",
     "input[aria-label*=\"verification code\" i]",
     "input[aria-label*=\"security code\" i]",
+    "input[placeholder*=\"security code\" i]",
     "input[aria-label*=验证码]",
     "input[placeholder*=验证码]",
+    "input[aria-label*=安全码]",
+    "input[placeholder*=安全码]",
+    "input[aria-label*=动态码]",
+    "input[placeholder*=动态码]",
+    "input[aria-label*=\"mfa\" i]",
+    "input[placeholder*=\"mfa\" i]",
+    "input[aria-label*=\"authenticator\" i]",
+    "input[placeholder*=\"authenticator\" i]",
+    "input[aria-label*=验证器]",
+    "input[placeholder*=验证器]",
 ];
 
 /// How long a step waits for a field the page may not have rendered yet
@@ -24774,7 +24979,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             .any(|s| matches!(s.as_str(), "username" | "password" | "totp"));
         if auto || fills_fields {
             let any: Vec<&str> = if totp_only {
-                AUTH_OTP_SELECTORS.to_vec()
+                auth_otp_asked_selectors()
             } else {
                 AUTH_USER_SELECTORS.iter()
                     .chain(&["input[type=password]"])
@@ -24825,7 +25030,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             let (value, selectors, strict): (Option<&String>, Vec<&str>, bool) = match step.as_str() {
                 "username" => (username.as_ref(), user_selectors.clone(), true),
                 "password" => (password.as_ref(), vec!["input[type=password]"], true),
-                "totp" => (otp.as_ref(), AUTH_OTP_SELECTORS.to_vec(), true),
+                "totp" => (otp.as_ref(), auth_otp_asked_selectors(), true),
                 "tab" => {
                     interaction::press_key(&mgr.client, &session_id, "Tab").await?;
                     continue;
@@ -24853,7 +25058,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                     pending.clear();
                     submitted = true;
                     if std::mem::take(&mut code_pending) {
-                        unblocked!(check_code_accepted(&mgr.client, &scope, here).await)?;
+                        unblocked!(check_code_accepted(&mgr.client, &scope, here, &auth_otp_asked_selectors()).await)?;
                     }
                     continue;
                 }
@@ -24876,14 +25081,15 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             let found = if auto && step == "username" {
                 // A page that remembers the account shows only the password.
                 // The broad text-input guess only next to a password field,
-                // so a one-time-code field is never taken for the username.
+                // so a one-time-code field or a site search box is never
+                // taken for the username.
                 match unblocked!(mark_usable_auth_element(&mgr.client, &scope, AUTH_USER_SELECTORS, &tag, AUTH_BWU_PROBE_MS, strict, pin).await) {
                     Ok(sel) => Some(sel),
                     Err(e) if e.starts_with("the page moved") => return Err(e),
                     Err(_) => {
                         let probe = format!("bwupw-{marker}");
                         if unblocked!(mark_usable_auth_element(&mgr.client, &scope, &["input[type=password]"], &probe, 0, true, pin).await).is_ok() {
-                            unblocked!(mark_usable_auth_element(&mgr.client, &scope, AUTH_USER_FALLBACK_SELECTORS, &tag, 0, strict, pin).await)
+                            unblocked!(mark_auth_user_beside_password(&mgr.client, &scope, AUTH_USER_FALLBACK_SELECTORS, &tag, strict, pin).await)
                                 .ok()
                         } else {
                             None
@@ -24931,7 +25137,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                     submitted = true;
                     skip_enter = true;
                     pending.clear();
-                    unblocked!(check_code_accepted(&mgr.client, &scope, here).await)?;
+                    unblocked!(check_code_accepted(&mgr.client, &scope, here, &auth_otp_asked_selectors()).await)?;
                 } else {
                     pending.push((tag, value.encode_utf16().count()));
                     code_pending = true;
@@ -25037,7 +25243,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                         submitted = true;
                     }
                     if submitted {
-                        unblocked!(check_code_accepted(&mgr.client, &scope, here).await)?;
+                        unblocked!(check_code_accepted(&mgr.client, &scope, here, AUTH_OTP_SELECTORS).await)?;
                     }
                 }
             }
@@ -25265,6 +25471,108 @@ fn left_sign_in_page(login_url: &str, url: &str) -> bool {
     moved && !super::login_wall::login_ish(&b)
 }
 
+/// Words in a path segment of a page that checks the account after the
+/// password: a code sent to the phone or mail, an identity check (a site can
+/// send a correct password on to `/service/identity/verifyPhone`).
+/// Matched as whole words of a segment (`verifyPhone` is `verify` + `phone`),
+/// so a signed-in `/challenges` page is not one.
+const VERIFY_SEGMENT_WORDS: &[&str] = &[
+    "verify",
+    "verification",
+    "challenge",
+    "checkpoint",
+    "captcha",
+    "2fa",
+    "mfa",
+    "twofactor",
+];
+
+/// The words of a path segment: split at anything not a letter or digit and
+/// where a lowercase letter meets an uppercase one, lowercased.
+fn segment_words(seg: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut prev_lower = false;
+    for c in seg.chars() {
+        if !c.is_ascii_alphanumeric() {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+            prev_lower = false;
+            continue;
+        }
+        if c.is_ascii_uppercase() && prev_lower && !word.is_empty() {
+            words.push(std::mem::take(&mut word));
+        }
+        prev_lower = c.is_ascii_lowercase();
+        word.push(c.to_ascii_lowercase());
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// The verification words in the path of `url` (`two` + `factor` counts as
+/// `twofactor`).
+fn verification_markers(url: &str) -> Vec<String> {
+    let Ok(u) = url::Url::parse(url) else {
+        return Vec::new();
+    };
+    let mut markers = Vec::new();
+    for seg in u.path_segments().into_iter().flatten() {
+        let words = segment_words(seg);
+        for w in &words {
+            if VERIFY_SEGMENT_WORDS.contains(&w.as_str()) && !markers.contains(w) {
+                markers.push(w.clone());
+            }
+        }
+        if words.windows(2).any(|p| p[0] == "two" && p[1] == "factor")
+            && !markers.iter().any(|m| m == "twofactor")
+        {
+            markers.push("twofactor".to_string());
+        }
+    }
+    markers
+}
+
+/// Whether `url` looks like a verification step rather than a signed-in page.
+#[cfg(test)]
+fn verification_page(url: &str) -> bool {
+    !verification_markers(url).is_empty()
+}
+
+/// Whether a page after the submit is a verification step: never the sign-in
+/// page itself, whose own URL may carry such a word, and only for a word the
+/// sign-in page's path does not already have (a site whose whole sign-in
+/// area lives under `/challenge/` is not on a check for that alone).
+fn verification_step(login_url: &str, url: &str) -> bool {
+    let same = match (url::Url::parse(login_url), url::Url::parse(url)) {
+        (Ok(a), Ok(b)) => {
+            a.origin() == b.origin()
+                && a.path().trim_end_matches('/') == b.path().trim_end_matches('/')
+        }
+        _ => false,
+    };
+    if same {
+        return false;
+    }
+    let before = verification_markers(login_url);
+    verification_markers(url)
+        .iter()
+        .any(|m| !before.contains(m))
+}
+
+/// The failure for a login whose form went away onto a verification page.
+fn sign_in_needs_verification(url: &str) -> String {
+    format!(
+        "auth login --bwu: the sign-in was not confirmed: the sign-in form is gone, but the tab \
+         is on {url}, which looks like a verification step (a code sent to the phone or mail, \
+         an identity check). Nothing is reported as signed in. Read the page (`snapshot -i`); \
+         a code sent by SMS or mail has to come from the user or their messages."
+    )
+}
+
 fn sign_in_evidence(login_url: &str, now: &SignInObservation) -> String {
     if left_sign_in_page(login_url, &now.url) {
         format!(
@@ -25317,7 +25625,9 @@ fn sign_in_not_confirmed(
 /// blocking after the submit. Chrome's tab record still says where the tab
 /// is, but a URL alone is not evidence of a sign-in: it is reported, never
 /// turned into one.
-fn sign_in_blocked(login_url: &str, url: &str) -> String {
+/// `denial` is the blocked read's error; it names the password manager the
+/// note's advice is for.
+fn sign_in_blocked(login_url: &str, url: &str, denial: &str) -> String {
     let place = if left_sign_in_page(login_url, url) {
         format!(
             "the tab is now on {url}, which is not the sign-in page, so it may have gone \
@@ -25330,7 +25640,7 @@ fn sign_in_blocked(login_url: &str, url: &str) -> String {
         "auth login --bwu: the sign-in was not confirmed: a password manager's frame blocks the \
          page after the submit and could not be closed, so the page could not be read; {place}. \
          Read the page (`snapshot -i`) once the frame is closed.{}",
-        no_recovery_note("the password manager's frame stayed open")
+        no_recovery_note("the password manager's frame stayed open", denial)
     )
 }
 
@@ -25360,6 +25670,8 @@ async fn confirm_sign_in(
     let deadline = started + Duration::from_millis(AUTH_BWU_CONFIRM_MS);
     let mut prev: Option<SignInObservation> = None;
     let mut last: Option<SignInObservation> = None;
+    // The verification page the last confirmed reading was on.
+    let mut verifying: Option<String> = None;
     loop {
         let top = if scope.in_frame() {
             scope_eval_once(&mgr.client, &top_scope, &top_observer, true).await
@@ -25375,7 +25687,7 @@ async fn confirm_sign_in(
                     // URL alone is not evidence of a sign-in: report it, as a
                     // failure the caller can check, not as a login.
                     let url = mgr.pinned_tab_url_from_browser().await.unwrap_or_default();
-                    return Err(sign_in_blocked(login_url, &url));
+                    return Err(sign_in_blocked(login_url, &url, e));
                 }
                 None
             }
@@ -25383,6 +25695,7 @@ async fn confirm_sign_in(
         };
         // The fields of a sign-in frame count too; a frame that went away
         // took its form with it.
+        let mut frame_url: Option<String> = None;
         if scope.in_frame() {
             if let Some(o) = now.as_mut() {
                 if let Ok(r) = scope_eval(&mgr.client, scope, &observer, true).await {
@@ -25391,18 +25704,34 @@ async fn confirm_sign_in(
                         if o.message.is_empty() {
                             o.message = f.message;
                         }
+                        frame_url = Some(f.url);
                     }
                 }
             }
         }
         if let Some(o) = &now {
             if sign_in_confirmed(login_url, prev.as_ref(), o) {
-                return Ok(sign_in_evidence(login_url, o));
+                // A verification page (the tab's, or the sign-in frame's) is
+                // watched to the deadline: one that moves on by itself to
+                // the signed-in page is not the end of the login.
+                match [Some(o.url.as_str()), frame_url.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .find(|u| verification_step(login_url, u))
+                {
+                    None => return Ok(sign_in_evidence(login_url, o)),
+                    Some(u) => verifying = Some(u.to_string()),
+                }
+            } else if o.form {
+                verifying = None;
             }
             last = Some(o.clone());
         }
         prev = now;
         if tokio::time::Instant::now() >= deadline {
+            if let Some(u) = &verifying {
+                return Err(sign_in_needs_verification(u));
+            }
             return Err(sign_in_not_confirmed(
                 last.as_ref(),
                 AUTH_BWU_CONFIRM_MS,
@@ -25975,13 +26304,14 @@ async fn type_code_once(
     }
 }
 
-/// After a code was submitted: if the page still asks for one, the site
-/// rejected it. Report that with the page's own message, not a selector
+/// After a code was submitted: if the page still asks for one (an empty field
+/// of `selectors`, those the code was looked for with), the site rejected it. Report that with the page's own message, not a selector
 /// error from the re-rendered form.
 async fn check_code_accepted(
     client: &super::cdp::client::CdpClient,
     scope: &AuthScope,
     origin: &str,
+    selectors: &[&str],
 ) -> Result<(), String> {
     tokio::time::sleep(Duration::from_millis(2_500)).await;
     let expression = format!(
@@ -25996,7 +26326,7 @@ async fn check_code_accepted(
             return alert ? alert.slice(0, 160) : '';
         }})()"#,
         origin = serde_json::to_string(origin).unwrap_or_default(),
-        sels = serde_json::to_string(AUTH_OTP_SELECTORS).unwrap_or_default(),
+        sels = serde_json::to_string(selectors).unwrap_or_default(),
     );
     let r = scope_eval(client, scope, &expression, true).await;
     match r {
@@ -27479,6 +27809,189 @@ mod tests {
         ));
     }
 
+    /// Whether `sel` matches an `<input>` with `attrs`. Understands only the
+    /// forms the code-field selectors use: `input`, `[a=v]`, `[a*=v]` with an
+    /// optional quoted value and `i` flag, and `:not([...])`.
+    fn input_matches(sel: &str, attrs: &[(&str, &str)]) -> bool {
+        fn attr_matches(cond: &str, attrs: &[(&str, &str)]) -> bool {
+            let (name, rest, contains) = match cond.find("*=") {
+                Some(i) => (&cond[..i], &cond[i + 2..], true),
+                None => {
+                    let i = cond
+                        .find('=')
+                        .unwrap_or_else(|| panic!("unsupported {cond}"));
+                    (&cond[..i], &cond[i + 1..], false)
+                }
+            };
+            let (value, fold) = match rest.strip_suffix(" i") {
+                Some(v) => (v, true),
+                None => (rest, false),
+            };
+            let value = value.trim_matches('"');
+            let Some((_, have)) = attrs.iter().find(|(k, _)| *k == name) else {
+                return false;
+            };
+            let (have, value) = if fold {
+                (have.to_lowercase(), value.to_lowercase())
+            } else {
+                (have.to_string(), value.to_string())
+            };
+            if contains {
+                have.contains(&value)
+            } else {
+                have == value
+            }
+        }
+        let mut rest = sel
+            .strip_prefix("input")
+            .unwrap_or_else(|| panic!("unsupported {sel}"));
+        while !rest.is_empty() {
+            let (negate, body) = match rest.strip_prefix(":not(") {
+                Some(r) => (true, r),
+                None => (false, rest),
+            };
+            let body = body
+                .strip_prefix('[')
+                .unwrap_or_else(|| panic!("unsupported {sel}"));
+            let end = body
+                .find(']')
+                .unwrap_or_else(|| panic!("unsupported {sel}"));
+            if attr_matches(&body[..end], attrs) == negate {
+                return false;
+            }
+            rest = &body[end + 1..];
+            if negate {
+                rest = rest
+                    .strip_prefix(')')
+                    .unwrap_or_else(|| panic!("unsupported {sel}"));
+            }
+        }
+        true
+    }
+
+    fn takes_code(selectors: &[&str], attrs: &[(&str, &str)]) -> bool {
+        selectors.iter().any(|s| input_matches(s, attrs))
+    }
+
+    // #864: Aliyun RAM's MFA box is described only by its text.
+    #[test]
+    fn six_digit_security_code_fields_take_the_code() {
+        let asked = auth_otp_asked_selectors();
+        for attrs in [
+            vec![("type", "text"), ("placeholder", "请输入 6 位数字安全码")],
+            vec![("aria-label", "请输入 6 位数字安全码")],
+            vec![("placeholder", "请输入MFA动态码")],
+            vec![("placeholder", "请输入虚拟 MFA 设备上的 6 位数字")],
+            vec![(
+                "placeholder",
+                "Enter the 6-digit code from your authenticator app",
+            )],
+            vec![("aria-label", "Security code")],
+            vec![("placeholder", "MFA code")],
+            vec![("placeholder", "请输入手机上验证器显示的 6 位数字")],
+            vec![(
+                "placeholder",
+                "Enter the code from your phone's authenticator app",
+            )],
+            vec![("placeholder", "请输入动态验证码")],
+            vec![("name", "otp")],
+            vec![("autocomplete", "one-time-code")],
+        ] {
+            assert!(takes_code(AUTH_OTP_SELECTORS, &attrs), "{attrs:?}");
+            assert!(takes_code(&asked, &attrs), "{attrs:?}");
+        }
+        // A bare "verification code" is taken only when the code was asked for.
+        for attrs in [
+            vec![("placeholder", "请输入验证码")],
+            vec![("aria-label", "Verification code")],
+        ] {
+            assert!(!takes_code(AUTH_OTP_SELECTORS, &attrs), "{attrs:?}");
+            assert!(takes_code(&asked, &attrs), "{attrs:?}");
+        }
+        // Never a phone number, a code sent by SMS or mail, an image captcha,
+        // a password, a search box or one of a row of one-digit inputs.
+        for attrs in [
+            vec![("type", "tel"), ("placeholder", "请输入手机号")],
+            vec![("placeholder", "请输入短信验证码")],
+            vec![("placeholder", "请输入手机验证码")],
+            vec![("placeholder", "请输入图形验证码")],
+            vec![("placeholder", "请输入邮箱验证码")],
+            vec![("placeholder", "请输入邮箱收到的 6 位数字验证码")],
+            vec![(
+                "placeholder",
+                "Enter the 6-digit code we texted to your phone",
+            )],
+            vec![("aria-label", "Security code sent to your email")],
+            vec![("type", "text"), ("placeholder", "搜索动态")],
+            vec![("placeholder", "安全码"), ("aria-label", "短信验证")],
+            vec![
+                ("aria-label", "Security code"),
+                ("placeholder", "Sent by SMS"),
+            ],
+            vec![("aria-label", "Verification code sent by SMS")],
+            vec![(
+                "placeholder",
+                "Enter the verification code sent to your email",
+            )],
+            vec![("placeholder", "Enter the characters in the image (captcha)")],
+            vec![("type", "password"), ("placeholder", "6 位数字支付密码")],
+            vec![("type", "email"), ("placeholder", "MFA account email")],
+            vec![("maxlength", "1"), ("aria-label", "Security code digit 1")],
+            vec![("type", "text"), ("placeholder", "Search")],
+            vec![("type", "text"), ("placeholder", "用户名/邮箱/手机号")],
+        ] {
+            assert!(!takes_code(&asked, &attrs), "{attrs:?}");
+        }
+        // A field the code cannot go into is still reported as asking for one.
+        assert!(takes_code(
+            AUTH_CODE_HINT_SELECTORS,
+            &[("placeholder", "请输入 6 位数字安全码")]
+        ));
+        assert!(takes_code(
+            AUTH_CODE_HINT_SELECTORS,
+            &[("aria-label", "Authenticator code")]
+        ));
+    }
+
+    // A correct password that lands on a phone check is not a sign-in.
+    #[test]
+    fn verification_step_is_not_a_sign_in() {
+        assert!(verification_page(
+            "https://account.example.com/fe/service/identity/verifyPhone?sid=x"
+        ));
+        assert!(verification_page("https://example.com/account/2fa"));
+        assert!(verification_page("https://example.com/checkpoint/"));
+        assert!(!verification_page("https://example.com/dashboard"));
+        assert!(!verification_page("https://example.com/?next=/verify"));
+        assert!(!verification_page("https://example.com/challenges"));
+        assert!(!verification_page("https://example.com/verifying-the-news"));
+        assert!(verification_page(
+            "https://example.com/account/verify-email"
+        ));
+        assert!(verification_page("https://example.com/two-factor"));
+        assert!(verification_page("https://example.com/TwoFactorAuth"));
+        // Only a page after the sign-in page counts, never the sign-in page.
+        let login = "https://example.com/challenge/login";
+        assert!(!verification_step(login, login));
+        assert!(verification_step(
+            login,
+            "https://example.com/challenge/verifyPhone"
+        ));
+        // A word the sign-in page's path already has is not new evidence.
+        assert!(!verification_step(
+            login,
+            "https://example.com/challenge/home"
+        ));
+        assert!(verification_step(
+            "https://example.com/login",
+            "https://example.com/challenge/home"
+        ));
+        assert_eq!(segment_words("verifyPhone"), ["verify", "phone"]);
+        assert_eq!(segment_words("2FA-Setup"), ["2fa", "setup"]);
+        let e = sign_in_needs_verification("https://example.com/2fa");
+        assert!(e.contains("not confirmed") && e.contains("/2fa"), "{e}");
+    }
+
     #[test]
     fn sign_in_observation_parses_the_page_reading() {
         let v = json!(r#"{"state":"complete","form":false,"message":"","url":"https://x/home"}"#);
@@ -27498,10 +28011,13 @@ mod tests {
     #[test]
     fn a_blocked_page_after_the_submit_is_not_a_login() {
         let login = "https://zentao.example.com/zentao/user-login.html";
-        let moved = sign_in_blocked(login, "https://zentao.example.com/zentao/my.html");
+        let id = "aeblfdkhhhdcdjpifhhbdiojplfjncoa";
+        let denial = format!("debugger_access_denied: x {id} (chrome://extensions/?id={id})");
+        let moved = sign_in_blocked(login, "https://zentao.example.com/zentao/my.html", &denial);
         assert!(moved.contains("the sign-in was not confirmed"), "{moved}");
         assert!(moved.contains("may have gone through"), "{moved}");
-        let stayed = sign_in_blocked(login, login);
+        assert!(moved.contains("Hide on this page"), "{moved}");
+        let stayed = sign_in_blocked(login, login, &denial);
         assert!(stayed.contains("still on"), "{stayed}");
         assert!(stayed.contains("do not close tabs"), "{stayed}");
         // The login wall tries such a login once more from the sign-in page.
@@ -27553,14 +28069,41 @@ mod tests {
 
     #[test]
     fn no_recovery_note_gives_a_safe_next_step() {
-        let note = no_recovery_note("the menu was still open");
-        assert!(note.contains("the menu was still open"), "{note}");
-        assert!(note.contains("Escape"), "{note}");
-        assert!(note.contains("do not close tabs"), "{note}");
-        assert!(
-            !note.contains("--all") && !note.contains("--launch"),
-            "{note}"
+        for manager in [None, Some("Bitwarden"), Some("1Password"), Some("LastPass")] {
+            let note = no_recovery_note_for("the menu was still open", manager);
+            assert!(note.contains("the menu was still open"), "{note}");
+            assert!(note.contains("do not close tabs"), "{note}");
+            assert!(
+                !note.contains("--all") && !note.contains("--launch"),
+                "{note}"
+            );
+        }
+        let unknown = no_recovery_note_for("x", None);
+        assert!(unknown.contains("Escape"), "{unknown}");
+        assert!(unknown.contains("If nothing is visible"), "{unknown}");
+        assert!(unknown.contains("Hide on this page"), "{unknown}");
+        let bitwarden = no_recovery_note_for("x", Some("Bitwarden"));
+        assert!(bitwarden.contains("Escape"), "{bitwarden}");
+    }
+
+    /// #872: 1Password's frame showed nothing, and the note told the user to
+    /// press Escape on a menu that was not there.
+    #[test]
+    fn no_recovery_note_for_1password_names_it_and_skips_escape() {
+        let id = "aeblfdkhhhdcdjpifhhbdiojplfjncoa";
+        let error = format!(
+            "debugger_access_denied: blocked. Frames of other extensions open in this browser: \
+             {id} (chrome://extensions/?id={id}); ..."
         );
+        let note = no_recovery_note(
+            "the pinned tab was not created by this session, and chrome-use does not switch \
+             the user's own tabs",
+            &error,
+        );
+        assert!(note.contains("most likely 1Password's"), "{note}");
+        assert!(note.contains("Hide on this page"), "{note}");
+        assert!(!note.contains("press Escape"), "{note}");
+        assert!(!note.contains("closes it with"), "{note}");
     }
 
     #[test]

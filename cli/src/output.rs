@@ -5148,7 +5148,9 @@ Bitwarden Login Options:
   A signed assertion is not proof of login; verify the authenticated destination.
   A password login succeeds only once the sign-in form is gone from the page
   (signedIn + evidence); a form still there ~12s after the submit fails with
-  "the sign-in was not confirmed". An Enter that never reached the page is
+  "the sign-in was not confirmed", as does a form that went away onto a
+  verification page (a path with verify, challenge, checkpoint, captcha, 2fa
+  or mfa). An Enter that never reached the page is
   replaced by a click on the form's sign-in button (submittedWith says so).
   Login walls: a navigation that lands on a sign-in page, or a site adapter
   that finds the site signed out, prints `login wall: …` (JSON: loginWall).
@@ -6760,7 +6762,10 @@ Core Commands:
   loop on reattach. Listed extension names/IDs are browser-wide candidates,
   not confirmed blockers of this tab. Verify before disabling one. A password manager's inline menu is closed automatically
   (a brief tab switch, or a blank tab in the minimized agent window for a
-  background tab in your own window); otherwise follow the error's next step.
+  background tab in your own window); otherwise follow the error's next step,
+  which names the password manager when it can. 1Password can keep a frame in
+  the page with nothing visible: there is no menu to press Escape on; the
+  error says how to hide 1Password on that page.
   Close a visible autofill menu or save-login bar first. Candidate lookup
   failure preserves the original denial; hiding may not dismiss a save bar.
   Relay lifecycle waits stop early on a confirmed access denial; ordinary
