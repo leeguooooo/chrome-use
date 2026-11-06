@@ -269,6 +269,38 @@ fn data_str(resp: crate::connection::Response, key: &str) -> Result<String, Stri
         .to_string())
 }
 
+/// The Chrome target id of the tab the session drives. The panel finds the
+/// handoff by it on a tab the session did not create: one the user lent it or
+/// one it adopted. Best effort.
+fn active_target(session: &str) -> Option<String> {
+    let resp = send_command(json!({"id": "hw-tab", "action": "tab_list"}), session).ok()?;
+    if !resp.success {
+        return None;
+    }
+    resp.data?["tabs"]
+        .as_array()?
+        .iter()
+        .find(|t| t["active"] == json!(true))
+        .and_then(|t| t["targetId"].as_str())
+        .map(str::to_string)
+}
+
+/// `session handoff` without `--wait`, before the session changes hands:
+/// record its tab so the panel shows the handoff there. A handoff already in
+/// place keeps its record; a session with no browser has no tab to record.
+pub fn record_plain(session: &str) {
+    if ownership::owner_of(session) == Owner::User || !crate::connection::daemon_ready(session) {
+        return;
+    }
+    let Some(target) = active_target(session) else {
+        return;
+    };
+    let _ = std::fs::write(
+        baseline_path(session),
+        json!({"since": now_ms(), "target": target}).to_string(),
+    );
+}
+
 /// One quick isolated-world check of a text / selector condition. `Ok(false)`
 /// is "not yet"; `Err` is a real failure.
 fn check_page_condition(session: &str, until: &Until) -> Result<bool, String> {
@@ -386,17 +418,20 @@ pub fn run(session: &str, spec: &WaitSpec, on_handed_off: impl FnOnce()) -> Resu
     // Baseline: reuse the one from an earlier `--wait` of this same handoff,
     // so re-waiting after a timeout still reports the change from the start.
     let already_handed_off = ownership::owner_of(session) == Owner::User;
-    let stored: Option<PageState> = if already_handed_off {
+    // A plain `session handoff` recorded only its tab and since, no page.
+    let prior: Option<Value> = if already_handed_off {
         std::fs::read_to_string(baseline_path(session))
             .ok()
             .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-            .map(|v| PageState {
-                url: v["url"].as_str().unwrap_or_default().to_string(),
-                title: v["title"].as_str().map(str::to_string),
-            })
     } else {
         None
     };
+    let stored: Option<PageState> = prior.as_ref().and_then(|v| {
+        Some(PageState {
+            url: v["url"].as_str()?.to_string(),
+            title: v["title"].as_str().map(str::to_string),
+        })
+    });
     let fresh_baseline = stored.is_none();
     let baseline = match stored {
         Some(b) => b,
@@ -411,13 +446,15 @@ pub fn run(session: &str, spec: &WaitSpec, on_handed_off: impl FnOnce()) -> Resu
         }
     };
     // The panel's handoff card reads the note and condition from here; a
-    // re-wait keeps the original baseline and since, with its own ask.
-    let since = std::fs::read_to_string(baseline_path(session))
-        .ok()
-        .filter(|_| !fresh_baseline)
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+    // re-wait keeps the original baseline, since and tab, with its own ask.
+    let since = prior
+        .as_ref()
         .and_then(|v| v["since"].as_u64())
         .unwrap_or_else(now_ms);
+    let target = prior
+        .as_ref()
+        .and_then(|v| v["target"].as_str().map(str::to_string))
+        .or_else(|| active_target(session));
     std::fs::write(
         baseline_path(session),
         json!({
@@ -426,6 +463,7 @@ pub fn run(session: &str, spec: &WaitSpec, on_handed_off: impl FnOnce()) -> Resu
             "since": since,
             "until": spec.until.as_ref().map(Until::describe),
             "note": spec.note,
+            "target": target,
         })
         .to_string(),
     )

@@ -1023,6 +1023,7 @@ fn run_session_ownership(
         Some("name") => run_session_name(session, json_mode, zh),
         Some("last") => run_session_last(session, json_mode),
         Some("handoff") => {
+            handoff_wait::record_plain(session);
             if let Err(e) = hand_off(session) {
                 if json_mode {
                     print_json_error(format!("handoff failed: {e}"));
