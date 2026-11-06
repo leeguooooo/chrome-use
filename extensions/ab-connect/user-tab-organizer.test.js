@@ -124,3 +124,13 @@ test('rename touches only groups this organizer made, still titled as reviewed, 
  const undone=await f.organizer.undo({version:1,id:'test-request-1',reviewed:true});
  assert.deepEqual(undone.undoResults.map(x=>x.status),['restored','restored']);
 });
+test('a rename that fails does not lose the undo record of one made before it',async()=>{
+ const f=fixture();await f.organizer.organize(f.request);
+ const update=f.env.groups.update;
+ f.env.groups.update=async(id,props)=>{if(props.title==='Z')throw Error('gone');return update(id,props);};
+ const r=await f.organizer.rename({version:1,id:'rename-request-2',reviewed:true,groups:[
+   {groupId:100,from:'Research',to:'研究'},{groupId:100,from:'研究',to:'Z'}]});
+ assert.deepEqual(r.results.map(x=>x.status),['renamed','failed']);
+ const undone=await f.organizer.undo({version:1,id:'test-request-1',reviewed:true});
+ assert.deepEqual(undone.undoResults.map(x=>x.status),['restored','restored']);
+});

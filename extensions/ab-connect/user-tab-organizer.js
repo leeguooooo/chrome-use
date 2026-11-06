@@ -157,7 +157,8 @@ export function createUserTabOrganizer(env) {
         // Only a group this organizer made, still titled as the caller saw it: never a user's or an agent's group.
         let info; try { info = await env.groups.get(g.groupId); } catch {}
         if (!mine.has(g.groupId) || !info || info.title !== g.from) { results.push({groupId: g.groupId, status: 'skipped'}); continue; }
-        await env.groups.update(g.groupId, {title: g.to});
+        // A failed update must not abandon the renames before it: their undo records are saved below.
+        try { await env.groups.update(g.groupId, {title: g.to}); } catch { results.push({groupId: g.groupId, status: 'failed'}); continue; }
         // Undo checks a group still carries the title its batch gave it; carry the new one over.
         for (const r of Object.values(records)) for (const t of r.originals || []) if (t.newGroupId === g.groupId && t.groupName === g.from) t.groupName = g.to;
         let after; try { after = await env.groups.get(g.groupId); } catch {}
