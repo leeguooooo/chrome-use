@@ -5,6 +5,9 @@ export const USER_TAB_GROUPS_VERSION = 1;
 // Reported alongside the version (kept at 1 so existing callers still match): a group may name
 // `groupId`, a group this organizer created earlier, to add tabs to it.
 export const USER_TAB_GROUPS_JOIN = true;
+// Also reported: a group this organizer created can be renamed when its title is still the one
+// the caller saw (Thermo renaming groups it titled with a bare host to the site's name).
+export const USER_TAB_GROUPS_RENAME = true;
 const COLORS = new Set(['grey','blue','red','yellow','green','pink','purple','cyan','orange']);
 const KEY = 'thermo_tab_organizer_v1';
 // Native groups this organizer created. Only these can be joined, so a chrome-use agent group
@@ -141,6 +144,28 @@ export function createUserTabOrganizer(env) {
         await save(records);
       }
       record.phase='complete'; await save(records); return response(record);
+    }); },
+    rename(request) { return serial(async () => {
+      if (request?.version !== 1 || !UUID.test(request?.id || '') || request?.reviewed !== true ||
+          !Array.isArray(request.groups) || !request.groups.length || request.groups.length > 100)
+        throw Error('renameTabGroups: version, request id and 1–100 reviewed groups are required');
+      const mine = await created(); const records = await load(); const results = [];
+      for (const g of request.groups) {
+        if (!Number.isInteger(g?.groupId) || typeof g.from !== 'string' || typeof g.to !== 'string' || !g.to.trim() || g.to.length > 100) {
+          results.push({groupId: g?.groupId ?? -1, status: 'invalid'}); continue;
+        }
+        // Only a group this organizer made, still titled as the caller saw it: never a user's or an agent's group.
+        let info; try { info = await env.groups.get(g.groupId); } catch {}
+        if (!mine.has(g.groupId) || !info || info.title !== g.from) { results.push({groupId: g.groupId, status: 'skipped'}); continue; }
+        // A failed update must not abandon the renames before it: their undo records are saved below.
+        try { await env.groups.update(g.groupId, {title: g.to}); } catch { results.push({groupId: g.groupId, status: 'failed'}); continue; }
+        // Undo checks a group still carries the title its batch gave it; carry the new one over.
+        for (const r of Object.values(records)) for (const t of r.originals || []) if (t.newGroupId === g.groupId && t.groupName === g.from) t.groupName = g.to;
+        let after; try { after = await env.groups.get(g.groupId); } catch {}
+        results.push({groupId: g.groupId, status: after?.title === g.to ? 'renamed' : 'unconfirmed'});
+      }
+      await save(records);
+      return {version: 1, id: request.id, results};
     }); },
     undo(request) { return serial(async () => {
       if (request?.version !== 1 || !UUID.test(request?.id || '') || request?.reviewed !== true)
