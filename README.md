@@ -449,6 +449,7 @@ Regular Human pointer clicks now use a seeded 60–200ms settling pause after mo
 | `chrome-use session list` · `session stop [name]` | Manage session workers |
 | `chrome-use auth login --bwu [--item <id\|name>]` | Fill the current login page from Bitwarden; handles TOTP and supported passkey second factors |
 | `chrome-use auth login --bwu --passkey` | Sign in with a vault passkey in `--launch` mode (bwu 0.9.0+) |
+| `chrome-use auth login --1password [--item <id\|name>]` | Fill the current login page from 1Password (username, password and TOTP; no passkeys) |
 | `chrome-use status` | Relay transport, recent debugger timeouts, duplicate installs, extension version skew, and session health. With ab-connect 0.5.50+, host disconnect schedules a first retry after 1s, with repeated failures backing off to 30s. Dead-socket command/event waits fail; old replies are not replayed. Failed sends/lost replies report action_outcome_unknown with retryable: false. Check the page before repeating an interrupted write |
 | `chrome-use close --forget-untracked` | Explicit recovery for stale ownership records with no tab identity. Requires two valid registry absence reads; reports ownershipDropped and does not claim those Chrome tabs were closed. Cannot be combined with a tab or --all |
 
@@ -593,6 +594,31 @@ chrome-use --session passkey-demo --launch snapshot -i
 
 Check the authenticated destination after login. A passkey assertion means
 Chrome signed the request; it does not establish that the site accepted it.
+
+### 1Password login
+
+`chrome-use auth login --1password` does the same with 1Password: the same
+account choice, `--item`, `--totp`, `--no-submit`, deferred TOTP and sign-in
+confirmation. It uses the official 1Password CLI, `op`, on PATH:
+
+- `op item list --categories Login --format json` lists the Login items (no
+  values); chrome-use keeps those with a website on the page's site.
+- `op run -- chrome-use …` starts the child with `op://<vault>/<item>/username`,
+  `…/password` and, for a code, `…/one-time password?attribute=otp` in its
+  environment; `op` puts the values there, so this process never sees them.
+
+`op` signs in as usual: through the 1Password app (which may ask for approval),
+or with `OP_SERVICE_ACCOUNT_TOKEN`. The item is not read before the login, so
+`_autotype` is Bitwarden-only, and an item without a one-time password field
+stops at the code step. 1Password cannot hand out passkeys:
+`--passkey` needs `--bwu`. The item that signed in to each host is remembered in
+`~/.chrome-use/1password-items.json`, apart from Bitwarden's.
+
+Login walls and the hints in errors use one password manager:
+`AGENT_BROWSER_PASSWORD_MANAGER=bwu|1password`, else an
+`AGENT_BROWSER_AUTO_LOGIN` that names one, else `"auth": {"passwordManager":
+"1password"}` in `~/.chrome-use/config.json`, else an `auth.autoLogin` that
+names one, else Bitwarden. `--bwu` and `--1password` always pick their own.
 
 A command that lands on a sign-in page, or a `site` adapter that finds the site
 signed out (`loginRequired: true`, or a failed run after HTTP 401), prints

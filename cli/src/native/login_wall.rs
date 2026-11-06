@@ -98,6 +98,39 @@ pub fn related(a: &str, b: &str) -> bool {
     !a.is_empty() && site(a) == site(b)
 }
 
+/// The registrable domain of `host` when the Public Suffix List (with its
+/// private section) knows its suffix: `alice.github.io` for
+/// `www.alice.github.io`. `None` for hosts it does not know (localhost, IPs).
+pub fn registrable_domain(host: &str) -> Option<&str> {
+    let h = host.trim_end_matches('.');
+    psl::suffix(h.as_bytes())
+        .filter(|s| s.is_known())
+        .and_then(|_| psl::domain_str(h))
+}
+
+/// Whether a frame on `b` may get the credentials of a login on `a`: the same
+/// site by `related`, and never two tenants of a shared suffix the Public
+/// Suffix List names (`alice.github.io` and `mallory.github.io`).
+pub fn same_login_site(a: &str, b: &str) -> bool {
+    let known =
+        |h: &str| psl::suffix(h.trim_end_matches('.').as_bytes()).is_some_and(|s| s.is_known());
+    if a.trim_end_matches('.')
+        .eq_ignore_ascii_case(b.trim_end_matches('.'))
+    {
+        return true;
+    }
+    if !known(a) && !known(b) {
+        return related(a, b);
+    }
+    // A host the list knows is the same site only by an equal registrable
+    // domain; a bare suffix (`github.io`) has none and matches only itself.
+    related(a, b)
+        && matches!(
+            (registrable_domain(a), registrable_domain(b)),
+            (Some(x), Some(y)) if x.eq_ignore_ascii_case(y)
+        )
+}
+
 /// Whether the URL itself looks like a sign-in page.
 pub fn login_ish(u: &url::Url) -> bool {
     let host = u.host_str().unwrap_or("").to_ascii_lowercase();
@@ -189,7 +222,12 @@ pub fn classify(current: &str, intended: Option<&str>) -> Option<Signal> {
 
 /// The `loginWall` object and the one-line stderr hint. `from_host` is the
 /// site the caller was on (or asked for), when known.
-pub fn report(current: &str, signal: &Signal, from_host: Option<&str>) -> Value {
+pub fn report(
+    current: &str,
+    signal: &Signal,
+    from_host: Option<&str>,
+    manager: crate::bwu_login::Manager,
+) -> Value {
     let host = http_url(current)
         .and_then(|u| u.host_str().map(str::to_string))
         .unwrap_or_default();
@@ -198,15 +236,16 @@ pub fn report(current: &str, signal: &Signal, from_host: Option<&str>) -> Value 
         "url": current,
         "returnTo": signal.return_to,
         "host": host,
-        "hint": hint(named),
+        "hint": hint(named, manager),
     })
 }
 
-pub fn hint(host: &str) -> String {
+pub fn hint(host: &str, manager: crate::bwu_login::Manager) -> String {
     format!(
         "login wall: {host} redirected to its sign-in page; sign in with `chrome-use auth login \
-         --bwu` (add --item <name> if the vault has several logins for it), then continue — ask \
-         the user only if no vault item matches, 2FA needs them, or login fails"
+         {}` (add --item <name> if the vault has several logins for it), then continue — ask \
+         the user only if no vault item matches, 2FA needs them, or login fails",
+        manager.flag()
     )
 }
 
@@ -444,12 +483,23 @@ mod tests {
         );
         // Even without knowing where we came from: the way back is on the URL.
         assert_eq!(s(cur, None), Some(Strength::Strong));
-        let r = report(cur, &sig, Some("dash.cloudflare.com"));
+        let r = report(
+            cur,
+            &sig,
+            Some("dash.cloudflare.com"),
+            crate::bwu_login::Manager::Bitwarden,
+        );
         assert_eq!(r["host"], "dash.cloudflare.com");
         assert!(r["hint"]
             .as_str()
             .unwrap()
             .starts_with("login wall: dash.cloudflare.com redirected"));
+        assert!(r["hint"].as_str().unwrap().contains("auth login --bwu`"));
+        let r = report(cur, &sig, None, crate::bwu_login::Manager::OnePassword);
+        assert!(r["hint"]
+            .as_str()
+            .unwrap()
+            .contains("auth login --1password`"));
     }
 
     #[test]

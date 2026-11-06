@@ -1,9 +1,15 @@
-//! `auth login --bwu`: log in to the current page with an account from the
-//! user's Bitwarden vault, through bitwarden-use (`bwu`, 0.7.0+).
+//! `auth login --bwu` / `auth login --1password`: log in to the current page
+//! with an account from the user's password manager: Bitwarden through
+//! bitwarden-use (`bwu`, 0.7.0+), or 1Password through the official `op` CLI
+//! on PATH. 1Password cannot hand out passkeys, so `--passkey` stays with
+//! Bitwarden.
 //!
 //! Outside `bwu run` this CLI picks the account (masked:
-//! `bwu login --domain <url> --list`, then the item's `_autotype` steps), and
-//! runs the same command line again under `bwu run`, which authorizes access
+//! `bwu login --domain <url> --list`, then the item's `_autotype` steps; for
+//! 1Password `op item list --categories Login`, matched against the page's
+//! host here, with no values and no probe of the item), and runs the same
+//! command line again under `bwu run` (or `op run`, with `op://` references
+//! in its environment), which authorizes access
 //! for the item and puts the values in the child's environment only. The
 //! child ([`parse`] with `CU_BWU_CHILD` set) reads them, drops them from the
 //! environment before a daemon can inherit them, and sends one secret
@@ -21,7 +27,144 @@ use crate::commands::ParseError;
 use crate::flags::Flags;
 
 const USAGE: &str =
-    "chrome-use auth login --bwu [--item <id|name>] [--passkey | --totp] [--no-submit]";
+    "chrome-use auth login --bwu|--1password [--item <id|name>] [--passkey | --totp] [--no-submit]";
+
+/// The password manager `auth login` takes the account from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Manager {
+    /// `--bwu`: bitwarden-use.
+    Bitwarden,
+    /// `--1password`: the official 1Password CLI, `op`.
+    OnePassword,
+}
+
+impl Manager {
+    /// `bwu` / `bitwarden`, or `1password` / `op`, as in
+    /// `AGENT_BROWSER_PASSWORD_MANAGER` or `auth.passwordManager`.
+    pub fn from_name(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "bwu" | "bitwarden" | "bitwarden-use" => Some(Self::Bitwarden),
+            "1password" | "op" | "onepassword" => Some(Self::OnePassword),
+            _ => None,
+        }
+    }
+
+    /// The one sign-ins and login-wall hints use when no flag names one:
+    /// `AGENT_BROWSER_PASSWORD_MANAGER`, else an `AGENT_BROWSER_AUTO_LOGIN`
+    /// that names one (`1password` turns auto-login on and picks it), else
+    /// `"auth": {"passwordManager"}` in `~/.chrome-use/config.json`, else an
+    /// `auth.autoLogin` that names one, else Bitwarden.
+    pub fn configured() -> Self {
+        Self::resolve(
+            Self::from_env().map(Self::name),
+            crate::report::user_config().as_ref(),
+        )
+    }
+
+    /// The manager this process's environment names:
+    /// `AGENT_BROWSER_PASSWORD_MANAGER`, else an `AGENT_BROWSER_AUTO_LOGIN`
+    /// that names one.
+    pub fn from_env() -> Option<Self> {
+        let env = |k: &str| std::env::var(k).ok().and_then(|v| Self::from_name(&v));
+        env("AGENT_BROWSER_PASSWORD_MANAGER").or_else(|| env("AGENT_BROWSER_AUTO_LOGIN"))
+    }
+
+    /// [`Self::configured`] for a command the daemon runs: the environment
+    /// part comes from the CLI that sent it (`_passwordManager`, empty when
+    /// its environment names none), since the daemon's own is frozen at
+    /// spawn. A command from an older CLI without the field uses the
+    /// daemon's.
+    pub fn for_command(cmd: &Value) -> Self {
+        match cmd.get("_passwordManager").and_then(Value::as_str) {
+            Some(env) => Self::resolve(Some(env), crate::report::user_config().as_ref()),
+            None => Self::configured(),
+        }
+    }
+
+    fn resolve(env: Option<&str>, config: Option<&Value>) -> Self {
+        if let Some(m) = env.and_then(Self::from_name) {
+            return m;
+        }
+        let auth = |key: &str| {
+            config.and_then(|c| {
+                c.get("auth")
+                    .and_then(|a| a.get(key))
+                    .or_else(|| c.get(format!("auth.{key}")))
+                    .and_then(Value::as_str)
+                    .and_then(Self::from_name)
+            })
+        };
+        auth("passwordManager")
+            .or_else(|| auth("autoLogin"))
+            .unwrap_or(Self::Bitwarden)
+    }
+
+    pub fn flag(self) -> &'static str {
+        match self {
+            Self::Bitwarden => "--bwu",
+            Self::OnePassword => "--1password",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bitwarden => "Bitwarden",
+            Self::OnePassword => "1Password",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Bitwarden => "bwu",
+            Self::OnePassword => "1password",
+        }
+    }
+
+    /// One value of an item for the child: `bwu run --env VAR=bw:<id>#<field>`,
+    /// or `VAR=op://<vault>/<id>/<field>` in `op run`'s environment.
+    fn env_ref(self, var: &str, vault: Option<&str>, id: &str, field: &str) -> String {
+        match self {
+            Self::Bitwarden => format!("{var}=bw:{id}#{field}"),
+            Self::OnePassword => {
+                let field = match field {
+                    "totp" => "one-time password?attribute=otp",
+                    f => f.strip_prefix("custom:").unwrap_or(f),
+                };
+                format!("{var}=op://{}/{id}/{field}", vault.unwrap_or_default())
+            }
+        }
+    }
+
+    fn missing(self) -> &'static str {
+        match self {
+            Self::Bitwarden => {
+                "auth login --bwu needs bitwarden-use (bwu) on PATH. Install it with: curl -fsSL \
+                 https://raw.githubusercontent.com/leeguooooo/bitwarden-use/main/install.sh | sh"
+            }
+            Self::OnePassword => {
+                "auth login --1password needs the 1Password CLI (`op`) on PATH, signed in \
+                 through the 1Password app or OP_SERVICE_ACCOUNT_TOKEN: \
+                 https://developer.1password.com/docs/cli/get-started/"
+            }
+        }
+    }
+
+    /// The manager's CLI on PATH.
+    fn find(self) -> Option<std::path::PathBuf> {
+        find_on_path(match self {
+            Self::Bitwarden => &["bwu", "bitwarden-use"],
+            Self::OnePassword => &["op"],
+        })
+    }
+
+    /// `~/.chrome-use/<file>`: the item last used to sign in to each host.
+    fn remembered_file(self) -> &'static str {
+        match self {
+            Self::Bitwarden => "bwu-items.json",
+            Self::OnePassword => "1password-items.json",
+        }
+    }
+}
 
 /// Set on the child so it fills instead of running `bwu` again.
 const CHILD: &str = "CU_BWU_CHILD";
@@ -41,6 +184,7 @@ const ITEM: &str = "CU_BWU_ITEM";
 const ITEM_ID: &str = "CU_BWU_ITEM_ID";
 
 struct Opts {
+    manager: Manager,
     item: Option<String>,
     no_submit: bool,
     passkey: bool,
@@ -49,15 +193,23 @@ struct Opts {
 
 fn opts(args: &[&str]) -> Result<Opts, ParseError> {
     let mut o = Opts {
+        manager: Manager::Bitwarden,
         item: None,
         no_submit: false,
         passkey: false,
         totp: false,
     };
+    if args.contains(&"--bwu") && args.contains(&"--1password") {
+        return Err(ParseError::InvalidValue {
+            message: "pick one of --bwu and --1password".to_string(),
+            usage: USAGE,
+        });
+    }
     let mut i = 0;
     while i < args.len() {
         match args[i] {
             "--bwu" => {}
+            "--1password" => o.manager = Manager::OnePassword,
             "--no-submit" => o.no_submit = true,
             "--passkey" => o.passkey = true,
             "--totp" => o.totp = true,
@@ -65,7 +217,7 @@ fn opts(args: &[&str]) -> Result<Opts, ParseError> {
                 o.item = Some(
                     args.get(i + 1)
                         .ok_or_else(|| ParseError::MissingArguments {
-                            context: "auth login --bwu --item".to_string(),
+                            context: format!("auth login {} --item", o.manager.flag()),
                             usage: USAGE,
                         })?
                         .to_string(),
@@ -75,14 +227,23 @@ fn opts(args: &[&str]) -> Result<Opts, ParseError> {
             other => {
                 return Err(ParseError::InvalidValue {
                     message: format!(
-                        "auth login --bwu takes no credential name ('{other}'): the account \
-                         comes from your Bitwarden vault for the current page"
+                        "auth login {} takes no credential name ('{other}'): the account \
+                         comes from your {} vault for the current page",
+                        o.manager.flag(),
+                        o.manager.label()
                     ),
                     usage: USAGE,
                 })
             }
         }
         i += 1;
+    }
+    if o.passkey && o.manager == Manager::OnePassword {
+        return Err(ParseError::InvalidValue {
+            message: "--passkey needs --bwu: 1Password cannot hand a passkey to chrome-use"
+                .to_string(),
+            usage: USAGE,
+        });
     }
     if o.passkey && o.no_submit {
         return Err(ParseError::InvalidValue {
@@ -99,17 +260,19 @@ fn opts(args: &[&str]) -> Result<Opts, ParseError> {
     Ok(o)
 }
 
-/// Parse `auth login --bwu …` (the args after `login`).
+/// Parse `auth login --bwu …` or `auth login --1password …` (the args after
+/// `login`).
 pub fn parse(args: &[&str], id: &str) -> Result<Value, ParseError> {
     let o = opts(args)?;
     if std::env::var_os(CHILD).is_none() {
         return Ok(json!({
-            "id": id, "action": "auth_login_bwu_probe",
+            "id": id, "action": "auth_login_bwu_probe", "manager": o.manager.name(),
             "item": o.item, "noSubmit": o.no_submit, "passkey": o.passkey, "totpOnly": o.totp,
         }));
     }
-    // Under `bwu run`: take the values and drop them from the environment
-    // before a daemon this command starts can inherit them.
+    // Under `bwu run` / `op run`: take the values and drop them from the
+    // environment before a daemon this command starts can inherit them, along
+    // with the service account token `op run` passes through.
     let take = |k: &str| {
         let v = std::env::var(k).ok().filter(|v| !v.is_empty());
         std::env::remove_var(k);
@@ -136,6 +299,9 @@ pub fn parse(args: &[&str], id: &str) -> Result<Value, ParseError> {
     let item = take(ITEM);
     let item_id = take(ITEM_ID);
     std::env::remove_var(CHILD);
+    if o.manager == Manager::OnePassword {
+        std::env::remove_var("OP_SERVICE_ACCOUNT_TOKEN");
+    }
     let origin = origin.ok_or_else(|| ParseError::InvalidValue {
         message: format!("auth login --bwu: {ORIGIN} is not set; run it without {CHILD}"),
         usage: USAGE,
@@ -158,7 +324,8 @@ pub fn parse(args: &[&str], id: &str) -> Result<Value, ParseError> {
         )
         .collect();
     Ok(json!({
-        "id": id, "action": "auth_login_bwu", "secret": true, "secrets": secrets,
+        "id": id, "action": "auth_login_bwu", "manager": o.manager.name(),
+        "secret": true, "secrets": secrets,
         "username": username, "password": password, "otp": otp, "fields": fields,
         "steps": steps, "origin": origin, "item": item, "itemId": item_id, "noSubmit": o.no_submit,
         "passkeys": passkeys, "passkeyFirst": o.passkey, "totpOnly": o.totp, "deferOtp": defer_otp,
@@ -177,10 +344,10 @@ fn fail(flags: &Flags, msg: &str) -> i32 {
     1
 }
 
-/// `bwu`, else `bitwarden-use`, from PATH.
-fn find_bwu() -> Option<std::path::PathBuf> {
+/// The first of `names` on PATH.
+fn find_on_path(names: &[&str]) -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH")?;
-    for name in ["bwu", "bitwarden-use"] {
+    for name in names {
         for dir in std::env::split_paths(&path) {
             let p = dir.join(name);
             if p.is_file() {
@@ -191,14 +358,21 @@ fn find_bwu() -> Option<std::path::PathBuf> {
     None
 }
 
-/// Run `bwu` and parse its stdout as JSON. Its stderr (unlock prompts,
-/// update notices) goes to ours.
-fn bwu_json(bwu: &std::path::Path, args: &[&str]) -> Result<Value, String> {
-    let out = Command::new(bwu)
+/// Run `bwu` / `op` and parse its stdout as JSON. Its stderr (unlock
+/// prompts, update notices) goes to ours.
+fn helper_json(bin: &std::path::Path, args: &[&str]) -> Result<Value, String> {
+    let tool = bin
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "bwu".into());
+    let out = Command::new(bin)
         .args(args)
+        // A tool that asks on stdin would wait on ours forever (and `op`
+        // reads piped stdin as a list of items).
+        .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .output()
-        .map_err(|e| format!("couldn't run {}: {e}", bwu.display()))?;
+        .map_err(|e| format!("couldn't run {}: {e}", bin.display()))?;
     let stderr = String::from_utf8_lossy(&out.stderr);
     if !out.status.success() {
         if stderr.contains("unexpected argument '--list'") {
@@ -208,7 +382,7 @@ fn bwu_json(bwu: &std::path::Path, args: &[&str]) -> Result<Value, String> {
             );
         }
         return Err(format!(
-            "`bwu {}` failed: {}",
+            "`{tool} {}` failed: {}",
             args.join(" "),
             stderr.trim()
         ));
@@ -216,7 +390,7 @@ fn bwu_json(bwu: &std::path::Path, args: &[&str]) -> Result<Value, String> {
     eprint!("{stderr}");
     serde_json::from_slice(&out.stdout).map_err(|e| {
         format!(
-            "`bwu {}` printed something that is not JSON: {e}",
+            "`{tool} {}` printed something that is not JSON: {e}",
             args.join(" ")
         )
     })
@@ -273,22 +447,27 @@ fn choose(
     item: Option<&str>,
     hosts: &LoginHosts,
     remembered: Option<&str>,
+    manager: Manager,
 ) -> Result<(Value, Option<String>), String> {
     let host = hosts.page.as_str();
     let line = |c: &Value| {
         format!(
-            "  --item {}  {}{}  (used {}×{}){}",
+            "  --item {}  {}{}{}{}",
             c["id"].as_str().unwrap_or(""),
             c["name"].as_str().unwrap_or(""),
             c["folder"]
                 .as_str()
                 .map(|f| format!(" [{f}]"))
                 .unwrap_or_default(),
-            c["uses"],
-            c["last_used"]
-                .as_str()
-                .map(|t| format!(", last {t}"))
-                .unwrap_or_default(),
+            // `op item list` keeps no use count: just when it last changed.
+            match (&c["uses"], c["last_used"].as_str(), c["updated"].as_str()) {
+                (Value::Null, _, Some(t)) => format!("  (updated {t})"),
+                (Value::Null, _, None) => String::new(),
+                (uses, last, _) => format!(
+                    "  (used {uses}×{})",
+                    last.map(|t| format!(", last {t}")).unwrap_or_default()
+                ),
+            },
             hosts
                 .named_for(c)
                 .map(|why| format!("  ← {why}"))
@@ -367,8 +546,9 @@ fn choose(
     match picked.as_slice() {
         [one] => Ok(((*one).clone(), why)),
         [] if candidates.is_empty() => Err(format!(
-            "no login in your Bitwarden vault matches {host}. Save one with this site's URL, or \
-             fill the form by hand."
+            "no login in your {} vault matches {host}. Save one with this site's URL, or \
+             fill the form by hand.",
+            manager.label()
         )),
         [] => Err(format!(
             "no login for {host} has the id or name '{}'. Logins for this site:\n{}",
@@ -384,15 +564,70 @@ fn choose(
     }
 }
 
-/// `~/.chrome-use/bwu-items.json`: the vault item last used to sign in to
-/// each host, by id. Only ids and names, never a value.
-fn remembered_path() -> Option<std::path::PathBuf> {
-    Some(dirs::home_dir()?.join(".chrome-use").join("bwu-items.json"))
+/// The Login items of `op item list --categories Login --format json` with a
+/// website on the page's site (its registrable domain by the Public Suffix
+/// List, private suffixes included: `alice.github.io` is not
+/// `mallory.github.io`; the exact host when the list does not know it), most
+/// recently changed first, in the shape [`choose`] reads. `op item list`
+/// carries no field values.
+fn op_candidates(items: &Value, host: &str) -> Vec<Value> {
+    let url_host = |href: &str| {
+        let href = href.trim();
+        let full = if href.contains("://") {
+            href.to_string()
+        } else {
+            format!("https://{href}")
+        };
+        url::Url::parse(&full)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+    };
+    let host = host.to_ascii_lowercase();
+    let mut out: Vec<Value> = items
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|i| i["category"] == "LOGIN")
+        .filter(|i| {
+            i["urls"].as_array().into_iter().flatten().any(|u| {
+                u["href"]
+                    .as_str()
+                    .and_then(url_host)
+                    .is_some_and(|h| same_site(&h, &host))
+            })
+        })
+        .map(|i| {
+            json!({
+                "id": i["id"], "name": i["title"], "folder": i["vault"]["name"],
+                "vault": i["vault"]["id"], "updated": i["updated_at"],
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| b["updated"].as_str().cmp(&a["updated"].as_str()));
+    out
+}
+
+/// Whether two hosts share a registrable domain the Public Suffix List knows
+/// (or are the same host).
+fn same_site(a: &str, b: &str) -> bool {
+    use crate::native::login_wall::registrable_domain as site;
+    a.trim_end_matches('.') == b.trim_end_matches('.')
+        || matches!((site(a), site(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// `~/.chrome-use/bwu-items.json` (`1password-items.json`): the vault item
+/// last used to sign in to each host, by id. Only ids and names, never a value.
+fn remembered_path(manager: Manager) -> Option<std::path::PathBuf> {
+    Some(
+        dirs::home_dir()?
+            .join(".chrome-use")
+            .join(manager.remembered_file()),
+    )
 }
 
 /// The item id last used to sign in to `host`.
-fn remembered_item(host: &str) -> Option<String> {
-    let store: Value = std::fs::read_to_string(remembered_path()?)
+fn remembered_item(manager: Manager, host: &str) -> Option<String> {
+    let store: Value = std::fs::read_to_string(remembered_path(manager)?)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())?;
     store["hosts"][host.to_ascii_lowercase()]["id"]
@@ -412,15 +647,19 @@ pub fn remember_if_signed_in(cmd: &Value, data: Option<&Value>) {
         .as_str()
         .and_then(|o| url::Url::parse(o).ok())
         .and_then(|u| u.host_str().map(str::to_string));
+    let manager = cmd["manager"]
+        .as_str()
+        .and_then(Manager::from_name)
+        .unwrap_or(Manager::Bitwarden);
     if let (Some(host), Some(id)) = (host, cmd["itemId"].as_str()) {
-        remember_item(&host, id);
+        remember_item(manager, &host, id);
     }
 }
 
 /// Remember that `id` signed in to `host`. Best effort: a failure to write
 /// only means the next login asks again.
-fn remember_item(host: &str, id: &str) {
-    let Some(path) = remembered_path() else {
+fn remember_item(manager: Manager, host: &str, id: &str) {
+    let Some(path) = remembered_path(manager) else {
         return;
     };
     let mut store: Value = std::fs::read_to_string(&path)
@@ -471,7 +710,7 @@ fn frame_hosts(frames: &[Value], page_host: &str) -> Vec<String> {
         };
         if matches!(u.scheme(), "http" | "https")
             && !h.eq_ignore_ascii_case(page_host)
-            && crate::native::login_wall::related(&h, &page_host.to_ascii_lowercase())
+            && crate::native::login_wall::same_login_site(&h, &page_host.to_ascii_lowercase())
             && !out.contains(&h)
         {
             out.push(h);
@@ -481,7 +720,7 @@ fn frame_hosts(frames: &[Value], page_host: &str) -> Vec<String> {
 }
 
 /// The parent half: choose the account, then run this command line again
-/// under `bwu run`. Returns the exit code.
+/// under the helper's `run`. Returns the exit code.
 pub fn run(flags: &Flags, cmd: &Value) -> i32 {
     match run_inner(flags, cmd) {
         Ok(code) => code,
@@ -489,10 +728,14 @@ pub fn run(flags: &Flags, cmd: &Value) -> i32 {
     }
 }
 
-/// The account chosen for the tab's page and how `bwu run` hands its values
-/// to the child.
+/// The account chosen for the tab's page and how `bwu run` / `op run` hands
+/// its values to the child.
 struct Prepared {
-    bwu: std::path::PathBuf,
+    manager: Manager,
+    /// `bwu` or `op`.
+    tool: std::path::PathBuf,
+    /// The 1Password vault (id) the item is in, for its `op://` references.
+    vault: Option<String>,
     envs: Vec<String>,
     origin: String,
     host: String,
@@ -509,15 +752,13 @@ struct Prepared {
 /// its values the login needs.
 fn prepare(
     flags: &Flags,
+    manager: Manager,
     item_arg: Option<&str>,
     passkey_first: bool,
     no_submit: bool,
     totp_only: bool,
 ) -> Result<Prepared, String> {
-    let bwu = find_bwu().ok_or(
-        "auth login --bwu needs bitwarden-use (bwu) on PATH. Install it with: curl -fsSL \
-         https://raw.githubusercontent.com/leeguooooo/bitwarden-use/main/install.sh | sh",
-    )?;
+    let tool = manager.find().ok_or(manager.missing())?;
     let resp = crate::connection::send_command(
         json!({ "id": crate::commands::gen_id(), "action": "url" }),
         &flags.session,
@@ -543,8 +784,20 @@ fn prepare(
     let origin = parsed.origin().ascii_serialization();
     let host = parsed.host_str().unwrap_or("").to_string();
 
-    let listed = bwu_json(&bwu, &["login", "--domain", &url, "--list"])?;
-    let candidates = listed["candidates"].as_array().cloned().unwrap_or_default();
+    let candidates = match manager {
+        Manager::Bitwarden => helper_json(&tool, &["login", "--domain", &url, "--list"])?
+            ["candidates"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
+        Manager::OnePassword => op_candidates(
+            &helper_json(
+                &tool,
+                &["item", "list", "--categories", "Login", "--format", "json"],
+            )?,
+            &host,
+        ),
+    };
     // Sign-in frames matter only when the name has to settle it.
     let hosts = if item_arg.is_none() && candidates.len() > 1 {
         LoginHosts {
@@ -558,12 +811,20 @@ fn prepare(
         &candidates,
         item_arg,
         &hosts,
-        remembered_item(&host).as_deref(),
+        remembered_item(manager, &host).as_deref(),
+        manager,
     )?;
     let id = chosen["id"].as_str().unwrap_or_default().to_string();
     let name = chosen["name"].as_str().unwrap_or_default().to_string();
-    // Masked: which values the item has, and its `_autotype` steps.
-    let item = bwu_json(&bwu, &["login", "--domain", &url, "--name", &id])?;
+    let vault = chosen["vault"].as_str().map(str::to_string);
+    let item = match manager {
+        // Masked: which values the item has, and its `_autotype` steps.
+        Manager::Bitwarden => helper_json(&tool, &["login", "--domain", &url, "--name", &id])?,
+        // No probe: `op item get` would hand this process the item's values.
+        // A Login item always has a username and a password field; a code
+        // the item lacks makes `op run` fail, which is reported.
+        Manager::OnePassword => json!({ "username": "", "password": "", "code": "" }),
+    };
     let mut steps: Option<Vec<String>> = item["autotype"].as_array().map(|a| {
         a.iter()
             .filter_map(|s| s.as_str().map(str::to_string))
@@ -571,7 +832,7 @@ fn prepare(
     });
     if totp_only {
         if !item["code"].is_string() {
-            return Err(format!("the vault item '{name}' has no TOTP seed. Add the authenticator's setup key or otpauth URI to this login's authenticator field in Bitwarden; storing only the password is not enough. SMS, email and push codes need their own source."));
+            return Err(format!("the vault item '{name}' has no TOTP seed. Add the authenticator's setup key or otpauth URI to this login's one-time password field in {}; storing only the password is not enough. SMS, email and push codes need their own source.", manager.label()));
         }
         steps = Some(vec!["totp".into(), "enter".into()]);
     }
@@ -586,22 +847,22 @@ fn prepare(
     }
     let mut envs: Vec<String> = Vec::new();
     if passkey_count > 0 && !no_submit && !totp_only {
-        envs.push(format!("{PASSKEYS}=bw:{id}#passkeys"));
+        envs.push(manager.env_ref(PASSKEYS, vault.as_deref(), &id, "passkeys"));
     }
     // Signing in with the passkey needs nothing else from the vault.
     let wants = |step: &str| !passkey_first && wants(step);
     if has("username") && wants("username") {
-        envs.push(format!("{USER}=bw:{id}#username"));
+        envs.push(manager.env_ref(USER, vault.as_deref(), &id, "username"));
     }
     if has("password") && wants("password") {
-        envs.push(format!("{PASS}=bw:{id}#password"));
+        envs.push(manager.env_ref(PASS, vault.as_deref(), &id, "password"));
     }
     // Default multi-step login: do not spend a code's lifetime filling the
     // password. Explicit _autotype retains its caller-defined sequence.
     let defer_otp =
         has("code") && wants("totp") && !no_submit && steps.is_none() && !envs.is_empty();
     if has("code") && wants("totp") && !no_submit && !defer_otp {
-        envs.push(format!("{OTP}=bw:{id}#totp"));
+        envs.push(manager.env_ref(OTP, vault.as_deref(), &id, "totp"));
     }
     let custom: Vec<String> = steps
         .iter()
@@ -610,7 +871,12 @@ fn prepare(
         .filter(|_| !passkey_first)
         .collect();
     for (i, field) in custom.iter().enumerate() {
-        envs.push(format!("CU_BWU_F{i}=bw:{id}#custom:{field}"));
+        envs.push(manager.env_ref(
+            &format!("CU_BWU_F{i}"),
+            vault.as_deref(),
+            &id,
+            &format!("custom:{field}"),
+        ));
     }
     if envs.is_empty() {
         return Err(format!(
@@ -618,7 +884,9 @@ fn prepare(
         ));
     }
     Ok(Prepared {
-        bwu,
+        manager,
+        tool,
+        vault,
         envs,
         origin,
         host,
@@ -631,14 +899,24 @@ fn prepare(
     })
 }
 
-/// `bwu run --env … -- chrome-use <child_args>`: the child fills the page.
+/// `bwu run --env … -- chrome-use <child_args>` (or `op run --
+/// chrome-use …` with the `op://` references in its environment): the child
+/// fills the page.
 fn child_command(p: &Prepared, child_args: &[std::ffi::OsString]) -> Result<Command, String> {
     let me =
         std::env::current_exe().map_err(|e| format!("couldn't find chrome-use itself: {e}"))?;
-    let mut run = Command::new(&p.bwu);
+    let mut run = Command::new(&p.tool);
     run.arg("run");
     for e in &p.envs {
-        run.arg("--env").arg(e);
+        match p.manager {
+            Manager::Bitwarden => {
+                run.arg("--env").arg(e);
+            }
+            Manager::OnePassword => {
+                let (var, reference) = e.split_once('=').unwrap_or((e, ""));
+                run.env(var, reference);
+            }
+        }
     }
     run.arg("--").arg(me).args(child_args);
     run.env(CHILD, "1")
@@ -659,16 +937,27 @@ fn child_command(p: &Prepared, child_args: &[std::ffi::OsString]) -> Result<Comm
 }
 
 fn run_inner(flags: &Flags, cmd: &Value) -> Result<i32, String> {
+    let manager = cmd["manager"]
+        .as_str()
+        .and_then(Manager::from_name)
+        .unwrap_or(Manager::Bitwarden);
     let p = prepare(
         flags,
+        manager,
         cmd["item"].as_str(),
         cmd["passkey"].as_bool().unwrap_or(false),
         cmd["noSubmit"].as_bool().unwrap_or(false),
         cmd["totpOnly"].as_bool().unwrap_or(false),
     )?;
     if !flags.json {
+        let approval = match p.manager {
+            Manager::Bitwarden => "bwu asks for Touch ID unless require_touch_id is off",
+            Manager::OnePassword => {
+                "the 1Password app asks for approval unless op signs in with a service account"
+            }
+        };
         eprintln!(
-            "logging in to {} as vault item '{}' (bwu asks for Touch ID unless require_touch_id is off)",
+            "logging in to {} as vault item '{}' ({approval})",
             p.host, p.name
         );
     }
@@ -676,7 +965,8 @@ fn run_inner(flags: &Flags, cmd: &Value) -> Result<i32, String> {
     // line above is not: an agent must be able to see which account it was.
     if let Some(why) = &p.why {
         eprintln!(
-            "auth login --bwu: used vault item '{}' ({why}); pass --item for another",
+            "auth login {}: used vault item '{}' ({why}); pass --item for another",
+            p.manager.flag(),
             p.name
         );
     }
@@ -706,19 +996,19 @@ fn login_exit_code(response: &crate::connection::Response) -> i32 {
 }
 
 /// Whether login walls are signed in automatically (#434):
-/// `AGENT_BROWSER_AUTO_LOGIN=bwu`, or `"auth": {"autoLogin": "bwu"}` (or
-/// `"auth.autoLogin": "bwu"`) in `~/.chrome-use/config.json`. A set env var
-/// wins either way.
+/// `AGENT_BROWSER_AUTO_LOGIN=bwu` (or `1password`), or `"auth": {"autoLogin":
+/// "bwu"}` (or `"auth.autoLogin"`, either manager) in
+/// `~/.chrome-use/config.json`. A set env var wins either way.
 pub fn auto_login_enabled(env: Option<&str>, config: Option<&Value>) -> bool {
     if let Some(v) = env.map(str::trim).filter(|v| !v.is_empty()) {
-        return v.eq_ignore_ascii_case("bwu");
+        return Manager::from_name(v).is_some();
     }
     config.is_some_and(|c| {
         c.get("auth")
             .and_then(|a| a.get("autoLogin"))
             .or_else(|| c.get("auth.autoLogin"))
             .and_then(Value::as_str)
-            .is_some_and(|v| v.eq_ignore_ascii_case("bwu"))
+            .is_some_and(|v| Manager::from_name(v).is_some())
     })
 }
 
@@ -733,21 +1023,31 @@ fn login_response(
     let output = child_command(p, &args)?
         .stderr(std::process::Stdio::inherit())
         .output()
-        .map_err(|e| format!("couldn't run {}: {e}", p.bwu.display()))?;
+        .map_err(|e| format!("couldn't run {}: {e}", p.tool.display()))?;
     let response = String::from_utf8_lossy(&output.stdout)
         .lines()
         .rev()
         .find_map(|line| serde_json::from_str::<crate::connection::Response>(line).ok());
+    let flag = p.manager.flag();
     let mut response = response.ok_or_else(|| {
+        let hint = match p.manager {
+            Manager::Bitwarden => "",
+            // `op run` stops before the child when a reference does not resolve.
+            Manager::OnePassword if p.envs.iter().any(|e| e.starts_with(OTP)) => {
+                " (op could not read the item's values: see its error above; for a code \
+                 the item needs a one-time password field)"
+            }
+            Manager::OnePassword => " (op could not read the item's values: see its error above)",
+        };
         format!(
-            "auth login --bwu exited with {} without a result",
+            "auth login {flag} exited with {} without a result{hint}",
             output.status
         )
     })?;
     let pending_site_gate = output.status.code() == Some(3) && login_exit_code(&response) == 3;
     if !output.status.success() && response.success && !pending_site_gate {
         response.success = false;
-        response.error = Some(format!("auth login --bwu exited with {}", output.status));
+        response.error = Some(format!("auth login {flag} exited with {}", output.status));
     }
     Ok(response)
 }
@@ -769,8 +1069,10 @@ fn run_login_phases(
         return Ok(first);
     }
     let otp = Prepared {
-        bwu: p.bwu.clone(),
-        envs: vec![format!("{OTP}=bw:{}#totp", p.id)],
+        manager: p.manager,
+        tool: p.tool.clone(),
+        vault: p.vault.clone(),
+        envs: vec![p.manager.env_ref(OTP, p.vault.as_deref(), &p.id, "totp")],
         origin: p.origin.clone(),
         host: p.host.clone(),
         id: p.id.clone(),
@@ -814,7 +1116,7 @@ fn run_login_child(p: &Prepared, args: &[std::ffi::OsString]) -> Result<(), Stri
     if !response.success {
         return Err(response
             .error
-            .unwrap_or_else(|| "auth login --bwu failed".into()));
+            .unwrap_or_else(|| format!("auth login {} failed", p.manager.flag())));
     }
     if let Some(data) = response.data.as_ref() {
         if data["confirmation_required"] == true {
@@ -832,7 +1134,10 @@ fn run_login_child(p: &Prepared, args: &[std::ffi::OsString]) -> Result<(), Stri
             return Ok(());
         }
     }
-    Err("auth login --bwu did not confirm a sign-in".into())
+    Err(format!(
+        "auth login {} did not confirm a sign-in",
+        p.manager.flag()
+    ))
 }
 
 /// Whether an `auth login --bwu` failure is worth one more try from the
@@ -850,11 +1155,13 @@ fn retry_after_unknown_outcome(err: &str) -> bool {
 }
 
 /// Sign in to the login wall the tab is on with the only vault login for it
-/// (several, or none, is reported, never guessed), then go back to
-/// `returnTo`. Returns `{ok, item, error}` plus `returnedTo` / `returnError`.
+/// (several, or none, is reported, never guessed) from the configured
+/// password manager ([`Manager::configured`]), then go back to `returnTo`.
+/// Returns `{ok, item, error}` plus `returnedTo` / `returnError`.
 pub fn auto_login(flags: &Flags, wall: &Value) -> Value {
     let mut out = json!({ "ok": false, "item": null, "error": null });
-    let p = match prepare(flags, None, false, false, false) {
+    let manager = Manager::configured();
+    let p = match prepare(flags, manager, None, false, false, false) {
         Ok(p) => p,
         Err(e) => {
             out["error"] = json!(e);
@@ -877,7 +1184,7 @@ pub fn auto_login(flags: &Flags, wall: &Value) -> Value {
         "--json",
         "auth",
         "login",
-        "--bwu",
+        manager.flag(),
         "--item",
         p.id.as_str(),
     ]
@@ -948,7 +1255,14 @@ mod tests {
     }
 
     fn pick(cands: &[Value], item: Option<&str>, host: &str) -> Result<Value, String> {
-        choose(cands, item, &LoginHosts::page(host), None).map(|(c, _)| c)
+        choose(
+            cands,
+            item,
+            &LoginHosts::page(host),
+            None,
+            Manager::Bitwarden,
+        )
+        .map(|(c, _)| c)
     }
 
     #[test]
@@ -1019,13 +1333,18 @@ mod tests {
             page: "appstoreconnect.apple.com".into(),
             frames: vec!["idmsa.apple.com".into()],
         };
-        let (item, why) = choose(&apple, None, &hosts, None).unwrap();
+        let (item, why) = choose(&apple, None, &hosts, None, Manager::Bitwarden).unwrap();
         assert_eq!(item["id"], "d1");
         assert!(why.unwrap().contains("idmsa.apple.com"));
         // An item named for the page itself beats one named for its frame.
         let mut both = apple.to_vec();
         both.push(c("a1", "appstoreconnect.apple.com"));
-        assert_eq!(choose(&both, None, &hosts, None).unwrap().0["id"], "a1");
+        assert_eq!(
+            choose(&both, None, &hosts, None, Manager::Bitwarden)
+                .unwrap()
+                .0["id"],
+            "a1"
+        );
 
         // Nothing named for the page or the frame: ask, the site's item first.
         let plain = [
@@ -1033,7 +1352,7 @@ mod tests {
             c("p3", "iCloud"),
             c("p2", "apple.com"),
         ];
-        let e = choose(&plain, None, &hosts, None).unwrap_err();
+        let e = choose(&plain, None, &hosts, None, Manager::Bitwarden).unwrap_err();
         assert!(e.contains("its sign-in frame: idmsa.apple.com"), "{e}");
         let first = e.lines().nth(1).unwrap();
         assert!(
@@ -1042,25 +1361,29 @@ mod tests {
         );
         // Two items named for frames: never guessed.
         let twins = [c("x", "idmsa.apple.com"), c("y", "idmsa.apple.com")];
-        assert!(choose(&twins, None, &hosts, None).is_err());
+        assert!(choose(&twins, None, &hosts, None, Manager::Bitwarden).is_err());
     }
 
     #[test]
     fn choose_uses_the_item_that_signed_in_here_last_time() {
         let apple = [c("p1", "Apple ID personal"), c("d1", "Developer")];
         let hosts = LoginHosts::page("appstoreconnect.apple.com");
-        let (item, why) = choose(&apple, None, &hosts, Some("d1")).unwrap();
+        let (item, why) = choose(&apple, None, &hosts, Some("d1"), Manager::Bitwarden).unwrap();
         assert_eq!(item["id"], "d1");
         assert_eq!(why.as_deref(), Some(PICKED_REMEMBERED));
         // --item overrides it; a remembered item no longer listed is ignored.
         assert_eq!(
-            choose(&apple, Some("p1"), &hosts, Some("d1")).unwrap().0["id"],
+            choose(&apple, Some("p1"), &hosts, Some("d1"), Manager::Bitwarden)
+                .unwrap()
+                .0["id"],
             "p1"
         );
-        assert!(choose(&apple, None, &hosts, Some("gone")).is_err());
+        assert!(choose(&apple, None, &hosts, Some("gone"), Manager::Bitwarden).is_err());
         // The only match needs no reason.
         assert_eq!(
-            choose(&apple[..1], None, &hosts, Some("d1")).unwrap().1,
+            choose(&apple[..1], None, &hosts, Some("d1"), Manager::Bitwarden)
+                .unwrap()
+                .1,
             None
         );
     }
@@ -1152,7 +1475,9 @@ else:
 "#).unwrap();
         std::fs::set_permissions(&bwu, std::fs::Permissions::from_mode(0o700)).unwrap();
         let p = Prepared {
-            bwu,
+            manager: Manager::Bitwarden,
+            tool: bwu,
+            vault: None,
             envs: vec!["CU_BWU_PW=bw:uuid#password".into()],
             origin: "https://example.com".into(),
             host: "example.com".into(),
@@ -1203,6 +1528,176 @@ else:
         ));
     }
 
+    #[test]
+    fn manager_from_env_then_config() {
+        let op = json!({"auth": {"passwordManager": "1password"}});
+        assert_eq!(Manager::resolve(None, None), Manager::Bitwarden);
+        assert_eq!(Manager::resolve(None, Some(&op)), Manager::OnePassword);
+        assert_eq!(Manager::resolve(Some("bwu"), Some(&op)), Manager::Bitwarden);
+        assert_eq!(Manager::resolve(Some("OP"), None), Manager::OnePassword);
+        // A daemon command carries the CLI's environment choice.
+        assert_eq!(
+            Manager::for_command(&json!({"_passwordManager": "1password"})),
+            Manager::OnePassword
+        );
+        assert_eq!(
+            Manager::for_command(&json!({"_passwordManager": "bwu"})),
+            Manager::Bitwarden
+        );
+        // An unknown env value falls through to the config.
+        assert_eq!(Manager::resolve(Some("x"), Some(&op)), Manager::OnePassword);
+        assert_eq!(
+            Manager::resolve(None, Some(&json!({"auth.autoLogin": "1password"}))),
+            Manager::OnePassword
+        );
+        assert_eq!(
+            Manager::resolve(None, Some(&json!({"auth": {"autoLogin": "bwu"}}))),
+            Manager::Bitwarden
+        );
+        assert!(auto_login_enabled(Some("1password"), None));
+        assert_eq!(
+            Manager::OnePassword.env_ref(PASS, Some("v1"), "abc", "password"),
+            "CU_BWU_PW=op://v1/abc/password"
+        );
+        assert_eq!(
+            Manager::OnePassword.env_ref(OTP, Some("v1"), "abc", "totp"),
+            "CU_BWU_OTP=op://v1/abc/one-time password?attribute=otp"
+        );
+        assert_eq!(
+            Manager::Bitwarden.env_ref(PASS, None, "abc", "password"),
+            "CU_BWU_PW=bw:abc#password"
+        );
+        assert_eq!(Manager::from_name("1pass-use"), None);
+    }
+
+    /// `op item list` rows: only Login items with a website on the page's
+    /// site, newest first, with their vault id for the `op://` references.
+    #[test]
+    fn op_candidates_match_the_pages_site() {
+        let row = |id: &str, href: Option<&str>, cat: &str, updated: &str| {
+            let mut r = json!({
+                "id": id, "title": format!("t-{id}"), "category": cat,
+                "vault": {"id": "vid", "name": "Agent"}, "updated_at": updated,
+            });
+            if let Some(h) = href {
+                r["urls"] = json!([{ "href": h, "primary": true }]);
+            }
+            r
+        };
+        let items = json!([
+            row(
+                "a",
+                Some("https://accounts.example.com/pass"),
+                "LOGIN",
+                "2026-11-01T00:00:00Z"
+            ),
+            row("b", Some("example.com"), "LOGIN", "2026-11-03T00:00:00Z"),
+            row(
+                "c",
+                Some("https://example.com.evil.net"),
+                "LOGIN",
+                "2026-11-04T00:00:00Z"
+            ),
+            row("d", None, "LOGIN", "2026-11-04T00:00:00Z"),
+            row(
+                "e",
+                Some("https://accounts.example.com"),
+                "PASSWORD",
+                "2026-11-04T00:00:00Z"
+            ),
+        ]);
+        // A shared host's tenants are different sites.
+        let pages = json!([
+            row(
+                "f",
+                Some("https://alice.github.io"),
+                "LOGIN",
+                "2026-11-04T00:00:00Z"
+            ),
+            row(
+                "g",
+                Some("mallory.github.io/login"),
+                "LOGIN",
+                "2026-11-04T00:00:00Z"
+            ),
+            row(
+                "h",
+                Some("http://localhost:3000"),
+                "LOGIN",
+                "2026-11-04T00:00:00Z"
+            ),
+        ]);
+        let ids = |got: Vec<Value>| -> Vec<String> {
+            got.iter()
+                .filter_map(|c| c["id"].as_str().map(String::from))
+                .collect()
+        };
+        assert_eq!(ids(op_candidates(&pages, "mallory.github.io")), ["g"]);
+        assert_eq!(ids(op_candidates(&pages, "localhost")), ["h"]);
+        let got = op_candidates(&items, "Accounts.Example.com");
+        let ids: Vec<&str> = got.iter().filter_map(|c| c["id"].as_str()).collect();
+        assert_eq!(ids, ["b", "a"]);
+        assert_eq!(got[0]["vault"], "vid");
+        assert_eq!(got[0]["folder"], "Agent");
+        assert_eq!(got[0]["name"], "t-b");
+        // No use count from op: the listing says when the item last changed.
+        let e = choose(
+            &got,
+            None,
+            &LoginHosts::page("accounts.example.com"),
+            None,
+            Manager::OnePassword,
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("--item b  t-b [Agent]  (updated 2026-11-03T00:00:00Z)"),
+            "{e}"
+        );
+    }
+
+    /// A mock `op`: `op run -- chrome-use …` with the item's `op://`
+    /// references (its vault in them) in the environment, never in the
+    /// arguments; `op run` puts the values only in the child's environment.
+    #[cfg(unix)]
+    #[test]
+    fn op_run_gets_references_in_its_environment() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let op = dir.path().join("op");
+        std::fs::write(&op, r#"#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+assert args[:2] == ['run', '--'], args
+assert not any('op://' in a or '--env' == a or '--vault' == a for a in args), args
+assert os.environ['CU_BWU_USER'] == 'op://vid/item1/username'
+assert os.environ['CU_BWU_PW'] == 'op://vid/item1/password'
+assert os.environ.get('CU_BWU_CHILD') == '1'
+print(json.dumps({'success': True, 'data': {'signedIn': True, 'filled': ['username', 'password']}, 'error': None}))
+"#).unwrap();
+        std::fs::set_permissions(&op, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let p = Prepared {
+            manager: Manager::OnePassword,
+            tool: op,
+            vault: Some("vid".into()),
+            envs: vec![
+                Manager::OnePassword.env_ref(USER, Some("vid"), "item1", "username"),
+                Manager::OnePassword.env_ref(PASS, Some("vid"), "item1", "password"),
+            ],
+            origin: "https://example.com".into(),
+            host: "example.com".into(),
+            id: "item1".into(),
+            name: "example".into(),
+            custom: Vec::new(),
+            steps: None,
+            why: None,
+            defer_otp: false,
+        };
+        let r =
+            run_login_phases(&p, &["auth".into(), "login".into(), "--1password".into()]).unwrap();
+        assert!(r.success, "{:?}", r.error);
+        assert_eq!(r.data.unwrap()["signedIn"], true);
+    }
+
     // One test: both halves set and clear the same process-wide variables.
     #[test]
     fn parse_probe_then_child() {
@@ -1216,6 +1711,13 @@ else:
         assert!(parse(&["--bwu", "--totp", "--no-submit"], "1").is_err());
         assert!(parse(&["--bwu", "--totp", "--passkey"], "1").is_err());
         assert_eq!(parse(&["--bwu", "--totp"], "1").unwrap()["totpOnly"], true);
+        assert_eq!(parse(&["--bwu"], "1").unwrap()["manager"], "bwu");
+        assert_eq!(
+            parse(&["--1password"], "1").unwrap()["manager"],
+            "1password"
+        );
+        assert!(parse(&["--bwu", "--1password"], "1").is_err());
+        assert!(parse(&["--1password", "--passkey"], "1").is_err());
 
         for (k, v) in [
             (CHILD, "1"),

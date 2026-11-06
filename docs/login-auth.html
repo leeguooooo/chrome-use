@@ -209,6 +209,20 @@
       <p><code>--no-submit</code> 只填不提交，不读取 TOTP，也不安装 passkey 验证器；不能与 <code>--passkey</code> 或 <code>--totp</code> 同用。签名成功不代表网站接受了登录，需用 <code>snapshot</code> 或网站的已认证状态确认目标页面。</p>
       <p>密码登录只有看到网站接受了才报成功：提交后等登录表单从页面上消失（页面加载完、连续两次读到），返回 <code>signedIn: true</code> 和 <code>evidence</code>；约 12 秒后表单还在就报 <code>the sign-in was not confirmed</code>，带上页面自己的提示。表单消失后落到验证页（地址路径里有 <code>verify</code>、<code>challenge</code>、<code>checkpoint</code>、<code>captcha</code>、<code>2fa</code> 或 <code>mfa</code>，比如手机验证），12 秒后还停在那里也报没确认，并写出那个页面；在这段时间里自己跳到登录后页面的验证页仍算登录成功。认不出用户名框时，只在密码框旁边找文本框，不会填进页面别处的站内搜索框。回车键是否到了页面也会检查：在你自己 Chrome 的后台标签页上，回车可能被 Chrome 接收却没到页面，这时什么都没提交，改点表单的登录按钮（<code>submittedWith</code> 会写明）。</p>
 
+      <h2>用 1Password 登录</h2>
+      <p><code>auth login --1password</code> 做的事和 <code>--bwu</code> 一样，只是值从 1Password 取：选账号的规则和 <code>--item</code>、<code>--totp</code>、<code>--no-submit</code>、登录后再取动态码、<code>signedIn</code> 确认都相同（不支持 <code>_autotype</code>：登录前不读取条目）。每个主机上次登录成功的条目记在 <code>~/.chrome-use/1password-items.json</code>。1Password 不能交出 passkey，<code>--passkey</code> 只能配 <code>--bwu</code>。</p>
+      <p>它直接调用 PATH 里的官方 1Password 命令行 <code>op</code>：<code>op item list --categories Login --format json</code> 列出登录条目（不含值），chrome-use 留下网址属于当前网站的那些；再用 <code>op run -- chrome-use …</code> 启动子进程，环境变量里放 <code>op://&lt;库&gt;/&lt;条目&gt;/username</code>、<code>…/password</code>，要验证码时再放 <code>…/one-time password?attribute=otp</code>，值只进子进程。<code>op</code> 经 1Password App 登录（可能弹窗确认），或用 <code>OP_SERVICE_ACCOUNT_TOKEN</code>。条目没有一次性密码字段时，会停在验证码那一步。</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">auth login --1password</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use open https://github.com/login
+<span class="du-prompt">$</span> chrome-use auth login <span class="du-flag">--1password</span>
+<span class="du-prompt">$</span> chrome-use auth login <span class="du-flag">--1password --totp --item</span> &lt;id&gt;</code></pre>
+      </div>
+      <p>登录墙和错误提示用哪个密码管理器：先看 <code>AGENT_BROWSER_PASSWORD_MANAGER=bwu|1password</code>，再看写了管理器名的 <code>AGENT_BROWSER_AUTO_LOGIN</code>，再看 <code>~/.chrome-use/config.json</code> 里的 <code>"auth": {"passwordManager": "1password"}</code> 和写了管理器名的 <code>auth.autoLogin</code>，都没有就用 Bitwarden。写了 <code>--bwu</code> 或 <code>--1password</code> 时总用写明的那个。</p>
+
       <hr class="du-divider" />
 
       <!-- ============ 双因素 ======= -->

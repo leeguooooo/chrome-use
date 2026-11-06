@@ -2779,7 +2779,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     }
                     Ok(cmd)
                 }
-                Some("login") if rest.contains(&"--bwu") => {
+                Some("login") if rest.contains(&"--bwu") || rest.contains(&"--1password") => {
                     crate::bwu_login::parse(&rest[1..], &id)
                 }
                 Some("login") => {
@@ -2790,7 +2790,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                         .find(|a| !a.starts_with("--"))
                         .ok_or_else(|| ParseError::MissingArguments {
                             context: "auth login".to_string(),
-                            usage: "chrome-use auth login <name> [--no-navigate] | auth login --bwu [--item <id>] [--passkey | --totp] [--no-submit]",
+                            usage: "chrome-use auth login <name> [--no-navigate] | auth login --bwu|--1password [--item <id>] [--passkey | --totp] [--no-submit]",
                         })?;
                     let no_navigate = rest.contains(&"--no-navigate");
                     Ok(

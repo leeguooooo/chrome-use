@@ -1193,6 +1193,7 @@ Ordinary selector and `--clip` screenshots use the same CLI pixel-cropping path,
 ```bash
 chrome-use auth login --bwu --item <id>
 chrome-use auth login --bwu --totp --item <id>
+chrome-use auth login --1password --totp --item <id>   # the same from 1Password
 ```
 
 The default flow fetches TOTP after observing a code field. `--totp` reads only

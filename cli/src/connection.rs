@@ -1630,6 +1630,9 @@ pub struct DaemonOptions<'a> {
 fn apply_daemon_env(cmd: &mut Command, session: &str, opts: &DaemonOptions) {
     cmd.env("AGENT_BROWSER_DAEMON", "1")
         .env("AGENT_BROWSER_SESSION", session)
+        // For `op` only (`auth login --1password`): the daemon never runs it,
+        // and must not keep a token that reads the user's vault.
+        .env_remove("OP_SERVICE_ACCOUNT_TOKEN")
         // Who started this daemon, for `~/.chrome-use/connect-mode.log`: a
         // detached daemon's own parent is init, which names nobody.
         .env(
@@ -2485,6 +2488,17 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
         if let Ok(v) = std::env::var("AGENT_BROWSER_SHOW_POSITION") {
             obj.insert("_showPosition".to_string(), Value::String(v));
         }
+        // The password manager a login-wall hint names (`--bwu` /
+        // `--1password`): this command's environment, not the daemon's.
+        obj.insert(
+            "_passwordManager".to_string(),
+            Value::String(
+                crate::bwu_login::Manager::from_env()
+                    .map(|m| m.name())
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
+        );
         if let Ok(h) = std::env::var("AGENT_BROWSER_HUMANIZE") {
             // Only forward a recognized level; warn once (like the --humanize flag
             // does) when the env var is set to garbage, instead of silently
