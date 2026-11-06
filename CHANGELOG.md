@@ -1,8 +1,29 @@
 # Changelog
 
-## 1.5.284
+## 1.5.285
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.107.
+
+### Features
+
+- **`auth login --1password`.** Signs in from 1Password through the official `op` CLI, with the same flow as `--bwu` (account choice, `--item`, `--totp`, `--no-submit`, the deferred code step, the `signedIn` check). Values reach only the `op run` child; chrome-use itself holds only `op://` references, and the daemon never keeps `OP_SERVICE_ACCOUNT_TOKEN`. Login walls and their hints use the configured password manager: `AGENT_BROWSER_PASSWORD_MANAGER`, else `AGENT_BROWSER_AUTO_LOGIN`, else `auth.passwordManager` / `auth.autoLogin` in config.json, else Bitwarden. A running daemon follows the setting of the command that triggered the hint (#859).
+- **Thermo can rename the tab groups it created.** New `ABExt.renameUserTabGroups` renames only groups Thermo's organizer made, and only while their title is still the one Thermo saw; a group you renamed is left alone, and undo keeps working (#870).
+
+### Fixes
+
+- **A verification step is no longer reported as signed in.** `auth login --bwu` reported `signedIn: true` when the password led to a phone check or MFA page. A page whose path names a verification step (`verify`, `challenge`, `checkpoint`, `captcha`, `2fa`, `mfa`) still showing after about 12 s now fails with "the sign-in was not confirmed", and a same-page MFA box such as Aliyun RAM's 「请输入 6 位数字安全码」 returns `needs: a verification code` (#867, #864).
+- **Six-digit security-code boxes take the TOTP.** A box described only by its placeholder or label (安全码, 动态码, MFA, authenticator, 6-digit, …) is filled by `--totp` and the deferred code step; boxes for SMS, email or image captchas are left alone, and a bare 验证码 / verification code box is filled only when you ask for the code (#864).
+- **The username no longer goes into a site search box.** When no field looks like a username field, the guess takes the text box beside the password field, in its own form or dialog.
+- **Errors from a password manager's in-page frame name that manager.** When an extension frame blocks chrome-use (`debugger_access_denied`), the error names the extension. For 1Password, which can keep an invisible frame on the page after a fill, it no longer says to press Escape; it points to 1Password's right-click "Hide on this page", or a reload, which loses what was typed. Bitwarden keeps its Escape advice (#872).
+
+### Contributors
+
+- @leeguooooo
+- @Jerryx333
+<!-- release:end -->
+
+## 1.5.284
 Works with extension ab-connect 0.5.106.
 
 ### Fixes
@@ -12,7 +33,6 @@ Works with extension ab-connect 0.5.106.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.283
 
