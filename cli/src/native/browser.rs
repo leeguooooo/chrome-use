@@ -2103,9 +2103,20 @@ fn foreign_frame_hint_with(error: &str, name_of: impl Fn(&str) -> Option<String>
     };
     let fix = match installed.as_slice() {
         [only] => inline_menu_fix(only),
-        _ => "To stop it happening, the user can turn off that extension's inline menu for this \
-              site."
-            .to_string(),
+        many => {
+            let one_password = if many.contains(&"1Password") {
+                format!(
+                    " 1Password can keep a frame in the page with nothing shown; if that is \
+                     the one: {ONE_PASSWORD_HIDE}"
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                "To stop it happening, the user can turn off that extension's inline menu for \
+                 this site.{one_password}"
+            )
+        }
     };
     format!(
         "\nCause: {culprit}. While that frame is in the tab Chrome refuses every debugger command \
@@ -2153,6 +2164,13 @@ fn blocking_inline_menu_manager_with(
     }
 }
 
+/// How the user takes 1Password out of a page (support.1password.com,
+/// "Hide 1Password on specific web pages"). Also quoted when the blocking
+/// manager cannot be told apart.
+pub(crate) const ONE_PASSWORD_HIDE: &str = "The user can right-click the page, choose \
+    \"1Password - Password Manager\" → \"Hide on this page\" (undone in 1Password's Settings → \
+    Autofill & save → Hidden pages), then run the command again.";
+
 /// What the user can do about `name`'s frame blocking a tab. Bitwarden's
 /// frame is its inline menu, which is visible and closes on Escape.
 /// 1Password can keep its frame in the page with nothing shown (#872), so
@@ -2163,13 +2181,12 @@ pub(crate) fn inline_menu_fix(name: &str) -> String {
              Escape (or a click on the page outside the field). To stop it opening, turn off \
              Bitwarden's inline autofill menu in its Autofill settings."
             .to_string(),
-        "1Password" => "1Password can keep its frame in the page after a field was focused \
-             with nothing shown, so there may be no menu to close and Escape does not help. \
-             The user can right-click the page, choose \"1Password - Password Manager\" → \
-             \"Hide on this page\" (undone in 1Password's Settings → Autofill & save → Hidden \
-             pages), then run the command again. Reloading the tab also drops the frame, but \
+        "1Password" => format!(
+            "If the frame is 1Password's: 1Password can keep its frame in the page after a \
+             field was focused with nothing shown, so there may be no menu to close and Escape \
+             does not help. {ONE_PASSWORD_HIDE} Reloading the tab also drops the frame, but \
              loses what was typed into the form."
-            .to_string(),
+        ),
         other => format!(
             "If {other}'s menu or save bar is visible in that tab, the user closes it; if \
              nothing is visible, {other} keeps a hidden frame there: turn {other} off for this \

@@ -18133,15 +18133,17 @@ fn no_recovery_note_for(reason: &str, manager: Option<&str>) -> String {
     let next = match manager {
         Some(name) => format!(
             "Next: run the command again; if it is still blocked, ask the user to deal with \
-             {name}'s frame, then repeat it. {}",
+             the frame (most likely {name}'s), then repeat it. {}",
             super::browser::inline_menu_fix(name)
         ),
-        None => "Next: run the command again; if it is still blocked and a password manager's \
-                 menu or save bar is visible in that tab, ask the user to close it (Escape, or a \
-                 click on the page outside the field), then repeat it. If nothing is visible, an \
-                 extension keeps a hidden frame in the page: the user turns that extension off \
-                 for this site."
-            .to_string(),
+        None => format!(
+            "Next: run the command again; if it is still blocked and a password manager's \
+             menu or save bar is visible in that tab, ask the user to close it (Escape, or a \
+             click on the page outside the field), then repeat it. If nothing is visible, an \
+             extension keeps a hidden frame in the page: the user turns that extension off \
+             for this site. For 1Password, which does this: {}",
+            super::browser::ONE_PASSWORD_HIDE
+        ),
     };
     format!(
         "\n(No automatic recovery: {reason}.) The tab and what was typed into it are intact: \
@@ -25340,7 +25342,9 @@ fn sign_in_not_confirmed(
 /// blocking after the submit. Chrome's tab record still says where the tab
 /// is, but a URL alone is not evidence of a sign-in: it is reported, never
 /// turned into one.
-fn sign_in_blocked(login_url: &str, url: &str) -> String {
+/// `denial` is the blocked read's error; it names the password manager the
+/// note's advice is for.
+fn sign_in_blocked(login_url: &str, url: &str, denial: &str) -> String {
     let place = if left_sign_in_page(login_url, url) {
         format!(
             "the tab is now on {url}, which is not the sign-in page, so it may have gone \
@@ -25353,7 +25357,7 @@ fn sign_in_blocked(login_url: &str, url: &str) -> String {
         "auth login --bwu: the sign-in was not confirmed: a password manager's frame blocks the \
          page after the submit and could not be closed, so the page could not be read; {place}. \
          Read the page (`snapshot -i`) once the frame is closed.{}",
-        no_recovery_note("the password manager's frame stayed open", "")
+        no_recovery_note("the password manager's frame stayed open", denial)
     )
 }
 
@@ -25398,7 +25402,7 @@ async fn confirm_sign_in(
                     // URL alone is not evidence of a sign-in: report it, as a
                     // failure the caller can check, not as a login.
                     let url = mgr.pinned_tab_url_from_browser().await.unwrap_or_default();
-                    return Err(sign_in_blocked(login_url, &url));
+                    return Err(sign_in_blocked(login_url, &url, e));
                 }
                 None
             }
@@ -27507,10 +27511,13 @@ mod tests {
     #[test]
     fn a_blocked_page_after_the_submit_is_not_a_login() {
         let login = "https://zentao.example.com/zentao/user-login.html";
-        let moved = sign_in_blocked(login, "https://zentao.example.com/zentao/my.html");
+        let id = "aeblfdkhhhdcdjpifhhbdiojplfjncoa";
+        let denial = format!("debugger_access_denied: x {id} (chrome://extensions/?id={id})");
+        let moved = sign_in_blocked(login, "https://zentao.example.com/zentao/my.html", &denial);
         assert!(moved.contains("the sign-in was not confirmed"), "{moved}");
         assert!(moved.contains("may have gone through"), "{moved}");
-        let stayed = sign_in_blocked(login, login);
+        assert!(moved.contains("Hide on this page"), "{moved}");
+        let stayed = sign_in_blocked(login, login, &denial);
         assert!(stayed.contains("still on"), "{stayed}");
         assert!(stayed.contains("do not close tabs"), "{stayed}");
         // The login wall tries such a login once more from the sign-in page.
@@ -27574,6 +27581,7 @@ mod tests {
         let unknown = no_recovery_note_for("x", None);
         assert!(unknown.contains("Escape"), "{unknown}");
         assert!(unknown.contains("If nothing is visible"), "{unknown}");
+        assert!(unknown.contains("Hide on this page"), "{unknown}");
         let bitwarden = no_recovery_note_for("x", Some("Bitwarden"));
         assert!(bitwarden.contains("Escape"), "{bitwarden}");
     }
@@ -27592,7 +27600,7 @@ mod tests {
              the user's own tabs",
             &error,
         );
-        assert!(note.contains("1Password's frame"), "{note}");
+        assert!(note.contains("most likely 1Password's"), "{note}");
         assert!(note.contains("Hide on this page"), "{note}");
         assert!(!note.contains("press Escape"), "{note}");
         assert!(!note.contains("closes it with"), "{note}");
