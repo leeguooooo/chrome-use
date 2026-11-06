@@ -229,7 +229,7 @@
 <span class="du-prompt">$</span> chrome-use auth login <span class="du-flag">--1password</span>
 <span class="du-prompt">$</span> chrome-use auth login <span class="du-flag">--1password --totp --item</span> &lt;id&gt;</code></pre>
       </div>
-      <p>Login walls and the hints in errors use one password manager: <code>AGENT_BROWSER_PASSWORD_MANAGER=bwu|1password</code>, else <code>"auth": {"passwordManager": "1password"}</code> in <code>~/.chrome-use/config.json</code>, else Bitwarden. <code>--bwu</code> and <code>--1password</code> always use their own.</p>
+      <p>Login walls and the hints in errors use one password manager: <code>AGENT_BROWSER_PASSWORD_MANAGER=bwu|1password</code>, else an <code>AGENT_BROWSER_AUTO_LOGIN</code> that names one, else <code>"auth": {"passwordManager": "1password"}</code> in <code>~/.chrome-use/config.json</code>, else an <code>auth.autoLogin</code> that names one, else Bitwarden. <code>--bwu</code> and <code>--1password</code> always use their own.</p>
 
       <hr class="du-divider" />
 

@@ -55,17 +55,30 @@ impl Manager {
     /// `"auth": {"passwordManager"}` in `~/.chrome-use/config.json`, else an
     /// `auth.autoLogin` that names one, else Bitwarden.
     pub fn configured() -> Self {
-        let env = |k: &str| {
-            std::env::var(k)
-                .ok()
-                .filter(|v| Self::from_name(v).is_some())
-        };
         Self::resolve(
-            env("AGENT_BROWSER_PASSWORD_MANAGER")
-                .or_else(|| env("AGENT_BROWSER_AUTO_LOGIN"))
-                .as_deref(),
+            Self::from_env().map(Self::name),
             crate::report::user_config().as_ref(),
         )
+    }
+
+    /// The manager this process's environment names:
+    /// `AGENT_BROWSER_PASSWORD_MANAGER`, else an `AGENT_BROWSER_AUTO_LOGIN`
+    /// that names one.
+    pub fn from_env() -> Option<Self> {
+        let env = |k: &str| std::env::var(k).ok().and_then(|v| Self::from_name(&v));
+        env("AGENT_BROWSER_PASSWORD_MANAGER").or_else(|| env("AGENT_BROWSER_AUTO_LOGIN"))
+    }
+
+    /// [`Self::configured`] for a command the daemon runs: the environment
+    /// part comes from the CLI that sent it (`_passwordManager`, empty when
+    /// its environment names none), since the daemon's own is frozen at
+    /// spawn. A command from an older CLI without the field uses the
+    /// daemon's.
+    pub fn for_command(cmd: &Value) -> Self {
+        match cmd.get("_passwordManager").and_then(Value::as_str) {
+            Some(env) => Self::resolve(Some(env), crate::report::user_config().as_ref()),
+            None => Self::configured(),
+        }
     }
 
     fn resolve(env: Option<&str>, config: Option<&Value>) -> Self {
@@ -100,7 +113,7 @@ impl Manager {
         }
     }
 
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::Bitwarden => "bwu",
             Self::OnePassword => "1password",
@@ -1522,6 +1535,15 @@ else:
         assert_eq!(Manager::resolve(None, Some(&op)), Manager::OnePassword);
         assert_eq!(Manager::resolve(Some("bwu"), Some(&op)), Manager::Bitwarden);
         assert_eq!(Manager::resolve(Some("OP"), None), Manager::OnePassword);
+        // A daemon command carries the CLI's environment choice.
+        assert_eq!(
+            Manager::for_command(&json!({"_passwordManager": "1password"})),
+            Manager::OnePassword
+        );
+        assert_eq!(
+            Manager::for_command(&json!({"_passwordManager": "bwu"})),
+            Manager::Bitwarden
+        );
         // An unknown env value falls through to the config.
         assert_eq!(Manager::resolve(Some("x"), Some(&op)), Manager::OnePassword);
         assert_eq!(

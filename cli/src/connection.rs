@@ -2488,6 +2488,17 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
         if let Ok(v) = std::env::var("AGENT_BROWSER_SHOW_POSITION") {
             obj.insert("_showPosition".to_string(), Value::String(v));
         }
+        // The password manager a login-wall hint names (`--bwu` /
+        // `--1password`): this command's environment, not the daemon's.
+        obj.insert(
+            "_passwordManager".to_string(),
+            Value::String(
+                crate::bwu_login::Manager::from_env()
+                    .map(|m| m.name())
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
+        );
         if let Ok(h) = std::env::var("AGENT_BROWSER_HUMANIZE") {
             // Only forward a recognized level; warn once (like the --humanize flag
             // does) when the env var is set to garbage, instead of silently

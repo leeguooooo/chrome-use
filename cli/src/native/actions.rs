@@ -5961,7 +5961,12 @@ async fn annotate_login_wall(
     insert_data_field(
         resp,
         "loginWall",
-        login_wall::report(&current, &signal, from_host.as_deref()),
+        login_wall::report(
+            &current,
+            &signal,
+            from_host.as_deref(),
+            crate::bwu_login::Manager::for_command(cmd),
+        ),
     );
 }
 

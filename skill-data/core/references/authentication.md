@@ -279,7 +279,9 @@ never), and the older `"auth": {"autoLogin": "bwu"}` in
 `~/.chrome-use/config.json` still counts as `always --all` for hosts without a
 decision of their own. Which password manager a wall signs in with, and which
 flag its hint and `ask` commands name: `AGENT_BROWSER_PASSWORD_MANAGER=bwu|1password`,
-else `"auth": {"passwordManager": "1password"}` in `config.json`, else Bitwarden.
+else an `AGENT_BROWSER_AUTO_LOGIN` that names one, else `"auth":
+{"passwordManager": "1password"}` in `config.json`, else an `auth.autoLogin`
+that names one, else Bitwarden.
 
 A site adapter that finds the site signed out (`chrome-use site …`) reports
 the same kind of wall: `login wall: <host> is not signed in (site …)` and

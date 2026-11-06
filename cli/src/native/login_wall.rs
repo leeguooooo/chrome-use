@@ -222,7 +222,12 @@ pub fn classify(current: &str, intended: Option<&str>) -> Option<Signal> {
 
 /// The `loginWall` object and the one-line stderr hint. `from_host` is the
 /// site the caller was on (or asked for), when known.
-pub fn report(current: &str, signal: &Signal, from_host: Option<&str>) -> Value {
+pub fn report(
+    current: &str,
+    signal: &Signal,
+    from_host: Option<&str>,
+    manager: crate::bwu_login::Manager,
+) -> Value {
     let host = http_url(current)
         .and_then(|u| u.host_str().map(str::to_string))
         .unwrap_or_default();
@@ -231,16 +236,16 @@ pub fn report(current: &str, signal: &Signal, from_host: Option<&str>) -> Value 
         "url": current,
         "returnTo": signal.return_to,
         "host": host,
-        "hint": hint(named),
+        "hint": hint(named, manager),
     })
 }
 
-pub fn hint(host: &str) -> String {
+pub fn hint(host: &str, manager: crate::bwu_login::Manager) -> String {
     format!(
         "login wall: {host} redirected to its sign-in page; sign in with `chrome-use auth login \
          {}` (add --item <name> if the vault has several logins for it), then continue — ask \
          the user only if no vault item matches, 2FA needs them, or login fails",
-        crate::bwu_login::Manager::configured().flag()
+        manager.flag()
     )
 }
 
@@ -478,12 +483,23 @@ mod tests {
         );
         // Even without knowing where we came from: the way back is on the URL.
         assert_eq!(s(cur, None), Some(Strength::Strong));
-        let r = report(cur, &sig, Some("dash.cloudflare.com"));
+        let r = report(
+            cur,
+            &sig,
+            Some("dash.cloudflare.com"),
+            crate::bwu_login::Manager::Bitwarden,
+        );
         assert_eq!(r["host"], "dash.cloudflare.com");
         assert!(r["hint"]
             .as_str()
             .unwrap()
             .starts_with("login wall: dash.cloudflare.com redirected"));
+        assert!(r["hint"].as_str().unwrap().contains("auth login --bwu`"));
+        let r = report(cur, &sig, None, crate::bwu_login::Manager::OnePassword);
+        assert!(r["hint"]
+            .as_str()
+            .unwrap()
+            .contains("auth login --1password`"));
     }
 
     #[test]

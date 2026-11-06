@@ -221,7 +221,7 @@
 <span class="du-prompt">$</span> chrome-use auth login <span class="du-flag">--1password</span>
 <span class="du-prompt">$</span> chrome-use auth login <span class="du-flag">--1password --totp --item</span> &lt;id&gt;</code></pre>
       </div>
-      <p>登录墙和错误提示用哪个密码管理器：先看 <code>AGENT_BROWSER_PASSWORD_MANAGER=bwu|1password</code>，再看 <code>~/.chrome-use/config.json</code> 里的 <code>"auth": {"passwordManager": "1password"}</code>，都没有就用 Bitwarden。写了 <code>--bwu</code> 或 <code>--1password</code> 时总用写明的那个。</p>
+      <p>登录墙和错误提示用哪个密码管理器：先看 <code>AGENT_BROWSER_PASSWORD_MANAGER=bwu|1password</code>，再看写了管理器名的 <code>AGENT_BROWSER_AUTO_LOGIN</code>，再看 <code>~/.chrome-use/config.json</code> 里的 <code>"auth": {"passwordManager": "1password"}</code> 和写了管理器名的 <code>auth.autoLogin</code>，都没有就用 Bitwarden。写了 <code>--bwu</code> 或 <code>--1password</code> 时总用写明的那个。</p>
 
       <hr class="du-divider" />
 

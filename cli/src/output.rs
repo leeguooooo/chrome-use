@@ -5135,9 +5135,10 @@ Bitwarden Login Options:
                            Cannot be combined with --passkey or --no-submit
   --no-submit              Fill only; skip TOTP and passkey authenticators
                            Cannot be combined with --passkey or --totp
-  Default login fetches TOTP after a code field appears (a second bwu run,
-  possibly a second authorization). Rejected codes are never retried automatically.
-  Store the authenticator setup key in the Bitwarden login, not just its password.
+  Default login fetches TOTP after a code field appears (a second bwu run, or
+  op run with --1password, possibly a second authorization). Rejected codes are
+  never retried automatically. Store the authenticator setup key in the
+  Bitwarden login (1Password: its one-time password field), not just its password.
   Pending verification returns needs + next and leaves the page in place.
   Unrecognized/short fields (maxlength < 6) remain pending (otp: unsupported).
   No code is read; inspect five-character Steam challenges before explicit --totp.
@@ -5172,8 +5173,9 @@ Auto-login decisions (per site, ~/.chrome-use/autologin.json):
   AGENT_BROWSER_AUTO_LOGIN=bwu|1password|ask|off overrides them; "auth":
   {"autoLogin": "bwu"} in ~/.chrome-use/config.json counts as `always --all`.
   Which password manager login walls use, and which flag hints name:
-  AGENT_BROWSER_PASSWORD_MANAGER=bwu|1password, else "auth":
-  {"passwordManager": "1password"} in config.json, else Bitwarden.
+  AGENT_BROWSER_PASSWORD_MANAGER=bwu|1password, else an AGENT_BROWSER_AUTO_LOGIN
+  that names one, else "auth": {"passwordManager": "1password"} in config.json,
+  else an auth.autoLogin that names one, else Bitwarden.
 
 Login behavior:
   auth login waits for form selectors to appear before filling/clicking.
@@ -6570,7 +6572,8 @@ Signed out:
   "not_logged_in"), or fails after one of its fetch calls got HTTP 401 or was
   redirected to a sign-in page, fails with `login wall: <host> is not signed
   in …` on stderr and `loginWall` in --json. Sign in with `open <loginUrl>`
-  and `auth login --bwu`, then run it again. When the user has not decided for
+  and `auth login --bwu` (the hint names `--1password` when that is the
+  configured password manager), then run it again. When the user has not decided for
   the site, `loginWall.ask` asks them (see `auth --help`). With `auth autologin
   always <host>` that happens by itself and the command runs once more; a
   write is rerun only when the adapter reported the login itself.
