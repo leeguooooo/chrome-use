@@ -1890,8 +1890,8 @@ const MENU_STILL_OPEN_IN_FRONT: &str = "menu still open (tab in front)";
 const MENU_COVERED_WINDOW: &str = "the menu was still open after chrome-use hid the tab for a \
     moment. Chrome is not the window in front: while another app covers it (or it is on another \
     Space), macOS reports every tab in it as hidden, so hiding the tab closes nothing. Ask the \
-    user to bring that Chrome window to the front once (or to press Escape in the tab); \
-    chrome-use then closes the menu by itself on the next command. Once the user allows \
+    user to bring that Chrome window to the front once; chrome-use then closes the menu by \
+    itself on the next command. Once the user allows \
     chrome-use on all sites (the chrome-use icon in Chrome's toolbar → \"Allow on all sites\"), \
     chrome-use closes it without that, except for a key press, which needs the field focused";
 
@@ -2080,10 +2080,14 @@ fn foreign_frame_hint_with(error: &str, name_of: impl Fn(&str) -> Option<String>
             [one] => one.clone(),
             many => many.join(", "),
         };
+        let fix = match listed_inline_menu_manager(error) {
+            Some(name) => format!(" {}", inline_menu_fix(name)),
+            None => String::new(),
+        };
         return format!(
             "\nPossible blocking extensions: {candidates}. These frames are listed browser-wide, \
              not attributed to this tab. Check which extension injects a frame into the blocked \
-             tab before disabling it for this site or moving its UI out of the page."
+             tab before disabling it for this site or moving its UI out of the page.{fix}"
         );
     }
     let installed = installed_inline_menu_extensions();
@@ -2092,10 +2096,27 @@ fn foreign_frame_hint_with(error: &str, name_of: impl Fn(&str) -> Option<String>
             .to_string()
     } else {
         format!(
-            "most likely {}'s inline autofill menu (installed in this Chrome), which opens next to a \
-             focused login or card field",
+            "most likely a frame of {} (installed in this Chrome), such as its inline autofill \
+             menu next to a focused login or card field",
             installed.join(" / ")
         )
+    };
+    let fix = match installed.as_slice() {
+        [only] => inline_menu_fix(only),
+        many => {
+            let one_password = if many.contains(&"1Password") {
+                format!(
+                    " 1Password can keep a frame in the page with nothing shown; if that is \
+                     the one: {ONE_PASSWORD_HIDE}"
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                "To stop it happening, the user can turn off that extension's inline menu for \
+                 this site.{one_password}"
+            )
+        }
     };
     format!(
         "\nCause: {culprit}. While that frame is in the tab Chrome refuses every debugger command \
@@ -2104,9 +2125,74 @@ fn foreign_frame_hint_with(error: &str, name_of: impl Fn(&str) -> Option<String>
          including under stealth mode; close that UI manually if needed. `press Escape` uses \
          the same blocked debugger and may also fail. `get url` and `tab inspect` still read \
          browser metadata; an explicit `open <url>` can leave the blocked page. Fill fields with \
-         `fill` (one write) rather than `type --key-events`. To stop it happening, the user can \
-         turn off that extension's inline menu for this site."
+         `fill` (one write) rather than `type --key-events`. {fix}"
     )
+}
+
+/// The one known password manager among the extensions a
+/// `debugger_access_denied` error lists (#872). `None` when the error lists
+/// none of them, or more than one: the list is browser-wide, so naming one
+/// of several would be a guess.
+pub(crate) fn listed_inline_menu_manager(error: &str) -> Option<&'static str> {
+    let mut known = listed_frame_extensions(error).into_iter().filter_map(|id| {
+        INLINE_MENU_EXTENSIONS
+            .iter()
+            .find(|(known, _)| *known == id)
+            .map(|(_, name)| *name)
+    });
+    let first = known.next()?;
+    known.all(|other| other == first).then_some(first)
+}
+
+/// The password manager most likely behind a `debugger_access_denied` error:
+/// the one the error lists, or, when it lists no extension at all, the only
+/// inline-menu password manager installed in this Chrome.
+pub(crate) fn blocking_inline_menu_manager(error: &str) -> Option<&'static str> {
+    blocking_inline_menu_manager_with(error, installed_inline_menu_extensions)
+}
+
+fn blocking_inline_menu_manager_with(
+    error: &str,
+    installed: impl FnOnce() -> Vec<&'static str>,
+) -> Option<&'static str> {
+    if !listed_frame_extensions(error).is_empty() {
+        return listed_inline_menu_manager(error);
+    }
+    match installed().as_slice() {
+        [only] => Some(*only),
+        _ => None,
+    }
+}
+
+/// How the user takes 1Password out of a page (support.1password.com,
+/// "Hide 1Password on specific web pages"). Also quoted when the blocking
+/// manager cannot be told apart.
+pub(crate) const ONE_PASSWORD_HIDE: &str = "The user can right-click the page, choose \
+    \"1Password - Password Manager\" → \"Hide on this page\" (undone in 1Password's Settings → \
+    Autofill & save → Hidden pages), then run the command again.";
+
+/// What the user can do about `name`'s frame blocking a tab. Bitwarden's
+/// frame is its inline menu, which is visible and closes on Escape.
+/// 1Password can keep its frame in the page with nothing shown (#872), so
+/// there is no menu to press Escape on.
+pub(crate) fn inline_menu_fix(name: &str) -> String {
+    match name {
+        "Bitwarden" => "If Bitwarden's inline menu is open in that tab, the user closes it with \
+             Escape (or a click on the page outside the field). To stop it opening, turn off \
+             Bitwarden's inline autofill menu in its Autofill settings."
+            .to_string(),
+        "1Password" => format!(
+            "If the frame is 1Password's: 1Password can keep its frame in the page after a \
+             field was focused with nothing shown, so there may be no menu to close and Escape \
+             does not help. {ONE_PASSWORD_HIDE} Reloading the tab also drops the frame, but \
+             loses what was typed into the form."
+        ),
+        other => format!(
+            "If {other}'s menu or save bar is visible in that tab, the user closes it; if \
+             nothing is visible, {other} keeps a hidden frame there: turn {other} off for this \
+             site, then run the command again."
+        ),
+    }
 }
 
 /// Race normal lifecycle waiting against a small number of access checks. A
@@ -12248,6 +12334,88 @@ mod tests {
             )),
             "{hint}"
         );
+    }
+
+    fn denial_listing(ids: &[&str]) -> String {
+        let listed: Vec<String> = ids
+            .iter()
+            .map(|id| format!("{id} (chrome://extensions/?id={id})"))
+            .collect();
+        format!(
+            "debugger_access_denied: Chrome blocked debugger access. Frames of other extensions \
+             open in this browser: {}; ... Original error: Cannot access a chrome-extension:// URL \
+             of different extension",
+            listed.join(", ")
+        )
+    }
+
+    const ONE_PASSWORD: &str = "aeblfdkhhhdcdjpifhhbdiojplfjncoa";
+    const BITWARDEN: &str = "nngceckbapebfimnlniiiahkandclblb";
+
+    /// #872: 1Password's frame is named, and nobody is told to press Escape
+    /// on a menu that is not there.
+    #[test]
+    fn a_listed_1password_frame_gets_its_own_fix() {
+        let error = denial_listing(&[ONE_PASSWORD]);
+        assert_eq!(listed_inline_menu_manager(&error), Some("1Password"));
+        let hint = foreign_frame_hint_with(&error, |_| Some("1Password".to_string()));
+        assert!(
+            hint.contains(&format!("1Password ({ONE_PASSWORD})")),
+            "{hint}"
+        );
+        assert!(hint.contains("Hide on this page"), "{hint}");
+        assert!(!hint.contains("Escape to close"), "{hint}");
+        assert!(!inline_menu_fix("1Password").contains("closes it with"));
+    }
+
+    #[test]
+    fn a_listed_bitwarden_menu_keeps_the_escape_advice() {
+        let error = denial_listing(&[BITWARDEN]);
+        assert_eq!(listed_inline_menu_manager(&error), Some("Bitwarden"));
+        let hint = foreign_frame_hint_with(&error, |_| None);
+        assert!(hint.contains("Escape"), "{hint}");
+        assert!(!hint.contains("1Password"), "{hint}");
+    }
+
+    #[test]
+    fn several_listed_managers_name_none() {
+        let both = denial_listing(&[BITWARDEN, ONE_PASSWORD]);
+        assert_eq!(listed_inline_menu_manager(&both), None);
+        assert_eq!(
+            blocking_inline_menu_manager_with(&both, || vec!["Bitwarden"]),
+            None
+        );
+        let other = denial_listing(&["nhpjggchkhnlbgdfcbgpdpkifemomkpg", ONE_PASSWORD]);
+        assert_eq!(listed_inline_menu_manager(&other), Some("1Password"));
+        // An unknown extension listed alone: the installed guess does not
+        // override what the relay saw.
+        let unknown = denial_listing(&["nhpjggchkhnlbgdfcbgpdpkifemomkpg"]);
+        assert_eq!(
+            blocking_inline_menu_manager_with(&unknown, || vec!["1Password"]),
+            None
+        );
+    }
+
+    #[test]
+    fn an_unlisted_denial_falls_back_to_the_only_installed_manager() {
+        let bare = "debugger_access_denied: Cannot access a chrome-extension:// URL of different extension";
+        assert_eq!(
+            blocking_inline_menu_manager_with(bare, || vec!["1Password"]),
+            Some("1Password")
+        );
+        assert_eq!(
+            blocking_inline_menu_manager_with(bare, || vec!["1Password", "Bitwarden"]),
+            None
+        );
+        assert_eq!(blocking_inline_menu_manager_with(bare, Vec::new), None);
+    }
+
+    #[test]
+    fn other_managers_get_a_named_fix_without_escape() {
+        let fix = inline_menu_fix("LastPass");
+        assert!(fix.contains("LastPass"), "{fix}");
+        assert!(!fix.contains("Escape"), "{fix}");
+        assert!(!MENU_COVERED_WINDOW.contains("Escape"));
     }
 
     #[test]

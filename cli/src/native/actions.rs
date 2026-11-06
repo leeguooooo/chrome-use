@@ -18047,7 +18047,8 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
         Err(reason) => {
             let mut out = first;
             if let Some(Value::String(e)) = out.get_mut("error") {
-                e.push_str(&no_recovery_note(&reason));
+                let note = no_recovery_note(&reason, e);
+                e.push_str(&note);
             }
             return out;
         }
@@ -18094,9 +18095,8 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
     }
     if is_denied(&second) {
         if let Some(Value::String(e)) = second.get_mut("error") {
-            e.push_str(&no_recovery_note(
-                "the menu opened again when the command was repeated",
-            ));
+            let note = no_recovery_note("the menu opened again when the command was repeated", e);
+            e.push_str(&note);
         }
     }
     second
@@ -18120,12 +18120,34 @@ fn with_menu_warning(mut out: Value, what: &str, note: Option<String>) -> Value 
 /// The tail of a blocked command's error when chrome-use could not close the
 /// menu: a safe next step, so the agent does not reach for `close --all` or a
 /// `--launch` profile (both lose the user's tabs or session, #373).
-fn no_recovery_note(reason: &str) -> String {
+///
+/// `error` is the blocked command's error: the extension it lists (or the one
+/// password manager installed) decides the advice. Escape closes Bitwarden's
+/// inline menu, but 1Password can block the tab with a frame that shows
+/// nothing, where there is no menu to press Escape on (#872).
+fn no_recovery_note(reason: &str, error: &str) -> String {
+    no_recovery_note_for(reason, super::browser::blocking_inline_menu_manager(error))
+}
+
+fn no_recovery_note_for(reason: &str, manager: Option<&str>) -> String {
+    let next = match manager {
+        Some(name) => format!(
+            "Next: run the command again; if it is still blocked, ask the user to deal with \
+             the frame (most likely {name}'s), then repeat it. {}",
+            super::browser::inline_menu_fix(name)
+        ),
+        None => format!(
+            "Next: run the command again; if it is still blocked and a password manager's \
+             menu or save bar is visible in that tab, ask the user to close it (Escape, or a \
+             click on the page outside the field), then repeat it. If nothing is visible, an \
+             extension keeps a hidden frame in the page: the user turns that extension off \
+             for this site. For 1Password, which does this: {}",
+            super::browser::ONE_PASSWORD_HIDE
+        ),
+    };
     format!(
         "\n(No automatic recovery: {reason}.) The tab and what was typed into it are intact: \
-         do not close tabs, stop the session or relaunch Chrome over this. Next: run the \
-         command again; if it is still blocked, ask the user to press Escape in that tab \
-         (or click the page outside the field) to close the menu, then repeat it."
+         do not close tabs, stop the session or relaunch Chrome over this. {next}"
     )
 }
 
@@ -23932,13 +23954,16 @@ async fn auth_close_menu(
     if *closed >= AUTH_MENU_CLOSE_LIMIT {
         return Err(format!(
             "{cause}{}",
-            no_recovery_note("the password manager's menu kept reopening during the login")
+            no_recovery_note(
+                "the password manager's menu kept reopening during the login",
+                cause
+            )
         ));
     }
     mgr.cycle_pinned_tab_visibility(true)
         .await
         .map(|_| *closed += 1)
-        .map_err(|why| format!("{cause}{}", no_recovery_note(&why)))
+        .map_err(|why| format!("{cause}{}", no_recovery_note(&why, cause)))
 }
 
 /// After a login: a password manager's menu that opened on the next page's
@@ -25487,7 +25512,9 @@ fn sign_in_not_confirmed(
 /// blocking after the submit. Chrome's tab record still says where the tab
 /// is, but a URL alone is not evidence of a sign-in: it is reported, never
 /// turned into one.
-fn sign_in_blocked(login_url: &str, url: &str) -> String {
+/// `denial` is the blocked read's error; it names the password manager the
+/// note's advice is for.
+fn sign_in_blocked(login_url: &str, url: &str, denial: &str) -> String {
     let place = if left_sign_in_page(login_url, url) {
         format!(
             "the tab is now on {url}, which is not the sign-in page, so it may have gone \
@@ -25500,7 +25527,7 @@ fn sign_in_blocked(login_url: &str, url: &str) -> String {
         "auth login --bwu: the sign-in was not confirmed: a password manager's frame blocks the \
          page after the submit and could not be closed, so the page could not be read; {place}. \
          Read the page (`snapshot -i`) once the frame is closed.{}",
-        no_recovery_note("the password manager's frame stayed open")
+        no_recovery_note("the password manager's frame stayed open", denial)
     )
 }
 
@@ -25547,7 +25574,7 @@ async fn confirm_sign_in(
                     // URL alone is not evidence of a sign-in: report it, as a
                     // failure the caller can check, not as a login.
                     let url = mgr.pinned_tab_url_from_browser().await.unwrap_or_default();
-                    return Err(sign_in_blocked(login_url, &url));
+                    return Err(sign_in_blocked(login_url, &url, e));
                 }
                 None
             }
@@ -27712,10 +27739,13 @@ mod tests {
     #[test]
     fn a_blocked_page_after_the_submit_is_not_a_login() {
         let login = "https://zentao.example.com/zentao/user-login.html";
-        let moved = sign_in_blocked(login, "https://zentao.example.com/zentao/my.html");
+        let id = "aeblfdkhhhdcdjpifhhbdiojplfjncoa";
+        let denial = format!("debugger_access_denied: x {id} (chrome://extensions/?id={id})");
+        let moved = sign_in_blocked(login, "https://zentao.example.com/zentao/my.html", &denial);
         assert!(moved.contains("the sign-in was not confirmed"), "{moved}");
         assert!(moved.contains("may have gone through"), "{moved}");
-        let stayed = sign_in_blocked(login, login);
+        assert!(moved.contains("Hide on this page"), "{moved}");
+        let stayed = sign_in_blocked(login, login, &denial);
         assert!(stayed.contains("still on"), "{stayed}");
         assert!(stayed.contains("do not close tabs"), "{stayed}");
         // The login wall tries such a login once more from the sign-in page.
@@ -27767,14 +27797,41 @@ mod tests {
 
     #[test]
     fn no_recovery_note_gives_a_safe_next_step() {
-        let note = no_recovery_note("the menu was still open");
-        assert!(note.contains("the menu was still open"), "{note}");
-        assert!(note.contains("Escape"), "{note}");
-        assert!(note.contains("do not close tabs"), "{note}");
-        assert!(
-            !note.contains("--all") && !note.contains("--launch"),
-            "{note}"
+        for manager in [None, Some("Bitwarden"), Some("1Password"), Some("LastPass")] {
+            let note = no_recovery_note_for("the menu was still open", manager);
+            assert!(note.contains("the menu was still open"), "{note}");
+            assert!(note.contains("do not close tabs"), "{note}");
+            assert!(
+                !note.contains("--all") && !note.contains("--launch"),
+                "{note}"
+            );
+        }
+        let unknown = no_recovery_note_for("x", None);
+        assert!(unknown.contains("Escape"), "{unknown}");
+        assert!(unknown.contains("If nothing is visible"), "{unknown}");
+        assert!(unknown.contains("Hide on this page"), "{unknown}");
+        let bitwarden = no_recovery_note_for("x", Some("Bitwarden"));
+        assert!(bitwarden.contains("Escape"), "{bitwarden}");
+    }
+
+    /// #872: 1Password's frame showed nothing, and the note told the user to
+    /// press Escape on a menu that was not there.
+    #[test]
+    fn no_recovery_note_for_1password_names_it_and_skips_escape() {
+        let id = "aeblfdkhhhdcdjpifhhbdiojplfjncoa";
+        let error = format!(
+            "debugger_access_denied: blocked. Frames of other extensions open in this browser: \
+             {id} (chrome://extensions/?id={id}); ..."
         );
+        let note = no_recovery_note(
+            "the pinned tab was not created by this session, and chrome-use does not switch \
+             the user's own tabs",
+            &error,
+        );
+        assert!(note.contains("most likely 1Password's"), "{note}");
+        assert!(note.contains("Hide on this page"), "{note}");
+        assert!(!note.contains("press Escape"), "{note}");
+        assert!(!note.contains("closes it with"), "{note}");
     }
 
     #[test]

@@ -3721,7 +3721,7 @@ pub struct RelayHealth {
 /// What `status` and `doctor` say while the extension lacks site access.
 pub const SITE_ACCESS_OFF: &str = "site access is off: when a password manager's menu \
     (Bitwarden, 1Password...) covers a field on a chrome-use tab while Chrome is behind another \
-    app, chrome-use cannot close it and waits for the user to press Escape";
+    app, chrome-use cannot close it and waits for the user to close it";
 /// How the user grants it: Chrome asks only after a click in the extension.
 pub const SITE_ACCESS_FIX: &str =
     "click the chrome-use icon in Chrome's toolbar, then \"Allow on all sites\" (once)";
