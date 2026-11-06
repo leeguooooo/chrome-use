@@ -8283,6 +8283,78 @@ async fn e2e_auth_login_bwu_reports_missing_code_on_challenge_page() {
     server.abort();
 }
 
+/// #864: an MFA step on the same page whose code box is described only by its
+/// placeholder (Aliyun RAM: `请输入 6 位数字安全码`, no otp-ish name, id or
+/// autocomplete; the submit button stays disabled until six digits).
+async fn security_code_fixture() -> (DaemonState, tokio::task::JoinHandle<()>, String) {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>Login</title>
+<form id="credentials"><input id="user" type="text" autocomplete="username"><input id="pw" type="password"><button>Sign in</button></form>
+<form id="challenge" hidden><input id="f1" type="text" placeholder="请输入 6 位数字安全码" maxlength="6"><button id="ok" disabled>确定</button><p role="alert"></p></form>
+<script>
+window.passwordSubmits = 0; window.codeSubmits = 0; window.code = '';
+credentials.onsubmit = e => { e.preventDefault(); passwordSubmits++; credentials.hidden = true; setTimeout(() => challenge.hidden = false, 300); };
+f1.oninput = () => { ok.disabled = !/^\d{6}$/.test(f1.value); };
+challenge.onsubmit = e => {
+  e.preventDefault(); codeSubmits++; code = f1.value;
+  challenge.hidden = true; document.body.insertAdjacentHTML('beforeend', '<h1>Console</h1>');
+};
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let origin = format!("http://127.0.0.1:{port}");
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    assert_success(
+        &execute_command(
+            &json!({"id":"n", "action":"navigate", "url":format!("{origin}/login")}),
+            &mut state,
+        )
+        .await,
+    );
+    (state, server, origin)
+}
+
+/// #864: the password step reports the pending security code instead of a
+/// sign-in, and `--totp` then finds the box and submits the code once.
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_fills_a_six_digit_security_code_field() {
+    let (mut state, server, origin) = security_code_fixture().await;
+    let first = Box::pin(execute_command(&json!({"id":"p", "action":"auth_login_bwu", "origin":origin, "username":"fixture@example.com", "password":"fixture-password"}), &mut state)).await;
+    assert_success(&first);
+    let d = get_data(&first);
+    assert_eq!(d["needs"], "a verification code", "{d}");
+    assert_ne!(d["signedIn"], true, "{d}");
+    let code = Box::pin(execute_command(&json!({"id":"c", "action":"auth_login_bwu", "origin":origin, "otp":"123456", "totpOnly":true}), &mut state)).await;
+    assert_success(&code);
+    assert_eq!(get_data(&code)["signedIn"], true, "{code}");
+    assert_evaluate(
+        &mut state,
+        "once",
+        "[passwordSubmits, codeSubmits, code]",
+        json!([1, 1, "123456"]),
+    )
+    .await;
+    let _ = execute_command(&json!({"id":"close", "action":"close"}), &mut state).await;
+    server.abort();
+}
+
+/// #864: with the code at hand, the default flow waits for the security-code
+/// box after the password and fills it.
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_defers_code_to_a_six_digit_security_code_field() {
+    let (mut state, server, origin) = security_code_fixture().await;
+    let first = Box::pin(execute_command(&json!({"id":"p", "action":"auth_login_bwu", "origin":origin, "username":"fixture@example.com", "password":"fixture-password", "deferOtp":true}), &mut state)).await;
+    assert_success(&first);
+    let d = get_data(&first);
+    assert_eq!(d["needs"], "a verification code", "{d}");
+    assert_eq!(d["otp"], "deferred", "{d}");
+    assert_ne!(d["signedIn"], true, "{d}");
+    let _ = execute_command(&json!({"id":"close", "action":"close"}), &mut state).await;
+    server.abort();
+}
+
 #[tokio::test]
 #[ignore]
 async fn e2e_auth_login_bwu_keeps_hint_only_challenges_pending() {
