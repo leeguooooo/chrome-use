@@ -288,17 +288,19 @@ fn active_target(session: &str) -> Option<String> {
 /// `session handoff` without `--wait`, before the session changes hands:
 /// record its tab so the panel shows the handoff there. A handoff already in
 /// place keeps its record; a session with no browser has no tab to record.
-pub fn record_plain(session: &str) {
+/// Whether a record was written, for the caller to drop if the handoff fails.
+pub fn record_plain(session: &str) -> bool {
     if ownership::owner_of(session) == Owner::User || !crate::connection::daemon_ready(session) {
-        return;
+        return false;
     }
     let Some(target) = active_target(session) else {
-        return;
+        return false;
     };
-    let _ = std::fs::write(
+    std::fs::write(
         baseline_path(session),
         json!({"since": now_ms(), "target": target}).to_string(),
-    );
+    )
+    .is_ok()
 }
 
 /// One quick isolated-world check of a text / selector condition. `Ok(false)`
