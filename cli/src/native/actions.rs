@@ -25375,22 +25375,39 @@ fn segment_words(seg: &str) -> Vec<String> {
     words
 }
 
-/// Whether `url` looks like a verification step rather than a signed-in page.
-fn verification_page(url: &str) -> bool {
+/// The verification words in the path of `url` (`two` + `factor` counts as
+/// `twofactor`).
+fn verification_markers(url: &str) -> Vec<String> {
     let Ok(u) = url::Url::parse(url) else {
-        return false;
+        return Vec::new();
     };
-    u.path_segments().into_iter().flatten().any(|seg| {
+    let mut markers = Vec::new();
+    for seg in u.path_segments().into_iter().flatten() {
         let words = segment_words(seg);
-        words
-            .iter()
-            .any(|w| VERIFY_SEGMENT_WORDS.contains(&w.as_str()))
-            || words.windows(2).any(|p| p[0] == "two" && p[1] == "factor")
-    })
+        for w in &words {
+            if VERIFY_SEGMENT_WORDS.contains(&w.as_str()) && !markers.contains(w) {
+                markers.push(w.clone());
+            }
+        }
+        if words.windows(2).any(|p| p[0] == "two" && p[1] == "factor")
+            && !markers.iter().any(|m| m == "twofactor")
+        {
+            markers.push("twofactor".to_string());
+        }
+    }
+    markers
+}
+
+/// Whether `url` looks like a verification step rather than a signed-in page.
+#[cfg(test)]
+fn verification_page(url: &str) -> bool {
+    !verification_markers(url).is_empty()
 }
 
 /// Whether a page after the submit is a verification step: never the sign-in
-/// page itself, whose own URL may carry such a word.
+/// page itself, whose own URL may carry such a word, and only for a word the
+/// sign-in page's path does not already have (a site whose whole sign-in
+/// area lives under `/challenge/` is not on a check for that alone).
 fn verification_step(login_url: &str, url: &str) -> bool {
     let same = match (url::Url::parse(login_url), url::Url::parse(url)) {
         (Ok(a), Ok(b)) => {
@@ -25399,7 +25416,13 @@ fn verification_step(login_url: &str, url: &str) -> bool {
         }
         _ => false,
     };
-    !same && verification_page(url)
+    if same {
+        return false;
+    }
+    let before = verification_markers(login_url);
+    verification_markers(url)
+        .iter()
+        .any(|m| !before.contains(m))
 }
 
 /// The failure for a login whose form went away onto a verification page.
@@ -27654,6 +27677,15 @@ mod tests {
         assert!(verification_step(
             login,
             "https://example.com/challenge/verifyPhone"
+        ));
+        // A word the sign-in page's path already has is not new evidence.
+        assert!(!verification_step(
+            login,
+            "https://example.com/challenge/home"
+        ));
+        assert!(verification_step(
+            "https://example.com/login",
+            "https://example.com/challenge/home"
         ));
         assert_eq!(segment_words("verifyPhone"), ["verify", "phone"]);
         assert_eq!(segment_words("2FA-Setup"), ["2fa", "setup"]);

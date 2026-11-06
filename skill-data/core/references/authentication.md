@@ -206,9 +206,10 @@ expires, inspect the page and use `--totp` on its authenticator challenge.
   quoting the page's own message when it shows one; a page it cannot read is
   a failure too. A form that went away onto a verification page (a URL path
   with `verify`, `challenge`, `checkpoint`, `captcha`, `2fa` or `mfa`, such as
-  a phone check) fails with `the sign-in was not confirmed`, naming that page:
-  the code it wants comes from the user. Pressing a key is never reported as a
-  login.
+  a phone check) and still on it after those 12 s fails with `the sign-in was
+  not confirmed`, naming that page: the code it wants comes from the user. A
+  check that moves on by itself to the signed-in page within that time is a
+  sign-in (`signedIn: true`). Pressing a key is never reported as a login.
 - **The username guess stays beside the password.** When no field matches a
   username selector, the broad guess (`input[type=text]`) takes only a text
   box before the password field in that field's own form or dialog, and
