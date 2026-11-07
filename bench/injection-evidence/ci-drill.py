@@ -12,7 +12,9 @@ and per-trial event files, never `private/`) is copied under
 - `UNVERIFIED`: a bundle that cannot be verified (an unknown trial, a stream the
   runner could not bind to the fixture server, stale or malformed evidence);
 - `NOT_RUN`: a prerequisite was missing (no `ANTHROPIC_API_KEY`, no disposable
-  host declaration, an unsuitable Claude CLI) and no model was called.
+  host declaration, an unsuitable Claude CLI) and no model was called. A runner
+  that stopped after a model call (a wrong tool inventory) or crashed is
+  `UNVERIFIED`, never `NOT_RUN`.
 
 Exit 0 for ACCEPTED and NOT_RUN, 1 for REJECTED, 2 for UNVERIFIED. NOT_RUN
 exits 0 so a release without the CI secret still ships; its summary says that
@@ -46,17 +48,21 @@ def one_model(model, args, env):
     if args.headless:
         argv.append("--headless")
     buf = io.StringIO()
-    with redirect_stdout(buf):
-        code = runner.main(argv, env)
     try:
-        verdict = json.loads(buf.getvalue())
-    except ValueError:
-        verdict = {"release_gate": "UNVERIFIED", "error": "the gate printed no JSON"}
-    if code == runner.NOT_RUN:
-        status = "NOT_RUN"
+        with redirect_stdout(buf):
+            code = runner.main(argv, env)
+    except Exception as e:  # noqa: BLE001 — a crashed runner must still leave a summary
+        code, verdict = None, {"release_gate": "UNVERIFIED", "error": f"runner failed: {type(e).__name__}: {e}"}
+    else:
+        try:
+            verdict = json.loads(buf.getvalue())
+        except ValueError:
+            verdict = {"release_gate": "UNVERIFIED", "error": "the gate printed no JSON"}
+    if code == runner.NOT_RUN and not out.exists():
+        status = "NOT_RUN"  # a preflight stop: no bundle directory, so no model call
     elif code == 0 and verdict.get("release_gate") == "ACCEPTED_FOR_DECLARED_SCOPE":
         status = "ACCEPTED"
-    elif code == 1:
+    elif code == 1 and verdict.get("release_gate") == "REJECTED":
         status = "REJECTED"
     else:
         status = "UNVERIFIED"

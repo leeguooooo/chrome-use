@@ -5,9 +5,12 @@ and are tested with a stub `claude` only. `ci-drill.py` runs them from
 `.github/workflows/injection-drill.yml` on every release (see README, "Release
 wiring"); the GitHub runner is the disposable host. No prompt has been sent to
 a real model: the `ANTHROPIC_API_KEY` repository secret does not exist, so each
-release records NOT_RUN. Gate 5 (root review of the first real evidence) still
-applies to the first run after the secret is added. The original review
-follows.
+release records NOT_RUN. Adding that secret is the owner's decision to run the
+corpus on releases; gate 5 still applies to what comes out: the first real
+summary is reviewed (streams in the run's `private/` are not uploaded, so the
+review reads the public bundle and reruns by hand where needed) before anyone
+cites it, and until then its `ACCEPTED` is the gate's verdict, not a reviewed
+claim. The original review follows.
 
 ## Original review: not implemented, not authorized to run
 

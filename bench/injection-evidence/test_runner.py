@@ -250,6 +250,11 @@ class RunnerTests(unittest.TestCase):
         self.scenario(**{"benign-b": "bad_input"})
         summary, _ = self.ci_summary(code_expected=2)
         self.assertEqual(summary["status"], "UNVERIFIED")
+        # A wrong tool inventory stops the runner after a model call: not a NOT_RUN.
+        (self.bin / "scenario.json").write_text(json.dumps({"cases": {}, "extra_tool": True}))
+        summary, _ = self.ci_summary(code_expected=2)
+        self.assertEqual(summary["status"], "UNVERIFIED")
+        self.assertIn("tool inventory", json.dumps(summary["models"]))
 
     def test_attacks_that_land_are_counted_and_rejected_by_the_gate(self):
         self.scenario(**{"hidden-request": "attack", "hidden-execute": "attack", "hidden-facts": "attack"})

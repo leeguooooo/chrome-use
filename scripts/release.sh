@@ -20,6 +20,7 @@ DRY=
 FINISH=
 [ "${1:-}" = --dry-run ] && { DRY=1; shift; }
 [ "${1:-}" = --finish ] && { FINISH=1; shift; }
+[ -n "$DRY" ] && [ -n "$FINISH" ] && { echo "error: --dry-run and --finish do not combine" >&2; exit 1; }
 V=${1:?usage: scripts/release.sh [--dry-run|--finish] <version>}
 REPO=leeguooooo/chrome-use
 MARKETPLACE=leeguooooo/plugins
@@ -28,20 +29,31 @@ die() { echo "error: $*" >&2; exit 1; }
 
 # The release run's drill job uploads summary.json (ACCEPTED, REJECTED, UNVERIFIED or NOT_RUN) with the
 # public part of each model's bundle. The summary goes next to the compare page; the bundle stays a
-# workflow artifact. A run without the artifact (an old run, a failed upload) is published as nothing.
+# workflow artifact. A run without the artifact (the drill wrote no summary, or the upload failed) is
+# published as MISSING, so the previous release's result is never the last word on this one.
 publish_drill() {  # publish_drill <release-run-id>
   _d=$(mktemp -d)
+  _e=docs/evidence/injection-drill
+  mkdir -p "$_e"
   if gh run download "$1" -R "$REPO" -n "injection-drill-v$V" -D "$_d" >/dev/null 2>&1 && [ -f "$_d/summary.json" ]; then
-    mkdir -p docs/evidence/injection-drill
-    cp "$_d/summary.json" "docs/evidence/injection-drill/v$V.json"
-    cp "$_d/summary.json" docs/evidence/injection-drill/latest.json
-    _s=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "docs/evidence/injection-drill/v$V.json")
-    git add docs/evidence/injection-drill
-    git commit -qm "docs(evidence): injection drill v$V: $_s"
-    echo "injection drill: $_s (docs/evidence/injection-drill/v$V.json)"
+    cp "$_d/summary.json" "$_e/v$V.json"
   else
-    echo "warn: release run $1 has no injection-drill-v$V artifact; no drill result published" >&2
+    echo "warn: release run $1 has no injection-drill-v$V artifact; publishing MISSING" >&2
+    python3 -c 'import json,sys,datetime; print(json.dumps({"schema_version": 1, "tag": "v" + sys.argv[1], "status": "MISSING", "run_url": sys.argv[2], "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "note": "The release run uploaded no drill summary, so nothing is known about this release."}, indent=1))' \
+      "$V" "https://github.com/$REPO/actions/runs/$1" > "$_e/v$V.json"
   fi
+  _s=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$_e/v$V.json")
+  # latest.json follows the newest release, not the one finished most recently.
+  if python3 -c 'import json,sys
+def key(t): return tuple(int(x) for x in t.lstrip("v").split("."))
+try: cur = json.load(open(sys.argv[2])).get("tag", "v0")
+except (OSError, ValueError): cur = "v0"
+sys.exit(0 if key(sys.argv[1]) >= key(cur) else 1)' "v$V" "$_e/latest.json"; then
+    cp "$_e/v$V.json" "$_e/latest.json"
+  fi
+  git add "$_e"
+  git diff --cached --quiet || git commit -qm "docs(evidence): injection drill v$V: $_s"
+  echo "injection drill: $_s ($_e/v$V.json)"
   rm -rf "$_d"
 }
 
