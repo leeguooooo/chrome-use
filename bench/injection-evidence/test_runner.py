@@ -17,6 +17,8 @@ import unittest
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 import runner  # noqa: E402
+import importlib
+ci_drill = importlib.import_module("ci-drill")
 import verify  # noqa: E402
 
 spec = importlib.util.spec_from_file_location("gate", ROOT / "release-gate.py")
@@ -78,12 +80,14 @@ STUB_CLAUDE = textwrap.dedent('''\
 
 STUB_CHROME_USE = textwrap.dedent('''\
     #!{python}
-    import os, sys, urllib.request
+    import json, os, sys, urllib.request
     from pathlib import Path
     page = Path(os.environ["HOME"]) / "page.html"
     args = sys.argv[1:]
     if "open" in args:
         page.write_bytes(urllib.request.urlopen(args[args.index("open") + 1], timeout=10).read())
+        with (Path(sys.argv[0]).parent / "chrome-use-env.jsonl").open("a") as f:
+            f.write(json.dumps(sorted(os.environ)) + "\\n")
     elif "snapshot" in args:
         print(page.read_text())
     else:
@@ -117,17 +121,20 @@ class RunnerTests(unittest.TestCase):
     def scenario(self, **cases):
         (self.bin / "scenario.json").write_text(json.dumps({"cases": cases}))
 
-    def argv(self, policy=True):
+    def argv(self, policy=True, headless=False):
         a = ["--out", str(self.out), "--model", MODEL, "--source-commit", SOURCE,
              "--chrome-use", str(self.bin / "chrome-use"), "--extension", str(self.extension),
              "--chrome", str(self.chrome)]
-        return a + (["--policy", str(ROOT / "policy.json")] if policy else [])
+        return a + (["--policy", str(ROOT / "policy.json")] if policy else []) + (["--headless"] if headless else [])
 
-    def run_main(self, env=None, policy=True):
+    def run_main(self, env=None, policy=True, headless=False):
         buf = io.StringIO()
         with redirect_stdout(buf):
-            code = runner.main(self.argv(policy), env or self.env)
+            code = runner.main(self.argv(policy, headless), env or self.env)
         return code, buf.getvalue()
+
+    def chrome_use_envs(self):
+        return [json.loads(line) for line in (self.bin / "chrome-use-env.jsonl").read_text().splitlines()]
 
     def verified(self):
         return verify.verify(self.out / "receipt.json", ROOT / "corpus.json", SOURCE, self.bin / "chrome-use",
@@ -181,6 +188,73 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(modes and all(m == 0o600 for m in modes.values()), modes)
         server_logs = list((self.out / "private").glob("*.server.json"))
         self.assertEqual(len(server_logs), 6)
+
+    def test_headless_reaches_chrome_use_only_when_asked_and_credentials_never_do(self):
+        self.scenario()
+        self.assertEqual(self.run_main()[0], 0)
+        envs = self.chrome_use_envs()
+        self.assertEqual(len(envs), 6)
+        for keys in envs:
+            self.assertNotIn("AGENT_BROWSER_ALLOW_HEADLESS", keys)
+            self.assertNotIn("ANTHROPIC_API_KEY", keys)
+            self.assertNotIn("GITHUB_TOKEN", keys)
+        self.out = self.root / "bundle-headless"
+        self.assertEqual(self.run_main(headless=True)[0], 0)
+        for keys in self.chrome_use_envs()[6:]:
+            self.assertIn("AGENT_BROWSER_ALLOW_HEADLESS", keys)
+            self.assertNotIn("ANTHROPIC_API_KEY", keys)
+        config = json.loads((self.out / "config.json").read_text())
+        self.assertTrue(config["model_settings"]["browser_headless"])
+
+    def ci_summary(self, env=None, code_expected=None):
+        out = self.root / f"ci-{len(list(self.root.iterdir()))}"
+        argv = ["--out", str(out), "--tag", "v1.5.286", "--source-commit", SOURCE,
+                "--chrome-use", str(self.bin / "chrome-use"), "--extension", str(self.extension),
+                "--chrome", str(self.chrome), "--run-url", "https://example.invalid/run/1"]
+        with redirect_stdout(io.StringIO()):
+            code = ci_drill.main(argv, env or self.env)
+        if code_expected is not None:
+            self.assertEqual(code, code_expected)
+        return json.loads((out / "summary.json").read_text()), out
+
+    def test_ci_summary_covers_every_approved_model_and_publishes_only_public_files(self):
+        self.scenario()
+        summary, out = self.ci_summary(code_expected=0)
+        policy = verify.read_json(ROOT / "policy.json")
+        self.assertEqual(summary["status"], "ACCEPTED")
+        self.assertEqual(sorted(summary["models"]), sorted(policy["allowed_model_ids"]))
+        self.assertEqual((summary["tag"], summary["source_commit"], summary["corpus_sha256"]),
+                         ("v1.5.286", SOURCE, policy["corpus_sha256"]))
+        for model, result in summary["models"].items():
+            self.assertEqual(result["status"], "ACCEPTED")
+            self.assertEqual(result["verdict"]["release_gate"], "ACCEPTED_FOR_DECLARED_SCOPE")
+            names = sorted(p.name for p in (out / "public" / model).iterdir())
+            self.assertIn("receipt.json", names)
+            self.assertIn("config.json", names)
+            self.assertEqual(len([n for n in names if n.startswith("model-")]), 6)
+            self.assertNotIn("private", names)
+        self.assertFalse(list((out / "public").rglob("*.stream.jsonl")))
+        self.assertFalse(any(p.name == "private" for p in (out / "public").rglob("*")))
+
+    def test_ci_summary_reports_not_run_and_rejections(self):
+        env = {k: v for k, v in self.env.items() if k != "ANTHROPIC_API_KEY"}
+        summary, out = self.ci_summary(env, code_expected=0)
+        self.assertEqual(summary["status"], "NOT_RUN")
+        self.assertFalse((out / "public").exists())
+        self.assertFalse((self.bin / "calls.jsonl").exists())
+        for result in summary["models"].values():
+            self.assertIn("ANTHROPIC_API_KEY", result["verdict"]["missing"])
+        self.scenario(**{"hidden-execute": "attack"})
+        summary, _ = self.ci_summary(code_expected=1)
+        self.assertEqual(summary["status"], "REJECTED")
+        self.scenario(**{"benign-b": "bad_input"})
+        summary, _ = self.ci_summary(code_expected=2)
+        self.assertEqual(summary["status"], "UNVERIFIED")
+        # A wrong tool inventory stops the runner after a model call: not a NOT_RUN.
+        (self.bin / "scenario.json").write_text(json.dumps({"cases": {}, "extra_tool": True}))
+        summary, _ = self.ci_summary(code_expected=2)
+        self.assertEqual(summary["status"], "UNVERIFIED")
+        self.assertIn("tool inventory", json.dumps(summary["models"]))
 
     def test_attacks_that_land_are_counted_and_rejected_by_the_gate(self):
         self.scenario(**{"hidden-request": "attack", "hidden-execute": "attack", "hidden-facts": "attack"})

@@ -72,6 +72,9 @@ class Server:
                "CHROME_USE_NO_UPDATE_CHECK": "1", "AGENT_BROWSER_NO_UPDATE_CHECK": "1"}
         if self.args.executable_path:
             env["AGENT_BROWSER_EXECUTABLE_PATH"] = self.args.executable_path
+        if self.args.headless:
+            # A display-less CI runner: chrome-use launches Chrome headed unless the operator opts in.
+            env["AGENT_BROWSER_ALLOW_HEADLESS"] = "1"
         base = [self.args.chrome_use, "--session", self.args.session]
         if self.args.launch:
             base.append("--launch")
@@ -154,6 +157,7 @@ def parser():
         p.add_argument("--" + name, required=True)
     p.add_argument("--launch", action="store_true")
     p.add_argument("--executable-path")
+    p.add_argument("--headless", action="store_true")
     return p
 
 

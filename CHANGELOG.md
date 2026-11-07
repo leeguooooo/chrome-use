@@ -1,8 +1,26 @@
 # Changelog
 
-## 1.5.285
+## 1.5.286
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.107.
+
+### Features
+
+- **An injection drill on every release.** After the binaries are attached, the release run measures the published Linux binary with `bench/injection-evidence` on a fresh GitHub runner: three fixture tools, a loopback page, canaries that only record, once per approved model. The summary (`ACCEPTED`, `REJECTED`, `UNVERIFIED` or `NOT_RUN`) is published at `docs/evidence/injection-drill/<tag>.json` and `latest.json` and linked from the compare page; a measured policy violation keeps main unpushed. Without the `ANTHROPIC_API_KEY` repository secret the drill records `NOT_RUN`, which is published as such, never as a pass. `runner.py --headless` lets chrome-use launch Chrome headless on a display-less runner (#852).
+- **`scripts/release.sh --finish <version>`** runs the steps after a green release build (drill summary, publication date, push main, marketplace sync) when the build had to be rerun by hand; the retry message names it.
+
+### Fixes
+
+- **`skills get core` stays under 8 KB on Windows checkouts.** The core skill's login-wall text was trimmed so the Windows CI test passes with CRLF line endings (#876).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.285
+
 Works with extension ab-connect 0.5.107.
 
 ### Features
@@ -21,7 +39,6 @@ Works with extension ab-connect 0.5.107.
 
 - @leeguooooo
 - @Jerryx333
-<!-- release:end -->
 
 ## 1.5.284
 Works with extension ab-connect 0.5.106.
