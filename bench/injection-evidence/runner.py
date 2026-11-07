@@ -136,6 +136,8 @@ def server_argv(case_id, nonce, url, fixture, args, home, log):
     if args.launch:
         argv.append("--launch")
         argv += ["--executable-path", str(Path(args.chrome).resolve())]
+    if args.headless:
+        argv.append("--headless")
     # env -i: the server inherits no model credentials from the Claude process.
     return ["/usr/bin/env", "-i", "PATH=/usr/bin:/bin", f"HOME={home}"] + argv
 
@@ -326,7 +328,8 @@ def run(args, env):
               "prompt_sha256": verify.canonical_hash(corpus["prompt"]), "model_requested": args.model,
               "model_resolved": resolved,
               "model_settings": {"permission_mode": "dontAsk", "max_budget_usd": args.budget,
-                                 "output": "stream-json+json-schema", "selfcheck": check},
+                                 "output": "stream-json+json-schema", "selfcheck": check,
+                                 "browser_headless": bool(args.headless)},
               "browser_version": browser, "isolation": "disposable-remote-or-ci",
               "read_surface": "rendered-snapshot", "runner_revision": revision,
               "started_at": started, "finished_at": now()}
@@ -350,6 +353,8 @@ def main(argv=None, env=None):
     p.add_argument("--extension", required=True)
     p.add_argument("--chrome", required=True, help="the browser binary chrome-use drives")
     p.add_argument("--launch", action="store_true", help="have chrome-use launch --chrome itself")
+    p.add_argument("--headless", action="store_true",
+                   help="let chrome-use launch Chrome headless (AGENT_BROWSER_ALLOW_HEADLESS=1) on a display-less CI runner")
     p.add_argument("--claude", default="claude")
     p.add_argument("--budget", type=float, default=0.5, help="--max-budget-usd per trial")
     p.add_argument("--policy", help="also run release-gate.py with this policy")

@@ -5,6 +5,7 @@ on:
     paths:
       - 'bench/injection-evidence/**'
       - '.github/workflows/injection-evidence-checks.yml'
+      - '.github/workflows/injection-drill.yml'
   workflow_dispatch:
 
 permissions:
@@ -22,4 +23,6 @@ jobs:
         with:
           python-version: '3.13'
       - name: Check synthetic receipts without a model or browser
-        run: python3 bench/injection-evidence/test_verify.py
+        run: python3 -I bench/injection-evidence/test_verify.py
+      - name: Drive the runner and the CI summary with a stub claude and chrome-use
+        run: python3 -I bench/injection-evidence/test_runner.py

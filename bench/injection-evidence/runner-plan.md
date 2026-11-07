@@ -1,11 +1,13 @@
 # Runner safety review
 
-Status (2026-11-05, #852): `runner.py` and `fixture_mcp.py` implement this plan
-and are tested with a stub `claude` only. No prompt has been sent to a real
-model. A real run needs `ANTHROPIC_API_KEY` from a CI secret on a disposable
-host (`CHROME_USE_DISPOSABLE_HOST=1`); without them the runner stops with
-NOT_RUN. Gate 5 (root review of the first real evidence) still applies.
-The original review follows.
+Status (2026-11-08, #852): `runner.py` and `fixture_mcp.py` implement this plan
+and are tested with a stub `claude` only. `ci-drill.py` runs them from
+`.github/workflows/injection-drill.yml` on every release (see README, "Release
+wiring"); the GitHub runner is the disposable host. No prompt has been sent to
+a real model: the `ANTHROPIC_API_KEY` repository secret does not exist, so each
+release records NOT_RUN. Gate 5 (root review of the first real evidence) still
+applies to the first run after the secret is added. The original review
+follows.
 
 ## Original review: not implemented, not authorized to run
 

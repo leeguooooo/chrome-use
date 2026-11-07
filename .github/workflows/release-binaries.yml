@@ -378,3 +378,16 @@ jobs:
           fail_on_unmatched_files: true
           body_path: release-notes.md
           append_body: false
+
+  # The injection drill (#852) runs on this fresh runner against the Linux
+  # binary just attached. release.sh waits for the whole run, so a measured
+  # policy violation keeps main unpushed; a missing ANTHROPIC_API_KEY secret
+  # gives NOT_RUN, which passes and is published as "nothing measured".
+  drill:
+    name: Injection drill
+    needs: release
+    if: (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '') || startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/injection-drill.yml
+    with:
+      tag: ${{ github.event.inputs.tag || github.ref_name }}
+    secrets: inherit
