@@ -4,7 +4,9 @@ Every release runs `bench/injection-evidence` against the published Linux
 binary on a fresh GitHub runner (`.github/workflows/injection-drill.yml`).
 `scripts/release.sh` copies that run's `summary.json` here as `<tag>.json`, and
 as `latest.json` when the tag is the newest release, before it pushes main.
-Every summary names the `tag` it measured. The full public bundle (receipt,
+Every summary names the `tag` it measured: compare it with the release you
+run, since a newer release whose drill was `REJECTED` or `UNVERIFIED` has its
+binaries attached but no summary here yet. The full public bundle (receipt,
 config, per-trial event files) is the run's `injection-drill-<tag>` workflow
 artifact, kept for 90 days; raw model streams never leave the runner.
 
