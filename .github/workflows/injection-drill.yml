@@ -4,7 +4,9 @@ name: Injection drill
 # disposable GitHub runner (#852): a fresh VM with no personal profiles, files
 # or vaults, which is what CHROME_USE_DISPOSABLE_HOST=1 declares. Called from
 # release-binaries.yml after the Release exists, or dispatched by hand for an
-# existing tag.
+# existing tag. The bench code comes from the ref this workflow runs on (the
+# tag itself when called from the release run); the binary and the extension
+# are the tag's.
 #
 # Without the ANTHROPIC_API_KEY secret the runner stops with NOT_RUN before any
 # model call and this job still succeeds: the summary then says nothing was
@@ -39,11 +41,18 @@ jobs:
       # CLI whose --help lacks one of the isolation flags it relies on.
       CLAUDE_CODE_VERSION: "2.1.319"
     steps:
-      - name: Checkout the tag
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ inputs.tag }}
           persist-credentials: false
+
+      - name: Resolve the tag's commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" -q .sha)
+          echo "$sha" | grep -Eq '^[0-9a-f]{40}$'
+          echo "SOURCE_COMMIT=$sha" >> "$GITHUB_ENV"
+          echo "measuring $TAG at $sha; bench code from $(git rev-parse HEAD)"
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -60,10 +69,14 @@ jobs:
           tar xzf chrome-use-linux-x64.tar.gz
           ./chrome-use --version
 
-      - name: Unpack the shipped extension
+      - name: Unpack the extension shipped with the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir measured/extension
-          unzip -q extensions/ab-connect.zip -d measured/extension
+          gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GITHUB_REPOSITORY/contents/extensions/ab-connect.zip?ref=$TAG" > measured/ab-connect.zip
+          unzip -q measured/ab-connect.zip -d measured/extension
           echo "extension $(python3 -c "import json; print(json.load(open('measured/extension/manifest.json'))['version'])")"
 
       - name: Install Claude Code
@@ -81,7 +94,7 @@ jobs:
           CHROME_USE_DISPOSABLE_HOST: "1"
         run: |
           python3 -I bench/injection-evidence/ci-drill.py --out drill --tag "$TAG" \
-            --source-commit "$(git rev-parse HEAD)" \
+            --source-commit "$SOURCE_COMMIT" \
             --chrome-use measured/chrome-use --extension measured/extension \
             --chrome /usr/bin/google-chrome --launch --headless \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
