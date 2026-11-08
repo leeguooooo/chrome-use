@@ -211,10 +211,8 @@
       </div>
 
       <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ 文本回读不一致？type 会警告，fill 会报错</div>
-        <code>type</code> 打完会回读字段：如果里面没有刚输入的文本，会打印 ⚠ 警告，引用写入的内容和字段当前的值
-        （退出码仍为 0，JSON 多出 <code>readBack</code>）。<code>fill</code> 校验失败时的报错同样引用两边的值，
-        文本回读不一致并不能证明页面限制了输入。富文本编辑器可能把字符保存在行内元素中，而纯文本回读会遗漏这些内容。重试或修改文本前，请先检查字段。
+        <div class="du-callout-title">ℹ️ 文本回读校验</div>
+        <code>type</code> 会检查文本回读是否包含输入内容。对于普通文本，回读不匹配且为空或与输入前相同时会报错（退出码 1）。包含 Enter、回车或 Tab 的文本不适用这条报错规则。其他不匹配会打印 ⚠ 警告（退出码 0，JSON <code>readBack</code>）。 <code>fill</code> 校验报错会描述回读差异；普通值可能直接引用，空值或敏感值会隐藏（例如 <code>read back an empty value after writing (value hidden)</code>），Monaco-native 校验则报告字符数。 文本回读不一致并不能证明页面限制了输入。富文本编辑器可能把字符保存在行内元素中，而纯文本回读会遗漏这些内容。重试或修改文本前，请先检查字段。
       </div>
 
       <div class="du-callout warn">

@@ -217,10 +217,8 @@
       </div>
 
       <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ Text readback differs? type warns, fill errors</div>
-        After <code>type</code> the field is read back: if it does not contain the typed text, a ⚠ warning quotes
-        what was written and what the field now holds (exit 0, JSON gains <code>readBack</code>). A <code>fill</code>
-        verification failure quotes both values too, e.g. <code>read back "" after writing "千代田区"</code>. A text readback mismatch does not establish an input restriction. Rich-text editors can retain characters in inline elements that plain-text readback omits. Inspect the field before retrying or changing the text.
+        <div class="du-callout-title">ℹ️ Text readback verification</div>
+        <code>type</code> checks whether text readback contains the typed text. For ordinary text, a mismatch with empty or unchanged readback is an error (exit 1). Text containing Enter, carriage return or Tab is exempt from that error. Other mismatches produce a ⚠ warning (exit 0, JSON <code>readBack</code>). A <code>fill</code> verification error describes the mismatch; it may quote ordinary values, hide values (e.g. <code>read back an empty value after writing (value hidden)</code>), or report character counts for Monaco-native verification. A text readback mismatch does not establish an input restriction. Rich-text editors can retain characters in inline elements that plain-text readback omits. Inspect the field before retrying or changing the text.
       </div>
 
       <div class="du-callout warn">

@@ -153,11 +153,14 @@ chrome-use upload @e1 file.pdf # Upload files; consumed/cleared dropzones warn b
 
 Drag mode follows the current session connection and target frame; an extension running in another Chrome profile does not change a launched browser’s drag mode.
 
-`type` reads the field back and prints a ⚠ warning (exit 0, JSON `readBack`)
-when the text readback does not contain what was typed. `fill` verification
-errors describe the requested text and observed readback without inferring an
-input restriction. Rich editors can retain characters in inline elements that
-plain-text readback omits. Inspect the field before retrying or changing the text. `press` warns (exit 0, JSON `keyListeners`)
+`type` checks whether text readback contains what was typed. For ordinary text,
+a mismatch with empty or unchanged readback is an error (exit 1). Text containing
+Enter, carriage return or Tab is exempt from that error. Other mismatches produce
+a ⚠ warning (exit 0, JSON `readBack`). `fill` mismatches are errors; values may be
+hidden or shown as character counts depending on the field and engine.
+Neither result proves an input restriction. Rich editors can retain characters
+in inline elements that plain-text readback omits. Inspect the field before
+retrying or changing the text. `press` warns (exit 0, JSON `keyListeners`)
 when a JavaScript-only key (Arrow/Home/End/PageUp/PageDown on a text field,
 Escape, Enter on a bare input outside a form) finds no keydown/keyup/keypress
 listener from the focused element up to window: the page cannot react, click

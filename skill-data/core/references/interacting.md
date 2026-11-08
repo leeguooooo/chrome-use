@@ -23,6 +23,7 @@ chrome-use get text @e6
 chrome-use wait --text "<expected page text>"  # case-sensitive substring
 ```
 
+
 `wait --text` matches an exact, case-sensitive substring of the page's visible
 text. Use the actual expected page wording: `Saved` will not match
 `Delivery saved.` When a receipt or confirmation is already visible, that is
@@ -68,7 +69,7 @@ exists, and lost its verification and hints. Use the command:
 | `getBoundingClientRect()` | `get box <sel or @ref>` |
 | patching `fetch`/XHR to see an API response | `network requests --filter api`, then `network request <id>` (reads the body from its original renderer; `responseBodyError` explains an unavailable body) |
 | `sleep N` or a polling loop | `wait --text "…"`, `wait <sel>`, `wait --url <pattern>`, `wait --fn "<expr>"` |
-| setting `.value` through a native setter | `fill @eN "…"`: it reads the value back and says when it did not stick |
+| setting `.value` through a native setter | `fill @eN "…"`: it reads the value back and reports verification failures |
 | injecting a script before the page runs | `addinitscript <js>`, then `reload` |
 
 Keep `eval` for what no command does: page globals, framework stores, canvas,
@@ -92,10 +93,10 @@ chrome-use hover @e1                   # hover: real pointer move at a point whe
                                           # missed it is an error ("did not take effect")
 chrome-use focus @e1                   # focus (useful before keyboard input)
 chrome-use fill @e2 "hello"            # clear then type (verified by read-back;
-                                          # a mismatch error quotes both values and
-                                          # does not infer an input restriction)
-chrome-use type @e2 " world"           # type without clearing (read back too: ⚠
-                                          # warning, exit 0, if the page rewrote it)
+                                          # mismatch errors may hide values or use counts)
+chrome-use type @e2 " world"           # type without clearing; readback mismatch:
+                                          # empty/unchanged -> error (exit 1) for ordinary text;
+                                          # other mismatch -> warning (exit 0, JSON readBack)
 chrome-use type @e5 "100-0001" --key-events  # real keystrokes (not insertText) —
                                           # use for autocomplete/combobox fields that
                                           # only react to key events (e.g. a postal box
@@ -164,6 +165,13 @@ chrome-use drag @e1 60                 # drag a handle by +60px (slider/canvas);
 chrome-use solve-slider                # auto-solve a 网易易盾 slider-puzzle captcha on the page
 chrome-use solve-slider 5              # ...retry up to 5 times (refreshes the puzzle on a miss)
 ```
+
+For `type`, text containing Enter, carriage return or Tab is exempt from the
+empty/unchanged-readback error. A mismatch does not prove input was rejected:
+rich editors may retain characters in inline elements that text readback omits.
+Inspect the field before retrying or changing the text. `fill` mismatch errors
+may quote ordinary values, hide empty/sensitive values, or report character
+counts for Monaco-native verification.
 
 **The `@ref` contract: a ref acts on the element it named, or it errors.** Every
 verb above re-checks the ref's role + name against the live accessibility tree

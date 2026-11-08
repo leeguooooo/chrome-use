@@ -68,6 +68,8 @@ async fn e2e_contenteditable_fill_preserves_focus_and_native_events() {
     server.abort();
 }
 
+/// Inline emoji images can survive both partial and empty text readbacks.
+/// Verification must remain strict without diagnosing an input filter.
 #[tokio::test]
 #[ignore]
 async fn e2e_readback_mismatch_does_not_infer_an_input_filter() {
@@ -117,41 +119,53 @@ async fn e2e_readback_mismatch_does_not_infer_an_input_filter() {
         requested
     );
 
-    for action in ["fill", "type"] {
-        eval_in(
-            &mut state,
-            "document.getElementById('editor').textContent = ''",
-        )
-        .await;
-        let response = run_cmd(
+    for (requested, expected_readback) in
+        [("hello \u{1f642} world", "hello  world"), ("\u{1f642}", "")]
+    {
+        for action in ["fill", "type"] {
+            eval_in(
+                &mut state,
+                "document.getElementById('editor').textContent = ''",
+            )
+            .await;
+            let response = run_cmd(
             &mut state,
             json!({"id":action,"action":action,"selector":"#editor","value":requested,"text":requested}),
         ).await;
-        let diagnostic = if action == "fill" {
-            assert_eq!(response["success"], false, "{response}");
-            response["error"].as_str().unwrap()
-        } else {
-            assert_success(&response);
-            response["data"]["warning"].as_str().unwrap()
-        };
-        assert!(diagnostic.contains("read back"), "{diagnostic}");
-        assert!(diagnostic.contains("Inspect the field"), "{diagnostic}");
-        assert!(!diagnostic.contains("Latin-only"), "{diagnostic}");
-        assert!(!diagnostic.contains("romanized"), "{diagnostic}");
-        assert!(!diagnostic.contains("rewrote or rejected"), "{diagnostic}");
-        assert_eq!(
-            eval_in(&mut state, "document.querySelector('#editor img').alt").await,
-            "\u{1f642}"
-        );
-        assert_eq!(
-            // Chrome may represent a typed space beside the image as NBSP.
-            eval_in(&mut state, "document.getElementById('editor').innerText")
-                .await
-                .as_str()
-                .unwrap()
-                .replace('\u{a0}', " "),
-            "hello  world"
-        );
+            let diagnostic = if action == "fill" || expected_readback.is_empty() {
+                assert_eq!(response["success"], false, "{response}");
+                response["error"].as_str().unwrap()
+            } else {
+                assert_success(&response);
+                response["data"]["warning"].as_str().unwrap()
+            };
+            assert!(diagnostic.contains("read back"), "{diagnostic}");
+            if action != "fill" || !expected_readback.is_empty() {
+                assert!(diagnostic.contains("Inspect the field"), "{diagnostic}");
+            } else {
+                assert!(diagnostic.contains("value hidden"), "{diagnostic}");
+                assert!(!diagnostic.contains(requested), "{diagnostic}");
+            }
+            assert!(!diagnostic.contains("did not take"), "{diagnostic}");
+            assert!(!diagnostic.contains("went nowhere"), "{diagnostic}");
+            assert!(!diagnostic.contains("Use `fill"), "{diagnostic}");
+            assert!(!diagnostic.contains("Latin-only"), "{diagnostic}");
+            assert!(!diagnostic.contains("romanized"), "{diagnostic}");
+            assert!(!diagnostic.contains("rewrote or rejected"), "{diagnostic}");
+            assert_eq!(
+                eval_in(&mut state, "document.querySelector('#editor img').alt").await,
+                "\u{1f642}"
+            );
+            assert_eq!(
+                // Chrome may represent a typed space beside the image as NBSP.
+                eval_in(&mut state, "document.getElementById('editor').innerText")
+                    .await
+                    .as_str()
+                    .unwrap()
+                    .replace('\u{a0}', " "),
+                expected_readback
+            );
+        }
     }
 
     let filtered = run_cmd(

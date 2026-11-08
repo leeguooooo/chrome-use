@@ -3626,11 +3626,10 @@ const TYPE_REREAD_DELAY_MS: u64 = 250;
 /// typed" is containment, not equality.
 ///
 /// `before` is the field's value before typing (`Some("")` when the field was
-/// cleared first). When the field ends up exactly where it started — nothing
-/// typed survived — this is an error, not a warning: the input went somewhere
-/// else, or the page threw it away, and `✓ Done` there sent agents off to
-/// submit empty login forms (#355). A partial rewrite (mask, formatter, input
-/// filter) stays a warning, as in #203.
+/// cleared first). For ordinary text, a mismatch with empty or unchanged
+/// readback is an error rather than a warning (#355). Other mismatches remain
+/// warnings (#203). These checks describe text readback only: inline elements
+/// can retain content that the probe omits, so neither outcome proves rejection.
 #[allow(clippy::too_many_arguments)]
 pub async fn verify_type_read_back(
     client: &CdpClient,
@@ -3691,7 +3690,8 @@ pub async fn verify_type_read_back(
 }
 
 /// True when the field holds exactly what it held before `type` ran (or is
-/// empty), i.e. none of the typed text survived. Text carrying Enter/Tab is
+/// empty). This does not prove that input was lost: inline elements may be
+/// omitted from text readback. Text carrying Enter/Tab is
 /// exempt: those keys can legitimately submit a form or move focus, and a
 /// field that clears on submit is not a failure.
 pub(crate) fn type_left_field_unchanged(typed: &str, before: Option<&str>, actual: &str) -> bool {
@@ -3703,6 +3703,8 @@ pub(crate) fn type_left_field_unchanged(typed: &str, before: Option<&str>, actua
     a.is_empty() || before.is_some_and(|b| norm(b) == a)
 }
 
+/// Describe an empty or unchanged text readback without claiming input was lost.
+/// Focus and delayed-read observations are evidence, not a diagnosis of the editor.
 pub(crate) fn type_not_kept_error(
     selector_or_ref: &str,
     typed: &str,
@@ -3712,33 +3714,29 @@ pub(crate) fn type_not_kept_error(
 ) -> String {
     let what = if actual.is_empty() {
         format!(
-            "the field is still empty after typing {}",
+            "read back an empty value after typing {}",
             quote_short(typed)
         )
     } else {
         format!(
-            "the field still holds {} after typing {}",
+            "read back the unchanged value {} after typing {}",
             quote_short(actual),
             quote_short(typed)
         )
     };
-    let why = if appeared_then_cleared {
-        "The text appeared and was then wiped: the page re-rendered the field (a form still \
-         hydrating right after load does this)."
-            .to_string()
+    let observation = if appeared_then_cleared {
+        " The first readback contained the typed text; the later readback did not.".to_string()
     } else {
         match focus {
-            Some(f) if f != "none" => format!(
-                "Keyboard focus is on <{f}>, so the keystrokes may have gone there, or the widget \
-                 ignores synthetic keyboard input."
-            ),
-            _ => "Nothing has keyboard focus: the keystrokes went nowhere.".to_string(),
+            Some("none") => " No focused element was observed after typing.".to_string(),
+            Some(f) => format!(" Keyboard focus was observed on <{f}> after typing."),
+            None => String::new(),
         }
     };
     format!(
-        "type did not take: {what}. {why} Use `fill {selector_or_ref} <text>` (sets the value the \
-         way a framework expects and verifies it), or `click {selector_or_ref}` then \
-         `keyboard type <text>`."
+        "type verification failed for {selector_or_ref}: {what}.{observation} \
+         Inspect the field before retrying or changing the text; \
+         readback alone does not establish whether the page rejected it"
     )
 }
 
@@ -7082,6 +7080,7 @@ mod tests {
         ));
     }
 
+    /// Non-ASCII, empty and partial readbacks must not imply a filter or transliteration.
     #[test]
     fn test_fill_mismatch_detail_reports_observations_without_diagnosing_a_filter() {
         for (expected, actual) in [
@@ -7122,6 +7121,7 @@ mod tests {
         assert!(!warning.contains("keystrokes were delivered"), "{warning}");
         assert!(type_read_back_warning("", "x").is_none());
     }
+    /// Neutral diagnostics preserve exact fill matching and the existing type error gate.
     #[test]
     fn test_rich_readback_mismatch_does_not_weaken_verification() {
         assert!(!fill_values_match(
@@ -7151,17 +7151,32 @@ mod tests {
         assert!(!type_left_field_unchanged("q\n", Some(""), ""));
     }
 
+    /// Empty, unchanged and delayed readbacks must not be mistaken for rejected input.
     #[test]
-    fn test_type_not_kept_error_names_the_way_out() {
+    fn test_type_not_kept_error_reports_observations() {
         let e = type_not_kept_error("@e41", "13800000000", "", true, None);
-        assert!(e.contains("still empty"), "{e}");
-        assert!(e.contains("re-rendered"), "{e}");
-        assert!(e.contains("fill @e41"), "{e}");
-        assert!(e.contains("keyboard type"), "{e}");
-        let e = type_not_kept_error("#q", "x", "", false, Some("input#other"));
-        assert!(e.contains("input#other"), "{e}");
+        assert!(e.contains("type verification failed for @e41"), "{e}");
+        assert!(e.contains("read back an empty value"), "{e}");
+        assert!(e.contains("first readback contained"), "{e}");
+        assert!(e.contains("later readback did not"), "{e}");
+        assert!(e.contains("Inspect the field"), "{e}");
+        for cause in [
+            "re-rendered",
+            "wiped",
+            "went nowhere",
+            "Use `fill",
+            "keyboard type",
+        ] {
+            assert!(!e.contains(cause), "{e}");
+        }
+        let e = type_not_kept_error("#q", "x", "old", false, Some("input#other"));
+        assert!(e.contains("unchanged value \"old\""), "{e}");
+        assert!(e.contains("focus was observed on <input#other>"), "{e}");
         let e = type_not_kept_error("#q", "x", "", false, Some("none"));
-        assert!(e.contains("Nothing has keyboard focus"), "{e}");
+        assert!(e.contains("No focused element was observed"), "{e}");
+        let e = type_not_kept_error("#q", "\u{1f642}", "", false, None);
+        assert!(!e.contains("focus"), "{e}");
+        assert!(e.contains("readback alone does not establish"), "{e}");
     }
 
     #[test]
