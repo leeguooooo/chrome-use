@@ -3704,7 +3704,7 @@ pub(crate) fn type_left_field_unchanged(typed: &str, before: Option<&str>, actua
     a.is_empty() || before.is_some_and(|b| norm(b) == a)
 }
 
-/// Describe an empty or unchanged text readback without claiming input was lost.
+/// Describe a failed text readback without claiming input was lost or unchanged.
 /// Values stay hidden, including when a password field clears itself. Focus and
 /// delayed-read observations are evidence, not a diagnosis of the editor.
 pub(crate) fn type_not_kept_error(
@@ -3721,7 +3721,7 @@ pub(crate) fn type_not_kept_error(
         )
     } else {
         format!(
-            "read back an unchanged value of {} chars after typing {} chars (values hidden)",
+            "read back a value of {} chars after typing {} chars (values hidden)",
             actual.chars().count(),
             typed.chars().count()
         )
@@ -7171,12 +7171,17 @@ mod tests {
         ] {
             assert!(!e.contains(cause), "{e}");
         }
-        let e = type_not_kept_error("#q", "x", "old", false, Some("input#other"));
-        assert!(e.contains("unchanged value of 3 chars"), "{e}");
+        let e = type_not_kept_error("#q", "typed-secret-42", "old", false, Some("input#other"));
+        assert!(e.contains("read back a value of 3 chars"), "{e}");
         assert!(e.contains("values hidden"), "{e}");
-        assert!(!e.contains("\"old\""), "{e}");
-        assert!(!e.contains("\"x\""), "{e}");
+        assert!(!e.contains("old"), "{e}");
+        assert!(!e.contains("typed-secret-42"), "{e}");
         assert!(e.contains("focus was observed on <input#other>"), "{e}");
+        // Whitespace-only readback fails verification even when the value changed.
+        assert!(type_left_field_unchanged("x", Some("old"), " "));
+        let e = type_not_kept_error("#q", "x", " ", false, None);
+        assert!(e.contains("read back a value of 1 chars"), "{e}");
+        assert!(!e.contains("unchanged"), "{e}");
         let e = type_not_kept_error("#q", "x", "", false, Some("none"));
         assert!(e.contains("No focused element was observed"), "{e}");
         let e = type_not_kept_error("#q", "\u{1f642}", "", false, None);

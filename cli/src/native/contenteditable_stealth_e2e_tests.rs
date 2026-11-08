@@ -219,6 +219,7 @@ async fn e2e_readback_mismatch_does_not_infer_an_input_filter() {
     let error = cleared["error"].as_str().unwrap();
     assert!(error.contains("read back an empty value"), "{error}");
     assert!(!error.contains(secret), "{error}");
+    assert!(!error.contains("private-password"), "{error}");
     assert!(error.contains("value hidden"), "{error}");
     assert!(error.contains("Inspect the field"), "{error}");
     assert_eq!(
