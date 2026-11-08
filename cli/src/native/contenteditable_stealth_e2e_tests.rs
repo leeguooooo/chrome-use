@@ -77,6 +77,7 @@ async fn e2e_readback_mismatch_does_not_infer_an_input_filter() {
       <input id="plain">
       <input id="filtered">
       <input id="private" type="password">
+      <input id="cleared-password" type="password" oninput="this.value = '';">
       <div id="editor" contenteditable="true" role="textbox"></div>
       <script>
       for (const id of ['filtered', 'private']) {
@@ -140,6 +141,14 @@ async fn e2e_readback_mismatch_does_not_infer_an_input_filter() {
                 response["error"].as_str().unwrap()
             } else {
                 assert_success(&response);
+                assert_eq!(
+                    response["data"]["readBack"]
+                        .as_str()
+                        .unwrap()
+                        .replace('\u{a0}', " "),
+                    expected_readback,
+                    "{response}"
+                );
                 response["data"]["warning"].as_str().unwrap()
             };
             assert!(diagnostic.contains("read back"), "{diagnostic}");
@@ -201,6 +210,25 @@ async fn e2e_readback_mismatch_does_not_infer_an_input_filter() {
     assert!(error.contains("Inspect the field"), "{error}");
     assert!(!error.contains("hello"), "{error}");
     assert!(!error.contains("\u{1f642}"), "{error}");
+    let secret = "private-password-42";
+    let cleared = run_cmd(
+        &mut state,
+        json!({"id":"cleared-password","action":"type","selector":"#cleared-password","text":secret}),
+    ).await;
+    assert_eq!(cleared["success"], false, "{cleared}");
+    let error = cleared["error"].as_str().unwrap();
+    assert!(error.contains("read back an empty value"), "{error}");
+    assert!(!error.contains(secret), "{error}");
+    assert!(error.contains("value hidden"), "{error}");
+    assert!(error.contains("Inspect the field"), "{error}");
+    assert_eq!(
+        eval_in(
+            &mut state,
+            "document.getElementById('cleared-password').value"
+        )
+        .await,
+        ""
+    );
     run_cmd(&mut state, json!({"id":"close","action":"close"})).await;
     server.abort();
 }

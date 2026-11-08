@@ -166,7 +166,7 @@ chrome-use solve-slider                # auto-solve a 网易易盾 slider-puzzle
 chrome-use solve-slider 5              # ...retry up to 5 times (refreshes the puzzle on a miss)
 ```
 
-The comparison collapses whitespace and removes some zero-width characters; a warning-free result does not confirm literal text retention. Whitespace-only input, an unreadable/non-editable target, or a failed readback probe can return success without `readBack` or a warning. The `--enter` commit path also skips this readback check. Inspect the field when verification is unavailable.
+Empty/unchanged readback errors report character counts instead of quoting the text. The comparison collapses whitespace and removes some zero-width characters; a warning-free result does not confirm literal text retention. Whitespace-only input, an unreadable/non-editable target, or a failed readback probe can return success without `readBack` or a warning. The `--enter` commit path also skips this readback check. Inspect the field when verification is unavailable.
 
 For `type`, text containing Enter, carriage return or Tab is exempt from the
 empty/unchanged-readback error. A mismatch does not prove input was rejected:

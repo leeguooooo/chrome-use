@@ -212,7 +212,7 @@
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 文本回读校验</div>
-        <code>type</code> 会检查文本回读是否包含输入内容。对于普通文本，回读不匹配且为空或与输入前相同时会报错（退出码 1）。包含 Enter、回车或 Tab 的文本不适用这条报错规则。其他不匹配会打印 ⚠ 警告（退出码 0，JSON <code>readBack</code>）。比较时会合并空白并移除部分零宽字符；没有警告不代表文本逐字保留。仅含空白的输入、无法读取或不可编辑的目标，以及回读探测失败，都可能返回成功而不包含 <code>readBack</code> 或警告。<code>--enter</code> 提交路径也会跳过这项回读检查。无法核验时请检查字段。 <code>fill</code> 校验报错会描述回读差异；普通值可能直接引用，空值或敏感值会隐藏（例如 <code>read back an empty value after writing (value hidden)</code>），Monaco-native 校验则报告字符数。 文本回读不一致并不能证明页面限制了输入。富文本编辑器可能把字符保存在行内元素中，而纯文本回读会遗漏这些内容。重试或修改文本前，请先检查字段。
+        <code>type</code> 会检查文本回读是否包含输入内容。对于普通文本，回读不匹配且为空或与输入前相同时会报错（退出码 1）。包含 Enter、回车或 Tab 的文本不适用这条报错规则。其他不匹配会打印 ⚠ 警告（退出码 0，JSON <code>readBack</code>）。回读为空或未改变时，报错只提供字符数，不引用输入或回读文本。比较时会合并空白并移除部分零宽字符；没有警告不代表文本逐字保留。仅含空白的输入、无法读取或不可编辑的目标，以及回读探测失败，都可能返回成功而不包含 <code>readBack</code> 或警告。<code>--enter</code> 提交路径也会跳过这项回读检查。无法核验时请检查字段。 <code>fill</code> 校验报错会描述回读差异；普通值可能直接引用，空值或敏感值会隐藏（例如 <code>read back an empty value after writing (value hidden)</code>），Monaco-native 校验则报告字符数。 文本回读不一致并不能证明页面限制了输入。富文本编辑器可能把字符保存在行内元素中，而纯文本回读会遗漏这些内容。重试或修改文本前，请先检查字段。
       </div>
 
       <div class="du-callout warn">

@@ -3275,6 +3275,7 @@ After typing, text readback is checked for the typed text. A mismatch that
 leaves empty or unchanged readback is an error (exit 1) for ordinary text.
 Text containing Enter, carriage return or Tab is exempt from that error.
 Other mismatches produce a ⚠ warning (exit 0, JSON `readBack`).
+Empty/unchanged readback errors report character counts instead of quoting the text.
 The comparison collapses whitespace and removes some zero-width characters;
 a warning-free result does not confirm literal text retention. Whitespace-only
 input, an unreadable/non-editable target, or a failed readback probe can return
