@@ -93,6 +93,13 @@ async fn e2e_readback_mismatch_does_not_infer_an_input_filter() {
           image,
           document.createTextNode(text.slice(at + marker.length))
         );
+        // Keep subsequent typed characters after the editor's replacement.
+        const range = document.createRange();
+        range.selectNodeContents(editor);
+        range.collapse(false);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
       });
       </script>"##;
     let (port, server) = spawn_html_server(html.to_string()).await;
@@ -137,7 +144,12 @@ async fn e2e_readback_mismatch_does_not_infer_an_input_filter() {
             "\u{1f642}"
         );
         assert_eq!(
-            eval_in(&mut state, "document.getElementById('editor').innerText").await,
+            // Chrome may represent a typed space beside the image as NBSP.
+            eval_in(&mut state, "document.getElementById('editor').innerText")
+                .await
+                .as_str()
+                .unwrap()
+                .replace('\u{a0}', " "),
             "hello  world"
         );
     }
