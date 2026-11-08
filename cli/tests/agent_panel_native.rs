@@ -1213,8 +1213,8 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
     let sockets = tempfile::tempdir_in("/tmp").unwrap();
     #[cfg(windows)]
     let sockets = tempfile::tempdir().unwrap();
-    // Remove this directory only after successful shutdown. If an assertion
-    // fails, preserve any socket/PID records so a surviving daemon can be found.
+    // Preserve socket/PID records if shutdown cannot be independently confirmed,
+    // including when an assertion or service-fixture cleanup fails.
     let sockets = sockets.keep();
     let profile = "native-delete-fixture";
     let codex_home = tempfile::tempdir().unwrap();
@@ -1373,7 +1373,9 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
     assert!(sibling["journal"]["events"].as_array().unwrap().len() > 2);
     drop(host);
     drop(cleanup);
-    std::fs::remove_dir_all(sockets).unwrap();
+    // A successful close response is not an independent process-exit check.
+    // Only remove an empty directory; never recursively delete tracking records.
+    let _ = std::fs::remove_dir(sockets);
 }
 
 #[test]
