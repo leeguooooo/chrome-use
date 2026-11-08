@@ -217,13 +217,10 @@
       </div>
 
       <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ Page rewrote the input? type warns, fill errors</div>
+        <div class="du-callout-title">ℹ️ Text readback differs? type warns, fill errors</div>
         After <code>type</code> the field is read back: if it does not contain the typed text, a ⚠ warning quotes
         what was written and what the field now holds (exit 0, JSON gains <code>readBack</code>). A <code>fill</code>
-        verification failure quotes both values too, e.g. <code>read back "" after writing "千代田区"</code>; when every
-        non-ASCII character vanished while ASCII survived, it says the page filtered non-Latin input (a Latin-only /
-        masked field), so re-typing will not help. Both deliver CJK fine on normal fields; these messages are about
-        pages that rewrite input.
+        verification failure quotes both values too, e.g. <code>read back "" after writing "千代田区"</code>. A text readback mismatch does not establish an input restriction. Rich-text editors can retain characters in inline elements that plain-text readback omits. Inspect the field before retrying or changing the text.
       </div>
 
       <div class="du-callout warn">

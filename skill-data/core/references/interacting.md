@@ -93,7 +93,7 @@ chrome-use hover @e1                   # hover: real pointer move at a point whe
 chrome-use focus @e1                   # focus (useful before keyboard input)
 chrome-use fill @e2 "hello"            # clear then type (verified by read-back;
                                           # a mismatch error quotes both values and
-                                          # says when the page filtered non-Latin input)
+                                          # does not infer an input restriction)
 chrome-use type @e2 " world"           # type without clearing (read back too: ⚠
                                           # warning, exit 0, if the page rewrote it)
 chrome-use type @e5 "100-0001" --key-events  # real keystrokes (not insertText) —

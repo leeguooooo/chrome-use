@@ -211,12 +211,10 @@
       </div>
 
       <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ 页面改写了输入？type 会警告，fill 会报错</div>
+        <div class="du-callout-title">ℹ️ 文本回读不一致？type 会警告，fill 会报错</div>
         <code>type</code> 打完会回读字段：如果里面没有刚输入的文本，会打印 ⚠ 警告，引用写入的内容和字段当前的值
         （退出码仍为 0，JSON 多出 <code>readBack</code>）。<code>fill</code> 校验失败时的报错同样引用两边的值，
-        例如 <code>read back "" after writing "千代田区"</code>；若非 ASCII 字符全部消失而 ASCII 仍在，
-        会指出页面过滤了非拉丁输入（仅限拉丁 / 带掩码的字段），重打一遍没有用。正常字段上两者都能正确输入中日韩文，
-        这些提示针对的是会改写输入的页面。
+        文本回读不一致并不能证明页面限制了输入。富文本编辑器可能把字符保存在行内元素中，而纯文本回读会遗漏这些内容。重试或修改文本前，请先检查字段。
       </div>
 
       <div class="du-callout warn">

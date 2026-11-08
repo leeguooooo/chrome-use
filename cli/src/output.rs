@@ -3219,10 +3219,10 @@ after 60 seconds of inactivity in a surviving document. Context loss can prevent
 restoration; comparison/write is not atomic. Avoid concurrent clipboard use.
 If restoration or the edit cannot be verified,
 fill fails loudly instead of reporting a false success. Verification
-errors quote both values (`read back "" after writing "千代田区"`); when every
-non-ASCII character vanished while ASCII survived, the error says the page
-filtered non-Latin input (a Latin-only / masked field), so re-typing the
-same text will not help.
+errors describe the requested text and observed readback without guessing why
+they differ. Rich editors can retain characters in inline elements that plain
+text omits. Inspect the field before retrying or changing the text; a mismatch
+does not establish an input restriction.
 After successful trusted contenteditable insertion, fill keeps editor focus
 without synthetic change/focusout events. Failed read-back is reported rather
 than overwriting the editor DOM. Use the page's save/commit action when needed.

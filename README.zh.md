@@ -337,7 +337,7 @@ chrome-use snapshot -i --diff          # 只回传相对上一张快照变化的
 
 用 `snapshot -i -c` 精简控件视图，已知区域用 scoped read；只有上一次观察还留下问题时才用 `--diff`。已知动作序列用 `batch`（每一步可以带自己的 `--observe`：`batch "fill @e1 Ada" "click @e2 --observe"`；`pick`、`hover` 和 `click` 一样可以观察），有条件分支的 observe/decide/act/verify 流程用 `script`，多个字段用 `form fill --map`，最后核验任务要求的结果：`observed.status: complete` 只表示这次捕获完整，不表示任务完成，要等页面自己的最终信号（`wait --text`）。小页面（树不超过 4 KB 且不超过 60 行）的观察直接带整棵当前树 `observed.snapshot` 和只含 `+`/`-` 行的 `observed.changes`；更大的页面照旧给 `delta`。`observed.text` 列出任意帧里变化的可见文字行（回执、日志、页码），不含输入框、文本域、下拉框和可编辑区域的内容，任一密码框带值时一行都不返回（`textStatus: redacted`）；读不到的帧列在 `textFrames` 里，观察随之变成 `partial`。每个 JSON 回复都带 `observed.target`，写明标签页和 target。`observed.announced` 收录动作执行和页面稳定期间出现的 toast 以及 alert/status/aria-live 区域的文字，回复前已经消失的也在（例如“视频审核中，修改未保存”）。元素截图写成 `screenshot <selector> <path>` 或 `screenshot <path> --selector <selector>`。只有树无法回答视觉问题时才加 `--with-screenshot <path>`。
 
-可编辑区域（contenteditable）的 `fill` 在真实输入成功后保留编辑器焦点，不再派发合成的 `change` 或 `focusout` 事件。读回核验失败时会明确报错，不会覆盖编辑器 DOM。需要保存或确认时，请使用页面提供的操作。
+可编辑区域（contenteditable）的 `fill` 在真实输入成功后保留编辑器焦点，不再派发合成的 `change` 或 `focusout` 事件。读回核验失败时会明确报错，不会覆盖编辑器 DOM。需要保存或确认时，请使用页面提供的操作。 文本回读不一致并不能证明页面限制了输入。富文本编辑器可能把字符保存在行内元素中，而纯文本回读会遗漏这些内容。重试或修改文本前，请先检查字段。
 
 `dblclick` 使用两次真实指针点击，并核验目标收到双击事件。目标被遮挡、禁用，或 frame 存在变换、跨源坐标无法可靠映射时会拒绝，不使用合成事件回退。第一次点击后目标变化时停止第二次点击。JSON 包含 `dispatch: "pointer"` 和 `verified`，无法确认事件送达时附带警告。操作中断或结果未确认时，请先检查页面再重试。双击不支持 `AGENT_BROWSER_CLICK_MODE=dom`。
 

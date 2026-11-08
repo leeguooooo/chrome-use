@@ -3580,12 +3580,11 @@ fn reformatted_warning(expected: &str, actual: &str, engine: &str) -> Option<Str
     })
 }
 
-/// Describe a fill/type read-back mismatch so truncation is VISIBLE: what was
-/// written, what the field holds now, and — when every non-ASCII character
-/// vanished while the ASCII survived — that the page filtered the input (a
-/// Latin-only address field, issue #203) rather than the keystrokes failing.
+/// Describe the requested text and the observed readback without inferring
+/// why they differ. Rich editors can retain characters in inline elements
+/// that their plain-text readback omits.
 pub(crate) fn fill_mismatch_detail(expected: &str, actual: &str) -> String {
-    let mut detail = if actual.is_empty() && !expected.is_empty() {
+    let detail = if actual.is_empty() && !expected.is_empty() {
         format!(
             "read back an empty value after writing {}",
             quote_short(expected)
@@ -3599,24 +3598,10 @@ pub(crate) fn fill_mismatch_detail(expected: &str, actual: &str) -> String {
             expected.chars().count()
         )
     };
-    if non_ascii_was_dropped(expected, actual) {
-        detail.push_str(
-            ". Only the ASCII characters survived: the page rejected the non-Latin text (a \
-             Latin-only / masked field), so re-typing won't help — check the field's input \
-             rules or supply a romanized value",
-        );
-    }
-    detail
-}
-
-/// True when `expected` carried non-ASCII characters and none of them made it
-/// into `actual`, while `actual` is otherwise consistent with the ASCII part.
-pub(crate) fn non_ascii_was_dropped(expected: &str, actual: &str) -> bool {
-    let non_ascii: Vec<char> = expected.chars().filter(|c| !c.is_ascii()).collect();
-    if non_ascii.is_empty() {
-        return false;
-    }
-    !actual.chars().any(|c| non_ascii.contains(&c))
+    format!(
+        "{detail}. Inspect the field before retrying or changing the text; \
+         readback alone does not establish whether the page rejected it"
+    )
 }
 
 fn quote_short(s: &str) -> String {
@@ -3818,9 +3803,7 @@ pub(crate) fn type_read_back_warning(typed: &str, actual: &str) -> Option<String
         return None;
     }
     Some(format!(
-        "the field does not contain what was typed: {}. The keystrokes were delivered; \
-         the page rewrote or rejected them (an input filter, mask or formatter). Verify with \
-         `get value` before moving on",
+        "the text readback does not contain what was typed: {}",
         fill_mismatch_detail(typed, actual)
     ))
 }
@@ -7100,33 +7083,60 @@ mod tests {
     }
 
     #[test]
-    fn test_fill_mismatch_detail_shows_both_values_and_flags_dropped_cjk() {
-        // Issue #203: the old message said "read back an empty value" and nothing
-        // else, so a Latin-only field silently eating CJK looked like a transport bug.
-        let d = fill_mismatch_detail("千代田区", "");
-        assert!(d.contains("\"千代田区\""), "{d}");
-        assert!(d.contains("Only the ASCII characters survived"), "{d}");
-        let d = fill_mismatch_detail("千代田1-2-3", "1-2-3");
-        assert!(
-            d.contains("\"1-2-3\"") && d.contains("\"千代田1-2-3\""),
-            "{d}"
-        );
-        assert!(d.contains("Latin-only"), "{d}");
-        // Pure-ASCII mismatch: no CJK diagnosis.
-        let d = fill_mismatch_detail("hello", "hell");
-        assert!(!d.contains("ASCII"), "{d}");
-        assert!(d.contains("(4 chars)") && d.contains("(5 chars)"), "{d}");
+    fn test_fill_mismatch_detail_reports_observations_without_diagnosing_a_filter() {
+        for (expected, actual) in [
+            ("千代田区", ""),
+            ("千代田1-2-3", "1-2-3"),
+            ("hello \u{1f642}", "hello "),
+            ("hello", "hell"),
+            ("千代田1-2-3", "unrelated"),
+        ] {
+            let detail = fill_mismatch_detail(expected, actual);
+            assert!(detail.contains(&quote_short(expected)), "{detail}");
+            assert!(detail.contains("Inspect the field"), "{detail}");
+            assert!(
+                detail.contains("readback alone does not establish"),
+                "{detail}"
+            );
+            assert!(!detail.contains("Latin-only"), "{detail}");
+            assert!(!detail.contains("romanized"), "{detail}");
+            if !actual.is_empty() {
+                assert!(detail.contains(&quote_short(actual)), "{detail}");
+                assert!(
+                    detail.contains(&format!("({} chars)", actual.chars().count())),
+                    "{detail}"
+                );
+            }
+        }
     }
-
     #[test]
     fn test_type_read_back_warning_only_when_text_is_missing() {
         assert!(type_read_back_warning("千代田区", "東京都千代田区").is_none());
-        let w = type_read_back_warning("千代田1-2-3", "1-2-3").unwrap();
-        assert!(w.contains("rewrote or rejected"), "{w}");
-        assert!(w.contains("ASCII"), "{w}");
+        let warning = type_read_back_warning("千代田1-2-3", "1-2-3").unwrap();
+        assert!(
+            warning.contains("text readback does not contain"),
+            "{warning}"
+        );
+        assert!(warning.contains("Inspect the field"), "{warning}");
+        assert!(!warning.contains("rewrote or rejected"), "{warning}");
+        assert!(!warning.contains("keystrokes were delivered"), "{warning}");
         assert!(type_read_back_warning("", "x").is_none());
     }
-
+    #[test]
+    fn test_rich_readback_mismatch_does_not_weaken_verification() {
+        assert!(!fill_values_match(
+            "hello \u{1f642}",
+            "hello ",
+            "contenteditable"
+        ));
+        assert!(!fill_values_match(
+            "I'd check",
+            "I\u{2019}d check",
+            "contenteditable"
+        ));
+        assert!(!fill_values_match("hello", "hell", "input"));
+        assert!(fill_values_match("hello", "hello", "input"));
+    }
     #[test]
     fn test_type_left_field_unchanged_only_when_nothing_landed() {
         // Empty after typing: nothing landed (#355).
