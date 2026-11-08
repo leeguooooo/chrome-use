@@ -3275,6 +3275,11 @@ After typing, text readback is checked for the typed text. A mismatch that
 leaves empty or unchanged readback is an error (exit 1) for ordinary text.
 Text containing Enter, carriage return or Tab is exempt from that error.
 Other mismatches produce a ⚠ warning (exit 0, JSON `readBack`).
+The comparison collapses whitespace and removes some zero-width characters;
+a warning-free result does not confirm literal text retention. Whitespace-only
+input, an unreadable/non-editable target, or a failed readback probe can return
+success without `readBack` or a warning. The --enter commit path also skips
+this readback check. Inspect the field when verification is unavailable.
 Neither outcome proves that the page rejected the input: rich editors may
 retain characters in inline elements that text readback omits. Inspect the
 field before retrying or changing the text.

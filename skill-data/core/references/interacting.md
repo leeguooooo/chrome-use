@@ -166,6 +166,8 @@ chrome-use solve-slider                # auto-solve a 网易易盾 slider-puzzle
 chrome-use solve-slider 5              # ...retry up to 5 times (refreshes the puzzle on a miss)
 ```
 
+The comparison collapses whitespace and removes some zero-width characters; a warning-free result does not confirm literal text retention. Whitespace-only input, an unreadable/non-editable target, or a failed readback probe can return success without `readBack` or a warning. The `--enter` commit path also skips this readback check. Inspect the field when verification is unavailable.
+
 For `type`, text containing Enter, carriage return or Tab is exempt from the
 empty/unchanged-readback error. A mismatch does not prove input was rejected:
 rich editors may retain characters in inline elements that text readback omits.
@@ -312,11 +314,12 @@ page's own state took it, so read what the commands report:
 - `fill` warns when the field's form or dialog had a disabled Save/Submit
   before the fill and still has it after (JSON `commitControl`), and when it
   had to fall back to a synthetic write (`engine: input-synthetic`).
-- In a rich-text editor (`contenteditable`), `fill` and `type` compare the
+- In a rich-text editor (`contenteditable`), `fill` compares the
   visible text: zero-width characters (U+200B the editor pads lines and topic
   nodes with), NBSP and whitespace runs do not count. A write the editor only
   formatted succeeds with a ⚠ note ("the editor formatted the text"); missing
-  or changed characters are still an error.
+  or changed characters still fail `fill` verification. For `type`, other mismatching
+  readbacks remain warnings unless the ordinary-text readback is empty or unchanged.
 - `fill` accepts a field that only reformatted the value (Stripe turns `1234`
   into `12 / 34`, a card number into groups of four) and says so with a ⚠ note;
   a value that differs in any other way is still an error, and a card or

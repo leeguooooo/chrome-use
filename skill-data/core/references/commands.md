@@ -156,7 +156,10 @@ Drag mode follows the current session connection and target frame; an extension 
 `type` checks whether text readback contains what was typed. For ordinary text,
 a mismatch with empty or unchanged readback is an error (exit 1). Text containing
 Enter, carriage return or Tab is exempt from that error. Other mismatches produce
-a ⚠ warning (exit 0, JSON `readBack`). `fill` mismatches are errors; values may be
+a ⚠ warning (exit 0, JSON `readBack`).
+The comparison collapses whitespace and removes some zero-width characters; a warning-free result does not confirm literal text retention. Whitespace-only input, an unreadable/non-editable target, or a failed readback probe can return success without `readBack` or a warning. The `--enter` commit path also skips this readback check. Inspect the field when verification is unavailable.
+
+`fill` mismatches are errors; values may be
 hidden or shown as character counts depending on the field and engine.
 Neither result proves an input restriction. Rich editors can retain characters
 in inline elements that plain-text readback omits. Inspect the field before

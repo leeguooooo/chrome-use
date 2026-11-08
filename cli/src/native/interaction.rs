@@ -3497,14 +3497,16 @@ async fn verify_fill_value(
         let detail = if actual.is_empty() && !expected.is_empty() {
             // Keep this marker: `finish_fill` keys its refocus-reset recovery
             // on it. It carries no value.
-            "read back an empty value after writing (value hidden)".to_string()
+            format!(
+                "read back an empty value after writing (value hidden). {READBACK_MISMATCH_ADVICE}"
+            )
         } else if Box::pin(super::sensitive::is_sensitive_object(
             client, session_id, object_id,
         ))
         .await
         {
             format!(
-                "the field holds {} chars after writing {} (values hidden: card / password field)",
+                "the field holds {} chars after writing {} (values hidden: card / password field). {READBACK_MISMATCH_ADVICE}",
                 actual.chars().count(),
                 expected.chars().count()
             )
@@ -3580,6 +3582,8 @@ fn reformatted_warning(expected: &str, actual: &str, engine: &str) -> Option<Str
     })
 }
 
+const READBACK_MISMATCH_ADVICE: &str = "Inspect the field before retrying or changing the text; readback alone does not establish whether the page rejected it";
+
 /// Describe the requested text and the observed readback without inferring
 /// why they differ. Rich editors can retain characters in inline elements
 /// that their plain-text readback omits.
@@ -3598,10 +3602,7 @@ pub(crate) fn fill_mismatch_detail(expected: &str, actual: &str) -> String {
             expected.chars().count()
         )
     };
-    format!(
-        "{detail}. Inspect the field before retrying or changing the text; \
-         readback alone does not establish whether the page rejected it"
-    )
+    format!("{detail}. {READBACK_MISMATCH_ADVICE}")
 }
 
 fn quote_short(s: &str) -> String {
@@ -3734,9 +3735,7 @@ pub(crate) fn type_not_kept_error(
         }
     };
     format!(
-        "type verification failed for {selector_or_ref}: {what}.{observation} \
-         Inspect the field before retrying or changing the text; \
-         readback alone does not establish whether the page rejected it"
+        "type verification failed for {selector_or_ref}: {what}.{observation} {READBACK_MISMATCH_ADVICE}"
     )
 }
 

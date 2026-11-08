@@ -76,11 +76,14 @@ async fn e2e_readback_mismatch_does_not_infer_an_input_filter() {
     let html = r##"<!doctype html><meta charset="utf-8">
       <input id="plain">
       <input id="filtered">
+      <input id="private" type="password">
       <div id="editor" contenteditable="true" role="textbox"></div>
       <script>
-      document.getElementById('filtered').addEventListener('input', event => {
-        event.target.value = event.target.value.replace(/[^\x00-\x7f]/g, '');
-      });
+      for (const id of ['filtered', 'private']) {
+        document.getElementById(id).addEventListener('input', event => {
+          event.target.value = event.target.value.replace(/[^\x00-\x7f]/g, '');
+        });
+      }
       document.getElementById('editor').addEventListener('input', event => {
         const editor = event.target;
         const text = editor.textContent;
@@ -140,9 +143,8 @@ async fn e2e_readback_mismatch_does_not_infer_an_input_filter() {
                 response["data"]["warning"].as_str().unwrap()
             };
             assert!(diagnostic.contains("read back"), "{diagnostic}");
-            if action != "fill" || !expected_readback.is_empty() {
-                assert!(diagnostic.contains("Inspect the field"), "{diagnostic}");
-            } else {
+            assert!(diagnostic.contains("Inspect the field"), "{diagnostic}");
+            if action == "fill" && expected_readback.is_empty() {
                 assert!(diagnostic.contains("value hidden"), "{diagnostic}");
                 assert!(!diagnostic.contains(requested), "{diagnostic}");
             }
@@ -185,6 +187,20 @@ async fn e2e_readback_mismatch_does_not_infer_an_input_filter() {
         eval_in(&mut state, "document.getElementById('filtered').value").await,
         "hello  world"
     );
+    let private = run_cmd(
+        &mut state,
+        json!({"id":"private","action":"fill","selector":"#private","value":requested}),
+    )
+    .await;
+    assert_eq!(private["success"], false, "{private}");
+    let error = private["error"].as_str().unwrap();
+    assert!(
+        error.contains("values hidden: card / password field"),
+        "{error}"
+    );
+    assert!(error.contains("Inspect the field"), "{error}");
+    assert!(!error.contains("hello"), "{error}");
+    assert!(!error.contains("\u{1f642}"), "{error}");
     run_cmd(&mut state, json!({"id":"close","action":"close"})).await;
     server.abort();
 }

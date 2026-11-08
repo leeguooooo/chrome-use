@@ -218,7 +218,7 @@
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Text readback verification</div>
-        <code>type</code> checks whether text readback contains the typed text. For ordinary text, a mismatch with empty or unchanged readback is an error (exit 1). Text containing Enter, carriage return or Tab is exempt from that error. Other mismatches produce a ⚠ warning (exit 0, JSON <code>readBack</code>). A <code>fill</code> verification error describes the mismatch; it may quote ordinary values, hide values (e.g. <code>read back an empty value after writing (value hidden)</code>), or report character counts for Monaco-native verification. A text readback mismatch does not establish an input restriction. Rich-text editors can retain characters in inline elements that plain-text readback omits. Inspect the field before retrying or changing the text.
+        <code>type</code> checks whether text readback contains the typed text. For ordinary text, a mismatch with empty or unchanged readback is an error (exit 1). Text containing Enter, carriage return or Tab is exempt from that error. Other mismatches produce a ⚠ warning (exit 0, JSON <code>readBack</code>). The comparison collapses whitespace and removes some zero-width characters; a warning-free result does not confirm literal text retention. Whitespace-only input, an unreadable/non-editable target, or a failed readback probe can return success without <code>readBack</code> or a warning. The <code>--enter</code> commit path also skips this readback check. Inspect the field when verification is unavailable. A <code>fill</code> verification error describes the mismatch; it may quote ordinary values, hide values (e.g. <code>read back an empty value after writing (value hidden)</code>), or report character counts for Monaco-native verification. A text readback mismatch does not establish an input restriction. Rich-text editors can retain characters in inline elements that plain-text readback omits. Inspect the field before retrying or changing the text.
       </div>
 
       <div class="du-callout warn">
@@ -635,7 +635,7 @@
         Stripe shows an expiry <code>1234</code> as <code>12 / 34</code> and a card number in groups of four. <code>fill</code> accepts a field that only added spaces and separators and says so with a ⚠ note; a value that differs in any other way is still an error, and a card or password value is never echoed in it.
       </p>
       <p>
-        Rich-text editors (<code>contenteditable</code>) are compared as visible text: zero-width characters (the U+200B an editor pads lines and topic nodes with), NBSP and whitespace runs do not count. A write the editor only formatted succeeds with an "editor formatted the text" note; missing or changed characters are still an error.
+        <code>fill</code> compares rich-text editors (<code>contenteditable</code>) as visible text: zero-width characters (the U+200B an editor pads lines and topic nodes with), NBSP and whitespace runs do not count. A write the editor only formatted succeeds with an "editor formatted the text" note; missing or changed characters still fail <code>fill</code> verification. For <code>type</code>, other mismatching readbacks remain warnings unless the ordinary-text readback is empty or unchanged.
       </p>
 
       <hr class="du-divider" />
