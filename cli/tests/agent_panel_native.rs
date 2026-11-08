@@ -1213,6 +1213,9 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
     let sockets = tempfile::tempdir_in("/tmp").unwrap();
     #[cfg(windows)]
     let sockets = tempfile::tempdir().unwrap();
+    // Remove this directory only after successful shutdown. If an assertion
+    // fails, preserve any socket/PID records so a surviving daemon can be found.
+    let sockets = sockets.keep();
     let profile = "native-delete-fixture";
     let codex_home = tempfile::tempdir().unwrap();
     let mut cleanup = ServiceFixture {
@@ -1224,7 +1227,7 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
         Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
-            .env("AGENT_BROWSER_SOCKET_DIR", sockets.path())
+            .env("AGENT_BROWSER_SOCKET_DIR", &sockets)
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
             .env("CODEX_HOME", codex_home.path())
             .env("PANEL_FIXTURE_UUID_SESSION", "1")
@@ -1368,6 +1371,9 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
     assert!(sent.get("error").is_none());
     let sibling = conversation_poll(&mut host, &rx, &ids[1], "idle");
     assert!(sibling["journal"]["events"].as_array().unwrap().len() > 2);
+    drop(host);
+    drop(cleanup);
+    std::fs::remove_dir_all(sockets).unwrap();
 }
 
 #[test]
