@@ -1,8 +1,30 @@
 # Changelog
 
-## 1.5.286
+## 1.5.287
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.107.
+
+### Features
+
+- **`--open-profile-window` for unattended runs.** When the session's Chrome profile is connected but has no window, a command fails with `profile_not_open` as before; with `--open-profile-window` (or `AGENT_BROWSER_OPEN_PROFILE_WINDOW=1`) the extension in that same profile opens an unfocused window and the command goes on. Only a confirmed "no window" opens one; an unreadable window list is still refused, Chrome is never restarted and no window is closed. JSON reports `data.profileWindowRecovery` (`attempted`, `opened`, `detail`; `opened: null` when the create got no answer), with a warning when a window was opened. The opt-in travels with each command, so a running daemon follows it, and script and batch steps inherit it (#883).
+
+### Fixes
+
+- **Cross-origin iframes no longer drop out after `adopt` or a `#hash` navigation.** Chrome reports an out-of-process frame once; when the daemon cleared its frame map after that report (adopting a tab can, depending on timing) or the frame survived a same-document navigation, `frames` left it out, values inside it were masked, and refs ended in `No objectId for ref`. The relay now hands back the frame sessions it holds (`ABRelay.iframeSessions`), and `snapshot`, `frames` and `frame` register any the daemon is missing, keeping only sessions that still answer. A frame attached again keeps only its new session, and a parent frame's detach is forwarded for the frames nested in it (#882).
+- **A selected frame prints once.** With a child frame selected, `snapshot` no longer repeats that frame under `- iframe`; selecting the top frame keeps presentation iframes (#882).
+- **A selected frame that a reload replaced** now returns `snapshot`, `screenshot --annotate` and `diff snapshot` to the top frame with a plain message instead of the raw `Frame with the given frameId is not found` on every call (#882).
+- **Text readback mismatches no longer claim the page rejected the input.** A rich-text editor can keep an emoji as an inline image that plain-text readback omits; `fill` and `type` now report what was read back and ask you to inspect the field before retrying or changing the text, instead of diagnosing a Latin-only field. Empty or unchanged `type` readback reports character counts rather than quoting field contents (#879, fixes #878).
+- **Native-panel deletion test isolated from inherited session records** (#881, fixes #880).
+
+### Contributors
+
+- @leeguooooo
+- @euvoor
+<!-- release:end -->
+
+## 1.5.286
+
 Works with extension ab-connect 0.5.107.
 
 ### Features
@@ -17,7 +39,6 @@ Works with extension ab-connect 0.5.107.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.285
 
