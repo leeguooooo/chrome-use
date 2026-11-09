@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.289
+## 1.5.290
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
+
+### Fixes
+
+- **Clicks inside same-site cross-origin iframes land on their target.** A frame such as `login.aliexpress.com` inside `www.aliexpress.com` shares the page's process. `click` activated refs in any iframe by focus and Enter, which does nothing on a custom option (`div role=menuitem`), so a country-code list kept its old choice while the click reported `✓ Done`; and `pick` placed its click with the option's position inside the frame, about the frame's offset away from it, so it chose another option (`TW +886` for `JP +81`). In-process frames now get a real pointer click in page coordinates, and the hit-tests that guard it look at the frame's own document. Out-of-process frames keep the keyboard activation.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.289
+
 Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
 
 ### Fixes
@@ -12,7 +25,6 @@ Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-ext
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.288
 
