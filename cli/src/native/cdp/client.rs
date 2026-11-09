@@ -538,7 +538,7 @@ impl CdpClient {
         };
         let mut quiet = p.clone();
         quiet[ctx_key] = Value::from(ctx);
-        match self
+        let first = match self
             .send_command_untimed(method, Some(quiet.clone()), session_id)
             .await
         {
@@ -566,6 +566,38 @@ impl CdpClient {
             }
             Err(e) if method == "DOM.resolveNode" && crate::native::quiet_dom::other_frame(&e) => {
                 Err(Self::isolation_unavailable(method, &e))
+            }
+            other => other,
+        };
+        // Chrome answers a node in a cross-origin child frame of this same
+        // process (a same-site iframe such as login.aliexpress.com inside
+        // www.aliexpress.com) with a null object, not an error: the main
+        // frame's isolated world cannot reach it. Resolve it in the same
+        // world of the frame it lives in; still never the main world.
+        match first {
+            Ok(out)
+                if method == "DOM.resolveNode" && crate::native::quiet_dom::resolved_null(&out) =>
+            {
+                let frames = Box::pin(crate::native::quiet_dom::child_frames(self, session)).await;
+                for frame in frames {
+                    let Ok(ctx) =
+                        Box::pin(crate::native::quiet_dom::frame_world(self, session, &frame))
+                            .await
+                    else {
+                        continue;
+                    };
+                    let mut in_frame = p.clone();
+                    in_frame[ctx_key] = Value::from(ctx);
+                    if let Ok(found) = self
+                        .send_command_untimed(method, Some(in_frame), session_id)
+                        .await
+                    {
+                        if found.pointer("/object/objectId").is_some() {
+                            return Ok(found);
+                        }
+                    }
+                }
+                Ok(out)
             }
             other => other,
         }

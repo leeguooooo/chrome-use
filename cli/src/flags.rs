@@ -20,6 +20,7 @@ pub(crate) const GLOBAL_BOOL_FLAGS: &[&str] = &[
     "--allow-file-access",
     "--allow-focus-recovery",
     "--open-profile-window",
+    "--clear-extension-frames",
     "--hide-scrollbars",
     "--auto-connect",
     "--launch",
@@ -1306,6 +1307,19 @@ pub fn parse_flags(args: &[String]) -> Flags {
             "--allow-focus-recovery" => {
                 let (value, consumed) = parse_bool_arg(args, i);
                 flags.allow_focus_recovery = value;
+                if consumed {
+                    i += 1;
+                }
+            }
+            "--clear-extension-frames" => {
+                // Surfaced as AGENT_BROWSER_CLEAR_EXTENSION_FRAMES, forwarded
+                // with every command this process sends.
+                let (value, consumed) = parse_bool_arg(args, i);
+                if value {
+                    std::env::set_var("AGENT_BROWSER_CLEAR_EXTENSION_FRAMES", "1");
+                } else {
+                    std::env::remove_var("AGENT_BROWSER_CLEAR_EXTENSION_FRAMES");
+                }
                 if consumed {
                     i += 1;
                 }

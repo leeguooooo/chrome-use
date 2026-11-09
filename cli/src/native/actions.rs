@@ -2400,6 +2400,15 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             std::env::remove_var("AGENT_BROWSER_OPEN_PROFILE_WINDOW");
         }
     }
+    // `--clear-extension-frames`: like `--open-profile-window`, the client
+    // command's choice; nested steps run under their parent's.
+    if cmd.get("_cbSkip").is_some() {
+        if cmd.get("_clearExtensionFrames").and_then(Value::as_bool) == Some(true) {
+            std::env::set_var("AGENT_BROWSER_CLEAR_EXTENSION_FRAMES", "1");
+        } else {
+            std::env::remove_var("AGENT_BROWSER_CLEAR_EXTENSION_FRAMES");
+        }
+    }
     // Position marker: this command's `--show-position` / env, else the
     // config file (read by the marker itself). Mirrored like CLICK_MODE.
     let show_position = cmd.get("_showPosition").and_then(|v| v.as_str());
@@ -18277,7 +18286,9 @@ fn no_recovery_note_for(reason: &str, manager: Option<&str>) -> String {
     };
     format!(
         "\n(No automatic recovery: {reason}.) The tab and what was typed into it are intact: \
-         do not close tabs, stop the session or relaunch Chrome over this. {next}"
+         do not close tabs, stop the session or relaunch Chrome over this. {next} To ask the \
+         user and wait in one step: `chrome-use session handoff --wait --note \"<what to do>\"` \
+         (shown in the side panel; it returns when they press Done)."
     )
 }
 

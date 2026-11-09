@@ -2542,10 +2542,14 @@ pub async fn resolve_element_object_id(
                 Some(effective_session_id),
             )
             .await?;
-        let object_id = result
-            .object
-            .object_id
-            .ok_or_else(|| format!("No objectId for ref {}", ref_id))?;
+        let object_id = result.object.object_id.ok_or_else(|| {
+            format!(
+                "No objectId for ref {ref_id}: Chrome found its node but would not hand it \
+                     out, so nothing was done. Run `snapshot -i` and use a fresh ref; if this \
+                     repeats inside an iframe, `frame <n>` then `snapshot -i` addresses that \
+                     frame directly"
+            )
+        })?;
         return Ok((object_id, effective_session_id.to_string()));
     }
 

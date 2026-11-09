@@ -7233,6 +7233,10 @@ Options:
                              e.g., --proxy-bypass "localhost,*.internal.com"
   --ignore-https-errors      Ignore HTTPS certificate errors
   --allow-file-access        Allow file:// URLs to access local files (Chromium only)
+  --clear-extension-frames   On a tab this session created and another extension blocks
+                             (debugger_access_denied, e.g. 1Password's hidden sign-in frame),
+                             remove other extensions' frames from that page and go on
+                             (or AGENT_BROWSER_CLEAR_EXTENSION_FRAMES=1; ab-connect 0.5.108+)
   --open-profile-window      When the session's Chrome profile has no window (profile_not_open),
                              open one in the background in that same profile and go on
                              (or AGENT_BROWSER_OPEN_PROFILE_WINDOW=1). Default off. JSON reports
@@ -7392,6 +7396,7 @@ Environment:
                                still follow their own config-root variables.
                                Native conversation services retain CLI sessions
                                independently of the extension connection.
+  AGENT_BROWSER_CLEAR_EXTENSION_FRAMES  1: remove other extensions' frames from a blocked agent tab
   AGENT_BROWSER_OPEN_PROFILE_WINDOW  1: a windowless relay profile gets a background window
                                  (same as --open-profile-window, for that command)
   AGENT_BROWSER_EXECUTABLE_PATH  Custom browser executable path

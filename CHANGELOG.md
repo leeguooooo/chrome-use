@@ -1,8 +1,27 @@
 # Changelog
 
-## 1.5.287
+## 1.5.288
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.108 (needed for `--clear-extension-frames`).
+
+### Features
+
+- **`--clear-extension-frames` for tabs another extension blocks.** While a page holds another extension's frame, Chrome refuses every debugger command on the tab (`debugger_access_denied`), and 1Password keeps such a frame in sign-in pages with nothing shown (`<com-1password-uso>`), so there was no menu to close. With `--clear-extension-frames` (or `AGENT_BROWSER_CLEAR_EXTENSION_FRAMES=1`) on a tab the session created, ab-connect removes other extensions' frames from that page through an isolated-world script the page cannot see, and the command is repeated when that is harmless. That extension's widget returns after a reload or on the next page; nothing is disabled. The user's own tabs are never touched. Needs ab-connect 0.5.108 and site access.
+- **A blocked tab's error names the one-step handoff.** When chrome-use cannot recover a blocked tab, the error now gives `session handoff --wait --note "<what to do>"`, which shows the step in the side panel and returns when the user presses Done.
+
+### Fixes
+
+- **Refs inside same-site cross-origin iframes work.** A frame such as `login.aliexpress.com` inside `www.aliexpress.com` shares the page's process. chrome-use resolves nodes in an isolated world, and Chrome answered such a frame's node in the main frame's world with a null object, so `click`, `type` and `get` on its refs failed with `No objectId for ref`. Nodes are now resolved in the same isolated world of the frame they live in; reads still never run in the page's main world.
+- **`No objectId for ref` says what to do** when it still happens.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.287
+
 Works with extension ab-connect 0.5.107.
 
 ### Features
@@ -21,7 +40,6 @@ Works with extension ab-connect 0.5.107.
 
 - @leeguooooo
 - @euvoor
-<!-- release:end -->
 
 ## 1.5.286
 

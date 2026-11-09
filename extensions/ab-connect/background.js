@@ -40,6 +40,7 @@ import { attachTabById } from './attach-by-id.js';
 import { attachCreatedTab, createTabAttachmentQueue } from './tab-attachment.js';
 import { releaseTab } from './release-tab.js';
 import { blurFocusedField } from './menu-blur.js';
+import { clearExtensionFrames } from './extension-frames.js';
 import { NativeFocusBridge, prepareNativeFocusRecovery } from './native-focus.js';
 import { SITE_ACCESS_NOTIFICATION, SITE_ACCESS_OPTIONS_PAGE, hasSiteAccess, isSiteAccessError, notifySiteAccessNeeded } from './site-access.js';
 import { DWELL_MS, UserTouchedTabs } from './user-touched.js';
@@ -1809,6 +1810,30 @@ async function handleForwardCdpCommand(msg) {
       });
     } catch (e) {
       // The agent now waits for the user: say where the switch is.
+      if (isSiteAccessError(e)) void notifySiteAccessNeeded({ storage: chrome.storage.local, notifications: chrome.notifications, t }).catch(() => {});
+      throw e;
+    }
+  }
+
+  // Opt-in (--clear-extension-frames): remove the frames another extension
+  // keeps in an agent tab, which make Chrome refuse every debugger command
+  // there (1Password's hidden sign-in frame).
+  if (method === 'ABExt.clearExtensionFrames') {
+    await loadOwnedTabs();
+    const tid = typeof params?.targetId === 'string' ? params.targetId : '';
+    const sid = typeof params?.sessionId === 'string' ? params.sessionId : sessionId;
+    const tabId = (sid ? resolveSessionTab(sid, sessionToTab, childSessionToTab) : null) ?? (tid ? tabForTarget(tid) : null);
+    try {
+      return await clearExtensionFrames(tabId, {
+        isOwned: (id) => {
+          guardTab(id, agentSession);
+          return ownedTabs.has(id);
+        },
+        getAllFrames: (id) => chrome.webNavigation.getAllFrames({ tabId: id }),
+        executeScript: (injection) => chrome.scripting.executeScript(injection),
+        ownId: chrome.runtime.id,
+      });
+    } catch (e) {
       if (isSiteAccessError(e)) void notifySiteAccessNeeded({ storage: chrome.storage.local, notifications: chrome.notifications, t }).catch(() => {});
       throw e;
     }
