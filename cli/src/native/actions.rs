@@ -3447,6 +3447,20 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                 _ => e,
             };
             let mut msg = super::browser::to_ai_friendly_error(&e);
+            // A session with no tab registered to drive (typically one that only
+            // ran `read <url>`, an HTTP fetch that opens no tab) gets "the tab is
+            // gone", which sends agents hunting for a redirect that never
+            // happened. Say what is actually missing instead.
+            if says_no_tab_to_drive(
+                super::browser::is_stale_target_error(&e),
+                state
+                    .browser
+                    .as_ref()
+                    .is_some_and(|m| m.is_cdp_connection() && m.owns_no_tab()),
+                state.last_unconfirmed_tab_switch.is_some(),
+            ) {
+                msg = NO_OWNED_TAB_MESSAGE.to_string();
+            }
             // A tab-gone error right after an unconfirmed switch means the
             // documented recovery has already been tried (#235).
             if super::browser::is_stale_target_error(&e) {
@@ -15916,6 +15930,26 @@ fn tab_liveness_probe_warning(
 /// Do not blindly repeat an unconfirmed switch. Foreground activation is a
 /// distinct, explicit recovery attempt when it has not yet been tried; this
 /// record does not establish whether the prior command requested activation.
+/// Replaces the tab-gone error when an external (relay/CDP) session has no
+/// tab registered to drive.
+pub(crate) const NO_OWNED_TAB_MESSAGE: &str = "this session has no tab registered to drive \
+    (none opened or adopted, or they are closed). `read <url>` fetches the page over HTTP and \
+    opens no tab, so page commands after it have nothing to act on. Run `open <url>` first, or \
+    `tab adopt <url-substring>` to drive a tab that is already open, then re-`snapshot`.";
+
+/// Whether a failed command should get [`NO_OWNED_TAB_MESSAGE`] instead of the
+/// tab-gone text. Only for a tab-gone error on an external connection whose
+/// session owns no tab (a locally launched browser drives its first tab without
+/// registering it), and not right after an unconfirmed tab switch, whose
+/// recovery note expects the original diagnosis.
+pub(crate) fn says_no_tab_to_drive(
+    stale_target: bool,
+    external_without_owned_tab: bool,
+    unconfirmed_switch: bool,
+) -> bool {
+    stale_target && external_without_owned_tab && !unconfirmed_switch
+}
+
 pub(crate) fn already_tried_note(
     attempt: Option<&(&'static str, String, std::time::Instant)>,
 ) -> Option<String> {
@@ -28837,6 +28871,38 @@ mod tests {
         );
         assert!(!warning.contains("open <url>"), "{warning}");
         assert!(!warning.contains("navigate <url>"), "{warning}");
+    }
+
+    /// A session that owns no tab (e.g. it only ran `read <url>`) is told
+    /// to open one, not sent hunting for a redirect that never happened.
+    #[test]
+    fn a_session_without_a_tab_is_told_to_open_one() {
+        // Replaced only for a tab-gone error on an external session owning no tab.
+        assert!(says_no_tab_to_drive(true, true, false));
+        assert!(
+            !says_no_tab_to_drive(false, true, false),
+            "other errors keep their text"
+        );
+        assert!(
+            !says_no_tab_to_drive(true, false, false),
+            "owned tab or local launch"
+        );
+        assert!(
+            !says_no_tab_to_drive(true, true, true),
+            "after an unconfirmed switch"
+        );
+        let msg = NO_OWNED_TAB_MESSAGE;
+        assert!(
+            msg.contains("read <url>") && msg.contains("opens no tab"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("open <url>") && msg.contains("tab adopt"),
+            "{msg}"
+        );
+        assert!(!msg.contains("OAuth"), "{msg}");
+        // The friendly rewrite would not turn it back into the tab-gone text.
+        assert!(!super::super::browser::is_stale_target_error(msg), "{msg}");
     }
 
     /// A tab-gone error that follows an unconfirmed switch must say the
