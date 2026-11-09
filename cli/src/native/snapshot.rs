@@ -1065,8 +1065,24 @@ async fn take_snapshot_at_depth(
     // which always returns the top document — it is not frame-scoped, so running
     // it at depth > 0 would re-scan the main frame's iframes and recurse
     // redundantly. Nested presentation iframes are rare; the AX-`Iframe` loop
-    // above still handles nested a11y-visible iframes at every depth.
-    if depth == 0 {
+    // above still handles nested a11y-visible iframes at every depth. Not when
+    // a child frame is selected either: the top document's iframes include
+    // that frame, whose content then printed a second time under `- iframe`
+    // (#882). Selecting the top frame itself still runs it.
+    let reads_top_document = match frame_id {
+        None => true,
+        Some(selected) => client
+            .send_command_no_params("Page.getFrameTree", Some(session_id))
+            .await
+            .ok()
+            .and_then(|t| {
+                t.pointer("/frameTree/frame/id")?
+                    .as_str()
+                    .map(|id| id == selected)
+            })
+            .unwrap_or(false),
+    };
+    if depth == 0 && reads_top_document {
         let handled: std::collections::HashSet<i64> = tree_nodes
             .iter()
             .filter(|n| n.role == "Iframe")

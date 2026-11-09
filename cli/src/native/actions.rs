@@ -611,6 +611,43 @@ struct DrainedEvents {
     detached_iframe_sessions: Vec<String>,
 }
 
+/// A snapshot error when a reload or navigation replaced the selected frame:
+/// its id names nothing now, and the raw CDP error said only that. Leave the
+/// frame and say what happened; any other error is returned as it was.
+fn left_vanished_frame(active_frame_id: &mut Option<String>, error: String) -> String {
+    if active_frame_id.is_none() || !selected_frame_gone(&error) {
+        return error;
+    }
+    *active_frame_id = None;
+    "The selected frame is gone (the page reloaded or navigated). Commands now run in the top \
+     frame; run `frames` and `frame <n>` to select it again."
+        .to_string()
+}
+
+/// Whether a snapshot error says the selected frame no longer exists.
+fn selected_frame_gone(error: &str) -> bool {
+    error.contains("Frame with the given frameId is not found")
+        || error.contains("Frame with the given id was not found")
+}
+
+/// The `(frameId, sessionId)` pairs of an `ABRelay.iframeSessions` reply that
+/// `known` does not hold yet.
+fn known_frame_sessions_missing(
+    reply: &Value,
+    known: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    reply["sessions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| Some((s["targetId"].as_str()?, s["sessionId"].as_str()?)))
+        .filter(|(frame, session)| {
+            !frame.is_empty() && known.get(*frame).map(String::as_str) != Some(*session)
+        })
+        .map(|(frame, session)| (frame.to_string(), session.to_string()))
+        .collect()
+}
+
 /// Compute a hash of the [`LaunchOptions`] fields that require a browser
 /// relaunch when changed (baked into the Chrome process at startup).
 ///
@@ -1365,6 +1402,54 @@ impl DaemonState {
             if !armed_new_sessions {
                 break;
             }
+        }
+    }
+
+    /// Register out-of-process frames whose attach this daemon did not keep
+    /// (#882). Chrome reports a frame's attach once, and a tab switch, `adopt`
+    /// or navigation clears `iframe_sessions`. A frame that attached before the
+    /// clear (an adopted tab's frames can) or outlived the navigation (a
+    /// `#hash` change keeps the iframe) was then gone for good: `frames` left
+    /// it out, and refs inside it resolved on the page session ("No objectId
+    /// for ref"). The relay keeps every frame session the extension attached,
+    /// so ask it for the active tab's. Over direct CDP nothing is asked.
+    pub async fn recover_iframe_sessions(&mut self) {
+        let missing: Vec<(String, String)> = {
+            let Some(mgr) = self.browser.as_ref().filter(|m| m.on_relay()) else {
+                return;
+            };
+            let Ok(page) = mgr.active_session_id() else {
+                return;
+            };
+            // On the page session: an older relay forwards the unknown method
+            // to this tab, where it fails, and nothing is recovered, as before.
+            let Ok(reply) = mgr
+                .client
+                .send_command("ABRelay.iframeSessions", Some(json!({})), Some(page))
+                .await
+            else {
+                return;
+            };
+            // The relay cannot always tell a session died (an idle-detached
+            // debugger takes its frames along silently): keep only the ones
+            // that still answer.
+            let mut live = Vec::new();
+            for (frame, session) in known_frame_sessions_missing(&reply, &self.iframe_sessions) {
+                let probe = mgr
+                    .client
+                    .send_command_no_params("Page.getFrameTree", Some(&session));
+                if let Ok(Ok(_)) = tokio::time::timeout(Duration::from_secs(2), probe).await {
+                    live.push((frame, session));
+                }
+            }
+            live
+        };
+        if !missing.is_empty() {
+            self.apply_drained_events(DrainedEvents {
+                attached_iframe_sessions: missing,
+                ..Default::default()
+            })
+            .await;
         }
     }
 
@@ -8590,6 +8675,7 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     if let Some(mgr) = state.browser.as_mut() {
         mgr.resync_targets().await.ok();
     }
+    state.recover_iframe_sessions().await;
 
     // Wait for the page to stop changing before reading it (#228). `snapshot`
     // used to capture the instant it was called, which on anything doing
@@ -8656,7 +8742,7 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         Ok(tree) => tree,
         Err(e) => {
             state.ref_map = previous_refs;
-            return Err(e);
+            return Err(left_vanished_frame(&mut state.active_frame_id, e));
         }
     };
 
@@ -9309,7 +9395,7 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
         // refreshes live entries while preserving backend-node identities. A
         // hard clear here reset numbering to e1 and invalidated refs captured by
         // the immediately preceding snapshot (issue #197).
-        let _ = snapshot::take_snapshot(
+        let annotated = snapshot::take_snapshot(
             &mgr.client,
             &session_id,
             &SnapshotOptions {
@@ -9320,7 +9406,8 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
             state.active_frame_id.as_deref(),
             &state.iframe_sessions,
         )
-        .await?;
+        .await;
+        annotated.map_err(|e| left_vanished_frame(&mut state.active_frame_id, e))?;
     }
 
     let result = screenshot::take_screenshot(
@@ -12501,6 +12588,7 @@ async fn handle_gettext(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
 }
 
 async fn handle_frames(_cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    state.recover_iframe_sessions().await;
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
     let frames =
@@ -15079,7 +15167,8 @@ async fn handle_diff_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Va
         state.active_frame_id.as_deref(),
         &state.iframe_sessions,
     )
-    .await?;
+    .await;
+    let current = current.map_err(|e| left_vanished_frame(&mut state.active_frame_id, e))?;
 
     let baseline = cmd.get("baseline").and_then(|v| v.as_str());
 
@@ -19553,6 +19642,7 @@ async fn handle_waitforfunction(cmd: &Value, state: &DaemonState) -> Result<Valu
 // ---------------------------------------------------------------------------
 
 async fn handle_frame(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    state.recover_iframe_sessions().await;
     // A frameId we already hold a session for. `observed.newFrames` names the
     // frames a click opened by id, so `frame <id>` has to take one: reporting an
     // identifier and then refusing it is the dead end this change is here to
@@ -31098,5 +31188,51 @@ mod observed_reload_note_tests {
         )
         .await;
         assert_eq!(response, failed("Wait timed out after 25000ms"));
+    }
+}
+
+#[cfg(test)]
+mod frame_session_recovery_tests {
+    use super::*;
+
+    /// Frame sessions the relay holds come back unless the daemon has them (#882).
+    #[test]
+    fn relay_frame_sessions_fill_only_what_the_daemon_lost() {
+        let reply = json!({"sessions": [
+            {"sessionId": "s-a", "targetId": "FA"},
+            {"sessionId": "s-b", "targetId": "FB"},
+            {"sessionId": "s-c", "targetId": ""},
+            {"targetId": "FD"}
+        ]});
+        let mut known = HashMap::new();
+        known.insert("FA".to_string(), "s-a".to_string());
+        assert_eq!(
+            known_frame_sessions_missing(&reply, &known),
+            vec![("FB".to_string(), "s-b".to_string())]
+        );
+        // A frame re-attached under a new session takes the new one.
+        known.insert("FB".to_string(), "old".to_string());
+        assert_eq!(
+            known_frame_sessions_missing(&reply, &known),
+            vec![("FB".to_string(), "s-b".to_string())]
+        );
+        assert!(known_frame_sessions_missing(&json!({}), &known).is_empty());
+    }
+
+    #[test]
+    fn a_vanished_selected_frame_is_recognised() {
+        assert!(selected_frame_gone(
+            r#"CDP error (Accessibility.getFullAXTree): {"code":-32602,"message":"Frame with the given frameId is not found."}"#
+        ));
+        assert!(!selected_frame_gone("CDP error: Target closed"));
+        let gone = r#"CDP error: {"message":"Frame with the given frameId is not found."}"#;
+        let mut frame = Some("F1".to_string());
+        assert!(left_vanished_frame(&mut frame, gone.to_string()).contains("frame is gone"));
+        assert_eq!(frame, None);
+        // Nothing selected, or another error: returned unchanged.
+        assert_eq!(left_vanished_frame(&mut frame, gone.to_string()), gone);
+        let mut frame = Some("F1".to_string());
+        assert_eq!(left_vanished_frame(&mut frame, "x".to_string()), "x");
+        assert_eq!(frame.as_deref(), Some("F1"));
     }
 }
