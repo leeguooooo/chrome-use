@@ -19,6 +19,7 @@ pub(crate) const GLOBAL_BOOL_FLAGS: &[&str] = &[
     "--ignore-https-errors",
     "--allow-file-access",
     "--allow-focus-recovery",
+    "--open-profile-window",
     "--hide-scrollbars",
     "--auto-connect",
     "--launch",
@@ -1305,6 +1306,19 @@ pub fn parse_flags(args: &[String]) -> Flags {
             "--allow-focus-recovery" => {
                 let (value, consumed) = parse_bool_arg(args, i);
                 flags.allow_focus_recovery = value;
+                if consumed {
+                    i += 1;
+                }
+            }
+            "--open-profile-window" => {
+                // Surfaced as AGENT_BROWSER_OPEN_PROFILE_WINDOW, which every
+                // command this process sends forwards to the daemon (#883).
+                let (value, consumed) = parse_bool_arg(args, i);
+                if value {
+                    std::env::set_var("AGENT_BROWSER_OPEN_PROFILE_WINDOW", "1");
+                } else {
+                    std::env::remove_var("AGENT_BROWSER_OPEN_PROFILE_WINDOW");
+                }
                 if consumed {
                     i += 1;
                 }

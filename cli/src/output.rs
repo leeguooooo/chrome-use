@@ -7233,6 +7233,10 @@ Options:
                              e.g., --proxy-bypass "localhost,*.internal.com"
   --ignore-https-errors      Ignore HTTPS certificate errors
   --allow-file-access        Allow file:// URLs to access local files (Chromium only)
+  --open-profile-window      When the session's Chrome profile has no window (profile_not_open),
+                             open one in the background in that same profile and go on
+                             (or AGENT_BROWSER_OPEN_PROFILE_WINDOW=1). Default off. JSON reports
+                             data.profileWindowRecovery {{attempted, opened, detail}}.
   --allow-focus-recovery     Permit one native Escape recovery for this invocation (Windows relay).
                              May briefly focus an owned agent-only window; default disabled.
                              Needs extension 0.5.103+ and a recovery-capable native host.

@@ -586,6 +586,16 @@ EOF</code></pre>
         Neither error is retried automatically.
       </p>
       <p>
+        For unattended or scheduled runs, add <code>--open-profile-window</code> (or set
+        <code>AGENT_BROWSER_OPEN_PROFILE_WINDOW=1</code>): when the profile is confirmed to have no window, the extension
+        in that profile opens a new unfocused window and the command goes on, with no rerun. It opens one only on a
+        confirmed "no window"; <code>profile window unavailable</code> is still refused. The window is always in the
+        session's own profile, never another one, and Chrome is not restarted and no window is closed. JSON
+        <code>data.profileWindowRecovery</code> records <code>attempted</code>, <code>opened</code> and <code>detail</code>,
+        with a warning when a window was opened. The switch applies to that command only, also on a daemon that is
+        already running.
+      </p>
+      <p>
         Browser commands normally require an open window in the selected Chrome profile. If its relay is down while Chrome is running and Local State does not list that profile as active, recovery first waits for the same profile to remain unlisted for 20 seconds. This gives a recently opened window or relay time to finish starting; active or unknown metadata cancels the pending window request. Recovery then requests one profile window and checks again 20 seconds after that request, within the existing 45-second relay wait. Opening a window does not prove the relay connected. This recovery can briefly bring Chrome to the foreground on macOS. Focus restoration is best effort; it does not guarantee returning to another Chrome window. This exception applies only to profile recovery; ordinary tab actions stay in the background. <code>status</code> only reads metadata and never opens a window. <code>AGENT_BROWSER_NO_AUTO_RECONNECT</code> disables automatic recovery. Missing or malformed metadata does not trigger a window request. An ambiguous process command line still counts as a running user browser; only a clearly separate automation instance on another data root is excluded. If recovery still cannot connect, follow the reported profile or relay error; do not restart Chrome merely because its relay is down.
       </p>
       <p>

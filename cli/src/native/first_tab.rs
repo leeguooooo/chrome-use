@@ -42,9 +42,50 @@ pub const WINDOW_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The profile has no window open. Nothing was created.
 pub const PROFILE_NOT_OPEN: &str = "profile not open: the Chrome profile this session uses has \
-     no open window, and chrome-use does not open one itself (that would bring Chrome up in \
-     front of you). Open a window in that profile first (pick it in Chrome's profile menu, or \
-     press Cmd+N / Ctrl+N in it), then rerun the same command. Nothing was opened or attached.";
+     no open window, and chrome-use does not open one unless asked (a new window is a change \
+     you did not make). Open a window in that profile first (pick it in Chrome's profile menu, \
+     or press Cmd+N / Ctrl+N in it), then rerun the same command; for unattended runs, rerun \
+     with --open-profile-window (or AGENT_BROWSER_OPEN_PROFILE_WINDOW=1) to let chrome-use \
+     open one in the background. Nothing was opened or attached.";
+
+/// Whether this command may open a window in a profile that has none
+/// (#883): `--open-profile-window` or `AGENT_BROWSER_OPEN_PROFILE_WINDOW`
+/// set to an on value. Off by default: opening a window is a visible change
+/// the user did not make.
+pub fn open_profile_window_enabled() -> bool {
+    std::env::var("AGENT_BROWSER_OPEN_PROFILE_WINDOW")
+        .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
+}
+
+/// What the window recovery did for the command running now, for the
+/// response (`data.profileWindowRecovery`). The daemon runs one command at a
+/// time per process.
+static RECOVERY: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+
+pub fn note_recovery(opened: bool, detail: &str) {
+    if let Ok(mut slot) = RECOVERY.lock() {
+        *slot = Some(serde_json::json!({
+            "attempted": true,
+            "opened": opened,
+            "detail": detail,
+        }));
+    }
+}
+
+pub fn take_recovery() -> Option<Value> {
+    RECOVERY.lock().ok().and_then(|mut slot| slot.take())
+}
+
+pub fn restore_recovery(recovery: Option<Value>) {
+    if let Ok(mut slot) = RECOVERY.lock() {
+        *slot = recovery;
+    }
+}
+
+/// The note a command carries when it opened the profile's window.
+pub const PROFILE_WINDOW_OPENED: &str = "The Chrome profile this session uses had no open \
+     window; chrome-use opened one in the background (--open-profile-window). Close it when \
+     you are done if you do not want it.";
 
 /// Prefixes of the first-tab failures. The error taxonomy keys on them, and
 /// none of them is retried by the relay-revive loop: the relay answered.

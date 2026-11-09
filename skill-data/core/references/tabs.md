@@ -74,6 +74,10 @@ still counts as a running user browser; only a clearly separate automation insta
 another data root is excluded. If recovery still cannot connect, follow the reported
 profile or relay error; do not restart Chrome merely because its relay is down.
 `profile not open` names the profile that is still unlisted after recovery.
+On a connected relay profile with no window, `--open-profile-window` (or
+`AGENT_BROWSER_OPEN_PROFILE_WINDOW=1`) lets that command open an unfocused window
+in the same profile and continue; JSON `data.profileWindowRecovery` says whether it
+was attempted and opened. Unknown window state is still refused.
 `profile window unavailable` means the window state could not be verified.
 After
 `first_tab_cleanup_incomplete`, run `close` in the same session before
