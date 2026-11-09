@@ -389,6 +389,17 @@ async fn run_socket_server(
                 let session_id = s.session_id.clone();
                 let handed_off =
                     crate::ownership::owner_of(&session_id) == crate::ownership::Owner::User;
+                // The user holds the session (`session handoff`): they are
+                // working on the page, and `handoff --wait` only watches the
+                // socket without sending commands. Exiting here ended every
+                // wait longer than the idle timeout with "the session's
+                // daemon is not answering". Wait another period instead.
+                if handed_off {
+                    drop(s);
+                    idle_sleep_pin = idle_timeout_ms
+                        .map(|ms| Box::pin(tokio::time::sleep(Duration::from_millis(ms))));
+                    continue;
+                }
                 if let Some(ref mut mgr) = s.browser {
                     // A default idle timeout should reap a browser process that
                     // we launched, but it must not delete the working tabs in the
@@ -521,6 +532,17 @@ async fn run_socket_server(
                 let session_id = s.session_id.clone();
                 let handed_off =
                     crate::ownership::owner_of(&session_id) == crate::ownership::Owner::User;
+                // The user holds the session (`session handoff`): they are
+                // working on the page, and `handoff --wait` only watches the
+                // socket without sending commands. Exiting here ended every
+                // wait longer than the idle timeout with "the session's
+                // daemon is not answering". Wait another period instead.
+                if handed_off {
+                    drop(s);
+                    idle_sleep_pin = idle_timeout_ms
+                        .map(|ms| Box::pin(tokio::time::sleep(Duration::from_millis(ms))));
+                    continue;
+                }
                 if let Some(ref mut mgr) = s.browser {
                     // Match the Unix daemon: an idle recycle disconnects from an
                     // external Chrome without deleting session tabs (#210).
