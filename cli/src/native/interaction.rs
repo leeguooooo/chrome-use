@@ -292,8 +292,20 @@ pub async fn click_reporting(
     // dispatch a real Enter on the page session; Chrome routes the key to the
     // focused element regardless of frame (same as `type --focused`), and Enter on a
     // focused button/link fires a trusted `click`. `coord` mode opts out.
+    //
+    // That holds for an out-of-process frame (its own session). A frame that
+    // shares the page's process (same-site, cross-origin: login.aliexpress.com
+    // inside www.aliexpress.com) shares its session too, and `getBoxModel`
+    // there answers in top-frame coordinates, so it gets a real pointer click:
+    // Enter does nothing on a custom option (`div role=menuitem`), and a
+    // country-code list that only listens to mousedown ignores `.click()`.
     let in_iframe = ref_map.ref_is_in_iframe(selector_or_ref);
-    if mode != "coord" && button == "left" && click_count == 1 && in_iframe {
+    let in_oopif = in_iframe
+        && parse_ref(selector_or_ref)
+            .and_then(|r| ref_map.get(&r))
+            .and_then(|e| e.frame_id.as_deref())
+            .is_some_and(|f| iframe_sessions.contains_key(f));
+    if mode != "coord" && button == "left" && click_count == 1 && in_oopif {
         let keyboard = dom_activate(
             client,
             session_id,
@@ -380,9 +392,15 @@ pub async fn click_reporting(
             if super::element::semantic_pin_active(selector_or_ref) {
                 let object =
                     super::element::resolve_semantic_pin(client, &effective_session_id).await?;
-                if let Some(cover) =
-                    semantic_hit_test(client, &effective_session_id, &object, Some((tx, ty)))
-                        .await?
+                let (ox, oy) =
+                    super::element::frame_offset(client, &effective_session_id, &object).await;
+                if let Some(cover) = semantic_hit_test(
+                    client,
+                    &effective_session_id,
+                    &object,
+                    Some((tx - ox, ty - oy)),
+                )
+                .await?
                 {
                     return Err(occluded_refusal(selector_or_ref, &cover));
                 }
@@ -443,6 +461,27 @@ pub async fn click_reporting(
                     "{e} To click the covered element anyway through the DOM \
                      (element.click(), isTrusted=false), add --allow-dom."
                 ));
+            }
+            // An in-process frame's target the pointer could not reach: the
+            // keyboard activation such targets had before.
+            if in_iframe && !in_oopif {
+                let keyboard = dom_activate(
+                    client,
+                    session_id,
+                    ref_map,
+                    selector_or_ref,
+                    iframe_sessions,
+                )
+                .await?;
+                let first_line = e.lines().next().unwrap_or("").trim().to_string();
+                return Ok(if keyboard {
+                    ClickOutcome::trusted("keyboard", warning)
+                } else {
+                    ClickOutcome::dom(
+                        &format!("a pointer click could not be placed ({first_line})"),
+                        warning,
+                    )
+                });
             }
             eprintln!(
                 "[click] coordinate click failed ({e}); falling back to DOM dispatch \
@@ -686,6 +725,16 @@ async fn verify_live_click_target(
     point: Option<(f64, f64)>,
 ) -> Result<(), String> {
     verify_click_epoch(client, target).await?;
+    // The landing point is top-frame; the guard hit-tests in the target's own
+    // document (an in-process child frame has its own origin).
+    let point = match point {
+        Some((x, y)) => {
+            let (ox, oy) =
+                super::element::frame_offset(client, &target.session_id, &target.object_id).await;
+            Some((x - ox, y - oy))
+        }
+        None => None,
+    };
     let args = point
         .map(|(x, y)| vec![json!({"value":x}), json!({"value":y})])
         .unwrap_or_default();

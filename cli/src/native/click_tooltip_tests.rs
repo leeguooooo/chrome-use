@@ -96,6 +96,7 @@ async fn run(cover: Cover, clear_hover_layer: bool) -> (Result<(), String>, Vec<
             500.0,
             200.0,
             clear_hover_layer,
+            false,
         ),
     )
     .await
