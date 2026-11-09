@@ -7776,6 +7776,16 @@ impl BrowserManager {
         let out = self.cycle_pinned_tab_visibility_menus(blur_focused).await;
         match (out, cleared) {
             (Err(e), Some(c)) => Err(format!("{e}; {c}")),
+            // Frames went and then a menu closed: say both.
+            (Ok(note), Some(c)) if !c.starts_with("--clear-extension-frames:") => {
+                let removed = c
+                    .trim_end_matches(", but the tab is still blocked")
+                    .to_string();
+                Ok(Some(match note {
+                    Some(n) => format!("{removed}; {n}"),
+                    None => removed,
+                }))
+            }
             (out, _) => out,
         }
     }
@@ -7816,7 +7826,7 @@ impl BrowserManager {
         extension_frames_note(&out)
     }
 
-    async fn cycle_pinned_tab_visibility_menus(
+    pub async fn cycle_pinned_tab_visibility_menus(
         &mut self,
         blur_focused: bool,
     ) -> Result<Option<String>, String> {

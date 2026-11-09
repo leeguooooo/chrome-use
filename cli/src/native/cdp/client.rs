@@ -578,20 +578,36 @@ impl CdpClient {
             Ok(out)
                 if method == "DOM.resolveNode" && crate::native::quiet_dom::resolved_null(&out) =>
             {
-                let frames = Box::pin(crate::native::quiet_dom::child_frames(self, session)).await;
+                // Bounded: a slow frame must not hold the session for a
+                // 30 s CDP timeout per frame.
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+                let step = std::time::Duration::from_secs(2);
+                let frames = Box::pin(tokio::time::timeout(
+                    step,
+                    crate::native::quiet_dom::child_frames(self, session),
+                ))
+                .await
+                .unwrap_or_default();
                 for frame in frames {
-                    let Ok(ctx) =
-                        Box::pin(crate::native::quiet_dom::frame_world(self, session, &frame))
-                            .await
-                    else {
+                    if tokio::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    let world = Box::pin(tokio::time::timeout(
+                        step,
+                        crate::native::quiet_dom::frame_world(self, session, &frame),
+                    ))
+                    .await;
+                    let Ok(Ok(ctx)) = world else {
                         continue;
                     };
                     let mut in_frame = p.clone();
                     in_frame[ctx_key] = Value::from(ctx);
-                    if let Ok(found) = self
-                        .send_command_untimed(method, Some(in_frame), session_id)
-                        .await
-                    {
+                    let resolved = Box::pin(tokio::time::timeout(
+                        step,
+                        self.send_command_untimed(method, Some(in_frame), session_id),
+                    ))
+                    .await;
+                    if let Ok(Ok(found)) = resolved {
                         if found.pointer("/object/objectId").is_some() {
                             return Ok(found);
                         }

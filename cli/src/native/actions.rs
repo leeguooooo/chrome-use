@@ -2389,26 +2389,6 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         }
         _ => std::env::remove_var("AGENT_BROWSER_CLICK_MODE"),
     }
-    // `--open-profile-window` (#883) is the client command's choice, never a
-    // value left over from an earlier one or from the daemon's spawn env. Only
-    // a top-level command (it carries `_cbSkip`) sets it; nested script and
-    // batch steps run under their parent's.
-    if cmd.get("_cbSkip").is_some() {
-        if cmd.get("_openProfileWindow").and_then(Value::as_bool) == Some(true) {
-            std::env::set_var("AGENT_BROWSER_OPEN_PROFILE_WINDOW", "1");
-        } else {
-            std::env::remove_var("AGENT_BROWSER_OPEN_PROFILE_WINDOW");
-        }
-    }
-    // `--clear-extension-frames`: like `--open-profile-window`, the client
-    // command's choice; nested steps run under their parent's.
-    if cmd.get("_cbSkip").is_some() {
-        if cmd.get("_clearExtensionFrames").and_then(Value::as_bool) == Some(true) {
-            std::env::set_var("AGENT_BROWSER_CLEAR_EXTENSION_FRAMES", "1");
-        } else {
-            std::env::remove_var("AGENT_BROWSER_CLEAR_EXTENSION_FRAMES");
-        }
-    }
     // Position marker: this command's `--show-position` / env, else the
     // config file (read by the marker itself). Mirrored like CLICK_MODE.
     let show_position = cmd.get("_showPosition").and_then(|v| v.as_str());
@@ -18157,7 +18137,10 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
                 let blur = !acts_at_focus(action);
                 mgr.wake_pinned_tab(blur).await;
                 if mgr.pinned_tab_blocked().await {
-                    pre = Some(Box::pin(mgr.cycle_pinned_tab_visibility(blur)).await);
+                    // Menus only: removing frames waits until the command
+                    // itself passed its target and policy checks and was
+                    // refused (below).
+                    pre = Some(Box::pin(mgr.cycle_pinned_tab_visibility_menus(blur)).await);
                 }
             }
         }
