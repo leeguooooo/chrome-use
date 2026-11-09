@@ -7147,13 +7147,13 @@ impl BrowserManager {
             Ok(Ok(result)) => result.target_id,
             Ok(Err(error)) => {
                 if opens_window {
-                    first_tab::note_recovery(false, &error);
+                    first_tab::note_recovery(first_tab::window_opened_after(&error), &error);
                 }
                 return Err(first_tab::create_failure(&error));
             }
             Err(_) => {
                 if opens_window {
-                    first_tab::note_recovery(false, "no answer within the first-tab budget");
+                    first_tab::note_recovery(None, "no answer within the first-tab budget");
                 }
                 return Err(first_tab::create_failure(
                     "no answer within the first-tab budget",
@@ -7161,7 +7161,7 @@ impl BrowserManager {
             }
         };
         if opens_window {
-            first_tab::note_recovery(true, "opened a background window in this profile");
+            first_tab::note_recovery(Some(true), "opened a background window in this profile");
         }
 
         // The delete right goes to disk before anything else can fail, so a
@@ -9636,10 +9636,14 @@ impl BrowserManager {
             .await;
         if opens_window {
             match &created {
-                Ok(_) => {
-                    first_tab::note_recovery(true, "opened a background window in this profile")
+                Ok(_) => first_tab::note_recovery(
+                    Some(true),
+                    "opened a background window in this profile",
+                ),
+                // A lost answer may still have opened the window.
+                Err(error) => {
+                    first_tab::note_recovery(first_tab::window_opened_after(error), error)
                 }
-                Err(error) => first_tab::note_recovery(false, error),
             }
         }
         let result = created?;

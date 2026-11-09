@@ -2389,12 +2389,16 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         }
         _ => std::env::remove_var("AGENT_BROWSER_CLICK_MODE"),
     }
-    // `--open-profile-window` (#883) is this command's choice, never a value
-    // left over from an earlier one or from the daemon's spawn env.
-    if cmd.get("_openProfileWindow").and_then(Value::as_bool) == Some(true) {
-        std::env::set_var("AGENT_BROWSER_OPEN_PROFILE_WINDOW", "1");
-    } else {
-        std::env::remove_var("AGENT_BROWSER_OPEN_PROFILE_WINDOW");
+    // `--open-profile-window` (#883) is the client command's choice, never a
+    // value left over from an earlier one or from the daemon's spawn env. Only
+    // a top-level command (it carries `_cbSkip`) sets it; nested script and
+    // batch steps run under their parent's.
+    if cmd.get("_cbSkip").is_some() {
+        if cmd.get("_openProfileWindow").and_then(Value::as_bool) == Some(true) {
+            std::env::set_var("AGENT_BROWSER_OPEN_PROFILE_WINDOW", "1");
+        } else {
+            std::env::remove_var("AGENT_BROWSER_OPEN_PROFILE_WINDOW");
+        }
     }
     // Position marker: this command's `--show-position` / env, else the
     // config file (read by the marker itself). Mirrored like CLICK_MODE.

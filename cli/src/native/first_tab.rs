@@ -62,7 +62,9 @@ pub fn open_profile_window_enabled() -> bool {
 /// time per process.
 static RECOVERY: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
 
-pub fn note_recovery(opened: bool, detail: &str) {
+/// `opened`: `None` when the create got no answer, so Chrome may or may not
+/// have opened the window; look before retrying.
+pub fn note_recovery(opened: Option<bool>, detail: &str) {
     if let Ok(mut slot) = RECOVERY.lock() {
         *slot = Some(serde_json::json!({
             "attempted": true,
@@ -197,6 +199,12 @@ pub fn create_failure(error: &str) -> String {
          profile's windows and close it if it is there; `chrome-use tab list` shows what this \
          session can see."
     )
+}
+
+/// `opened` for [`note_recovery`] after a failed create: `Some(false)` only
+/// when the extension's answer proves nothing was opened.
+pub fn window_opened_after(error: &str) -> Option<bool> {
+    (!create_failure(error).starts_with(FIRST_TAB_OUTCOME_UNKNOWN)).then_some(false)
 }
 
 /// How cleaning up a tab that could not be set up ended.
@@ -365,6 +373,16 @@ pub fn cleanup_incomplete(target_id: &str, cause: &str, why: &str, recorded: boo
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// #883: only an answer that proves nothing was made counts as not opened.
+    #[test]
+    fn a_lost_create_answer_leaves_the_window_unknown() {
+        assert_eq!(window_opened_after("Request timed out"), None);
+        assert_eq!(
+            window_opened_after("createTarget: agent window ownership is unknown; refusing to create another window"),
+            Some(false)
+        );
+    }
 
     /// #486: a tab is created only when the profile shows a real window.
     #[test]

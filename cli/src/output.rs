@@ -7392,6 +7392,8 @@ Environment:
                                still follow their own config-root variables.
                                Native conversation services retain CLI sessions
                                independently of the extension connection.
+  AGENT_BROWSER_OPEN_PROFILE_WINDOW  1: a windowless relay profile gets a background window
+                                 (same as --open-profile-window, for that command)
   AGENT_BROWSER_EXECUTABLE_PATH  Custom browser executable path
   AGENT_BROWSER_EXTENSIONS       Comma-separated browser extension paths
   AGENT_BROWSER_INIT_SCRIPTS     Comma-separated paths to page init scripts
@@ -7470,6 +7472,7 @@ Examples:
   chrome-use --cdp 9222 snapshot      # Connect via CDP port
   chrome-use --auto-connect snapshot  # Auto-discover running Chrome
   chrome-use --allow-focus-recovery click @e1  # Opt in to bounded Windows native recovery
+  chrome-use --open-profile-window site <name>  # Unattended: open a window if the profile has none
   chrome-use stream enable            # Start runtime streaming on an auto-selected port
   chrome-use stream status            # Inspect runtime streaming state
   chrome-use --color-scheme dark open example.com  # Dark mode
