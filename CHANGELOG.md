@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.288
+## 1.5.289
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
+
+### Fixes
+
+- **`session handoff --wait` no longer gives up after the idle timeout.** A wait without a `--until-*` condition only checks that the session's daemon is there, and the daemon stopped after 10 minutes without commands even while the user held the session, so a longer wait ended with `lost the browser session while waiting (the session's daemon is not answering)` and the session left handed off. A handed-off session's daemon now stays up until the user is done.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.288
+
 Works with extension ab-connect 0.5.108 (needed for `--clear-extension-frames`).
 
 ### Features
@@ -18,7 +31,6 @@ Works with extension ab-connect 0.5.108 (needed for `--clear-extension-frames`).
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.287
 
