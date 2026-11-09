@@ -1200,11 +1200,22 @@ fn upgrade_refuses_busy_old_service_and_replaces_it_only_after_owned_idle_shutdo
     panic!("Owned upgraded service exit was not confirmed");
 }
 
+/// Deletion uses isolated session records, confirms cleanup, and preserves sibling data.
 #[test]
 #[cfg(any(unix, windows))]
 fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
     let _case = native_case();
     let registry = tempfile::tempdir().unwrap();
+    // Session records are separate from the relay registry. Inheriting them
+    // can start an unrelated tab sweep that sends CDP frames into this fixture.
+    // Keep Unix socket paths short enough even with a full panel session UUID.
+    #[cfg(unix)]
+    let sockets = tempfile::tempdir_in("/tmp").unwrap();
+    #[cfg(windows)]
+    let sockets = tempfile::tempdir().unwrap();
+    // Preserve socket/PID records if shutdown cannot be independently confirmed,
+    // including when an assertion or service-fixture cleanup fails.
+    let sockets = sockets.keep();
     let profile = "native-delete-fixture";
     let codex_home = tempfile::tempdir().unwrap();
     let mut cleanup = ServiceFixture {
@@ -1216,6 +1227,7 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
         Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
+            .env("AGENT_BROWSER_SOCKET_DIR", &sockets)
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
             .env("CODEX_HOME", codex_home.path())
             .env("PANEL_FIXTURE_UUID_SESSION", "1")
@@ -1319,6 +1331,10 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
         deleted["result"]["deleted"]["browserSession"]["session"],
         format!("panel-{}", ids[0])
     );
+    assert_eq!(
+        deleted["result"]["deleted"]["browserSession"]["closed"], true,
+        "Browser-session cleanup failed: {deleted}"
+    );
     assert!(!folder.join(&ids[0]).exists());
     let listed = panel_reply(&mut host, &rx, "list", "conversationList", json!({}));
     let listed: Vec<_> = listed["result"]["conversations"]
@@ -1355,6 +1371,11 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
     assert!(sent.get("error").is_none());
     let sibling = conversation_poll(&mut host, &rx, &ids[1], "idle");
     assert!(sibling["journal"]["events"].as_array().unwrap().len() > 2);
+    drop(host);
+    drop(cleanup);
+    // A successful close response is not an independent process-exit check.
+    // Only remove an empty directory; never recursively delete tracking records.
+    let _ = std::fs::remove_dir(sockets);
 }
 
 #[test]
