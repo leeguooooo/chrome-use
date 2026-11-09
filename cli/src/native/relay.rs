@@ -165,6 +165,22 @@ impl RelayState {
         (current != session).then_some(current)
     }
 
+    /// Every frame session nested under `session`, at any depth.
+    fn iframe_descendants(&self, session: &str) -> Vec<String> {
+        let mut found: Vec<String> = Vec::new();
+        let mut frontier = vec![session.to_string()];
+        while let Some(parent) = frontier.pop() {
+            for (child, p) in &self.oopif_parents {
+                if *p == parent && child != session && !found.contains(child) {
+                    found.push(child.clone());
+                    frontier.push(child.clone());
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
     fn forget_iframe_children(&mut self, session: &str) {
         let mut gone = HashSet::from([session.to_string()]);
         loop {
@@ -521,6 +537,22 @@ impl RelayState {
                                 .and_then(|t| t.as_str())
                                 .unwrap_or("")
                                 .to_string();
+                            // A frame attached again (the debugger was idle-
+                            // detached and came back) has one live session:
+                            // the old one must not be handed out (#882).
+                            let replaced: Vec<String> = self
+                                .oopif_sessions
+                                .iter()
+                                .filter(|(old, t)| {
+                                    !target.is_empty() && **t == target && old.as_str() != sid
+                                })
+                                .map(|(old, _)| old.clone())
+                                .collect();
+                            for old in replaced {
+                                self.oopif_sessions.remove(&old);
+                                self.oopif_parents.remove(&old);
+                                self.forget_iframe_children(&old);
+                            }
                             self.oopif_sessions.insert(sid.to_string(), target);
                             if let Some(parent) = session_id {
                                 self.oopif_parents
@@ -610,10 +642,24 @@ impl RelayState {
                             if let Some(sid) = session_id {
                                 ev["sessionId"] = json!(sid);
                             }
-                            let routed = self.page_event(session_id.or(Some(g)), ev);
+                            let route = session_id.or(Some(g));
+                            let mut out = vec![self.page_event(route, ev)];
+                            // Frames nested in it go with it, and Chrome may
+                            // not say so before its own detach: tell the
+                            // daemon, or it keeps routing to dead sessions.
+                            for child in self.iframe_descendants(g) {
+                                out.push(self.page_event(
+                                    route,
+                                    json!({
+                                        "method": "Target.detachedFromTarget",
+                                        "params": { "sessionId": child },
+                                        "sessionId": g,
+                                    }),
+                                ));
+                            }
                             self.oopif_parents.remove(g);
                             self.forget_iframe_children(g);
-                            return vec![routed];
+                            return out;
                         }
                     }
                     if let Some(gone) = gone {
@@ -768,6 +814,50 @@ mod tests {
         );
         assert_eq!(ask(&mut s, "cb-tab-1"), json!([]));
         assert_eq!(ask(&mut s, "unknown"), json!([]));
+    }
+
+    /// A frame attached again keeps only its new session; a parent's detach
+    /// is forwarded for the frames nested in it too (#882).
+    #[test]
+    fn reattached_and_nested_frame_sessions_stay_current() {
+        let mut s = RelayState::new();
+        let attach = |parent: &str, child: &str, target: &str| {
+            json!({"method":"forwardCDPEvent","params":{
+                "sessionId": parent, "method":"Target.attachedToTarget","params":{
+                    "sessionId": child, "targetInfo":{"targetId": target, "type":"iframe"}}}})
+        };
+        s.handle_ext_message(&attach("cb-tab-1", "old-a", "FA"), "");
+        s.handle_ext_message(&attach("cb-tab-1", "new-a", "FA"), "");
+        s.handle_ext_message(&attach("new-a", "nested", "FN"), "");
+        let ask = s.route_client_command(
+            1,
+            &json!({"id": 1, "method": "ABRelay.iframeSessions", "params": {}, "sessionId": "cb-tab-1"}),
+        );
+        assert_eq!(
+            ask,
+            ClientRoute::Local(json!({"id": 1, "result": {"sessions": [
+                {"sessionId": "nested", "targetId": "FN"},
+                {"sessionId": "new-a", "targetId": "FA"}
+            ]}}))
+        );
+        let out = s.handle_ext_message(
+            &json!({"method":"forwardCDPEvent","params":{
+                "sessionId":"cb-tab-1","method":"Target.detachedFromTarget",
+                "params":{"sessionId":"new-a"}}}),
+            "",
+        );
+        let detached: Vec<String> = out
+            .iter()
+            .filter_map(|o| match o {
+                RelayOut::ToClient { msg, .. } | RelayOut::GroupEvent { msg, .. } => msg
+                    .pointer("/params/sessionId")
+                    .and_then(Value::as_str)
+                    .map(String::from),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(detached, vec!["new-a".to_string(), "nested".to_string()]);
+        assert!(s.oopif_sessions.is_empty());
     }
 
     #[test]

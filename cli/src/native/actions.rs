@@ -611,6 +611,19 @@ struct DrainedEvents {
     detached_iframe_sessions: Vec<String>,
 }
 
+/// A snapshot error when a reload or navigation replaced the selected frame:
+/// its id names nothing now, and the raw CDP error said only that. Leave the
+/// frame and say what happened; any other error is returned as it was.
+fn left_vanished_frame(active_frame_id: &mut Option<String>, error: String) -> String {
+    if active_frame_id.is_none() || !selected_frame_gone(&error) {
+        return error;
+    }
+    *active_frame_id = None;
+    "The selected frame is gone (the page reloaded or navigated). Commands now run in the top \
+     frame; run `frames` and `frame <n>` to select it again."
+        .to_string()
+}
+
 /// Whether a snapshot error says the selected frame no longer exists.
 fn selected_frame_gone(error: &str) -> bool {
     error.contains("Frame with the given frameId is not found")
@@ -1417,7 +1430,19 @@ impl DaemonState {
             else {
                 return;
             };
-            known_frame_sessions_missing(&reply, &self.iframe_sessions)
+            // The relay cannot always tell a session died (an idle-detached
+            // debugger takes its frames along silently): keep only the ones
+            // that still answer.
+            let mut live = Vec::new();
+            for (frame, session) in known_frame_sessions_missing(&reply, &self.iframe_sessions) {
+                let probe = mgr
+                    .client
+                    .send_command_no_params("Page.getFrameTree", Some(&session));
+                if let Ok(Ok(_)) = tokio::time::timeout(Duration::from_secs(2), probe).await {
+                    live.push((frame, session));
+                }
+            }
+            live
         };
         if !missing.is_empty() {
             self.apply_drained_events(DrainedEvents {
@@ -8717,17 +8742,7 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         Ok(tree) => tree,
         Err(e) => {
             state.ref_map = previous_refs;
-            if state.active_frame_id.is_some() && selected_frame_gone(&e) {
-                // A reload or navigation replaced the selected frame; its id
-                // now names nothing, and the raw CDP error said only that.
-                state.active_frame_id = None;
-                return Err(
-                    "The selected frame is gone (the page reloaded or navigated). Commands now \
-                     run in the top frame; run `frames` and `frame <n>` to select it again."
-                        .to_string(),
-                );
-            }
-            return Err(e);
+            return Err(left_vanished_frame(&mut state.active_frame_id, e));
         }
     };
 
@@ -9380,7 +9395,7 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
         // refreshes live entries while preserving backend-node identities. A
         // hard clear here reset numbering to e1 and invalidated refs captured by
         // the immediately preceding snapshot (issue #197).
-        let _ = snapshot::take_snapshot(
+        let annotated = snapshot::take_snapshot(
             &mgr.client,
             &session_id,
             &SnapshotOptions {
@@ -9391,7 +9406,8 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
             state.active_frame_id.as_deref(),
             &state.iframe_sessions,
         )
-        .await?;
+        .await;
+        annotated.map_err(|e| left_vanished_frame(&mut state.active_frame_id, e))?;
     }
 
     let result = screenshot::take_screenshot(
@@ -15151,7 +15167,8 @@ async fn handle_diff_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Va
         state.active_frame_id.as_deref(),
         &state.iframe_sessions,
     )
-    .await?;
+    .await;
+    let current = current.map_err(|e| left_vanished_frame(&mut state.active_frame_id, e))?;
 
     let baseline = cmd.get("baseline").and_then(|v| v.as_str());
 
@@ -31208,5 +31225,14 @@ mod frame_session_recovery_tests {
             r#"CDP error (Accessibility.getFullAXTree): {"code":-32602,"message":"Frame with the given frameId is not found."}"#
         ));
         assert!(!selected_frame_gone("CDP error: Target closed"));
+        let gone = r#"CDP error: {"message":"Frame with the given frameId is not found."}"#;
+        let mut frame = Some("F1".to_string());
+        assert!(left_vanished_frame(&mut frame, gone.to_string()).contains("frame is gone"));
+        assert_eq!(frame, None);
+        // Nothing selected, or another error: returned unchanged.
+        assert_eq!(left_vanished_frame(&mut frame, gone.to_string()), gone);
+        let mut frame = Some("F1".to_string());
+        assert_eq!(left_vanished_frame(&mut frame, "x".to_string()), "x");
+        assert_eq!(frame.as_deref(), Some("F1"));
     }
 }
