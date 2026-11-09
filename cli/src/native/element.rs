@@ -2344,7 +2344,7 @@ pub(crate) async fn resolve_element_center_with(
         let r = &reply["result"]["value"];
         // The box is the element's own frame's; input goes in top-frame
         // coordinates (an option list inside an in-process iframe).
-        let (ox, oy) = frame_offset(client, session_id, &object).await;
+        let (ox, oy) = frame_offset(client, session_id, &object).await?;
         return Ok((
             r["x"].as_f64().ok_or("semantic target has no box")? + ox,
             r["y"].as_f64().ok_or("semantic target has no box")? + oy,
@@ -2419,7 +2419,8 @@ pub(crate) async fn resolve_element_center_with(
                         x,
                         y,
                         clear_hover_layer && entry.frame_id.is_none(),
-                        entry.frame_id.is_some(),
+                        // An out-of-process frame's box model is frame-local already.
+                        entry.frame_id.is_some() && effective_session_id == session_id,
                     )
                     .await?;
                 }
@@ -3054,38 +3055,65 @@ pub(crate) async fn frame_offset(
     client: &CdpClient,
     session_id: &str,
     object_id: &str,
-) -> (f64, f64) {
+) -> Result<(f64, f64), String> {
+    // The rect is the axis-aligned box, so the top frame's side is the box
+    // around the border quad (a rotated node's first vertex is not its
+    // corner). Each read is bounded: a stalled page must not hold a click.
     const LOCAL_ORIGIN_JS: &str =
         "function(){const w=this.ownerDocument&&this.ownerDocument.defaultView;\
         if(!w||w===w.top)return null;const e=this.nodeType===1?this:this.parentElement;\
         if(!e)return null;const r=e.getBoundingClientRect();return [r.left,r.top]}";
-    let local = client
-        .send_command(
+    const BUDGET: std::time::Duration = std::time::Duration::from_millis(1000);
+    let failed = |what: &str| format!("could not place the target inside its frame ({what})");
+    let local = tokio::time::timeout(
+        BUDGET,
+        client.send_command(
             "Runtime.callFunctionOn",
             Some(json!({"objectId": object_id, "functionDeclaration": LOCAL_ORIGIN_JS, "returnByValue": true})),
             Some(session_id),
-        )
-        .await;
-    let Some((lx, ly)) = local.ok().and_then(|v| {
-        let a = v["result"]["value"].as_array()?.clone();
-        Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?))
-    }) else {
-        return (0.0, 0.0);
-    };
-    let model = client
-        .send_command(
+        ),
+    )
+    .await
+    .map_err(|_| failed("its frame did not answer"))?
+    .map_err(|e| failed(&e))?;
+    let value = &local["result"]["value"];
+    if value.is_null() {
+        return Ok((0.0, 0.0));
+    }
+    let (lx, ly) = value
+        .as_array()
+        .and_then(|a| Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?)))
+        .ok_or_else(|| failed("no box in its frame"))?;
+    let model = tokio::time::timeout(
+        BUDGET,
+        client.send_command(
             "DOM.getBoxModel",
             Some(json!({"objectId": object_id})),
             Some(session_id),
-        )
-        .await;
-    let Some((bx, by)) = model.ok().and_then(|v| {
-        let b = v["model"]["border"].as_array()?.clone();
-        Some((b.first()?.as_f64()?, b.get(1)?.as_f64()?))
-    }) else {
-        return (0.0, 0.0);
-    };
-    (bx - lx, by - ly)
+        ),
+    )
+    .await
+    .map_err(|_| failed("the page did not answer"))?
+    .map_err(|e| failed(&e))?;
+    let quad: Vec<f64> = model["model"]["border"]
+        .as_array()
+        .map(|q| q.iter().filter_map(|v| v.as_f64()).collect())
+        .unwrap_or_default();
+    if quad.len() != 8 {
+        return Err(failed("no box in the page"));
+    }
+    let bx = quad
+        .iter()
+        .step_by(2)
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+    let by = quad
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+    Ok((bx - lx, by - ly))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3179,8 +3207,13 @@ pub(crate) async fn verify_click_target(
     let mut retries_left = max_retries;
     // The probe hit-tests in the target's own document: a child frame's
     // needs frame-local coordinates (x, y and the cursor are top-frame).
+    // An offset that cannot be read skips the probe, as a probe that cannot
+    // run does: the click point itself comes from the box model.
     let (ox, oy) = if in_child_frame {
-        frame_offset(client, session_id, object_id).await
+        match frame_offset(client, session_id, object_id).await {
+            Ok(offset) => offset,
+            Err(_) => return Ok(()),
+        }
     } else {
         (0.0, 0.0)
     };

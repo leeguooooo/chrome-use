@@ -393,7 +393,7 @@ pub async fn click_reporting(
                 let object =
                     super::element::resolve_semantic_pin(client, &effective_session_id).await?;
                 let (ox, oy) =
-                    super::element::frame_offset(client, &effective_session_id, &object).await;
+                    super::element::frame_offset(client, &effective_session_id, &object).await?;
                 if let Some(cover) = semantic_hit_test(
                     client,
                     &effective_session_id,
@@ -464,7 +464,8 @@ pub async fn click_reporting(
             }
             // An in-process frame's target the pointer could not reach: the
             // keyboard activation such targets had before.
-            if in_iframe && !in_oopif {
+            // A covered one (`--allow-dom`) takes the DOM click below.
+            if in_iframe && !in_oopif && !e.contains(" is occluded by ") {
                 let keyboard = dom_activate(
                     client,
                     session_id,
@@ -730,7 +731,14 @@ async fn verify_live_click_target(
     let point = match point {
         Some((x, y)) => {
             let (ox, oy) =
-                super::element::frame_offset(client, &target.session_id, &target.object_id).await;
+                super::element::frame_offset(client, &target.session_id, &target.object_id)
+                    .await
+                    .map_err(|e| {
+                        format!(
+                            "click stopped before press: {e}; no mouse button was sent. \
+                             Observe the page before trying again."
+                        )
+                    })?;
             Some((x - ox, y - oy))
         }
         None => None,
