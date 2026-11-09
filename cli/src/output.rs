@@ -3219,10 +3219,10 @@ after 60 seconds of inactivity in a surviving document. Context loss can prevent
 restoration; comparison/write is not atomic. Avoid concurrent clipboard use.
 If restoration or the edit cannot be verified,
 fill fails loudly instead of reporting a false success. Verification
-errors quote both values (`read back "" after writing "千代田区"`); when every
-non-ASCII character vanished while ASCII survived, the error says the page
-filtered non-Latin input (a Latin-only / masked field), so re-typing the
-same text will not help.
+errors report the readback mismatch without guessing its cause. Values may be
+hidden, or represented by character counts, depending on the field and engine.
+Rich editors can retain characters in inline elements that plain text omits. Inspect the field before retrying or changing the text; a mismatch
+does not establish an input restriction.
 After successful trusted contenteditable insertion, fill keeps editor focus
 without synthetic change/focusout events. Failed read-back is reported rather
 than overwriting the editor DOM. Use the page's save/commit action when needed.
@@ -3271,10 +3271,19 @@ Usage: chrome-use type <selector> <text>
 Types text into the specified element character by character.
 Unlike fill, this does not clear existing content first.
 
-After typing, the field is read back. If it does not contain the typed
-text (the page rewrote or filtered the input), a ⚠ warning quotes what was
-typed and what the field now holds; the exit code stays 0 and the JSON
-gains `readBack`.
+After typing, text readback is checked for the typed text. A mismatch that
+leaves empty or unchanged readback is an error (exit 1) for ordinary text.
+Text containing Enter, carriage return or Tab is exempt from that error.
+Other mismatches produce a ⚠ warning (exit 0, JSON `readBack`).
+Empty/unchanged readback errors report character counts instead of quoting the text.
+The comparison collapses whitespace and removes some zero-width characters;
+a warning-free result does not confirm literal text retention. Whitespace-only
+input, an unreadable/non-editable target, or a failed readback probe can return
+success without `readBack` or a warning. The --enter commit path also skips
+this readback check. Inspect the field when verification is unavailable.
+Neither outcome proves that the page rejected the input: rich editors may
+retain characters in inline elements that text readback omits. Inspect the
+field before retrying or changing the text.
 
 Options:
   --key-events         Send real per-character keyDown/keyUp instead of

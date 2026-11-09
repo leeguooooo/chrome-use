@@ -3497,14 +3497,16 @@ async fn verify_fill_value(
         let detail = if actual.is_empty() && !expected.is_empty() {
             // Keep this marker: `finish_fill` keys its refocus-reset recovery
             // on it. It carries no value.
-            "read back an empty value after writing (value hidden)".to_string()
+            format!(
+                "read back an empty value after writing (value hidden). {READBACK_MISMATCH_ADVICE}"
+            )
         } else if Box::pin(super::sensitive::is_sensitive_object(
             client, session_id, object_id,
         ))
         .await
         {
             format!(
-                "the field holds {} chars after writing {} (values hidden: card / password field)",
+                "the field holds {} chars after writing {} (values hidden: card / password field). {READBACK_MISMATCH_ADVICE}",
                 actual.chars().count(),
                 expected.chars().count()
             )
@@ -3580,12 +3582,13 @@ fn reformatted_warning(expected: &str, actual: &str, engine: &str) -> Option<Str
     })
 }
 
-/// Describe a fill/type read-back mismatch so truncation is VISIBLE: what was
-/// written, what the field holds now, and — when every non-ASCII character
-/// vanished while the ASCII survived — that the page filtered the input (a
-/// Latin-only address field, issue #203) rather than the keystrokes failing.
+const READBACK_MISMATCH_ADVICE: &str = "Inspect the field before retrying or changing the text; readback alone does not establish whether the page rejected it";
+
+/// Describe the requested text and the observed readback without inferring
+/// why they differ. Rich editors can retain characters in inline elements
+/// that their plain-text readback omits.
 pub(crate) fn fill_mismatch_detail(expected: &str, actual: &str) -> String {
-    let mut detail = if actual.is_empty() && !expected.is_empty() {
+    let detail = if actual.is_empty() && !expected.is_empty() {
         format!(
             "read back an empty value after writing {}",
             quote_short(expected)
@@ -3599,24 +3602,7 @@ pub(crate) fn fill_mismatch_detail(expected: &str, actual: &str) -> String {
             expected.chars().count()
         )
     };
-    if non_ascii_was_dropped(expected, actual) {
-        detail.push_str(
-            ". Only the ASCII characters survived: the page rejected the non-Latin text (a \
-             Latin-only / masked field), so re-typing won't help — check the field's input \
-             rules or supply a romanized value",
-        );
-    }
-    detail
-}
-
-/// True when `expected` carried non-ASCII characters and none of them made it
-/// into `actual`, while `actual` is otherwise consistent with the ASCII part.
-pub(crate) fn non_ascii_was_dropped(expected: &str, actual: &str) -> bool {
-    let non_ascii: Vec<char> = expected.chars().filter(|c| !c.is_ascii()).collect();
-    if non_ascii.is_empty() {
-        return false;
-    }
-    !actual.chars().any(|c| non_ascii.contains(&c))
+    format!("{detail}. {READBACK_MISMATCH_ADVICE}")
 }
 
 fn quote_short(s: &str) -> String {
@@ -3641,11 +3627,10 @@ const TYPE_REREAD_DELAY_MS: u64 = 250;
 /// typed" is containment, not equality.
 ///
 /// `before` is the field's value before typing (`Some("")` when the field was
-/// cleared first). When the field ends up exactly where it started — nothing
-/// typed survived — this is an error, not a warning: the input went somewhere
-/// else, or the page threw it away, and `✓ Done` there sent agents off to
-/// submit empty login forms (#355). A partial rewrite (mask, formatter, input
-/// filter) stays a warning, as in #203.
+/// cleared first). For ordinary text, a mismatch with empty or unchanged
+/// readback is an error rather than a warning (#355). Other mismatches remain
+/// warnings (#203). These checks describe text readback only: inline elements
+/// can retain content that the probe omits, so neither outcome proves rejection.
 #[allow(clippy::too_many_arguments)]
 pub async fn verify_type_read_back(
     client: &CdpClient,
@@ -3706,7 +3691,8 @@ pub async fn verify_type_read_back(
 }
 
 /// True when the field holds exactly what it held before `type` ran (or is
-/// empty), i.e. none of the typed text survived. Text carrying Enter/Tab is
+/// empty). This does not prove that input was lost: inline elements may be
+/// omitted from text readback. Text carrying Enter/Tab is
 /// exempt: those keys can legitimately submit a form or move focus, and a
 /// field that clears on submit is not a failure.
 pub(crate) fn type_left_field_unchanged(typed: &str, before: Option<&str>, actual: &str) -> bool {
@@ -3718,6 +3704,9 @@ pub(crate) fn type_left_field_unchanged(typed: &str, before: Option<&str>, actua
     a.is_empty() || before.is_some_and(|b| norm(b) == a)
 }
 
+/// Describe a failed text readback without claiming input was lost or unchanged.
+/// Values stay hidden, including when a password field clears itself. Focus and
+/// delayed-read observations are evidence, not a diagnosis of the editor.
 pub(crate) fn type_not_kept_error(
     selector_or_ref: &str,
     typed: &str,
@@ -3727,33 +3716,27 @@ pub(crate) fn type_not_kept_error(
 ) -> String {
     let what = if actual.is_empty() {
         format!(
-            "the field is still empty after typing {}",
-            quote_short(typed)
+            "read back an empty value after typing {} chars (value hidden)",
+            typed.chars().count()
         )
     } else {
         format!(
-            "the field still holds {} after typing {}",
-            quote_short(actual),
-            quote_short(typed)
+            "read back a value of {} chars after typing {} chars (values hidden)",
+            actual.chars().count(),
+            typed.chars().count()
         )
     };
-    let why = if appeared_then_cleared {
-        "The text appeared and was then wiped: the page re-rendered the field (a form still \
-         hydrating right after load does this)."
-            .to_string()
+    let observation = if appeared_then_cleared {
+        " The first readback contained the typed text; the later readback did not.".to_string()
     } else {
         match focus {
-            Some(f) if f != "none" => format!(
-                "Keyboard focus is on <{f}>, so the keystrokes may have gone there, or the widget \
-                 ignores synthetic keyboard input."
-            ),
-            _ => "Nothing has keyboard focus: the keystrokes went nowhere.".to_string(),
+            Some("none") => " No focused element was observed after typing.".to_string(),
+            Some(f) => format!(" Keyboard focus was observed on <{f}> after typing."),
+            None => String::new(),
         }
     };
     format!(
-        "type did not take: {what}. {why} Use `fill {selector_or_ref} <text>` (sets the value the \
-         way a framework expects and verifies it), or `click {selector_or_ref}` then \
-         `keyboard type <text>`."
+        "type verification failed for {selector_or_ref}: {what}.{observation} {READBACK_MISMATCH_ADVICE}"
     )
 }
 
@@ -3818,9 +3801,7 @@ pub(crate) fn type_read_back_warning(typed: &str, actual: &str) -> Option<String
         return None;
     }
     Some(format!(
-        "the field does not contain what was typed: {}. The keystrokes were delivered; \
-         the page rewrote or rejected them (an input filter, mask or formatter). Verify with \
-         `get value` before moving on",
+        "the text readback does not contain what was typed: {}",
         fill_mismatch_detail(typed, actual)
     ))
 }
@@ -7099,34 +7080,63 @@ mod tests {
         ));
     }
 
+    /// Non-ASCII, empty and partial readbacks must not imply a filter or transliteration.
     #[test]
-    fn test_fill_mismatch_detail_shows_both_values_and_flags_dropped_cjk() {
-        // Issue #203: the old message said "read back an empty value" and nothing
-        // else, so a Latin-only field silently eating CJK looked like a transport bug.
-        let d = fill_mismatch_detail("千代田区", "");
-        assert!(d.contains("\"千代田区\""), "{d}");
-        assert!(d.contains("Only the ASCII characters survived"), "{d}");
-        let d = fill_mismatch_detail("千代田1-2-3", "1-2-3");
-        assert!(
-            d.contains("\"1-2-3\"") && d.contains("\"千代田1-2-3\""),
-            "{d}"
-        );
-        assert!(d.contains("Latin-only"), "{d}");
-        // Pure-ASCII mismatch: no CJK diagnosis.
-        let d = fill_mismatch_detail("hello", "hell");
-        assert!(!d.contains("ASCII"), "{d}");
-        assert!(d.contains("(4 chars)") && d.contains("(5 chars)"), "{d}");
+    fn test_fill_mismatch_detail_reports_observations_without_diagnosing_a_filter() {
+        for (expected, actual) in [
+            ("千代田区", ""),
+            ("千代田1-2-3", "1-2-3"),
+            ("hello \u{1f642}", "hello "),
+            ("hello", "hell"),
+            ("千代田1-2-3", "unrelated"),
+        ] {
+            let detail = fill_mismatch_detail(expected, actual);
+            assert!(detail.contains(&quote_short(expected)), "{detail}");
+            assert!(detail.contains("Inspect the field"), "{detail}");
+            assert!(
+                detail.contains("readback alone does not establish"),
+                "{detail}"
+            );
+            assert!(!detail.contains("Latin-only"), "{detail}");
+            assert!(!detail.contains("romanized"), "{detail}");
+            if !actual.is_empty() {
+                assert!(detail.contains(&quote_short(actual)), "{detail}");
+                assert!(
+                    detail.contains(&format!("({} chars)", actual.chars().count())),
+                    "{detail}"
+                );
+            }
+        }
     }
-
     #[test]
     fn test_type_read_back_warning_only_when_text_is_missing() {
         assert!(type_read_back_warning("千代田区", "東京都千代田区").is_none());
-        let w = type_read_back_warning("千代田1-2-3", "1-2-3").unwrap();
-        assert!(w.contains("rewrote or rejected"), "{w}");
-        assert!(w.contains("ASCII"), "{w}");
+        let warning = type_read_back_warning("千代田1-2-3", "1-2-3").unwrap();
+        assert!(
+            warning.contains("text readback does not contain"),
+            "{warning}"
+        );
+        assert!(warning.contains("Inspect the field"), "{warning}");
+        assert!(!warning.contains("rewrote or rejected"), "{warning}");
+        assert!(!warning.contains("keystrokes were delivered"), "{warning}");
         assert!(type_read_back_warning("", "x").is_none());
     }
-
+    /// Neutral diagnostics preserve exact fill matching and the existing type error gate.
+    #[test]
+    fn test_rich_readback_mismatch_does_not_weaken_verification() {
+        assert!(!fill_values_match(
+            "hello \u{1f642}",
+            "hello ",
+            "contenteditable"
+        ));
+        assert!(!fill_values_match(
+            "I'd check",
+            "I\u{2019}d check",
+            "contenteditable"
+        ));
+        assert!(!fill_values_match("hello", "hell", "input"));
+        assert!(fill_values_match("hello", "hello", "input"));
+    }
     #[test]
     fn test_type_left_field_unchanged_only_when_nothing_landed() {
         // Empty after typing: nothing landed (#355).
@@ -7141,17 +7151,42 @@ mod tests {
         assert!(!type_left_field_unchanged("q\n", Some(""), ""));
     }
 
+    /// Empty, unchanged and delayed readbacks must not be mistaken for rejected input.
     #[test]
-    fn test_type_not_kept_error_names_the_way_out() {
+    fn test_type_not_kept_error_reports_observations() {
         let e = type_not_kept_error("@e41", "13800000000", "", true, None);
-        assert!(e.contains("still empty"), "{e}");
-        assert!(e.contains("re-rendered"), "{e}");
-        assert!(e.contains("fill @e41"), "{e}");
-        assert!(e.contains("keyboard type"), "{e}");
-        let e = type_not_kept_error("#q", "x", "", false, Some("input#other"));
-        assert!(e.contains("input#other"), "{e}");
+        assert!(e.contains("type verification failed for @e41"), "{e}");
+        assert!(e.contains("read back an empty value"), "{e}");
+        assert!(e.contains("11 chars (value hidden)"), "{e}");
+        assert!(!e.contains("13800000000"), "{e}");
+        assert!(e.contains("first readback contained"), "{e}");
+        assert!(e.contains("later readback did not"), "{e}");
+        assert!(e.contains("Inspect the field"), "{e}");
+        for cause in [
+            "re-rendered",
+            "wiped",
+            "went nowhere",
+            "Use `fill",
+            "keyboard type",
+        ] {
+            assert!(!e.contains(cause), "{e}");
+        }
+        let e = type_not_kept_error("#q", "typed-secret-42", "old", false, Some("input#other"));
+        assert!(e.contains("read back a value of 3 chars"), "{e}");
+        assert!(e.contains("values hidden"), "{e}");
+        assert!(!e.contains("old"), "{e}");
+        assert!(!e.contains("typed-secret-42"), "{e}");
+        assert!(e.contains("focus was observed on <input#other>"), "{e}");
+        // Whitespace-only readback fails verification even when the value changed.
+        assert!(type_left_field_unchanged("x", Some("old"), " "));
+        let e = type_not_kept_error("#q", "x", " ", false, None);
+        assert!(e.contains("read back a value of 1 chars"), "{e}");
+        assert!(!e.contains("unchanged"), "{e}");
         let e = type_not_kept_error("#q", "x", "", false, Some("none"));
-        assert!(e.contains("Nothing has keyboard focus"), "{e}");
+        assert!(e.contains("No focused element was observed"), "{e}");
+        let e = type_not_kept_error("#q", "\u{1f642}", "", false, None);
+        assert!(!e.contains("focus"), "{e}");
+        assert!(e.contains("readback alone does not establish"), "{e}");
     }
 
     #[test]

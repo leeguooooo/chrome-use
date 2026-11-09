@@ -211,12 +211,8 @@
       </div>
 
       <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ 页面改写了输入？type 会警告，fill 会报错</div>
-        <code>type</code> 打完会回读字段：如果里面没有刚输入的文本，会打印 ⚠ 警告，引用写入的内容和字段当前的值
-        （退出码仍为 0，JSON 多出 <code>readBack</code>）。<code>fill</code> 校验失败时的报错同样引用两边的值，
-        例如 <code>read back "" after writing "千代田区"</code>；若非 ASCII 字符全部消失而 ASCII 仍在，
-        会指出页面过滤了非拉丁输入（仅限拉丁 / 带掩码的字段），重打一遍没有用。正常字段上两者都能正确输入中日韩文，
-        这些提示针对的是会改写输入的页面。
+        <div class="du-callout-title">ℹ️ 文本回读校验</div>
+        <code>type</code> 会检查文本回读是否包含输入内容。对于普通文本，回读不匹配且为空或与输入前相同时会报错（退出码 1）。包含 Enter、回车或 Tab 的文本不适用这条报错规则。其他不匹配会打印 ⚠ 警告（退出码 0，JSON <code>readBack</code>）。回读为空或未改变时，报错只提供字符数，不引用输入或回读文本。比较时会合并空白并移除部分零宽字符；没有警告不代表文本逐字保留。仅含空白的输入、无法读取或不可编辑的目标，以及回读探测失败，都可能返回成功而不包含 <code>readBack</code> 或警告。<code>--enter</code> 提交路径也会跳过这项回读检查。无法核验时请检查字段。 <code>fill</code> 校验报错会描述回读差异；普通值可能直接引用，空值或敏感值会隐藏（例如 <code>read back an empty value after writing (value hidden)</code>），Monaco-native 校验则报告字符数。 文本回读不一致并不能证明页面限制了输入。富文本编辑器可能把字符保存在行内元素中，而纯文本回读会遗漏这些内容。重试或修改文本前，请先检查字段。
       </div>
 
       <div class="du-callout warn">
@@ -601,7 +597,7 @@
         Stripe 会把有效期 <code>1234</code> 显示成 <code>12 / 34</code>，卡号显示成四位一组。<code>fill</code> 遇到这种只是多了空格和分隔符的情况算成功，并用 ⚠ 说明页面改了格式；值有其他任何不同仍然报错，而且卡号、密码这类值不会出现在报错里。
       </p>
       <p>
-        富文本编辑器（<code>contenteditable</code>）按可见文字比较：编辑器给每行和话题节点补的零宽字符（U+200B）、NBSP 和连续空白都不算差异。只是被编辑器改了格式的写入算成功，并附“the editor formatted the text”说明；少字或改字仍然报错。
+        <code>fill</code> 对富文本编辑器（<code>contenteditable</code>）按可见文字比较：编辑器给每行和话题节点补的零宽字符（U+200B）、NBSP 和连续空白都不算差异。只是被编辑器改了格式的写入算成功，并附“the editor formatted the text”说明；少字或改字仍然会使 <code>fill</code> 校验失败。对于 <code>type</code>，其他回读不匹配仍为警告，普通文本回读为空或与输入前相同时才报错。
       </p>
 
       <hr class="du-divider" />

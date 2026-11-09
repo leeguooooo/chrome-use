@@ -23,6 +23,7 @@ chrome-use get text @e6
 chrome-use wait --text "<expected page text>"  # case-sensitive substring
 ```
 
+
 `wait --text` matches an exact, case-sensitive substring of the page's visible
 text. Use the actual expected page wording: `Saved` will not match
 `Delivery saved.` When a receipt or confirmation is already visible, that is
@@ -68,7 +69,7 @@ exists, and lost its verification and hints. Use the command:
 | `getBoundingClientRect()` | `get box <sel or @ref>` |
 | patching `fetch`/XHR to see an API response | `network requests --filter api`, then `network request <id>` (reads the body from its original renderer; `responseBodyError` explains an unavailable body) |
 | `sleep N` or a polling loop | `wait --text "…"`, `wait <sel>`, `wait --url <pattern>`, `wait --fn "<expr>"` |
-| setting `.value` through a native setter | `fill @eN "…"`: it reads the value back and says when it did not stick |
+| setting `.value` through a native setter | `fill @eN "…"`: it reads the value back and reports verification failures |
 | injecting a script before the page runs | `addinitscript <js>`, then `reload` |
 
 Keep `eval` for what no command does: page globals, framework stores, canvas,
@@ -92,10 +93,10 @@ chrome-use hover @e1                   # hover: real pointer move at a point whe
                                           # missed it is an error ("did not take effect")
 chrome-use focus @e1                   # focus (useful before keyboard input)
 chrome-use fill @e2 "hello"            # clear then type (verified by read-back;
-                                          # a mismatch error quotes both values and
-                                          # says when the page filtered non-Latin input)
-chrome-use type @e2 " world"           # type without clearing (read back too: ⚠
-                                          # warning, exit 0, if the page rewrote it)
+                                          # mismatch errors may hide values or use counts)
+chrome-use type @e2 " world"           # type without clearing; readback mismatch:
+                                          # empty/unchanged -> error (exit 1) for ordinary text;
+                                          # other mismatch -> warning (exit 0, JSON readBack)
 chrome-use type @e5 "100-0001" --key-events  # real keystrokes (not insertText) —
                                           # use for autocomplete/combobox fields that
                                           # only react to key events (e.g. a postal box
@@ -164,6 +165,15 @@ chrome-use drag @e1 60                 # drag a handle by +60px (slider/canvas);
 chrome-use solve-slider                # auto-solve a 网易易盾 slider-puzzle captcha on the page
 chrome-use solve-slider 5              # ...retry up to 5 times (refreshes the puzzle on a miss)
 ```
+
+Empty/unchanged readback errors report character counts instead of quoting the text. The comparison collapses whitespace and removes some zero-width characters; a warning-free result does not confirm literal text retention. Whitespace-only input, an unreadable/non-editable target, or a failed readback probe can return success without `readBack` or a warning. The `--enter` commit path also skips this readback check. Inspect the field when verification is unavailable.
+
+For `type`, text containing Enter, carriage return or Tab is exempt from the
+empty/unchanged-readback error. A mismatch does not prove input was rejected:
+rich editors may retain characters in inline elements that text readback omits.
+Inspect the field before retrying or changing the text. `fill` mismatch errors
+may quote ordinary values, hide empty/sensitive values, or report character
+counts for Monaco-native verification.
 
 **The `@ref` contract: a ref acts on the element it named, or it errors.** Every
 verb above re-checks the ref's role + name against the live accessibility tree
@@ -304,11 +314,12 @@ page's own state took it, so read what the commands report:
 - `fill` warns when the field's form or dialog had a disabled Save/Submit
   before the fill and still has it after (JSON `commitControl`), and when it
   had to fall back to a synthetic write (`engine: input-synthetic`).
-- In a rich-text editor (`contenteditable`), `fill` and `type` compare the
+- In a rich-text editor (`contenteditable`), `fill` compares the
   visible text: zero-width characters (U+200B the editor pads lines and topic
   nodes with), NBSP and whitespace runs do not count. A write the editor only
   formatted succeeds with a ⚠ note ("the editor formatted the text"); missing
-  or changed characters are still an error.
+  or changed characters still fail `fill` verification. For `type`, other mismatching
+  readbacks remain warnings unless the ordinary-text readback is empty or unchanged.
 - `fill` accepts a field that only reformatted the value (Stripe turns `1234`
   into `12 / 34`, a card number into groups of four) and says so with a ⚠ note;
   a value that differs in any other way is still an error, and a card or
