@@ -7790,6 +7790,16 @@ impl BrowserManager {
         }
     }
 
+    /// [`Self::clear_extension_frames`], and `Ok` only when the tab then
+    /// answers the debugger again.
+    pub async fn clear_extension_frames_unblocking(&self) -> Result<String, String> {
+        let note = self.clear_extension_frames().await?;
+        if self.pinned_tab_blocked().await {
+            return Err(format!("{note}, but the tab is still blocked"));
+        }
+        Ok(note)
+    }
+
     /// Remove the frames other extensions keep in the pinned tab, through
     /// ab-connect (`ABExt.clearExtensionFrames`, 0.5.108+). Only a tab this
     /// session created. The note names what went.

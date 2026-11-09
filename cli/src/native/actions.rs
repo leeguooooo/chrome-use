@@ -18160,6 +18160,14 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
     let blur = safe_to_repeat(action);
     let recovery = match (pre, state.browser.as_mut()) {
         // Already tried just now, before the command ran: do not flash twice.
+        // Menus were tried before the command ran; a frame that is no menu
+        // (--clear-extension-frames) is removed now that it was refused.
+        (Some(Err(reason)), Some(mgr)) if super::browser::clear_extension_frames_enabled() => {
+            match Box::pin(mgr.clear_extension_frames_unblocking()).await {
+                Ok(note) => Ok(Some(note)),
+                Err(e) => Err(format!("{reason}; --clear-extension-frames: {e}")),
+            }
+        }
         (Some(Err(reason)), _) => Err(reason),
         (_, Some(mgr)) if mgr.on_relay() => Box::pin(mgr.cycle_pinned_tab_visibility(blur)).await,
         _ => Err("not on the extension relay".to_string()),
@@ -18234,7 +18242,9 @@ fn with_menu_warning(mut out: Value, what: &str, note: Option<String>) -> Value 
         warning.push_str(&format!(". {note}"));
     }
     if let Some(obj) = out.as_object_mut() {
-        obj.entry("warning").or_insert_with(|| json!(warning));
+        let merged =
+            crate::profiles::merge_warning(obj.get("warning").and_then(Value::as_str), &warning);
+        obj.insert("warning".to_string(), json!(merged));
     }
     out
 }
@@ -28247,8 +28257,10 @@ mod tests {
             !w.contains("closed it") && !w.contains("tab works again"),
             "{w}"
         );
+        // An existing warning stays, and the recovery is reported next to it.
         let kept = with_menu_warning(json!({ "success": true, "warning": "x" }), "y", None);
-        assert_eq!(kept["warning"], "x");
+        let w = kept["warning"].as_str().unwrap();
+        assert!(w.contains('x') && w.contains("frame-tree read, y"), "{w}");
     }
 
     /// `close --all` run by one agent closed every other agent's tab mid-task;
