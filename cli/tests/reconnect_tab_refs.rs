@@ -49,6 +49,8 @@ struct Browser {
     calls: Vec<String>,
     /// `Target.attachToTarget` calls.
     attached: u32,
+    /// The `dedicatedWindow` hint of each `Target.createTarget`.
+    dedicated: Vec<Option<bool>>,
     /// Page evaluations answered with the extension's `reply_too_large`.
     huge_replies: u32,
 }
@@ -247,6 +249,7 @@ impl Fake {
             }
             "Target.createTarget" => {
                 b.created += 1;
+                b.dedicated.push(params["dedicatedWindow"].as_bool());
                 let id = format!("T{}", b.created);
                 let url = params["url"].as_str().unwrap_or("about:blank").to_string();
                 b.targets.push((id.clone(), url));
@@ -1304,6 +1307,53 @@ fn a_profile_without_a_window_is_refused_and_nothing_is_created() {
     let r = d.send(json!({"id": "a", "action": "tab_list"}));
     assert_eq!(r["success"], true, "{r}");
     assert_eq!(created_and_attached(&fake), (1, 1), "{r}");
+}
+
+/// #883: with `--open-profile-window`, a profile without a window gets one:
+/// the first tab is created in a new background window of the same profile
+/// (the extension's `dedicatedWindow`), and the response says so.
+#[test]
+fn open_profile_window_opens_one_in_the_background_and_says_so() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start("rc-open-window", &cdp);
+    publish_profile_endpoint(&d, &cdp);
+    fake.0.lock().unwrap().windows = Some(json!([]));
+
+    // `tab list` needs the session's first tab but no page load, which this
+    // fake does not model.
+    let out = d.cli(&["--open-profile-window", "tab", "list"]);
+    let all = text(&out);
+    assert!(out.status.success(), "{all}");
+    let v: Value = all
+        .lines()
+        .find_map(|l| serde_json::from_str::<Value>(l).ok())
+        .unwrap_or_else(|| panic!("no JSON in: {all}"));
+    assert_eq!(v["data"]["profileWindowRecovery"]["opened"], true, "{v}");
+    assert_eq!(v["data"]["profileWindowRecovery"]["attempted"], true, "{v}");
+    assert!(
+        v["warning"]
+            .as_str()
+            .is_some_and(|w| w.contains("opened one in the background")),
+        "{v}"
+    );
+    {
+        let b = fake.0.lock().unwrap();
+        assert_eq!(b.created, 1);
+        assert_eq!(b.dedicated, vec![Some(true)]);
+    }
+
+    // `tab new` on a profile without a window takes the same opt-in.
+    let out = d.cli(&["--open-profile-window", "tab", "new"]);
+    let all = text(&out);
+    let v: Value = all
+        .lines()
+        .find_map(|l| serde_json::from_str::<Value>(l).ok())
+        .unwrap_or_else(|| panic!("no JSON in: {all}"));
+    assert_eq!(v["data"]["profileWindowRecovery"]["opened"], true, "{v}");
+    assert_eq!(
+        fake.0.lock().unwrap().dedicated,
+        vec![Some(true), Some(true)]
+    );
 }
 
 /// An answer that does not show a real normal window is not "open", and it is

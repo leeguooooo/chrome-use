@@ -2221,12 +2221,37 @@ fn annotate_forced(response: &mut Value, note: &Value) {
 
 pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     let outer_note = take_forced_note();
+    let outer_recovery = super::first_tab::take_recovery();
     let mut response = Box::pin(execute_command_noted(cmd, state)).await;
     if let Some(note) = take_forced_note() {
         annotate_forced(&mut response, &note);
     }
+    if let Some(recovery) = super::first_tab::take_recovery() {
+        annotate_profile_window_recovery(&mut response, recovery);
+    }
     set_forced_note(outer_note);
+    // A nested step (batch, script) reports its own; the outer command keeps
+    // what it had before the step ran.
+    super::first_tab::restore_recovery(outer_recovery);
     response
+}
+
+/// Put what `--open-profile-window` did on the response (#883): the record
+/// in `data.profileWindowRecovery`, on success and failure alike, and a
+/// warning when a window was opened.
+fn annotate_profile_window_recovery(response: &mut Value, recovery: Value) {
+    if !response.get("data").is_some_and(Value::is_object) {
+        response["data"] = json!({});
+    }
+    let opened = recovery["opened"].as_bool() == Some(true);
+    response["data"]["profileWindowRecovery"] = recovery;
+    if let (true, Some(obj)) = (opened, response.as_object_mut()) {
+        let merged = crate::profiles::merge_warning(
+            obj.get("warning").and_then(Value::as_str),
+            super::first_tab::PROFILE_WINDOW_OPENED,
+        );
+        obj.insert("warning".to_string(), json!(merged));
+    }
 }
 
 async fn execute_command_noted(cmd: &Value, state: &mut DaemonState) -> Value {
@@ -2363,6 +2388,17 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             std::env::set_var("AGENT_BROWSER_CLICK_MODE", "dom-fallback")
         }
         _ => std::env::remove_var("AGENT_BROWSER_CLICK_MODE"),
+    }
+    // `--open-profile-window` (#883) is the client command's choice, never a
+    // value left over from an earlier one or from the daemon's spawn env. Only
+    // a top-level command (it carries `_cbSkip`) sets it; nested script and
+    // batch steps run under their parent's.
+    if cmd.get("_cbSkip").is_some() {
+        if cmd.get("_openProfileWindow").and_then(Value::as_bool) == Some(true) {
+            std::env::set_var("AGENT_BROWSER_OPEN_PROFILE_WINDOW", "1");
+        } else {
+            std::env::remove_var("AGENT_BROWSER_OPEN_PROFILE_WINDOW");
+        }
     }
     // Position marker: this command's `--show-position` / env, else the
     // config file (read by the marker itself). Mirrored like CLICK_MODE.

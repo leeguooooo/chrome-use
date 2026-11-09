@@ -7121,10 +7121,14 @@ impl BrowserManager {
     async fn open_first_tab(&mut self) -> Result<(), String> {
         let total = tokio::time::Instant::now() + first_tab::FIRST_TAB_TOTAL_BUDGET;
         let work = total - first_tab::FIRST_TAB_CLEANUP_RESERVE;
-        self.require_open_profile_window_by(work).await?;
+        let opens_window = self.require_open_profile_window_by(work).await?;
 
         let agent_group = self.agent_group();
-        let dedicated_window = self.dedicated_window();
+        let dedicated_window = if opens_window {
+            Some(true)
+        } else {
+            self.dedicated_window()
+        };
         let created = tokio::time::timeout_at(
             work,
             self.client.send_command_typed::<_, CreateTargetResult>(
@@ -7141,13 +7145,24 @@ impl BrowserManager {
         .await;
         let target_id = match created {
             Ok(Ok(result)) => result.target_id,
-            Ok(Err(error)) => return Err(first_tab::create_failure(&error)),
+            Ok(Err(error)) => {
+                if opens_window {
+                    first_tab::note_recovery(first_tab::window_opened_after(&error), &error);
+                }
+                return Err(first_tab::create_failure(&error));
+            }
             Err(_) => {
+                if opens_window {
+                    first_tab::note_recovery(None, "no answer within the first-tab budget");
+                }
                 return Err(first_tab::create_failure(
                     "no answer within the first-tab budget",
-                ))
+                ));
             }
         };
+        if opens_window {
+            first_tab::note_recovery(Some(true), "opened a background window in this profile");
+        }
 
         // The delete right goes to disk before anything else can fail, so a
         // later `close` can still find the tab if this daemon goes away.
@@ -7298,12 +7313,17 @@ impl BrowserManager {
     /// On the relay, refuse before creating a tab unless the profile shows an
     /// open window (#486). Off the relay (a browser we launched, a plain CDP
     /// endpoint) creating a target never brings the user's Chrome forward.
+    ///
+    /// `Ok(true)`: the profile has no window and this command opted in to
+    /// opening one (#883); the tab is then created in a new unfocused window
+    /// of this same profile (the extension answering is the one in it).
+    /// A window list that cannot be read is still refused.
     async fn require_open_profile_window_by(
         &self,
         deadline: tokio::time::Instant,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         if !self.via_relay() {
-            return Ok(());
+            return Ok(false);
         }
         let cap = std::cmp::min(
             deadline,
@@ -7315,7 +7335,15 @@ impl BrowserManager {
         )
         .await
         .unwrap_or_else(|_| Err("the window check got no answer in time".to_string()));
-        first_tab::profile_window_verdict(answer)
+        match first_tab::profile_window_verdict(answer) {
+            Ok(()) => Ok(false),
+            Err(e)
+                if e == first_tab::PROFILE_NOT_OPEN && first_tab::open_profile_window_enabled() =>
+            {
+                Ok(true)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -9581,14 +9609,19 @@ impl BrowserManager {
         }
 
         let target_url = url.unwrap_or("about:blank");
-        self.require_open_profile_window_by(
-            tokio::time::Instant::now() + first_tab::WINDOW_CHECK_TIMEOUT,
-        )
-        .await?;
+        let opens_window = self
+            .require_open_profile_window_by(
+                tokio::time::Instant::now() + first_tab::WINDOW_CHECK_TIMEOUT,
+            )
+            .await?;
 
         let agent_group = self.agent_group();
-        let dedicated_window = self.dedicated_window();
-        let result: CreateTargetResult = self
+        let dedicated_window = if opens_window {
+            Some(true)
+        } else {
+            self.dedicated_window()
+        };
+        let created: Result<CreateTargetResult, String> = self
             .client
             .send_command_typed(
                 "Target.createTarget",
@@ -9600,7 +9633,20 @@ impl BrowserManager {
                 },
                 None,
             )
-            .await?;
+            .await;
+        if opens_window {
+            match &created {
+                Ok(_) => first_tab::note_recovery(
+                    Some(true),
+                    "opened a background window in this profile",
+                ),
+                // A lost answer may still have opened the window.
+                Err(error) => {
+                    first_tab::note_recovery(first_tab::window_opened_after(error), error)
+                }
+            }
+        }
+        let result = created?;
         // We created this tab — own it so close() can clean it up.
         self.remember_created_target(&result.target_id);
 

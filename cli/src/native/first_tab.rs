@@ -42,9 +42,52 @@ pub const WINDOW_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The profile has no window open. Nothing was created.
 pub const PROFILE_NOT_OPEN: &str = "profile not open: the Chrome profile this session uses has \
-     no open window, and chrome-use does not open one itself (that would bring Chrome up in \
-     front of you). Open a window in that profile first (pick it in Chrome's profile menu, or \
-     press Cmd+N / Ctrl+N in it), then rerun the same command. Nothing was opened or attached.";
+     no open window, and chrome-use does not open one unless asked (a new window is a change \
+     you did not make). Open a window in that profile first (pick it in Chrome's profile menu, \
+     or press Cmd+N / Ctrl+N in it), then rerun the same command; for unattended runs, rerun \
+     with --open-profile-window (or AGENT_BROWSER_OPEN_PROFILE_WINDOW=1) to let chrome-use \
+     open one in the background. Nothing was opened or attached.";
+
+/// Whether this command may open a window in a profile that has none
+/// (#883): `--open-profile-window` or `AGENT_BROWSER_OPEN_PROFILE_WINDOW`
+/// set to an on value. Off by default: opening a window is a visible change
+/// the user did not make.
+pub fn open_profile_window_enabled() -> bool {
+    std::env::var("AGENT_BROWSER_OPEN_PROFILE_WINDOW")
+        .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
+}
+
+/// What the window recovery did for the command running now, for the
+/// response (`data.profileWindowRecovery`). The daemon runs one command at a
+/// time per process.
+static RECOVERY: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+
+/// `opened`: `None` when the create got no answer, so Chrome may or may not
+/// have opened the window; look before retrying.
+pub fn note_recovery(opened: Option<bool>, detail: &str) {
+    if let Ok(mut slot) = RECOVERY.lock() {
+        *slot = Some(serde_json::json!({
+            "attempted": true,
+            "opened": opened,
+            "detail": detail,
+        }));
+    }
+}
+
+pub fn take_recovery() -> Option<Value> {
+    RECOVERY.lock().ok().and_then(|mut slot| slot.take())
+}
+
+pub fn restore_recovery(recovery: Option<Value>) {
+    if let Ok(mut slot) = RECOVERY.lock() {
+        *slot = recovery;
+    }
+}
+
+/// The note a command carries when it opened the profile's window.
+pub const PROFILE_WINDOW_OPENED: &str = "The Chrome profile this session uses had no open \
+     window; chrome-use opened one in the background (--open-profile-window). Close it when \
+     you are done if you do not want it.";
 
 /// Prefixes of the first-tab failures. The error taxonomy keys on them, and
 /// none of them is retried by the relay-revive loop: the relay answered.
@@ -156,6 +199,12 @@ pub fn create_failure(error: &str) -> String {
          profile's windows and close it if it is there; `chrome-use tab list` shows what this \
          session can see."
     )
+}
+
+/// `opened` for [`note_recovery`] after a failed create: `Some(false)` only
+/// when the extension's answer proves nothing was opened.
+pub fn window_opened_after(error: &str) -> Option<bool> {
+    (!create_failure(error).starts_with(FIRST_TAB_OUTCOME_UNKNOWN)).then_some(false)
 }
 
 /// How cleaning up a tab that could not be set up ended.
@@ -324,6 +373,16 @@ pub fn cleanup_incomplete(target_id: &str, cause: &str, why: &str, recorded: boo
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// #883: only an answer that proves nothing was made counts as not opened.
+    #[test]
+    fn a_lost_create_answer_leaves_the_window_unknown() {
+        assert_eq!(window_opened_after("Request timed out"), None);
+        assert_eq!(
+            window_opened_after("createTarget: agent window ownership is unknown; refusing to create another window"),
+            Some(false)
+        );
+    }
 
     /// #486: a tab is created only when the profile shows a real window.
     #[test]
