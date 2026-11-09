@@ -3451,19 +3451,21 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             // ran `read <url>`, an HTTP fetch that opens no tab) gets "the tab is
             // gone", which sends agents hunting for a redirect that never
             // happened. Say what is actually missing instead.
-            if says_no_tab_to_drive(
-                super::browser::is_stale_target_error(&e),
+            let no_tab = says_no_tab_to_drive(
+                &e,
                 state
                     .browser
                     .as_ref()
                     .is_some_and(|m| m.is_cdp_connection() && m.owns_no_tab()),
-                state.last_unconfirmed_tab_switch.is_some(),
-            ) {
+            );
+            if no_tab {
                 msg = NO_OWNED_TAB_MESSAGE.to_string();
             }
             // A tab-gone error right after an unconfirmed switch means the
-            // documented recovery has already been tried (#235).
-            if super::browser::is_stale_target_error(&e) {
+            // documented recovery has already been tried (#235). Not when the
+            // session owns no tab: the switched-to tab can no longer be
+            // selected, so that note's advice no longer applies.
+            if super::browser::is_stale_target_error(&e) && !no_tab {
                 if let Some(note) = already_tried_note(state.last_unconfirmed_tab_switch.as_ref()) {
                     msg.push_str(&note);
                 }
@@ -15938,16 +15940,14 @@ pub(crate) const NO_OWNED_TAB_MESSAGE: &str = "this session has no tab registere
     `tab adopt <url-substring>` to drive a tab that is already open, then re-`snapshot`.";
 
 /// Whether a failed command should get [`NO_OWNED_TAB_MESSAGE`] instead of the
-/// tab-gone text. Only for a tab-gone error on an external connection whose
-/// session owns no tab (a locally launched browser drives its first tab without
-/// registering it), and not right after an unconfirmed tab switch, whose
-/// recovery note expects the original diagnosis.
-pub(crate) fn says_no_tab_to_drive(
-    stale_target: bool,
-    external_without_owned_tab: bool,
-    unconfirmed_switch: bool,
-) -> bool {
-    stale_target && external_without_owned_tab && !unconfirmed_switch
+/// tab-gone text: a tab-gone error on an external connection whose session
+/// owns no tab (a locally launched browser drives its first tab without
+/// registering it). A domain-preflight refusal keeps its own text: its
+/// `site_domain_unverified:` prefix is what stops the fallback adapter.
+pub(crate) fn says_no_tab_to_drive(error: &str, external_without_owned_tab: bool) -> bool {
+    external_without_owned_tab
+        && super::browser::is_stale_target_error(error)
+        && !error.starts_with("site_domain_unverified:")
 }
 
 pub(crate) fn already_tried_note(
@@ -28878,19 +28878,17 @@ mod tests {
     #[test]
     fn a_session_without_a_tab_is_told_to_open_one() {
         // Replaced only for a tab-gone error on an external session owning no tab.
-        assert!(says_no_tab_to_drive(true, true, false));
+        let gone = "CDP error (Runtime.evaluate): no attached tab for targetId T";
+        assert!(says_no_tab_to_drive(gone, true));
         assert!(
-            !says_no_tab_to_drive(false, true, false),
-            "other errors keep their text"
-        );
-        assert!(
-            !says_no_tab_to_drive(true, false, false),
+            !says_no_tab_to_drive(gone, false),
             "owned tab or local launch"
         );
-        assert!(
-            !says_no_tab_to_drive(true, true, true),
-            "after an unconfirmed switch"
-        );
+        assert!(!says_no_tab_to_drive("Element not found: h1", true));
+        // The domain-preflight refusal keeps the prefix the fallback guard reads.
+        let refusal = "site_domain_unverified: could not read current URL: stale sessionId";
+        assert!(super::super::browser::is_stale_target_error(refusal));
+        assert!(!says_no_tab_to_drive(refusal, true));
         let msg = NO_OWNED_TAB_MESSAGE;
         assert!(
             msg.contains("read <url>") && msg.contains("opens no tab"),
