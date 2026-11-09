@@ -190,6 +190,60 @@ async fn try_create_world(client: &CdpClient, session_id: &str) -> Result<i64, S
         .ok_or_else(|| "no isolated world context".to_string())
 }
 
+/// Whether a `DOM.resolveNode` answer holds a null object instead of the
+/// node: Chrome's reply for a node of a cross-origin child frame resolved in
+/// the main frame's isolated world.
+pub fn resolved_null(out: &Value) -> bool {
+    out.pointer("/object/objectId").is_none()
+        && out.pointer("/object/subtype").and_then(|v| v.as_str()) == Some("null")
+}
+
+/// The child frames this session renders itself (same-process frames; an
+/// out-of-process frame has a session of its own), main frame excluded.
+pub async fn child_frames(client: &CdpClient, session_id: &str) -> Vec<String> {
+    fn walk(node: &Value, out: &mut Vec<String>) {
+        for child in node
+            .get("childFrames")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            if let Some(id) = child.pointer("/frame/id").and_then(|v| v.as_str()) {
+                out.push(id.to_string());
+            }
+            walk(child, out);
+        }
+    }
+    let mut out = Vec::new();
+    if let Ok(tree) = client
+        .send_command("Page.getFrameTree", None, Some(session_id))
+        .await
+    {
+        walk(&tree["frameTree"], &mut out);
+    }
+    out
+}
+
+/// This process's isolated world in `frame_id`, a child frame of the tab.
+/// Chrome keeps one world per name and frame, so asking again returns the
+/// same world (or a fresh one after the frame navigated).
+pub async fn frame_world(
+    client: &CdpClient,
+    session_id: &str,
+    frame_id: &str,
+) -> Result<i64, String> {
+    let out = client
+        .send_command(
+            "Page.createIsolatedWorld",
+            Some(json!({ "frameId": frame_id, "worldName": world_name() })),
+            Some(session_id),
+        )
+        .await?;
+    out.get("executionContextId")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| "no isolated world context".to_string())
+}
+
 /// The world's context is gone (a navigation or reload).
 pub fn context_gone(e: &str) -> bool {
     e.contains("Cannot find context with specified id")
@@ -441,4 +495,21 @@ pub async fn hit_test(
         v.get("hit").and_then(|b| b.as_bool()).unwrap_or(false),
         v.get("top").and_then(|t| t.as_str()).map(String::from),
     ))
+}
+
+#[cfg(test)]
+mod frame_world_tests {
+    use super::*;
+
+    /// A cross-origin node resolved in the main frame's world comes back null.
+    #[test]
+    fn a_null_resolve_is_recognised() {
+        assert!(resolved_null(
+            &json!({"object": {"type": "object", "subtype": "null"}})
+        ));
+        assert!(!resolved_null(
+            &json!({"object": {"type": "object", "subtype": "node", "objectId": "1.2"}})
+        ));
+        assert!(!resolved_null(&json!({})));
+    }
 }

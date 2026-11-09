@@ -212,6 +212,13 @@ not do that; the error then says so. A background tab is never brought to the
 front on its own: the error gives the exact `extension call tabs.update`
 command that does it (`tab select --activate` cannot, it needs the debugger
 first).
+1Password can keep a frame in a sign-in page with nothing shown, so there is no
+menu to close. On a tab the session created, `--clear-extension-frames` (or
+`AGENT_BROWSER_CLEAR_EXTENSION_FRAMES=1`, ab-connect 0.5.108+, site access on)
+removes other extensions' frames from that page through an isolated-world
+script, then repeats the command when that is harmless. That extension's widget
+is gone from the page until a reload or the next page. Without it, hand the step
+to the user in one command: `session handoff --wait --note "<what to do>"`.
 Reattaching does not help. To avoid it, fill those fields with `fill` rather than
 `type --key-events`, turn the extension's inline menu off for the site, or use a
 `--launch` profile.
