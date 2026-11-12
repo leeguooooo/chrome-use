@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.290
+## 1.5.291
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
+
+### Fixes
+
+- **A relay session that never opened a tab is told so.** `read <url>` fetches the page over HTTP and opens no tab, so a page command after it (`get title`, `snapshot`, …) failed with "the tab this command was driving is gone — it navigated across processes (e.g. an OAuth/SSO redirect) …", and agents went looking for a redirect that never happened. On a relay or CDP connection whose session has opened or adopted no tab (or closed them all), that error now says the session has no tab to drive and to run `open <url>` or `tab adopt <url-substring>` first. Locally launched browsers, sessions that own a tab, and domain-preflight refusals keep their messages.
+
+### Contributors
+
+- @Jerryx333
+<!-- release:end -->
+
+## 1.5.290
+
 Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
 
 ### Fixes
@@ -12,7 +25,6 @@ Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-ext
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.289
 

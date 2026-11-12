@@ -3436,9 +3436,25 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                 _ => e,
             };
             let mut msg = super::browser::to_ai_friendly_error(&e);
+            // A session with no tab registered to drive (typically one that only
+            // ran `read <url>`, an HTTP fetch that opens no tab) gets "the tab is
+            // gone", which sends agents hunting for a redirect that never
+            // happened. Say what is actually missing instead.
+            let no_tab = says_no_tab_to_drive(
+                &e,
+                state
+                    .browser
+                    .as_ref()
+                    .is_some_and(|m| m.is_cdp_connection() && m.owns_no_tab()),
+            );
+            if no_tab {
+                msg = NO_OWNED_TAB_MESSAGE.to_string();
+            }
             // A tab-gone error right after an unconfirmed switch means the
-            // documented recovery has already been tried (#235).
-            if super::browser::is_stale_target_error(&e) {
+            // documented recovery has already been tried (#235). Not when the
+            // session owns no tab: the switched-to tab can no longer be
+            // selected, so that note's advice no longer applies.
+            if super::browser::is_stale_target_error(&e) && !no_tab {
                 if let Some(note) = already_tried_note(state.last_unconfirmed_tab_switch.as_ref()) {
                     msg.push_str(&note);
                 }
@@ -15897,6 +15913,24 @@ fn tab_liveness_probe_warning(
      fail, preserve the target and inspect it. Do not repeatedly switch or create tabs, \
      automatically reload the page, or replay an action whose outcome is unknown"
         .to_string()
+}
+
+/// Replaces the tab-gone error when an external (relay/CDP) session has no
+/// tab registered to drive.
+pub(crate) const NO_OWNED_TAB_MESSAGE: &str = "this session has no tab registered to drive \
+    (none opened or adopted, or they are closed). `read <url>` fetches the page over HTTP and \
+    opens no tab, so page commands after it have nothing to act on. Run `open <url>` first, or \
+    `tab adopt <url-substring>` to drive a tab that is already open, then re-`snapshot`.";
+
+/// Whether a failed command should get [`NO_OWNED_TAB_MESSAGE`] instead of the
+/// tab-gone text: a tab-gone error on an external connection whose session
+/// owns no tab (a locally launched browser drives its first tab without
+/// registering it). A domain-preflight refusal keeps its own text: its
+/// `site_domain_unverified:` prefix is what stops the fallback adapter.
+pub(crate) fn says_no_tab_to_drive(error: &str, external_without_owned_tab: bool) -> bool {
+    external_without_owned_tab
+        && super::browser::is_stale_target_error(error)
+        && !error.starts_with("site_domain_unverified:")
 }
 
 /// Add what an agent needs when a tab-gone error follows a `tab select` /
@@ -28843,6 +28877,36 @@ mod tests {
         );
         assert!(!warning.contains("open <url>"), "{warning}");
         assert!(!warning.contains("navigate <url>"), "{warning}");
+    }
+
+    /// A session that owns no tab (e.g. it only ran `read <url>`) is told
+    /// to open one, not sent hunting for a redirect that never happened.
+    #[test]
+    fn a_session_without_a_tab_is_told_to_open_one() {
+        // Replaced only for a tab-gone error on an external session owning no tab.
+        let gone = "CDP error (Runtime.evaluate): no attached tab for targetId T";
+        assert!(says_no_tab_to_drive(gone, true));
+        assert!(
+            !says_no_tab_to_drive(gone, false),
+            "owned tab or local launch"
+        );
+        assert!(!says_no_tab_to_drive("Element not found: h1", true));
+        // The domain-preflight refusal keeps the prefix the fallback guard reads.
+        let refusal = "site_domain_unverified: could not read current URL: stale sessionId";
+        assert!(super::super::browser::is_stale_target_error(refusal));
+        assert!(!says_no_tab_to_drive(refusal, true));
+        let msg = NO_OWNED_TAB_MESSAGE;
+        assert!(
+            msg.contains("read <url>") && msg.contains("opens no tab"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("open <url>") && msg.contains("tab adopt"),
+            "{msg}"
+        );
+        assert!(!msg.contains("OAuth"), "{msg}");
+        // The friendly rewrite would not turn it back into the tab-gone text.
+        assert!(!super::super::browser::is_stale_target_error(msg), "{msg}");
     }
 
     /// A tab-gone error that follows an unconfirmed switch must say the

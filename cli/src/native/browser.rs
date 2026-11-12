@@ -7129,6 +7129,14 @@ impl BrowserManager {
         self.created_targets.clone()
     }
 
+    /// True when this session has no tab registered to drive: none created or
+    /// adopted (a fresh external session, or one that only ran `read <url>`).
+    /// A locally launched browser drives its first tab without registering it,
+    /// so callers pair this with `is_cdp_connection`.
+    pub fn owns_no_tab(&self) -> bool {
+        self.created_targets.is_empty() && self.adopted_targets.is_empty()
+    }
+
     pub fn is_cdp_connection(&self) -> bool {
         self.browser_process.is_none()
     }
