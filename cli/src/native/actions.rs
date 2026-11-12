@@ -2389,17 +2389,6 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         }
         _ => std::env::remove_var("AGENT_BROWSER_CLICK_MODE"),
     }
-    // `--open-profile-window` (#883) is the client command's choice, never a
-    // value left over from an earlier one or from the daemon's spawn env. Only
-    // a top-level command (it carries `_cbSkip`) sets it; nested script and
-    // batch steps run under their parent's.
-    if cmd.get("_cbSkip").is_some() {
-        if cmd.get("_openProfileWindow").and_then(Value::as_bool) == Some(true) {
-            std::env::set_var("AGENT_BROWSER_OPEN_PROFILE_WINDOW", "1");
-        } else {
-            std::env::remove_var("AGENT_BROWSER_OPEN_PROFILE_WINDOW");
-        }
-    }
     // Position marker: this command's `--show-position` / env, else the
     // config file (read by the marker itself). Mirrored like CLICK_MODE.
     let show_position = cmd.get("_showPosition").and_then(|v| v.as_str());
@@ -18182,7 +18171,10 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
                 let blur = !acts_at_focus(action);
                 mgr.wake_pinned_tab(blur).await;
                 if mgr.pinned_tab_blocked().await {
-                    pre = Some(Box::pin(mgr.cycle_pinned_tab_visibility(blur)).await);
+                    // Menus only: removing frames waits until the command
+                    // itself passed its target and policy checks and was
+                    // refused (below).
+                    pre = Some(Box::pin(mgr.cycle_pinned_tab_visibility_menus(blur)).await);
                 }
             }
         }
@@ -18202,6 +18194,14 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
     let blur = safe_to_repeat(action);
     let recovery = match (pre, state.browser.as_mut()) {
         // Already tried just now, before the command ran: do not flash twice.
+        // Menus were tried before the command ran; a frame that is no menu
+        // (--clear-extension-frames) is removed now that it was refused.
+        (Some(Err(reason)), Some(mgr)) if super::browser::clear_extension_frames_enabled() => {
+            match Box::pin(mgr.clear_extension_frames_unblocking()).await {
+                Ok(note) => Ok(Some(note)),
+                Err(e) => Err(format!("{reason}; --clear-extension-frames: {e}")),
+            }
+        }
         (Some(Err(reason)), _) => Err(reason),
         (_, Some(mgr)) if mgr.on_relay() => Box::pin(mgr.cycle_pinned_tab_visibility(blur)).await,
         _ => Err("not on the extension relay".to_string()),
@@ -18276,7 +18276,9 @@ fn with_menu_warning(mut out: Value, what: &str, note: Option<String>) -> Value 
         warning.push_str(&format!(". {note}"));
     }
     if let Some(obj) = out.as_object_mut() {
-        obj.entry("warning").or_insert_with(|| json!(warning));
+        let merged =
+            crate::profiles::merge_warning(obj.get("warning").and_then(Value::as_str), &warning);
+        obj.insert("warning".to_string(), json!(merged));
     }
     out
 }
@@ -18311,7 +18313,9 @@ fn no_recovery_note_for(reason: &str, manager: Option<&str>) -> String {
     };
     format!(
         "\n(No automatic recovery: {reason}.) The tab and what was typed into it are intact: \
-         do not close tabs, stop the session or relaunch Chrome over this. {next}"
+         do not close tabs, stop the session or relaunch Chrome over this. {next} To ask the \
+         user and wait in one step: `chrome-use session handoff --wait --note \"<what to do>\"` \
+         (shown in the side panel; it returns when they press Done)."
     )
 }
 
@@ -28287,8 +28291,10 @@ mod tests {
             !w.contains("closed it") && !w.contains("tab works again"),
             "{w}"
         );
+        // An existing warning stays, and the recovery is reported next to it.
         let kept = with_menu_warning(json!({ "success": true, "warning": "x" }), "y", None);
-        assert_eq!(kept["warning"], "x");
+        let w = kept["warning"].as_str().unwrap();
+        assert!(w.contains('x') && w.contains("frame-tree read, y"), "{w}");
     }
 
     /// `close --all` run by one agent closed every other agent's tab mid-task;

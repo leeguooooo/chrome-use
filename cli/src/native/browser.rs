@@ -2169,7 +2169,9 @@ fn blocking_inline_menu_manager_with(
 /// manager cannot be told apart.
 pub(crate) const ONE_PASSWORD_HIDE: &str = "The user can right-click the page, choose \
     \"1Password - Password Manager\" → \"Hide on this page\" (undone in 1Password's Settings → \
-    Autofill & save → Hidden pages), then run the command again.";
+    Autofill & save → Hidden pages), then run the command again. Without the user, on a tab \
+    this session opened: run it again with --clear-extension-frames (ab-connect 0.5.108+), which \
+    removes 1Password's frame from that page.";
 
 /// What the user can do about `name`'s frame blocking a tab. Bitwarden's
 /// frame is its inline menu, which is visible and closes on Escape.
@@ -3661,6 +3663,45 @@ pub fn is_valid_label(s: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Whether a blocked agent tab may have other extensions' frames removed
+/// (`--clear-extension-frames` / `AGENT_BROWSER_CLEAR_EXTENSION_FRAMES`).
+/// Off by default: that extension's widget is gone from the page until it
+/// adds it again.
+pub fn clear_extension_frames_enabled() -> bool {
+    std::env::var("AGENT_BROWSER_CLEAR_EXTENSION_FRAMES")
+        .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
+}
+
+/// The note for what `ABExt.clearExtensionFrames` removed; an error when it
+/// removed nothing.
+fn extension_frames_note(out: &Value) -> Result<String, String> {
+    let removed = out["removed"].as_array().cloned().unwrap_or_default();
+    if removed.is_empty() {
+        return Err("no other extension's frame was found in the tab".to_string());
+    }
+    let mut what: Vec<String> = Vec::new();
+    for r in &removed {
+        let host = r["host"].as_str().unwrap_or("");
+        let ext = r["extension"].as_str().unwrap_or("");
+        let name = if host.starts_with("com-1password") {
+            "1Password".to_string()
+        } else if !ext.is_empty() {
+            format!("extension {ext}")
+        } else {
+            host.to_string()
+        };
+        if !what.contains(&name) {
+            what.push(name);
+        }
+    }
+    Ok(format!(
+        "removed {} frame(s) another extension kept in this tab ({}); it shows its widget on \
+         this page again after a reload or on the next page (--clear-extension-frames)",
+        removed.len(),
+        what.join(", ")
+    ))
 }
 
 /// Whether the agent should place its tabs in a dedicated agent window instead
@@ -7726,6 +7767,84 @@ impl BrowserManager {
     /// with a longer hidden moment: a sign-in widget (Apple's, in an iframe)
     /// puts the cursor back into its field when the tab is shown.
     pub async fn cycle_pinned_tab_visibility(
+        &mut self,
+        blur_focused: bool,
+    ) -> Result<Option<String>, String> {
+        // `--clear-extension-frames`: a frame another extension keeps in the
+        // tab (1Password's hidden sign-in frame) blocks it whatever the
+        // window does, so remove it first; the tab flips below are for menus.
+        let mut cleared: Option<String> = None;
+        if clear_extension_frames_enabled() {
+            match self.clear_extension_frames().await {
+                Ok(note) if !self.pinned_tab_blocked().await => return Ok(Some(note)),
+                Ok(note) => cleared = Some(format!("{note}, but the tab is still blocked")),
+                Err(e) => cleared = Some(format!("--clear-extension-frames: {e}")),
+            }
+        }
+        let out = self.cycle_pinned_tab_visibility_menus(blur_focused).await;
+        match (out, cleared) {
+            (Err(e), Some(c)) => Err(format!("{e}; {c}")),
+            // Frames went and then a menu closed: say both.
+            (Ok(note), Some(c)) if !c.starts_with("--clear-extension-frames:") => {
+                let removed = c
+                    .trim_end_matches(", but the tab is still blocked")
+                    .to_string();
+                Ok(Some(match note {
+                    Some(n) => format!("{removed}; {n}"),
+                    None => removed,
+                }))
+            }
+            (out, _) => out,
+        }
+    }
+
+    /// [`Self::clear_extension_frames`], and `Ok` only when the tab then
+    /// answers the debugger again.
+    pub async fn clear_extension_frames_unblocking(&self) -> Result<String, String> {
+        let note = self.clear_extension_frames().await?;
+        if self.pinned_tab_blocked().await {
+            return Err(format!("{note}, but the tab is still blocked"));
+        }
+        Ok(note)
+    }
+
+    /// Remove the frames other extensions keep in the pinned tab, through
+    /// ab-connect (`ABExt.clearExtensionFrames`, 0.5.108+). Only a tab this
+    /// session created. The note names what went.
+    async fn clear_extension_frames(&self) -> Result<String, String> {
+        if !self.on_relay() {
+            return Err("not on the extension relay".to_string());
+        }
+        let pinned = self.active_target_id.clone().ok_or("no pinned tab")?;
+        if !self.created_targets.contains(&pinned) {
+            return Err("only a tab this session created has its frames removed".to_string());
+        }
+        let page = self
+            .pages
+            .iter()
+            .find(|p| p.target_id == pinned)
+            .ok_or("pinned tab not tracked")?;
+        let out = self
+            .client
+            .send_command(
+                "ABExt.clearExtensionFrames",
+                Some(json!({ "sessionId": page.session_id, "targetId": page.target_id })),
+                None,
+            )
+            .await
+            .map_err(|e| {
+                if e.contains("wasn't found") || e.contains("not found") {
+                    "ab-connect is older than 0.5.108; Chrome updates it from the Web Store \
+                     (or update it from chrome://extensions)"
+                        .to_string()
+                } else {
+                    e
+                }
+            })?;
+        extension_frames_note(&out)
+    }
+
+    pub async fn cycle_pinned_tab_visibility_menus(
         &mut self,
         blur_focused: bool,
     ) -> Result<Option<String>, String> {
@@ -16350,5 +16469,26 @@ mod screenshot_window_preparation_tests {
                 "ABExt.prepareScreenshot"
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod extension_frames_tests {
+    use super::*;
+
+    #[test]
+    fn the_note_names_what_was_removed() {
+        let out = json!({"removed": [
+            {"extension": "aeblfdkhhhdcdjpifhhbdiojplfjncoa", "tag": "iframe", "host": "com-1password-uso"},
+            {"extension": "", "tag": "com-1password-menu", "host": "com-1password-menu"}
+        ], "frames": 2});
+        let note = extension_frames_note(&out).unwrap();
+        assert!(note.contains("removed 2 frame(s)"), "{note}");
+        assert!(note.contains("(1Password)"), "{note}");
+        assert!(extension_frames_note(&json!({"removed": []})).is_err());
+        let other = json!({"removed": [{"extension": "abcdabcdabcdabcdabcdabcdabcdabcd", "tag": "iframe", "host": ""}]});
+        assert!(extension_frames_note(&other)
+            .unwrap()
+            .contains("extension abcdabcd"));
     }
 }

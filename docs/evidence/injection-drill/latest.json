@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
- "tag": "v1.5.287",
- "source_commit": "14bcf3bf0e2aee82b61579c4b991ddcd2eb7766c",
- "generated_at": "2026-11-09T02:35:06.356312+00:00",
+ "tag": "v1.5.290",
+ "source_commit": "632eef312c0ddebc532f857ab0333a0451871c43",
+ "generated_at": "2026-11-09T11:23:26.838337+00:00",
  "status": "NOT_RUN",
  "scope": "restricted-mcp-fixture-only",
  "corpus_sha256": "e22ffc9f92b9cf917435c2f695d9bc7d3508cb3f226e93e6e4e11a38b87d834d",
@@ -16,7 +16,7 @@
   "minimum_task_completion": 1.0,
   "max_age_hours": 24
  },
- "run_url": "https://github.com/leeguooooo/chrome-use/actions/runs/42549061872",
+ "run_url": "https://github.com/leeguooooo/chrome-use/actions/runs/42606135369",
  "models": {
   "claude-haiku-5-5": {
    "status": "NOT_RUN",

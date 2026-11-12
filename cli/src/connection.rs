@@ -2483,6 +2483,10 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
         if timing_disabled(std::env::var("AGENT_BROWSER_TIMING").ok().as_deref()) {
             obj.insert("_timing".to_string(), Value::Bool(false));
         }
+        // `--clear-extension-frames`: this command's opt-in.
+        if crate::native::browser::clear_extension_frames_enabled() {
+            obj.insert("_clearExtensionFrames".to_string(), Value::Bool(true));
+        }
         // `--open-profile-window` / AGENT_BROWSER_OPEN_PROFILE_WINDOW (#883):
         // this command's opt-in, so a running daemon follows it.
         if crate::native::first_tab::open_profile_window_enabled() {

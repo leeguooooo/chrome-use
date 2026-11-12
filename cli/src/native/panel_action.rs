@@ -25,10 +25,34 @@ pub(crate) async fn execute_command_stamped(cmd: &Value, state: &mut DaemonState
     super::focus_recovery::scope(cmd, execute_command_stamped_inner(cmd, state)).await
 }
 
+/// Per-command opt-ins the client forwards (`--open-profile-window`,
+/// `--clear-extension-frames`): set for this top-level command only, from its
+/// own fields, whatever client sent it, and cleared when it ends. Nested
+/// script and batch steps run inside and inherit them.
+const COMMAND_OPT_INS: &[(&str, &str)] = &[
+    ("_openProfileWindow", "AGENT_BROWSER_OPEN_PROFILE_WINDOW"),
+    (
+        "_clearExtensionFrames",
+        "AGENT_BROWSER_CLEAR_EXTENSION_FRAMES",
+    ),
+];
+
+fn set_command_opt_ins(cmd: Option<&Value>) {
+    for (field, var) in COMMAND_OPT_INS {
+        if cmd.and_then(|c| c.get(*field)).and_then(Value::as_bool) == Some(true) {
+            std::env::set_var(var, "1");
+        } else {
+            std::env::remove_var(var);
+        }
+    }
+}
+
 async fn execute_command_stamped_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let stamp = begin(cmd, state);
     let logged = log_start(cmd);
+    set_command_opt_ins(Some(cmd));
     let mut response = execute_command_recovering(cmd, state).await;
+    set_command_opt_ins(None);
     if let Some(entry) = logged {
         log_finish(entry, &response);
     }

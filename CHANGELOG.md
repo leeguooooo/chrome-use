@@ -1,8 +1,51 @@
 # Changelog
 
-## 1.5.287
+## 1.5.290
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
+
+### Fixes
+
+- **Clicks inside same-site cross-origin iframes land on their target.** A frame such as `login.aliexpress.com` inside `www.aliexpress.com` shares the page's process. `click` activated refs in any iframe by focus and Enter, which does nothing on a custom option (`div role=menuitem`), so a country-code list kept its old choice while the click reported `✓ Done`; and `pick` placed its click with the option's position inside the frame, about the frame's offset away from it, so it chose another option (`TW +886` for `JP +81`). In-process frames now get a real pointer click in page coordinates, and the hit-tests that guard it look at the frame's own document. Out-of-process frames keep the keyboard activation.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.289
+
+Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
+
+### Fixes
+
+- **`session handoff --wait` no longer gives up after the idle timeout.** A wait without a `--until-*` condition only checks that the session's daemon is there, and the daemon stopped after 10 minutes without commands even while the user held the session, so a longer wait ended with `lost the browser session while waiting (the session's daemon is not answering)` and the session left handed off. A handed-off session's daemon now stays up until the user is done.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.288
+
+Works with extension ab-connect 0.5.108 (needed for `--clear-extension-frames`).
+
+### Features
+
+- **`--clear-extension-frames` for tabs another extension blocks.** While a page holds another extension's frame, Chrome refuses every debugger command on the tab (`debugger_access_denied`), and 1Password keeps such a frame in sign-in pages with nothing shown (`<com-1password-uso>`), so there was no menu to close. With `--clear-extension-frames` (or `AGENT_BROWSER_CLEAR_EXTENSION_FRAMES=1`) on a tab the session created, ab-connect removes other extensions' frames from that page through an isolated-world script the page cannot see, and the command is repeated when that is harmless. That extension's widget returns after a reload or on the next page; nothing is disabled. The user's own tabs are never touched. Needs ab-connect 0.5.108 and site access.
+- **A blocked tab's error names the one-step handoff.** When chrome-use cannot recover a blocked tab, the error now gives `session handoff --wait --note "<what to do>"`, which shows the step in the side panel and returns when the user presses Done.
+
+### Fixes
+
+- **Refs inside same-site cross-origin iframes work.** A frame such as `login.aliexpress.com` inside `www.aliexpress.com` shares the page's process. chrome-use resolves nodes in an isolated world, and Chrome answered such a frame's node in the main frame's world with a null object, so `click`, `type` and `get` on its refs failed with `No objectId for ref`. Nodes are now resolved in the same isolated world of the frame they live in; reads still never run in the page's main world.
+- **`No objectId for ref` says what to do** when it still happens.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.287
+
 Works with extension ab-connect 0.5.107.
 
 ### Features
@@ -21,7 +64,6 @@ Works with extension ab-connect 0.5.107.
 
 - @leeguooooo
 - @euvoor
-<!-- release:end -->
 
 ## 1.5.286
 

@@ -2342,9 +2342,12 @@ pub(crate) async fn resolve_element_center_with(
         let object = resolve_semantic_pin(client, session_id).await?;
         let reply = client.send_command("Runtime.callFunctionOn", Some(json!({"objectId":object,"functionDeclaration":"function(){const r=this.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,w:r.width,h:r.height}}","returnByValue":true})),Some(session_id)).await?;
         let r = &reply["result"]["value"];
+        // The box is the element's own frame's; input goes in top-frame
+        // coordinates (an option list inside an in-process iframe).
+        let (ox, oy) = frame_offset(client, session_id, &object).await?;
         return Ok((
-            r["x"].as_f64().ok_or("semantic target has no box")?,
-            r["y"].as_f64().ok_or("semantic target has no box")?,
+            r["x"].as_f64().ok_or("semantic target has no box")? + ox,
+            r["y"].as_f64().ok_or("semantic target has no box")? + oy,
             r["w"].as_f64().unwrap_or(0.0),
             r["h"].as_f64().unwrap_or(0.0),
             session_id.to_string(),
@@ -2416,6 +2419,8 @@ pub(crate) async fn resolve_element_center_with(
                         x,
                         y,
                         clear_hover_layer && entry.frame_id.is_none(),
+                        // An out-of-process frame's box model is frame-local already.
+                        entry.frame_id.is_some() && effective_session_id == session_id,
                     )
                     .await?;
                 }
@@ -2542,10 +2547,14 @@ pub async fn resolve_element_object_id(
                 Some(effective_session_id),
             )
             .await?;
-        let object_id = result
-            .object
-            .object_id
-            .ok_or_else(|| format!("No objectId for ref {}", ref_id))?;
+        let object_id = result.object.object_id.ok_or_else(|| {
+            format!(
+                "No objectId for ref {ref_id}: Chrome found its node but would not hand it \
+                     out, so nothing was done. Run `snapshot -i` and use a fresh ref; if this \
+                     repeats inside an iframe, `frame <n>` then `snapshot -i` addresses that \
+                     frame directly"
+            )
+        })?;
         return Ok((object_id, effective_session_id.to_string()));
     }
 
@@ -3035,6 +3044,79 @@ const REF_RECOVERY_HINT: &str =
 /// found outside the tooltip, the target and that control, then the check
 /// runs again. The probe only reads layout (isolated world, as every
 /// `DOM.resolveNode` object is); nothing is written to the page.
+/// Where the frame holding `object_id` sits in the top frame's viewport, in
+/// CSS px; `(0, 0)` for a node of the top frame (or when it cannot be read).
+/// Input events and `DOM.getBoxModel` use top-frame coordinates, while a
+/// hit-test (`elementFromPoint`) in a child frame's own document needs
+/// frame-local ones. Matters for an in-process child frame (same-site,
+/// cross-origin: login.aliexpress.com inside www.aliexpress.com), whose
+/// nodes share the page's session.
+pub(crate) async fn frame_offset(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+) -> Result<(f64, f64), String> {
+    // The rect is the axis-aligned box, so the top frame's side is the box
+    // around the border quad (a rotated node's first vertex is not its
+    // corner). Each read is bounded: a stalled page must not hold a click.
+    const LOCAL_ORIGIN_JS: &str =
+        "function(){const w=this.ownerDocument&&this.ownerDocument.defaultView;\
+        if(!w||w===w.top)return null;const e=this.nodeType===1?this:this.parentElement;\
+        if(!e)return null;const r=e.getBoundingClientRect();return [r.left,r.top]}";
+    const BUDGET: std::time::Duration = std::time::Duration::from_millis(1000);
+    let failed = |what: &str| format!("could not place the target inside its frame ({what})");
+    let local = tokio::time::timeout(
+        BUDGET,
+        client.send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({"objectId": object_id, "functionDeclaration": LOCAL_ORIGIN_JS, "returnByValue": true})),
+            Some(session_id),
+        ),
+    )
+    .await
+    .map_err(|_| failed("its frame did not answer"))?
+    .map_err(|e| failed(&e))?;
+    let value = &local["result"]["value"];
+    if value.is_null() {
+        return Ok((0.0, 0.0));
+    }
+    let (lx, ly) = value
+        .as_array()
+        .and_then(|a| Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?)))
+        .ok_or_else(|| failed("no box in its frame"))?;
+    let model = tokio::time::timeout(
+        BUDGET,
+        client.send_command(
+            "DOM.getBoxModel",
+            Some(json!({"objectId": object_id})),
+            Some(session_id),
+        ),
+    )
+    .await
+    .map_err(|_| failed("the page did not answer"))?
+    .map_err(|e| failed(&e))?;
+    let quad: Vec<f64> = model["model"]["border"]
+        .as_array()
+        .map(|q| q.iter().filter_map(|v| v.as_f64()).collect())
+        .unwrap_or_default();
+    if quad.len() != 8 {
+        return Err(failed("no box in the page"));
+    }
+    let bx = quad
+        .iter()
+        .step_by(2)
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+    let by = quad
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+    Ok((bx - lx, by - ly))
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn verify_click_target(
     client: &CdpClient,
     session_id: &str,
@@ -3043,6 +3125,7 @@ pub(crate) async fn verify_click_target(
     x: f64,
     y: f64,
     clear_hover_layer: bool,
+    in_child_frame: bool,
 ) -> Result<(), String> {
     use serde::Deserialize;
 
@@ -3122,8 +3205,22 @@ pub(crate) async fn verify_click_target(
     let mut last_occ: Option<Occluder>;
     let mut moved_off: Option<(f64, f64)> = None;
     let mut retries_left = max_retries;
+    // The probe hit-tests in the target's own document: a child frame's
+    // needs frame-local coordinates (x, y and the cursor are top-frame).
+    // An offset that cannot be read skips the probe, as a probe that cannot
+    // run does: the click point itself comes from the box model.
+    let (ox, oy) = if in_child_frame {
+        match frame_offset(client, session_id, object_id).await {
+            Ok(offset) => offset,
+            Err(_) => return Ok(()),
+        }
+    } else {
+        (0.0, 0.0)
+    };
+    let (x, y) = (x - ox, y - oy);
     loop {
         let (px, py) = super::humanize::last_cursor();
+        let (px, py) = (px - ox, py - oy);
         let call_params = serde_json::json!({
             "objectId": object_id,
             "functionDeclaration": function_decl,
@@ -3153,7 +3250,7 @@ pub(crate) async fn verify_click_target(
             Ok(v) => v,
             Err(_) => return Ok(()),
         };
-        let rest = occ.rest.as_ref().map(|p| (p.x, p.y));
+        let rest = occ.rest.as_ref().map(|p| (p.x + ox, p.y + oy));
         let hover = occ.hover;
         last_occ = Some(occ);
         if let (true, true, None, Some((rx, ry))) = (clear_hover_layer, hover, moved_off, rest) {
@@ -6354,6 +6451,9 @@ mod derived_identity_tests {
     }
 }
 
+#[cfg(test)]
+#[path = "click_frame_tests.rs"]
+mod click_frame_tests;
 #[cfg(test)]
 #[path = "click_tooltip_tests.rs"]
 mod click_tooltip_tests;
