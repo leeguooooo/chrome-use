@@ -15926,12 +15926,6 @@ fn tab_liveness_probe_warning(
         .to_string()
 }
 
-/// Add what an agent needs when a tab-gone error follows a `tab select` /
-/// `tab adopt` that was never confirmed (issue #235).
-///
-/// Do not blindly repeat an unconfirmed switch. Foreground activation is a
-/// distinct, explicit recovery attempt when it has not yet been tried; this
-/// record does not establish whether the prior command requested activation.
 /// Replaces the tab-gone error when an external (relay/CDP) session has no
 /// tab registered to drive.
 pub(crate) const NO_OWNED_TAB_MESSAGE: &str = "this session has no tab registered to drive \
@@ -15950,6 +15944,12 @@ pub(crate) fn says_no_tab_to_drive(error: &str, external_without_owned_tab: bool
         && !error.starts_with("site_domain_unverified:")
 }
 
+/// Add what an agent needs when a tab-gone error follows a `tab select` /
+/// `tab adopt` that was never confirmed (issue #235).
+///
+/// Do not blindly repeat an unconfirmed switch. Foreground activation is a
+/// distinct, explicit recovery attempt when it has not yet been tried; this
+/// record does not establish whether the prior command requested activation.
 pub(crate) fn already_tried_note(
     attempt: Option<&(&'static str, String, std::time::Instant)>,
 ) -> Option<String> {
