@@ -16,6 +16,9 @@ use super::cdp::types::*;
 use super::element::{resolve_element_object_id, RefMap};
 use super::first_tab;
 
+#[path = "blank_bootstrap.rs"]
+mod blank_bootstrap;
+
 /// The daemon's session name, set once at daemon start. Names the Chrome tab
 /// group that abs-created tabs land in when driving the user's real Chrome via
 /// the `ab-connect` extension, so each agent/session gets its own group.
@@ -7257,7 +7260,8 @@ impl BrowserManager {
                     None,
                 )
                 .await?;
-            self.enable_domains(&attach.session_id).await?;
+            self.enable_created_domains(&target_id, &attach.session_id, "about:blank", work)
+                .await?;
             Ok::<String, String>(attach.session_id)
         };
         let failed = match tokio::time::timeout_at(work, setup).await {
@@ -9818,7 +9822,15 @@ impl BrowserManager {
                     )
                     .await?;
             }
-            self.enable_domains(&attach.session_id).await
+            self.enable_new_tab_domains(
+                &result.target_id,
+                &attach.session_id,
+                target_url,
+                activate,
+                tokio::time::Instant::now() + first_tab::FIRST_TAB_TOTAL_BUDGET
+                    - first_tab::FIRST_TAB_CLEANUP_RESERVE,
+            )
+            .await
         };
         if let Err(error) = initialize.await {
             return Err(format!(
@@ -16492,3 +16504,7 @@ mod extension_frames_tests {
             .contains("extension abcdabcd"));
     }
 }
+
+#[cfg(test)]
+#[path = "blank_bootstrap_tests.rs"]
+mod blank_bootstrap_tests;
