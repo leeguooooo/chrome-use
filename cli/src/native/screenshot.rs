@@ -192,7 +192,13 @@ pub async fn take_screenshot(
             )?
             .0;
             if !contains(&full, &region) {
-                return Err("Screenshot: requested region extends outside the page".into());
+                // Name both sizes: without them the caller can only guess how
+                // far to shrink the clip (#894).
+                return Err(format!(
+                    "Screenshot: requested region extends outside the page: requested \
+                     x={} y={} {}x{}, page is {}x{} (CSS px). Shrink the clip to fit.",
+                    region.x, region.y, region.width, region.height, full.width, full.height
+                ));
             }
             capture_options.full_page = true;
             capture_options.clip = Some((full.x, full.y, full.width, full.height));

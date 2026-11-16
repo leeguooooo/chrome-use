@@ -205,6 +205,9 @@ on the longest edge by default (width only for `--full`, so a long page stays
 readable); `--full-res` keeps the captured size, and `--max-width`,
 `--max-height`, and `--scale` control the output size. Do not infer CSS click coordinates from a resized
 image: for a known ref, `box @ref` returns CSS-pixel bounds and `centerX/centerY`.
+A downscaled result has `resized: true` with `originalWidth`, `originalHeight` and
+`scaleFactor` (image px ÷ captured px). A `--clip` outside the page fails with
+the requested region and the page size, both in CSS px.
 Prefer semantic refs for ordinary controls; see the canvas guidance above
 when the target has no semantic representation. Screenshots serve as requested
 assets and visual evidence; they are not a default extra check after a click.

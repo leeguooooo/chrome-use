@@ -822,7 +822,9 @@ fn after_capture(
             DeliveryState::NotAttempted,
             None,
             Some("the capture was not ready".to_string()),
-            not_written(),
+            // Nothing exists at the artifact path either: pointing there right
+            // after "the capture was not kept" contradicts it (#894).
+            format!("the requested location {requested} was not written; no capture was kept"),
         ),
         Some(expected) => {
             let delivery = artifacts::deliver(Path::new(&output.path), requested, expected);
