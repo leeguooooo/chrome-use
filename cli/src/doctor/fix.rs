@@ -155,14 +155,14 @@ fn create_encryption_key_at(dir: &Path) -> bool {
         return false;
     }
     let hex: String = buf.iter().map(|b| format!("{:02x}", b)).collect();
-    if fs::write(&path, format!("{}\n", hex)).is_err() {
-        return false;
-    }
+    // Written as a value, not an early return: on Windows the cfg block below
+    // is gone and clippy's needless_bool fires on the bare `if` (Rust 1.100).
+    let written = fs::write(&path, format!("{}\n", hex)).is_ok();
     #[cfg(unix)]
-    {
+    if written {
         let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
     }
-    true
+    written
 }
 
 #[cfg(test)]

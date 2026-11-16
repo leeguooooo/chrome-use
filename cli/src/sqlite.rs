@@ -14,18 +14,19 @@ pub(crate) fn output(args: &[&OsStr]) -> io::Result<Output> {
 }
 
 fn unavailable_executable(error: &io::Error) -> bool {
-    if error.kind() == io::ErrorKind::NotFound {
-        return true;
-    }
+    // Accumulated rather than early returns: on Windows the cfg arms are gone
+    // and clippy's needless_bool fires on what is left (Rust 1.100).
+    #[allow(unused_mut)]
+    let mut unavailable = error.kind() == io::ErrorKind::NotFound;
     #[cfg(unix)]
-    if error.raw_os_error() == Some(libc::ENOEXEC) {
-        return true;
+    {
+        unavailable |= error.raw_os_error() == Some(libc::ENOEXEC);
     }
     #[cfg(target_os = "macos")]
-    if error.raw_os_error() == Some(libc::EBADARCH) {
-        return true;
+    {
+        unavailable |= error.raw_os_error() == Some(libc::EBADARCH);
     }
-    false
+    unavailable
 }
 
 fn output_with(primary: &Path, fallback: Option<&Path>, args: &[&OsStr]) -> io::Result<Output> {
