@@ -338,6 +338,15 @@ impl NudgeTracker {
         None
     }
 
+    /// A command other than `eval` succeeded. The agent moved on from the last
+    /// failure, so an `eval` after this is ordinary page work, not a workaround
+    /// for it (#894: a later eval carried a screenshot failure's suggestion).
+    pub fn on_success(&mut self, action: &str) {
+        if !is_eval(action) {
+            self.last_failure = None;
+        }
+    }
+
     /// The agent ran `eval`. Shortly after a failed action that usually means
     /// it is scripting around chrome-use; offer once for that failure.
     pub fn on_eval(&mut self, now: std::time::Instant, session: &str) -> Option<Value> {
@@ -460,6 +469,17 @@ mod tests {
             .is_none());
         assert!(t
             .on_failure("type", "Missing 'text' parameter", now, "s")
+            .is_none());
+    }
+
+    #[test]
+    fn an_eval_after_the_agent_moved_on_does_not_nudge() {
+        let mut t = NudgeTracker::default();
+        let now = std::time::Instant::now();
+        t.on_failure("screenshot", "Element not found: #a", now, "work");
+        t.on_success("snapshot");
+        assert!(t
+            .on_eval(now + std::time::Duration::from_secs(5), "work")
             .is_none());
     }
 

@@ -2045,9 +2045,31 @@ fn run_tool(arguments: &Value, mut args: Vec<String>) -> Result<Value, ProtocolE
     }
     let timeout_ms = optional_u64(arguments, "timeoutMs")?.unwrap_or(DEFAULT_TIMEOUT_MS);
 
-    let run = run_cli(&args, timeout_ms)
+    let mut run = run_cli(&args, timeout_ms)
         .map_err(|e| ProtocolError::invalid_params(format!("Failed to run chrome-use: {}", e)))?;
+    let command = args.first().map(String::as_str).unwrap_or("");
+    run.stdout = mcp_recovery_hint(&run.stdout, command);
+    run.stderr = mcp_recovery_hint(&run.stderr, command);
     Ok(tool_result_from_run(run))
+}
+
+/// The CLI's outcome-unknown errors say to check `chrome-use session last`, a
+/// shell command an MCP-only agent cannot run (#895). Name the tool call that
+/// answers the same question for the command that was sent. The replacement
+/// holds no quote or backslash, so it is safe inside the JSON stdout.
+fn mcp_recovery_hint(text: &str, command: &str) -> String {
+    const CLI_HINT: &str = "`chrome-use session last`";
+    if !text.contains(CLI_HINT) {
+        return text.to_string();
+    }
+    let hint = match command {
+        "open" | "navigate" | "goto" => {
+            "`chrome_use_tabs` with action list (a tab at the URL you opened means it ran)"
+        }
+        "tab" => "`chrome_use_tabs` with action list",
+        _ => "`chrome_use_snapshot` (or `chrome_use_tabs` with action list)",
+    };
+    text.replace(CLI_HINT, hint)
 }
 
 fn validate_arguments_object(arguments: &Value) -> Result<(), ProtocolError> {
@@ -2606,6 +2628,22 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn outcome_unknown_hint_names_an_mcp_tool_not_a_shell_command() {
+        let raw = "{\"success\":false,\"error\":\"action_outcome_unknown: daemon disconnected \
+                   unexpectedly. Check what happened with `chrome-use session last` (and the page)\"}";
+        let open = mcp_recovery_hint(raw, "open");
+        assert!(!open.contains("chrome-use session last"), "{open}");
+        assert!(
+            open.contains("`chrome_use_tabs` with action list"),
+            "{open}"
+        );
+        assert!(serde_json::from_str::<Value>(&open).is_ok(), "{open}");
+        let click = mcp_recovery_hint(raw, "click");
+        assert!(click.contains("`chrome_use_snapshot`"), "{click}");
+        assert_eq!(mcp_recovery_hint("plain", "open"), "plain");
     }
 
     #[test]

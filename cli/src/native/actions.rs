@@ -3407,7 +3407,10 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             Err(ref e) => state
                 .report_nudge
                 .on_failure(action, e, now, &state.session_id),
-            Ok(_) => None,
+            Ok(_) => {
+                state.report_nudge.on_success(action);
+                None
+            }
         };
         if sugg.is_none() && crate::friction::is_eval(action) {
             sugg = state.report_nudge.on_eval(now, &state.session_id);
@@ -9468,7 +9471,8 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // skips it) applies. Annotated shots are left untouched so ref overlays stay
     // aligned. 1200 follows iphone-use: about 1.2k image tokens for a viewport
     // instead of ~3.3k at 2000, with body text still legible.
-    let mut resized: Option<(u32, u32)> = None;
+    // (width, height, original width, original height) of the saved image.
+    let mut resized: Option<(u32, u32, u32, u32)> = None;
     if !annotate {
         let scale = cmd.get("scale").and_then(|v| v.as_f64());
         let max_w = cmd
@@ -9539,10 +9543,15 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     if let Some(info) = window_preparation {
         response["windowPreparation"] = info;
     }
-    if let Some((w, h)) = resized {
+    if let Some((w, h, ow, oh)) = resized {
         response["width"] = json!(w);
         response["height"] = json!(h);
         response["resized"] = json!(true);
+        // Without the factor, image coordinates cannot be mapped back to the
+        // capture (#894): x_capture = x_image / scaleFactor.
+        response["originalWidth"] = json!(ow);
+        response["originalHeight"] = json!(oh);
+        response["scaleFactor"] = json!((w as f64 / ow as f64 * 10000.0).round() / 10000.0);
     }
     if !result.annotations.is_empty() {
         response["annotations"] = serde_json::to_value(&result.annotations)
@@ -9594,7 +9603,7 @@ fn downscale_screenshot(
     max_w: Option<u32>,
     max_h: Option<u32>,
     default_edge: Option<u32>,
-) -> Option<(u32, u32)> {
+) -> Option<(u32, u32, u32, u32)> {
     let img = image::open(path).ok()?;
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 {
@@ -9630,7 +9639,7 @@ fn downscale_screenshot(
     let nh = ((h as f64 * factor).round() as u32).max(1);
     let resized = img.resize(nw, nh, image::imageops::FilterType::Lanczos3);
     resized.save(path).ok()?;
-    Some((resized.width(), resized.height()))
+    Some((resized.width(), resized.height(), w, h))
 }
 
 /// `canvas list` — enumerate <canvas> elements (size, visibility, whether
