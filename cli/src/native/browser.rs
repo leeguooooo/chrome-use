@@ -2896,6 +2896,31 @@ pub(crate) fn is_relay_timeout(error: &str) -> bool {
         && !error.contains("budget already scaled with the payload")
 }
 
+/// The relay gives one `Runtime.evaluate` / `Runtime.callFunctionOn` its flat
+/// command budget whatever the caller's `timeoutMs` is. A script that awaits
+/// longer than that on a healthy page is not a stalled tab: it keeps running
+/// and only its result is lost (#891). Name that case instead of letting the
+/// generic text send the caller looking for a hung page.
+fn script_budget_note(error: &str) -> String {
+    if !(error.contains("Runtime.evaluate") || error.contains("Runtime.callFunctionOn")) {
+        return String::new();
+    }
+    let budget = error
+        .split("relay timeout after ")
+        .nth(1)
+        .and_then(|rest| rest.split("ms").next())
+        .and_then(|ms| ms.trim().parse::<u64>().ok())
+        .map(|ms| format!("{} s", ms / 1000))
+        .unwrap_or_else(|| "its relay budget".into());
+    format!(
+        "\nIf this was a script that awaits timers, waits or a submit: over the extension \
+         relay one evaluation may take {budget}, independent of `timeoutMs`. The script was \
+         not cancelled; it keeps running in the page and only its return value is lost. \
+         Check the page's state before re-running a script with side effects, and split \
+         long scripts into steps that each finish within {budget}."
+    )
+}
+
 /// Report the browser-level probe without inferring a renderer or compositor
 /// cause. Native screenshot capture can time out while page JavaScript answers.
 pub(crate) fn diagnose_relay_timeout(error: &str, probe: &TabProbe) -> String {
@@ -2918,7 +2943,7 @@ pub(crate) fn diagnose_relay_timeout(error: &str, probe: &TabProbe) -> String {
                  capture retries, and inspect the page before repeating an action that \
                  may already have changed it.",
                 status.as_deref().unwrap_or("unknown")
-            )
+            ) + &script_budget_note(&error)
         }
         TabProbe::Unreachable(reason) => format!(
             "{error}\n{RELAY_TIMEOUT_DIAGNOSIS} the tab probe also failed ({reason}); \
@@ -14458,6 +14483,31 @@ mod tests {
         assert!(needs_focus_emulation(Some(&hidden)));
         assert!(needs_focus_emulation(Some(&json!({}))));
         assert!(needs_focus_emulation(None));
+    }
+
+    #[test]
+    fn relay_timeout_of_a_script_says_it_keeps_running() {
+        let raw = "CDP error (Runtime.evaluate): relay timeout after 8000ms: \
+                   chrome.debugger.sendCommand(Runtime.evaluate). [diag in-flight=1]";
+        let out = diagnose_relay_timeout(
+            raw,
+            &TabProbe::Alive {
+                status: Some("complete".into()),
+                discarded: false,
+                frozen: false,
+            },
+        );
+        assert!(out.contains("one evaluation may take 8 s"), "{out}");
+        assert!(out.contains("keeps running in the page"), "{out}");
+        let shot = diagnose_relay_timeout(
+            "relay timeout after 25000ms: chrome.debugger.sendCommand(Page.captureScreenshot)",
+            &TabProbe::Alive {
+                status: None,
+                discarded: false,
+                frozen: false,
+            },
+        );
+        assert!(!shot.contains("one evaluation may take"), "{shot}");
     }
 
     #[test]

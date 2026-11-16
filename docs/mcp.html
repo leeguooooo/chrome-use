@@ -118,11 +118,11 @@
           <tr><td><code>chrome_use_fill</code></td><td>清空后填入表单字段</td></tr>
           <tr><td><code>chrome_use_type</code></td><td>在现有内容后追加输入</td></tr>
           <tr><td><code>chrome_use_press</code></td><td>按一个键或组合键</td></tr>
-          <tr><td><code>chrome_use_eval</code></td><td>在页面里执行 JavaScript</td></tr>
+          <tr><td><code>chrome_use_eval</code></td><td>在页面里执行 JavaScript。走扩展 relay 时单次执行（含等待 Promise）约 8 秒，与 <code>timeoutMs</code> 无关；超时后脚本仍在页面里继续运行，只是拿不到返回值</td></tr>
           <tr><td><code>chrome_use_wait</code></td><td>等待某个条件或超时</td></tr>
           <tr><td><code>chrome_use_back</code></td><td>后退一页</td></tr>
           <tr><td><code>chrome_use_forward</code></td><td>前进一页</td></tr>
-          <tr><td><code>chrome_use_reload</code></td><td>刷新当前页</td></tr>
+          <tr><td><code>chrome_use_reload</code></td><td>刷新当前页，或刷新 <code>tabId</code> 指定的标签页（用户共享的标签页需加 <code>force</code>）</td></tr>
           <tr><td><code>chrome_use_confirm</code></td><td>回应被拦下的操作（<code>confirmation_required</code>）：<code>id</code>，<code>decline: true</code> 撤回。<code>approval: user</code> 时等用户在扩展里选择，见<a href="/permissions.html">权限与安全</a></td></tr>
         </tbody>
       </table>
@@ -146,7 +146,7 @@
           <tr><td><code>chrome_use_scroll</code></td><td>滚动页面或某个容器</td></tr>
           <tr><td><code>chrome_use_tabs</code></td><td>列出、新建、原生复制、无导航接管、浏览器级检查、关闭或切换本会话的标签。<code>action: "list", all: true</code> 只读地列出 profile 里全部标签及其归属；<code>action: "close", force: true</code> 关闭不是本会话创建的标签，只在用户要求时使用。带 <code>tabId</code> 的工具也接受 <code>force</code>，原地操作这类标签（<code>--tab &lt;handle&gt; --force</code>）</td></tr>
           <tr><td><code>chrome_use_extract</code></td><td>按 schema 把页面抓成结构化 JSON</td></tr>
-          <tr><td><code>chrome_use_expect</code></td><td>断言某个条件，不满足即报错</td></tr>
+          <tr><td><code>chrome_use_expect</code></td><td>断言某个条件，不满足即报错。可用 <code>tabId</code> 和 <code>force</code> 指定要检查的标签页，而不是最近操作过的那个</td></tr>
           <tr><td><code>chrome_use_find</code></td><td>按文本 / URL 定位元素或标签</td></tr>
           <tr><td><code>chrome_use_network_route</code></td><td>拦截 / 改写网络请求</td></tr>
           <tr><td><code>chrome_use_site</code></td><td>跑社区站点适配器做结构化提取</td></tr>

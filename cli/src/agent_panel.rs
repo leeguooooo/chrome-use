@@ -33,6 +33,13 @@ mod project_hosts;
 mod projects;
 mod recovery;
 mod redact;
+
+/// A URL as it may be shown to a user or agent: userinfo removed, sensitive
+/// query and fragment values (`token`, `secret`, `key`, `access_token`, ...)
+/// replaced by `[redacted]`, parameter names kept. Idempotent.
+pub(crate) fn redact_url(url: &str) -> String {
+    redact::url(url)
+}
 mod repos;
 mod schedules;
 mod service;
