@@ -1,8 +1,25 @@
 # Changelog
 
-## 1.5.291
+## 1.5.292
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
+
+### Fixes
+
+- **`--observe` no longer prints credentials from request URLs.** A dashboard that authenticates its WebSocket with `?token=` had the secret copied into the observed request list even when it was filled with `--from-env`. Observed request and resource URLs now show `token`, `secret`, `key`, `access_token` and similar values as `[redacted]`, keeping the parameter name. `network requests --json` still has the captured URL (#897, #900).
+- **A long relay `eval` says it is still running.** Over the extension relay one evaluation has about 8 s whatever `timeoutMs` says. A script that awaited longer failed with text about a stalled tab although the page was fine and the script finished. On a tab Chrome still reports, the error now says the script keeps running in the page and only its return value is lost, and the MCP `chrome_use_eval` description states the limit (#891, #900).
+- **MCP `chrome_use_expect` and `chrome_use_reload` can target a tab.** Both take `tabId` and `force`, so a check or reload on a user-shared tab no longer lands on whichever tab the session touched last (#892, #900).
+- **Screenshot results say how big things are.** A `clip` outside the page fails with the requested region and the page size. A downscaled shot reports `originalWidth`, `originalHeight` and `scaleFactor` next to `resized`. A capture that was not kept no longer points at an artifact path, and an `eval` after the agent moved on from a failure no longer carries that failure's report suggestion (#894, #901).
+- **MCP recovery hints name a tool.** An outcome-unknown error told MCP agents to run `chrome-use session last`, a shell command they cannot run; it now names `chrome_use_tabs` (list) or `chrome_use_snapshot` (#895, #901).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.291
+
 Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
 
 ### Fixes
@@ -12,7 +29,6 @@ Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-ext
 ### Contributors
 
 - @Jerryx333
-<!-- release:end -->
 
 ## 1.5.290
 
