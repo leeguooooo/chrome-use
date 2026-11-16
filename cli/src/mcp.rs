@@ -493,7 +493,7 @@ fn core_tools() -> Vec<Value> {
         }),
         json!({
             "name": TOOL_EVAL,
-            "description": "Run JavaScript in the page's main world (state persists, page handlers fire) and return its result.",
+            "description": "Run JavaScript in the page's main world (state persists, page handlers fire) and return its result. Over the extension relay one evaluation, including an awaited promise, has about 8 s regardless of timeoutMs; a longer script keeps running in the page but its result is lost, so split long waits into separate calls.",
             "inputSchema": build_schema(obj(&[
                 ("script", json!({ "type": "string", "description": "JavaScript to evaluate." })),
                 ("frame", json!({ "type": "string", "description": "Run in this frame's context instead of the main frame (CSS selector, @ref, URL substring, or frame index)." })),
@@ -532,8 +532,11 @@ fn core_tools() -> Vec<Value> {
         }),
         json!({
             "name": TOOL_RELOAD,
-            "description": "Reload the current page.",
-            "inputSchema": build_schema(obj(&[]), &[]),
+            "description": "Reload the current page, or the tab named by tabId.",
+            "inputSchema": build_schema(obj(&[
+                ("tabId", json!({ "type": "string", "description": "Target tab id (e.g. t2), label, or targetId (--tab)." })),
+                ("force", json!({ "type": "boolean", "description": "With tabId: act on a tab this session does not own (the user's own, or another session's), in place and in the background (--tab <handle> --force). Only when the user asked you to act on that tab; the result has forced: true and the tab's title and url." })),
+            ]), &[]),
         }),
         json!({
             "name": TOOL_CONFIRM,
@@ -675,6 +678,8 @@ fn extended_tools() -> Vec<Value> {
                 ("not", json!({ "type": "boolean", "description": "Invert the result: pass when the condition is false (--not)." })),
                 ("noWait", json!({ "type": "boolean", "description": "Evaluate once instead of polling until timeout (--no-wait)." })),
                 ("waitTimeoutMs", json!({ "type": "integer", "description": "How long to poll before giving up (distinct from the top-level timeoutMs) (--timeout)." })),
+                ("tabId", json!({ "type": "string", "description": "Target tab id (e.g. t2), label, or targetId (--tab)." })),
+                ("force", json!({ "type": "boolean", "description": "With tabId: act on a tab this session does not own (the user's own, or another session's), in place and in the background (--tab <handle> --force). Only when the user asked you to act on that tab; the result has forced: true and the tab's title and url." })),
             ]), &["kind"]),
         }),
         json!({
@@ -908,7 +913,7 @@ fn call_browser_tool(name: &str, arguments: &Value) -> Result<Value, ProtocolErr
         TOOL_WAIT => call_wait(arguments),
         TOOL_BACK => call_observed(arguments, "back"),
         TOOL_FORWARD => call_observed(arguments, "forward"),
-        TOOL_RELOAD => call_observed(arguments, "reload"),
+        TOOL_RELOAD => call_reload(arguments),
         TOOL_CONFIRM => call_confirm(arguments),
         TOOL_HOVER => call_hover(arguments),
         TOOL_SELECT => call_select(arguments),
@@ -950,6 +955,27 @@ fn call_confirm(arguments: &Value) -> Result<Value, ProtocolError> {
 fn call_observed(arguments: &Value, command: &str) -> Result<Value, ProtocolError> {
     let mut args = vec![command.to_string()];
     push_observe(&mut args, arguments)?;
+    run_tool(arguments, args)
+}
+
+/// `tabId` (+ `force`) maps to the global `--tab <handle> [--force]`.
+fn push_tab(args: &mut Vec<String>, arguments: &Value) -> Result<(), ProtocolError> {
+    if let Some(tab_id) = optional_string(arguments, "tabId")? {
+        args.push("--tab".to_string());
+        args.push(tab_id);
+        if optional_bool(arguments, "force")?.unwrap_or(false) {
+            args.push("--force".to_string());
+        }
+    }
+    Ok(())
+}
+
+/// `reload` on the session's tab or, with `tabId` (+ `force`), on a named one:
+/// a user-shared tab could otherwise only be reloaded through `eval` (#892).
+fn call_reload(arguments: &Value) -> Result<Value, ProtocolError> {
+    let mut args = vec!["reload".to_string()];
+    push_observe(&mut args, arguments)?;
+    push_tab(&mut args, arguments)?;
     run_tool(arguments, args)
 }
 
@@ -1668,6 +1694,9 @@ fn call_expect(arguments: &Value) -> Result<Value, ProtocolError> {
         args.push("--timeout".to_string());
         args.push(timeout.to_string());
     }
+    // Without a tab the check runs on whichever tab the session touched last,
+    // so a check meant for a user-shared tab could land elsewhere (#892).
+    push_tab(&mut args, arguments)?;
     if kind == "request" {
         if let Some(method) = optional_string(arguments, "method")? {
             args.push("--method".to_string());
@@ -2534,6 +2563,48 @@ mod tests {
             if props.get("tabId").is_some() && tool["name"] != TOOL_TABS {
                 assert!(props.get("force").is_some(), "{}", tool["name"]);
             }
+        }
+    }
+
+    #[test]
+    fn expect_and_reload_target_a_named_tab_through_the_real_parser() {
+        let _guard = crate::test_utils::EnvGuard::new(&[]);
+        let expect = json!({"kind":"count","selector":"tr","op":">=","count":3,
+            "tabId":"chrome-tab:7","force":true});
+        let reload = json!({"tabId":"chrome-tab:7","force":true});
+        for (arguments, action) in [(expect, "expect"), (reload, "reload")] {
+            let mut args = Vec::new();
+            if action == "expect" {
+                args.push("expect".to_string());
+                push_tab(&mut args, &arguments).ok().unwrap();
+                args.extend(["count", "tr", ">=", "3"].map(String::from));
+            } else {
+                args.push("reload".to_string());
+                push_tab(&mut args, &arguments).ok().unwrap();
+            }
+            let flags = crate::flags::parse_flags(&args);
+            assert_eq!(flags.tab.as_deref(), Some("chrome-tab:7"), "{action}");
+            assert!(flags.tab_force, "{action}");
+            // `main` strips global flags before the subcommand parser sees them.
+            let clean = crate::flags::clean_args(&args);
+            let command = crate::commands::parse_command(&clean, &flags).unwrap();
+            assert_eq!(command["tabId"], "chrome-tab:7", "{action}");
+            assert_eq!(command["forceTab"], true, "{action}");
+            if action == "expect" {
+                assert_eq!(command["selector"], "tr", "{command}");
+            }
+        }
+        for name in [TOOL_EXPECT, TOOL_RELOAD] {
+            let tool = extended_tools()
+                .into_iter()
+                .chain(core_tools())
+                .find(|t| t["name"] == name)
+                .unwrap();
+            let props = &tool["inputSchema"]["properties"];
+            assert!(
+                props.get("tabId").is_some() && props.get("force").is_some(),
+                "{name}"
+            );
         }
     }
 

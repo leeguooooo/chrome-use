@@ -122,11 +122,11 @@
           <tr><td><code>chrome_use_fill</code></td><td>Clear and fill a form field</td></tr>
           <tr><td><code>chrome_use_type</code></td><td>Type, appending after existing content</td></tr>
           <tr><td><code>chrome_use_press</code></td><td>Press a key or key combo</td></tr>
-          <tr><td><code>chrome_use_eval</code></td><td>Run JavaScript on the page</td></tr>
+          <tr><td><code>chrome_use_eval</code></td><td>Run JavaScript on the page. Over the extension relay one evaluation, awaited promise included, has about 8 s whatever <code>timeoutMs</code> says; a longer script keeps running but its result is lost</td></tr>
           <tr><td><code>chrome_use_wait</code></td><td>Wait for a condition or timeout</td></tr>
           <tr><td><code>chrome_use_back</code></td><td>Go back one page</td></tr>
           <tr><td><code>chrome_use_forward</code></td><td>Go forward one page</td></tr>
-          <tr><td><code>chrome_use_reload</code></td><td>Reload the current page</td></tr>
+          <tr><td><code>chrome_use_reload</code></td><td>Reload the current page, or the tab named by <code>tabId</code> (with <code>force</code> for a user-shared tab)</td></tr>
           <tr><td><code>chrome_use_confirm</code></td><td>Answer a held action (<code>confirmation_required</code>): <code>id</code>, <code>decline: true</code> to withdraw. With <code>approval: user</code> it waits for the user's choice in the extension; see <a href="/en/permissions.html">Permissions &amp; Safety</a></td></tr>
         </tbody>
       </table>
@@ -150,7 +150,7 @@
           <tr><td><code>chrome_use_scroll</code></td><td>Scroll the page or a container</td></tr>
           <tr><td><code>chrome_use_tabs</code></td><td>List, open, natively duplicate, adopt without navigation, inspect browser-level state, close, or switch this session's tabs. <code>action: "list", all: true</code> lists every tab in the profile with its owner (read-only); <code>action: "close", force: true</code> closes a tab the session did not create, only on the user's request. Tools that take <code>tabId</code> also take <code>force</code> to act on such a tab in place (<code>--tab <tr><td><code>chrome_use_tabs</code></td><td>List, open, natively duplicate, adopt without navigation, inspect browser-level state, close, or switch this session's tabs</td></tr>lt;handle<tr><td><code>chrome_use_tabs</code></td><td>List, open, natively duplicate, adopt without navigation, inspect browser-level state, close, or switch this session's tabs</td></tr>gt; --force</code>)</td></tr>
           <tr><td><code>chrome_use_extract</code></td><td>Scrape the page into structured JSON by schema</td></tr>
-          <tr><td><code>chrome_use_expect</code></td><td>Assert a condition, erroring if it fails</td></tr>
+          <tr><td><code>chrome_use_expect</code></td><td>Assert a condition, erroring if it fails. Takes <code>tabId</code> and <code>force</code> to check a named tab instead of the last one touched</td></tr>
           <tr><td><code>chrome_use_find</code></td><td>Locate an element or tab by text / URL</td></tr>
           <tr><td><code>chrome_use_network_route</code></td><td>Intercept / rewrite network requests</td></tr>
           <tr><td><code>chrome_use_site</code></td><td>Run a community site adapter for structured extraction</td></tr>

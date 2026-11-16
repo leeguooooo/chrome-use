@@ -40,7 +40,9 @@ fn request_line(method: &str, url: &str) -> (String, bool) {
             payload.len()
         )
     } else {
-        url.to_string()
+        // An auth token in a query string (a WebSocket `?token=`) is a
+        // credential; the observation would copy it into the transcript (#897).
+        crate::agent_panel::redact_url(url)
     };
     // Network metadata is untrusted text. Keep one request on one terminal line.
     let line: String = format!("{method} {display_url}")
@@ -91,6 +93,34 @@ pub(super) fn summarize_requests<'a>(
 #[cfg(test)]
 mod tests {
     use super::{human_check_vendor, human_check_verdict, resource_lines};
+
+    #[test]
+    fn observed_request_and_resource_urls_mask_auth_query_values() {
+        let s = super::summarize_requests([
+            (
+                "GET",
+                "ws://localhost:9090/connections?token=SYNTH_SECRET_1",
+            ),
+            (
+                "GET",
+                "ws://localhost:9090/logs?token=SYNTH_SECRET_2&level=info",
+            ),
+            ("GET", "https://api.example/x?api_key=SYNTH_SECRET_3&page=2"),
+        ]);
+        let joined = s.lines.join("\n");
+        assert!(!joined.contains("SYNTH_SECRET"), "{joined}");
+        assert!(joined.contains("token=[redacted]"), "{joined}");
+        assert!(joined.contains("level=info"), "{joined}");
+        assert!(joined.contains("page=2"), "{joined}");
+        let (lines, _) = resource_lines(
+            &[
+                serde_json::json!({"url": "https://cdn.example/a.js?secret=SYNTH_SECRET_4", "type": "script"}),
+            ],
+            10,
+        );
+        assert!(!lines[0].contains("SYNTH_SECRET"), "{lines:?}");
+        assert!(lines[0].contains("secret=[redacted]"), "{lines:?}");
+    }
 
     #[test]
     fn extension_requests_are_not_the_pages_response() {
@@ -315,7 +345,8 @@ pub(super) fn resource_lines(entries: &[serde_json::Value], cap: usize) -> (Vec<
         .filter_map(|e| {
             let url = e.get("url")?.as_str()?;
             let kind = e.get("type").and_then(|v| v.as_str()).unwrap_or("other");
-            Some((rank(kind), format!("{kind} {}", shorten(url, 120))))
+            let url = crate::agent_panel::redact_url(url);
+            Some((rank(kind), format!("{kind} {}", shorten(&url, 120))))
         })
         .collect();
     rows.sort_by_key(|(r, _)| *r);

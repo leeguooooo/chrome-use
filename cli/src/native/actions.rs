@@ -7844,8 +7844,8 @@ async fn handle_done(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
             // is; a blank tab is nothing the user needs.
             if !owned.contains(&target_id) {
                 notes.push(format!(
-                    "{target_id} was not kept: it is not a tab this session opened, so it was \
-                     left exactly as it was"
+                    "{target_id} left open as it was: it is not a tab this session opened, so \
+                     `done` neither kept nor closed it"
                 ));
                 continue;
             }

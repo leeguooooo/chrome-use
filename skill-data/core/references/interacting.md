@@ -338,6 +338,9 @@ page's own state took it, so read what the commands report:
   the page settled — kept even when the toast is gone before the result
   (`视频审核中，修改未保存`), printed as `observed announced:`. A toast that
   shows up after the settle is not in it: `wait --text` for that one.
+  Observed request and resource URLs mask credential query values
+  (`token`, `secret`, `key`, `access_token` and similar become
+  `[redacted]`); `network requests --json` keeps the captured URL.
 
 **Buttons that are really switches.** A button that wraps a checkbox, switch
 or radio shows as `button "简体中文" [toggles=checkbox(checked=true), ref=e1]`.
