@@ -6520,8 +6520,8 @@ is on PATH, `update` also installs OpenCLI (jackwener/OpenCLI): a `name/command`
 neither pack has runs through OpenCLI's own runtime over this session, marked
 "(opencli)" in `site list`. Ours always win on a shared name, and
 douyin/delete, douyin/update, twitter/delete, twitter/like, twitter/follow,
-bilibili/user-videos and bilibili/creator-stats are ours (chrome-use-sites),
-never OpenCLI's. OpenCLI is third-party and not maintained by chrome-use:
+bilibili/user-videos, bilibili/creator-stats and gemini/ask, read, history
+and detail are ours (chrome-use-sites), never OpenCLI's. OpenCLI is third-party and not maintained by chrome-use:
 each run prints a stderr note and --json adds maintainedBy: "opencli".
 Use it as a last resort; port account actions into chrome-use-sites.
 AGENT_BROWSER_SITES_NO_OPENCLI=1 turns OpenCLI off.

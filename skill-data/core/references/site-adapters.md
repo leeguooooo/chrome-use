@@ -34,6 +34,11 @@ chrome-use site github/issues owner/repo --json   # run it → JSON (navigates t
   `bilibili/creator-stats` used to come from OpenCLI and are now maintained in chrome-use-sites
   (ported with attribution); OpenCLI never runs them, and a cache that predates them is
   synced on first use. Delete, like and follow open their page first: run them with `--until-done`.
+  `gemini/ask`, `gemini/read`, `gemini/history` and `gemini/detail` are ours too (rewritten): the
+  answer comes only from the answer element, a prompt that was sent but not answered in time is an
+  error with `sent: true` (never send it again; use `gemini/read`), and a dialog over the page is
+  reported as `status: "blocked_by_dialog"` with its title and buttons for the user to decide.
+  A new conversation is `--fresh true`; `--new` and `--model` are global flags and never reach an adapter.
 - **OpenCLI is a last resort.** When Node.js 20+ is on PATH, `site update` also installs
   [OpenCLI](https://github.com/jackwener/OpenCLI) (~1,300 commands over ~180 sites). A
   `name/cmd` that neither pack has runs through OpenCLI's own runtime in Node, driving this

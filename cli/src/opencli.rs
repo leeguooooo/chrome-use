@@ -52,6 +52,12 @@ pub const PORTED: &[&str] = &[
     "twitter/follow",
     "bilibili/user-videos",
     "bilibili/creator-stats",
+    // Rewritten for chrome-use-sites, not ported: the upstream `gemini/ask`
+    // returned side-navigation text as the answer with exit 0 (#904).
+    "gemini/ask",
+    "gemini/read",
+    "gemini/history",
+    "gemini/detail",
 ];
 
 /// Whether `spec` is one of the `PORTED` commands.
@@ -1277,10 +1283,17 @@ mod tests {
             "twitter/follow",
             "bilibili/user-videos",
             "bilibili/creator-stats",
+            "gemini/ask",
+            "gemini/read",
+            "gemini/history",
+            "gemini/detail",
         ] {
             assert!(is_ported(spec), "{spec}");
         }
         assert!(!is_ported("douyin/videos"));
+        // The rest of the upstream gemini pack still comes from OpenCLI.
+        assert!(!is_ported("gemini/image"));
+        assert!(!is_ported("gemini/models"));
     }
 
     #[test]
