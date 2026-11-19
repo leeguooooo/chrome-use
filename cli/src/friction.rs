@@ -102,13 +102,21 @@ pub fn record(action: &str, error: &str, origin: &str, now_unix: u64) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(mut f) = std::fs::OpenOptions::new()
+    let _ = append_record(&path, &rec);
+}
+
+/// Append `rec` as one line in a single write. Every session's daemon appends
+/// to the same file: formatting the value straight into the file is one write
+/// per JSON token, and two records written at once came out as one line with
+/// their tokens interleaved, which no reader can parse (#899).
+fn append_record(path: &std::path::Path, rec: &Value) -> std::io::Result<()> {
+    let mut line = rec.to_string();
+    line.push('\n');
+    std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&path)
-    {
-        let _ = writeln!(f, "{}", rec);
-    }
+        .open(path)?
+        .write_all(line.as_bytes())
 }
 
 /// Convenience for the daemon: stamp the time and record.
@@ -408,6 +416,49 @@ fn report_suggestion(key: &str, reason: &str, count: u32, session: &str) -> Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_records_stay_one_parseable_line_each() {
+        let dir = std::env::temp_dir().join(format!(
+            "chrome-use-friction-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("friction.jsonl");
+        let _ = std::fs::remove_file(&path);
+        const WRITERS: usize = 8;
+        const RECORDS: usize = 200;
+        let handles: Vec<_> = (0..WRITERS)
+            .map(|w| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    for i in 0..RECORDS {
+                        let rec = json!({
+                            "ts": i,
+                            "action": "done",
+                            "category": "other",
+                            "error": "close incomplete: 1 of the 2 tab(s) could not be confirmed closed",
+                            "host": Value::Null,
+                            "session": format!("session-{w}"),
+                        });
+                        append_record(&path, &rec).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), WRITERS * RECORDS);
+        for line in lines {
+            let v: Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("{e}: {line}"));
+            assert_eq!(v["action"], "done");
+        }
+    }
 
     #[test]
     fn dynamic_form_guard_is_classified_as_stale_ref() {
