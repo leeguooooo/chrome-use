@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.293
+## 1.5.294
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
+
+### Fixes
+
+- **`click @ref` reaches a control inside a custom element.** A ref to a button inside a shadow root, open or closed, was refused as `occluded by <HOST>` (for example the 发布 button in Xiaohongshu's `xhs-publish-btn` bar): the page reports the shadow host for that point, and the cover check did not look inside it. The check now follows the target's own shadow roots, so the click lands as one real pointer click. A layer that really is on top, over the host or inside the same shadow root, is still refused, and so is an empty custom element laid over an ordinary button (#905).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.293
+
 Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
 
 ### Fixes
@@ -12,7 +25,6 @@ Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-ext
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.292
 
