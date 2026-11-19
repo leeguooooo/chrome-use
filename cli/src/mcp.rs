@@ -353,9 +353,25 @@ fn tools_for(profile: Profile) -> Vec<Value> {
         }
     }
     if crate::agent_panel::panel_mcp_context().is_some() {
+        add_restore(&mut tools);
         tools.extend(panel_tools());
     }
     tools
+}
+
+/// `restore` exists only where `chrome_use_task` does: in a panel
+/// conversation, on the acting tools that work on the page in place (#893).
+fn add_restore(tools: &mut [Value]) {
+    for tool in tools {
+        if crate::agent_panel::evidence_proto::RESTORE_TOOLS
+            .contains(&tool["name"].as_str().unwrap_or(""))
+        {
+            tool["inputSchema"]["properties"]["restore"] = json!({
+                "type": "boolean",
+                "description": "Set true only on a call that puts the page back the way it was before a check: closing the drawer, menu or dialog you opened to look inside, clearing a filter you set. A check recorded before this call then still counts in chrome_use_task, on your word that nothing else changed; the assessment says so. Never set it on a call that does anything else.",
+            });
+        }
+    }
 }
 
 /// Extra tools exist only for a host-bound panel conversation; ordinary MCP
@@ -363,7 +379,7 @@ fn tools_for(profile: Profile) -> Vec<Value> {
 fn panel_tools() -> Vec<Value> {
     vec![
         json!({"name":"chrome_use_skills","description":"List skills, read a skill or a selected skill's relative text asset, or save a profile-library skill when the user asks. Asset reads need path; omit id for the active message's selected skill. Scheduled chats may only list and read.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","read","save"]},"id":{"type":"string"},"path":{"type":"string"},"name":{"type":"string"},"content":{"type":"string"}},"required":["action"],"additionalProperties":false}}),
-        json!({"name":TOOL_TASK,"description":"Before your final answer, record how the user's request went. List each thing the user asked for as a requirement marked met, unmet or unknown. A requirement marked met needs a check from a browser action of this request: an expect, a readBack or a urlMatch (copy the predicate verbatim from the action result's `recorded check <kind>: <predicate> (cite action <id>)` line, and that action id) or a downloadType (the expected MIME type and the artifact id). A predicate that differs from the recorded one does not count. Never mark met what no check showed. If you cannot continue, set status blocked and give the blocker.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["assess"]},"status":{"type":"string","enum":["complete","partial","blocked","failed"]},"reason":{"type":"string"},"requirements":{"type":"array","maxItems":12,"items":{"type":"object","properties":{"text":{"type":"string"},"status":{"type":"string","enum":["met","unmet","unknown"]},"check":{"type":"object","properties":{"kind":{"type":"string","enum":["expect","readBack","urlMatch","downloadType"]},"predicate":{"type":"string","description":"For expect, readBack and urlMatch: the recorded check's predicate, copied verbatim from the action result. For downloadType: the expected MIME type."},"evidence":{"type":"string","description":"The action id (chrome-use action <id>) or artifact id that ran the check."}},"required":["kind","predicate","evidence"],"additionalProperties":false}},"required":["text","status"],"additionalProperties":false}},"blocker":{"type":"object","properties":{"kind":{"type":"string","enum":["humanCheck","login","permission","missingInput","siteError","other"]},"text":{"type":"string"}},"required":["kind","text"],"additionalProperties":false}},"required":["action","status","requirements"],"additionalProperties":false}}),
+        json!({"name":TOOL_TASK,"description":"Before your final answer, record how the user's request went. List each thing the user asked for as a requirement marked met, unmet or unknown. A requirement marked met needs a check from a browser action of this request: an expect, a readBack or a urlMatch (copy the predicate verbatim from the action result's `recorded check <kind>: <predicate> (cite action <id>)` line, and that action id) or a downloadType (the expected MIME type and the artifact id). A predicate that differs from the recorded one does not count. A check goes stale when a later acting call of this request touches the same page, so order the work: first the checks that need a temporary state (open the drawer, expect, then close it again with restore: true on the closing call), then every other check, and act no more before this call. Never mark met what no check showed. If you cannot continue, set status blocked and give the blocker.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["assess"]},"status":{"type":"string","enum":["complete","partial","blocked","failed"]},"reason":{"type":"string"},"requirements":{"type":"array","maxItems":12,"items":{"type":"object","properties":{"text":{"type":"string"},"status":{"type":"string","enum":["met","unmet","unknown"]},"check":{"type":"object","properties":{"kind":{"type":"string","enum":["expect","readBack","urlMatch","downloadType"]},"predicate":{"type":"string","description":"For expect, readBack and urlMatch: the recorded check's predicate, copied verbatim from the action result. For downloadType: the expected MIME type."},"evidence":{"type":"string","description":"The action id (chrome-use action <id>) or artifact id that ran the check."}},"required":["kind","predicate","evidence"],"additionalProperties":false}},"required":["text","status"],"additionalProperties":false}},"blocker":{"type":"object","properties":{"kind":{"type":"string","enum":["humanCheck","login","permission","missingInput","siteError","other"]},"text":{"type":"string"}},"required":["kind","text"],"additionalProperties":false}},"required":["action","status","requirements"],"additionalProperties":false}}),
         json!({"name":TOOL_RECORD,"description":"Record the browser while you work, only when the user turned on recording for this message. start returns the recording's artifact id; stop finishes it. A finished answer does not mean the recording is ready.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["start","stop"]},"artifactId":{"type":"string"}},"required":["action"],"additionalProperties":false}}),
         json!({"name":"chrome_use_schedules","description":"Manage recurring prompts only at the user's request. Times are host-local. A schedule cannot gain tools or automatic approval beyond this conversation. Scheduled chats may only list. A dispatched run is not a completed task.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","save","delete","run"]},"id":{"type":"string"},"name":{"type":"string"},"prompt":{"type":"string"},"agentId":{"type":"string"},"model":{"type":["string","null"]},"options":{"type":"object","properties":{"effort":{"type":["string","null"]},"serviceTier":{"type":["string","null"]},"toolAccess":{"type":"string","enum":["browserOnly","readFiles","writeFiles","runCommands"]}},"additionalProperties":false},"fullAccess":{"type":"boolean"},"enabled":{"type":"boolean"},"skillId":{"type":["string","null"]},"rule":{"type":"object","properties":{"kind":{"type":"string","enum":["interval","daily","weekdays","cron"]},"minutes":{"type":"integer","minimum":1},"time":{"type":"string"},"expression":{"type":"string"}},"required":["kind"],"additionalProperties":false}},"required":["action"],"additionalProperties":false}}),
     ]
@@ -2819,6 +2835,41 @@ mod tests {
             12
         );
         assert!(schemas.iter().any(|t| t["name"] == TOOL_RECORD));
+    }
+
+    #[test]
+    fn restore_is_offered_on_in_place_acting_tools_and_described_in_assess() {
+        // Outside a panel there is no assessment, so no tool offers it.
+        for tool in tools_for(Profile::All) {
+            assert!(
+                tool["inputSchema"]["properties"].get("restore").is_none(),
+                "{}",
+                tool["name"]
+            );
+        }
+        let mut tools = core_tools();
+        tools.extend(extended_tools());
+        add_restore(&mut tools);
+        let offered: Vec<&str> = tools
+            .iter()
+            .filter(|t| t["inputSchema"]["properties"].get("restore").is_some())
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        for name in crate::agent_panel::evidence_proto::RESTORE_TOOLS {
+            assert!(offered.contains(name), "{name} should offer restore");
+        }
+        assert_eq!(
+            offered.len(),
+            crate::agent_panel::evidence_proto::RESTORE_TOOLS.len()
+        );
+        for name in [TOOL_OPEN, TOOL_RELOAD, TOOL_BACK, TOOL_TABS, TOOL_EXPECT] {
+            assert!(!offered.contains(&name), "{name} must not offer restore");
+        }
+        let panel = panel_tools();
+        let task = panel.iter().find(|t| t["name"] == TOOL_TASK).unwrap();
+        let description = task["description"].as_str().unwrap();
+        assert!(description.contains("restore: true"), "{description}");
+        assert!(description.contains("goes stale"), "{description}");
     }
 
     #[test]

@@ -58,6 +58,10 @@ pub(super) struct Lease {
     /// The page the tool named (`{tabHandle, url}`), journaled as
     /// `browserActionTarget.requested`.
     pub requested: Option<Value>,
+    /// Admitted with `restore: true` (#893): the agent declared that this
+    /// acting call only puts the page back. Journaled at admission, never
+    /// taken from an assessment.
+    pub restore: bool,
 }
 
 impl Lease {
@@ -83,6 +87,7 @@ impl Lease {
             check: None,
             delivery: None,
             requested: None,
+            restore: false,
         }
     }
     /// Whether the report computes the verdict from the artifacts.
@@ -158,6 +163,7 @@ pub(super) fn rebuild<'a>(
                     outputs,
                 );
                 lease.requested = d.get("requested").filter(|r| r.is_object()).cloned();
+                lease.restore = d["restore"] == true;
                 leases.insert(action.into(), lease);
             }
             "browserActionTarget" => {
@@ -433,25 +439,50 @@ fn verify(
         );
     }
     let recorded_because = "the browser recorded this check";
-    // Fresh: no later acting action of this turn on the same page.
+    // Fresh: no later acting action of this turn on the same page, other
+    // than ones the agent declared as restoring it (#893).
     let (Some(sequence), Some(target)) = (lease.report_sequence, &lease.landing.target_id) else {
         return ("checked", recorded_because.into(), shown);
     };
-    let stale = leases.values().any(|other| {
-        other.message_id == message_id
-            && other.tool_class == ToolClass::Act
-            && other.report_sequence.is_some_and(|s| s > sequence)
-            && other.landing.target_id.as_ref() == Some(target)
-    });
-    if stale {
-        (
+    let mut later: Vec<(u64, &String, &Lease)> = leases
+        .iter()
+        .filter_map(|(id, other)| {
+            let at = other.report_sequence.filter(|s| *s > sequence)?;
+            (other.message_id == message_id
+                && other.tool_class == ToolClass::Act
+                && other.landing.target_id.as_ref() == Some(target))
+            .then_some((at, id, other))
+        })
+        .collect();
+    later.sort_by_key(|(at, _, _)| *at);
+    // One unmarked action is enough: whatever was restored around it, the
+    // page may no longer show what the check saw.
+    if let Some((_, id, other)) = later.iter().find(|(_, _, other)| !other.restore) {
+        return (
             "stale",
-            "a later action changed the same page".into(),
+            format!(
+                "a later action changed the same page: {} (action {id})",
+                other.tool
+            ),
             shown,
-        )
-    } else {
-        ("checked", recorded_because.into(), shown)
+        );
     }
+    if later.is_empty() {
+        return ("checked", recorded_because.into(), shown);
+    }
+    // Counted on the agent's word that those calls only put the page back;
+    // nothing measured that, so the reason says it.
+    let ids: Vec<&str> = later.iter().map(|(_, id, _)| id.as_str()).collect();
+    (
+        "checked",
+        format!(
+            "{recorded_because}; {} later action(s) on the page were declared restore and not \
+             verified: {}",
+            ids.len(),
+            ids.join(", ")
+        ),
+        shown,
+    )
 }
 
 /// A check predicate in one spelling, so an agent that copies the recorded

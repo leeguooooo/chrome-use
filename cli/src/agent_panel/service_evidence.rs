@@ -270,6 +270,9 @@ impl Engine {
         if p.outputs.len() > 1 {
             return Err("a browser action can capture at most one file".into());
         }
+        if p.restore && !proto::accepts_restore(&p.tool, p.tool_class) {
+            return Err("restore is not accepted on this tool".into());
+        }
         let workspace = self.workspace(id);
         let mut outputs = Vec::new();
         for request in &p.outputs {
@@ -299,7 +302,7 @@ impl Engine {
         self.record(
             id,
             "actionAdmitted",
-            json!({"v":1,"messageId":message.id,"generation":p.generation,"actionId":action,"tool":p.tool,"toolClass":p.tool_class,"argumentsDigest":p.arguments_digest,"outputs":entries,"quotaReserved":reserved.iter().sum::<u64>(),"requested":requested}),
+            json!({"v":1,"messageId":message.id,"generation":p.generation,"actionId":action,"tool":p.tool,"toolClass":p.tool_class,"argumentsDigest":p.arguments_digest,"outputs":entries,"quotaReserved":reserved.iter().sum::<u64>(),"requested":requested,"restore":p.restore}),
         )?;
         // Each capture is an artifact from its admission on (plan 2.2).
         for output in &outputs {
@@ -320,6 +323,7 @@ impl Engine {
             .collect();
         let mut lease = Lease::new(&message.id, p.generation, &p.tool, p.tool_class, outputs);
         lease.requested = requested;
+        lease.restore = p.restore;
         self.evidence
             .leases
             .entry(id.into())
@@ -1403,6 +1407,8 @@ mod tests {
         engine: Arc<Mutex<Engine>>,
         id: String,
         commands: mpsc::Receiver<BackendCommand>,
+        /// The next Begin carries `restore: true`.
+        restore_next: std::sync::atomic::AtomicBool,
     }
 
     async fn chat_with(agent: &str, allow_reuse: bool) -> Chat {
@@ -1438,6 +1444,7 @@ mod tests {
             engine,
             id,
             commands,
+            restore_next: Default::default(),
         };
         if allow_reuse {
             c.notice(
@@ -1501,6 +1508,9 @@ mod tests {
                 requested: Some(
                     json!({"tabHandle":"chrome-tab:7","url":"https://shop.example/cart?token=SYNTH_TOKEN_REQ"}),
                 ),
+                restore: self
+                    .restore_next
+                    .swap(false, std::sync::atomic::Ordering::Relaxed),
             };
             let reply = self
                 .op(proto::OP_ACTION_BEGIN, proto::encode(&begin).unwrap())
@@ -1511,6 +1521,22 @@ mod tests {
         async fn begin(&self, tool: &str, class: ToolClass) -> String {
             let (action, reply) = self.begin_with(0, tool, class, vec![], None).await;
             assert_eq!(reply["admitted"], true, "{reply}");
+            action
+        }
+        /// An acting call the agent marked `restore: true`, reported done.
+        async fn acted(&self, tool: &str, restore: bool) -> String {
+            self.restore_next
+                .store(restore, std::sync::atomic::Ordering::Relaxed);
+            let action = self.begin(tool, ToolClass::Act).await;
+            self.send_report(&self.report(&action, tool, ToolClass::Act))
+                .await;
+            action
+        }
+        /// A passing `expect` with this predicate.
+        async fn expected(&self, predicate: &str) -> String {
+            let action = self.begin("chrome_use_expect", ToolClass::Observe).await;
+            self.send_report(&expect_report(self, &action, predicate, true))
+                .await;
             action
         }
         fn report(&self, action: &str, tool: &str, class: ToolClass) -> proto::ActionReport {
@@ -2018,6 +2044,120 @@ mod tests {
         let reply = c.send_report(&report).await;
         assert_eq!(reply["verdict"], "failed");
         assert_eq!(reply["artifacts"][0]["reason"], "pathMismatch");
+    }
+
+    /// #893. A check made while a drawer was open is followed by the call
+    /// that closes it again. Marked `restore`, that call does not make the
+    /// check stale, and the reason says the check rests on the declaration.
+    /// Everything else still fails closed.
+    #[tokio::test]
+    async fn a_declared_restore_keeps_the_check_before_it_and_nothing_else() {
+        let requirement = |predicate: &str, evidence: &str| json!({"text":predicate,"status":"met","check":{"kind":"expect","predicate":predicate,"evidence":evidence}});
+        let assessed = |list: Vec<Value>| json!({"status":"done","requirements":list});
+
+        // The order the tool description asks for: the temporary state
+        // first, put back with `restore`, then the other checks.
+        let c = chat_with("claude", true).await;
+        c.send("check the orders page", false).await;
+        c.acted("chrome_use_click", false).await;
+        let drawer = c.expected("text .drawer h2 contains Order 42").await;
+        let close = c.acted("chrome_use_eval", true).await;
+        let rows = c.expected("count table tr == 5").await;
+        let total = c.expected("text #total contains 42").await;
+        let out = c
+            .assess(
+                0,
+                assessed(vec![
+                    requirement("text .drawer h2 contains Order 42", &drawer),
+                    requirement("count table tr == 5", &rows),
+                    requirement("text #total contains 42", &total),
+                ]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out["status"], "checksPassed", "{out}");
+        assert_eq!(out["downgradedBecause"], json!([]), "{out}");
+        let because = out["requirements"][0]["because"].as_str().unwrap();
+        assert!(
+            because.contains("declared restore and not verified") && because.contains(&close),
+            "{because}"
+        );
+        for later in [1, 2] {
+            assert_eq!(
+                out["requirements"][later]["because"],
+                "the browser recorded this check"
+            );
+        }
+        let admitted = c.kinds("actionAdmitted").await;
+        let marked: Vec<&Value> = admitted.iter().filter(|a| a["restore"] == true).collect();
+        assert_eq!(marked.len(), 1, "{admitted:?}");
+        assert_eq!(marked[0]["actionId"], close.as_str());
+
+        // An unmarked acting call after the restore makes every check
+        // before it stale again, and the reason names that call.
+        let click = c.acted("chrome_use_click", false).await;
+        let out = c
+            .assess(
+                0,
+                assessed(vec![
+                    requirement("text .drawer h2 contains Order 42", &drawer),
+                    requirement("count table tr == 5", &rows),
+                ]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out["status"], "notChecked", "{out}");
+        for r in out["requirements"].as_array().unwrap() {
+            assert_eq!(r["computed"], "stale", "{r}");
+            let because = r["because"].as_str().unwrap();
+            assert!(
+                because.starts_with("a later action changed the same page: chrome_use_click")
+                    && because.contains(&click),
+                "{because}"
+            );
+        }
+
+        // The order of the report in #893: three checks, then the click
+        // that opens the drawer. That click is not a restore, so the three
+        // are stale whatever the closing call says.
+        let c = chat_with("claude", true).await;
+        c.send("check the orders page", false).await;
+        let rows = c.expected("count table tr == 5").await;
+        let open = c.acted("chrome_use_click", false).await;
+        let drawer = c.expected("text .drawer h2 contains Order 42").await;
+        c.acted("chrome_use_eval", true).await;
+        let out = c
+            .assess(
+                0,
+                assessed(vec![
+                    requirement("count table tr == 5", &rows),
+                    requirement("text .drawer h2 contains Order 42", &drawer),
+                ]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out["status"], "someChecksPassed", "{out}");
+        assert_eq!(out["requirements"][0]["computed"], "stale");
+        assert!(out["requirements"][0]["because"]
+            .as_str()
+            .unwrap()
+            .contains(&open));
+        assert_eq!(out["requirements"][1]["computed"], "checked");
+
+        // A tool that navigates cannot be a restore: it is not admitted, so
+        // the MCP side never runs it.
+        c.restore_next
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let (_, reply) = c
+            .begin_with(0, "chrome_use_open", ToolClass::Act, vec![], None)
+            .await;
+        assert_eq!(reply["admitted"], false, "{reply}");
+        assert_eq!(reply["reason"], "restore is not accepted on this tool");
+
+        // The mark survives a restart: it is rebuilt from the journal.
+        let events = c.engine.lock().await.store.all_events(&c.id).unwrap();
+        let leases = evidence::rebuild(std::path::Path::new("/tmp"), &events);
+        assert_eq!(leases.values().filter(|l| l.restore).count(), 1);
     }
 
     #[tokio::test]

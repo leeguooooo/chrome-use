@@ -619,6 +619,17 @@ pub(crate) fn run_leased<E>(
             "This computer's boot clock is unavailable, so the action was not run.",
         ));
     };
+    // `restore` on a tool that cannot restore is refused before anything
+    // runs: silently dropping it would let the agent believe its earlier
+    // checks still count.
+    let restore = bool_arg(arguments, "restore");
+    if restore && !proto::accepts_restore(tool, class) {
+        return Ok(refused(
+            "The action was not run: `restore` is only for a call that puts the page back as it \
+             was (click, press, eval, fill, type, select, hover, scroll or an acting find). \
+             Drop `restore` from this call.",
+        ));
+    }
     let begin = ActionBegin {
         caller_conversation: context.conversation.clone(),
         generation,
@@ -631,6 +642,7 @@ pub(crate) fn run_leased<E>(
         requested_destination: requested.clone(),
         outputs: outputs.clone(),
         requested: requested_target(tool, arguments),
+        restore,
     };
     let reply = proto::encode(&begin).and_then(|params| {
         context
@@ -1571,6 +1583,54 @@ mod tests {
         let report = &fake.sent(proto::OP_ACTION_REPORT)[0];
         assert_eq!(report["verdict"]["possiblyExecuted"], false);
         assert_eq!(report["errorCode"], "not_run");
+    }
+
+    /// #893: `restore: true` travels with the Begin of an in-place acting
+    /// call, is left off the wire otherwise, and stops a tool that cannot
+    /// restore before anything is sent or run.
+    #[test]
+    fn restore_is_sent_at_begin_and_refused_where_it_cannot_apply() {
+        let fake = Fake::default();
+        fake.answer(proto::OP_ACTION_BEGIN, vec![admitted(), admitted()]);
+        fake.answer(proto::OP_ACTION_REPORT, vec![bound(), bound()]);
+        let ran = |arguments: Value| {
+            run_leased::<()>(&context(&fake), "chrome_use_eval", &arguments, |_, _| {
+                Ok(cli(
+                    json!({"success": true, "data": {"result": 1}}),
+                    Some(0),
+                ))
+            })
+            .unwrap()
+        };
+        ran(json!({"script": "closeDrawer()", "restore": true}));
+        ran(json!({"script": "1"}));
+        let begins = fake.sent(proto::OP_ACTION_BEGIN);
+        assert_eq!(begins[0]["restore"], true);
+        assert!(begins[1].get("restore").is_none(), "{}", begins[1]);
+
+        for (tool, arguments) in [
+            (
+                "chrome_use_open",
+                json!({"url": "https://example.test/", "restore": true}),
+            ),
+            ("chrome_use_reload", json!({"restore": true})),
+            ("chrome_use_expect", json!({"text": "x", "restore": true})),
+        ] {
+            let fake = Fake::default();
+            let result = run_leased::<()>(&context(&fake), tool, &arguments, |_, _| {
+                panic!("{tool} must not run with restore")
+            })
+            .unwrap();
+            assert_eq!(result["isError"], true, "{tool}");
+            assert!(
+                result["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("`restore` is only for"),
+                "{result}"
+            );
+            assert!(fake.sent(proto::OP_ACTION_BEGIN).is_empty(), "{tool}");
+        }
     }
 
     #[test]

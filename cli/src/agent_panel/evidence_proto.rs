@@ -249,6 +249,33 @@ pub(crate) struct ActionBegin {
     /// landed on Y".
     #[serde(default)]
     pub requested: Option<Value>,
+    /// The agent's `restore: true` on an acting call (#893): it declares the
+    /// call only puts the page back the way it was before a check, such as
+    /// closing a drawer it opened to look inside. A check recorded before it
+    /// is then not made stale by it. Left off the wire when false, so a
+    /// service older than this field still admits every unmarked call.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restore: bool,
+}
+
+/// The acting tools that accept `restore`: ones that work on the page in
+/// place. A tool that navigates, switches tabs, moves files or runs an
+/// adapter replaces what the earlier checks looked at, so it never restores.
+pub(crate) const RESTORE_TOOLS: &[&str] = &[
+    "chrome_use_click",
+    "chrome_use_press",
+    "chrome_use_eval",
+    "chrome_use_fill",
+    "chrome_use_type",
+    "chrome_use_select",
+    "chrome_use_hover",
+    "chrome_use_scroll",
+    "chrome_use_find",
+];
+
+/// Whether `restore` may be honoured for this call.
+pub(crate) fn accepts_restore(tool: &str, class: ToolClass) -> bool {
+    class == ToolClass::Act && RESTORE_TOOLS.contains(&tool)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -545,6 +572,7 @@ mod tests {
                 name: "shot.png".into(),
             }],
             requested: None,
+            restore: false,
         };
         let wire = encode(&begin).unwrap();
         assert_eq!(wire["callerConversation"], "c");
