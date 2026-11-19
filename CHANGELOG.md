@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.292
+## 1.5.293
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
+
+### Fixes
+
+- **Failures logged by two sessions at once stay readable.** Every session's daemon appends to `~/.chrome-use/friction.jsonl`, and a record was written one JSON token at a time. Two sessions failing in the same instant (two `done` run together) left one line with both records' tokens interleaved; `friction` and `report` skip a line they cannot parse, so both failures were missing from them. Each record is now written in a single write (#899).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.292
+
 Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
 
 ### Fixes
@@ -16,7 +29,6 @@ Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-ext
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.291
 
