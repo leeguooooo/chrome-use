@@ -7,6 +7,8 @@ use std::process;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(unix)]
+use futures_util::FutureExt;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::signal;
 use tokio::sync::{mpsc, Notify, RwLock};
@@ -302,6 +304,68 @@ pub async fn run_daemon(session: &str) {
     }
 }
 
+/// What an idle daemon does before it exits: a launched browser is closed,
+/// an external one keeps its tabs (blank ones excepted) and its group is
+/// dissolved when no other session of the project is live. Returns whether
+/// the daemon may exit: `false` while the user holds the session.
+///
+/// `arrived` is set by the accept loop when a command arrives meanwhile. The
+/// daemon then stays, so the group is left alone and a closed browser is
+/// dropped from the state, as when its process has exited: the waiting
+/// command starts from "no browser" exactly like a fresh daemon's first one.
+#[cfg(unix)]
+async fn idle_cleanup(
+    state: &std::sync::Arc<tokio::sync::Mutex<DaemonState>>,
+    idle_timeout_ms: Option<u64>,
+    arrived: &std::sync::atomic::AtomicBool,
+) -> bool {
+    let arrived = || arrived.load(std::sync::atomic::Ordering::Relaxed);
+    let mut s = state.lock().await;
+    let session_id = s.session_id.clone();
+    let handed_off = crate::ownership::owner_of(&session_id) == crate::ownership::Owner::User;
+    // The user holds the session (`session handoff`): they are working on
+    // the page, and `handoff --wait` only watches the socket without sending
+    // commands. Exiting here ended every wait longer than the idle timeout
+    // with "the session's daemon is not answering". Wait another period
+    // instead.
+    if handed_off {
+        return false;
+    }
+    let mut closed = false;
+    if let Some(ref mut mgr) = s.browser {
+        // A default idle timeout should reap a browser process that we
+        // launched, but it must not delete the working tabs in the user's
+        // real Chrome. Dropping the external CDP connection is sufficient;
+        // persisted ownership lets the next daemon adopt the same tab with
+        // its in-page state intact (#210).
+        if should_close_browser_on_idle(mgr.is_cdp_connection(), handed_off) {
+            let _ = mgr.close().await;
+            mark_browser_reaped(&session_id, idle_timeout_ms.unwrap_or_default());
+            closed = true;
+        } else {
+            // A tab the session opened and never loaded anything into is
+            // clutter: it goes now, not with the sweep.
+            let _ = tokio::time::timeout(Duration::from_secs(5), mgr.close_blank_own_tabs()).await;
+        }
+        if !arrived()
+            && mgr.is_cdp_connection()
+            && !crate::group_lifecycle::group_has_other_live_session(&session_id)
+        {
+            // Nobody works in the project's group any more: take its tabs
+            // out of it, so Chrome keeps no saved group when the window
+            // closes (#692). They stay for the next session of the project,
+            // or until the sweep closes them.
+            let _ = tokio::time::timeout(Duration::from_secs(5), mgr.ungroup_own_group()).await;
+        }
+    }
+    if closed && arrived() {
+        s.browser = None;
+        s.screencasting = false;
+        s.update_stream_client().await;
+    }
+    true
+}
+
 #[cfg(unix)]
 async fn run_socket_server(
     socket_path: &PathBuf,
@@ -385,52 +449,83 @@ async fn run_socket_server(
                     None => std::future::pending::<()>().await,
                 }
             }, if idle_timeout_ms.is_some() => {
-                let mut s = state.lock().await;
-                let session_id = s.session_id.clone();
-                let handed_off =
-                    crate::ownership::owner_of(&session_id) == crate::ownership::Owner::User;
-                // The user holds the session (`session handoff`): they are
-                // working on the page, and `handoff --wait` only watches the
-                // socket without sending commands. Exiting here ended every
-                // wait longer than the idle timeout with "the session's
-                // daemon is not answering". Wait another period instead.
-                if handed_off {
-                    drop(s);
+                // A command that arrives while the daemon idles out must be
+                // served, not dropped (#895). The cleanup below can take ten
+                // seconds; a client that connected during it sat unread in
+                // the accept queue, got EOF when the daemon exited, and was
+                // told its command "may have run". So the listener is polled
+                // before, during and after the cleanup, and a command read
+                // from any of those connections keeps the daemon alive for
+                // another idle period. A bare connect is not a command:
+                // liveness checks (`daemon_ready`, this daemon's own look at
+                // its group) connect and send nothing. `handle_connection`
+                // signals `reset_rx` once it has read a command line, before
+                // it waits for the session lock, and that signal decides.
+                use std::sync::atomic::Ordering::Relaxed;
+                const READ_GRACE: Duration = Duration::from_millis(300);
+                let serve = |stream| {
+                    let state = state.clone();
+                    let reset_tx = reset_tx.clone();
+                    let sf = stream_file.clone();
+                    let cn = close_notify.clone();
+                    tokio::spawn(async move {
+                        handle_connection(stream, state, reset_tx, sf, cn).await;
+                    });
+                };
+                let arrived = std::sync::atomic::AtomicBool::new(false);
+                // Connections accepted here whose first line is not read yet.
+                let mut unread = 0u32;
+                while let Some(Ok((stream, _))) = listener.accept().now_or_never() {
+                    unread += 1;
+                    serve(stream);
+                }
+                if unread > 0
+                    && matches!(
+                        tokio::time::timeout(READ_GRACE, reset_rx.recv()).await,
+                        Ok(Some(()))
+                    )
+                {
+                    arrived.store(true, Relaxed);
+                }
+                let mut may_exit = false;
+                if !arrived.load(Relaxed) {
+                    unread = 0;
+                    let cleanup = idle_cleanup(&state, idle_timeout_ms, &arrived);
+                    tokio::pin!(cleanup);
+                    may_exit = loop {
+                        tokio::select! {
+                            biased;
+                            done = &mut cleanup => break done,
+                            Some(()) = reset_rx.recv() => arrived.store(true, Relaxed),
+                            accepted = listener.accept() => {
+                                if let Ok((stream, _)) = accepted {
+                                    unread += 1;
+                                    serve(stream);
+                                }
+                            }
+                        }
+                    };
+                    // One last look: a client may have connected while the
+                    // cleanup's final step was finishing, and one accepted
+                    // just before may not have been read yet.
+                    while let Some(Ok((stream, _))) = listener.accept().now_or_never() {
+                        unread += 1;
+                        serve(stream);
+                    }
+                    if !arrived.load(Relaxed)
+                        && unread > 0
+                        && matches!(
+                            tokio::time::timeout(READ_GRACE, reset_rx.recv()).await,
+                            Ok(Some(()))
+                        )
+                    {
+                        arrived.store(true, Relaxed);
+                    }
+                }
+                if !may_exit || arrived.load(Relaxed) {
                     idle_sleep_pin = idle_timeout_ms
                         .map(|ms| Box::pin(tokio::time::sleep(Duration::from_millis(ms))));
                     continue;
-                }
-                if let Some(ref mut mgr) = s.browser {
-                    // A default idle timeout should reap a browser process that
-                    // we launched, but it must not delete the working tabs in the
-                    // user's real Chrome. Dropping the external CDP connection is
-                    // sufficient; persisted ownership lets the next daemon adopt
-                    // the same tab with its in-page state intact (#210).
-                    if should_close_browser_on_idle(mgr.is_cdp_connection(), handed_off) {
-                        let _ = mgr.close().await;
-                        mark_browser_reaped(&session_id, idle_timeout_ms.unwrap_or_default());
-                    } else {
-                        // A tab the session opened and never loaded anything
-                        // into is clutter: it goes now, not with the sweep.
-                        let _ = tokio::time::timeout(
-                            Duration::from_secs(5),
-                            mgr.close_blank_own_tabs(),
-                        )
-                        .await;
-                    }
-                    if mgr.is_cdp_connection()
-                        && !crate::group_lifecycle::group_has_other_live_session(&session_id)
-                    {
-                        // Nobody works in the project's group any more: take its
-                        // tabs out of it, so Chrome keeps no saved group when the
-                        // window closes (#692). They stay for the next session
-                        // of the project, or until the sweep closes them.
-                        let _ = tokio::time::timeout(
-                            Duration::from_secs(5),
-                            mgr.ungroup_own_group(),
-                        )
-                        .await;
-                    }
                 }
                 break;
             }

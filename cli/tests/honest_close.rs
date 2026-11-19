@@ -59,6 +59,10 @@ struct Browser {
     /// A page loads in every tab created blank, as if the agent had used it.
     /// A tab still blank when its session idles out is closed then.
     pages_loaded: bool,
+    /// How long `tabGroups.query` takes to answer (the idle exit asks it
+    /// when it dissolves the session's group), and how often it was asked.
+    group_query_delay: Duration,
+    group_queries: u32,
 }
 
 #[derive(Clone)]
@@ -112,6 +116,14 @@ impl Fake {
 
     fn load_pages(&self) {
         self.0.lock().unwrap().pages_loaded = true;
+    }
+
+    fn slow_group_query(&self, delay: Duration) {
+        self.0.lock().unwrap().group_query_delay = delay;
+    }
+
+    fn group_queries(&self) -> u32 {
+        self.0.lock().unwrap().group_queries
     }
 
     fn refuse(&self, target: &str) {
@@ -327,6 +339,17 @@ async fn serve(fake: Fake, stream: tokio::net::TcpStream) {
         };
         if fake.hangs(req["method"].as_str().unwrap_or("")) {
             continue; // never answered
+        }
+        if req["method"] == "ABExt.call"
+            && req["params"]["namespace"] == "tabGroups"
+            && req["params"]["method"] == "query"
+        {
+            let delay = {
+                let mut b = fake.0.lock().unwrap();
+                b.group_queries += 1;
+                b.group_query_delay
+            };
+            tokio::time::sleep(delay).await;
         }
         for event in fake.take_events() {
             let frame = tokio_tungstenite::tungstenite::Message::Text(event.to_string());
@@ -1549,6 +1572,46 @@ fn idle_exit_closes_tabs_never_loaded() {
     );
     assert!(fake.open_targets().is_empty(), "{:?}", fake.open_targets());
     assert!(!cli.record_path().exists(), "record left for a closed tab");
+}
+
+/// #895: a command that arrives while the daemon is idling out (here: while
+/// it dissolves the session's tab group, which the fake answers slowly) is
+/// served by that daemon. It used to sit unread in the accept queue until the
+/// daemon exited, and the client reported `action_outcome_unknown: daemon
+/// disconnected unexpectedly ... which may have run`.
+#[test]
+fn a_command_arriving_while_the_daemon_idles_out_is_served() {
+    let (fake, url) = Fake::start(true);
+    fake.load_pages();
+    let cli = Cli::new("hc895-idle-race", &url, true);
+    let idle = [("AGENT_BROWSER_IDLE_TIMEOUT_MS", "1500")];
+    let r = cli.run(&["tab", "list"], &idle);
+    assert_eq!(r["success"], true, "{r}");
+    let daemon = cli.daemon_pid().expect("a daemon is running");
+    fake.slow_group_query(Duration::from_secs(4));
+    let started = Instant::now();
+    while fake.group_queries() == 0 {
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the idle exit never asked for the session's group"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The daemon is inside its idle cleanup now.
+    let r = cli.run(&["tab", "list"], &idle);
+    assert_eq!(r["success"], true, "{r}");
+    assert_eq!(
+        cli.daemon_pid(),
+        Some(daemon),
+        "the same daemon answered instead of exiting under the command"
+    );
+    assert_eq!(fake.open_targets().len(), 1, "{:?}", fake.open_targets());
+    // With nothing arriving, it still idles out.
+    fake.slow_group_query(Duration::ZERO);
+    assert!(
+        cli.wait_no_daemon(Duration::from_secs(30)),
+        "daemon did not idle out afterwards"
+    );
 }
 
 /// `close incomplete` with no daemon: a saved tab whose close is refused
