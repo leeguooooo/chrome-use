@@ -1,8 +1,26 @@
 # Changelog
 
-## 1.5.294
+## 1.5.295
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
+
+### Fixes
+
+- **A command that arrives while the daemon idles out is served.** After ten idle minutes the daemon cleans up (closes blank tabs, dissolves the session's tab group) and exits. That cleanup can take ten seconds, more on a loaded machine, and the daemon did not read new connections during it: a command sent in that window got `action_outcome_unknown: daemon disconnected unexpectedly ... which may have run` although the daemon had never read it. The daemon now keeps accepting during the cleanup, and a command that arrives keeps it running. macOS and Linux; the Windows daemon has no such cleanup (#895).
+- **`gemini/ask`, `gemini/read`, `gemini/history` and `gemini/detail` come from chrome-use-sites.** OpenCLI's `gemini/ask` returned side-navigation text as the answer and exited 0 when a dialog covered the Gemini page. The new adapters read the answer only from the answer element and fail otherwise; a prompt that was sent but not answered in time is an error that says it was sent; a dialog is reported with its title and buttons and nothing in it is pressed. A new conversation is `--fresh true`: `--new` is a chrome-use global flag and never reaches an adapter. The first use syncs the adapter pack (#904).
+
+### New Features
+
+- **`restore: true` for the call that puts a page back (agent panel).** In a panel conversation, `chrome_use_task` counts a check only while no later acting call touched the same page, so closing a drawer that a check needed open made the checks on that page stale. `chrome_use_click`, `press`, `eval`, `fill`, `type`, `select`, `hover`, `scroll` and an acting `find` now take `restore: true` for a call that only puts the page back. A check followed only by such calls still counts, and its reason says it rests on calls declared restore and not verified. Any unmarked acting call after a check still makes it stale, and the reason names that call. The `chrome_use_task` description states the order: checks that need a temporary state first, then every other check (#893).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.294
+
 Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
 
 ### Fixes
@@ -12,7 +30,6 @@ Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-ext
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.293
 
