@@ -3322,11 +3322,25 @@ pub(crate) async fn verify_click_target(
 /// finds one, a `rest` point for the pointer: inside the viewport, outside the
 /// layer, the target and the control under the last pointer position, and on
 /// nothing interactive (which could open another tooltip).
+///
+/// A document reports the shadow host for a point over anything in its shadow
+/// tree, and `contains` stops at a shadow root, so a button inside a custom
+/// element used to look covered by its own host (#905). The probe follows the
+/// target's chain of shadow roots down from that host, open or closed, and
+/// reports a cover only when something else is on top inside one of them.
 pub(crate) const OCCLUSION_PROBE_JS: &str = r#"function(x, y, px, py) {
     const doc = this.ownerDocument || document;
-    const at = doc.elementFromPoint(x, y);
+    let at = doc.elementFromPoint(x, y);
     if (!at) return JSON.stringify({reason:'no-element-at-point'});
-    if (at === this || this.contains(at) || at.contains(this)) return null;
+    for (let depth = 0; depth < 16; depth++) {
+        if (at === this || this.contains(at) || at.contains(this)) return null;
+        let root = this.getRootNode ? this.getRootNode() : null;
+        while (root && root.host && root.host !== at) root = root.host.getRootNode();
+        if (!root || root.host !== at || typeof root.elementFromPoint !== 'function') break;
+        const inner = root.elementFromPoint(x, y);
+        if (!inner || inner === at) break;
+        at = inner;
+    }
     const out = {
         tag: at.tagName,
         testid: (at.dataset && at.dataset.testid) || null,

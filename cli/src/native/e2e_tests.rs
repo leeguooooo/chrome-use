@@ -17609,3 +17609,129 @@ dl.onclick=e=>{out.dl++;out.trusted=out.trusted&&e.isTrusted};calc.onclick=e=>{o
     server.abort();
     run_cmd(&mut state, json!({"id":"close","action":"close"})).await;
 }
+
+/// #905: a button inside a custom element's shadow root (closed, as on the
+/// Xiaohongshu publish bar) is not covered by its own host: `click @ref` lands
+/// one real pointer click on it. A custom element, or anything else, that
+/// really is on top of the target is still refused, and nothing is clicked.
+#[tokio::test]
+#[ignore]
+async fn e2e_click_ref_inside_shadow_root_lands_and_real_covers_are_refused() {
+    // The bar: two buttons in a closed shadow root, a gap at the host's centre.
+    let bar = |mode: &str, extra_shadow: &str| {
+        format!(
+            r##"<!doctype html><meta charset="utf-8"><style>
+body{{margin:0;font:14px sans-serif}}.spacer{{height:1500px}}
+xhs-publish-btn{{display:block;width:680px;height:90px;position:sticky;bottom:0;background:#fff}}
+#cover{{position:fixed;left:0;bottom:0;width:680px;height:90px;background:rgba(0,0,0,.2)}}
+</style><div class="spacer">content</div><xhs-publish-btn></xhs-publish-btn>
+<script>
+window.out={{events:[]}};
+const wire=(root)=>{{for(const b of root.querySelectorAll('button'))for(const t of ['mousedown','click'])b.addEventListener(t,e=>out.events.push({{id:b.id,t,trusted:e.isTrusted}}));}};
+customElements.define('inner-actions', class extends HTMLElement{{constructor(){{super();
+const s=this.attachShadow({{mode:'{mode}'}});
+s.innerHTML='<style>button{{position:absolute;top:25px;width:120px;height:40px}}#draft{{left:60px}}#pub{{left:500px}}#veil{{position:absolute;left:0;top:0;width:680px;height:90px}}</style><button id="draft">暂存离开</button><button id="pub">发布</button>{extra_shadow}';
+wire(s);}}}});
+customElements.define('xhs-publish-btn', class extends HTMLElement{{constructor(){{super();
+const s=this.attachShadow({{mode:'{mode}'}});
+s.innerHTML='<style>.bar{{position:relative;width:680px;height:90px}}</style><div class="bar"><inner-actions></inner-actions></div>';}}}});
+</script>"##
+        )
+    };
+    let lands = [
+        ("closed shadow roots", bar("closed", "")),
+        ("open shadow roots", bar("open", "")),
+    ];
+    let covered_in_light = bar("closed", "") + r#"<div id="cover"></div>"#;
+    let covered_in_shadow = bar("closed", r#"<div id="veil"></div>"#);
+    // An empty custom element laid over an ordinary button.
+    let overlay = r##"<!doctype html><meta charset="utf-8"><style>
+body{margin:0;font:14px sans-serif}
+#wrap{position:relative;width:680px;height:90px;margin-top:200px}
+button{position:absolute;top:25px;width:120px;height:40px}#draft{left:60px}#pub{left:500px}
+xhs-publish-btn{display:block;position:absolute;left:0;top:0;width:680px;height:90px}
+</style><div id="wrap"><button id="draft">暂存离开</button><button id="pub">发布</button><xhs-publish-btn></xhs-publish-btn></div>
+<script>
+window.out={events:[]};
+customElements.define('xhs-publish-btn', class extends HTMLElement{});
+for(const b of document.querySelectorAll('button'))for(const t of ['mousedown','click'])b.addEventListener(t,e=>out.events.push({id:b.id,t,trusted:e.isTrusted}));
+</script>"##
+        .to_string();
+    let refused = [
+        (
+            "a light-DOM layer over the shadow button",
+            covered_in_light,
+            "DIV",
+        ),
+        (
+            "a layer inside the same shadow root",
+            covered_in_shadow,
+            "DIV",
+        ),
+        (
+            "an empty custom element over a button",
+            overlay,
+            "XHS-PUBLISH-BTN",
+        ),
+    ];
+    let cases = lands
+        .into_iter()
+        .map(|(name, html)| (name, html, None))
+        .chain(refused.into_iter().map(|(n, h, by)| (n, h, Some(by))));
+    for (name, html, cover) in cases {
+        let (port, server) = spawn_html_server(html).await;
+        let mut state = DaemonState::new();
+        launch_on(port, &mut state).await;
+        assert_success(
+            &run_cmd(
+                &mut state,
+                json!({"id":"snapshot","action":"snapshot","interactive":true,"settleMs":0}),
+            )
+            .await,
+        );
+        let publish = state
+            .ref_map
+            .entries_sorted()
+            .into_iter()
+            .find(|(_, e)| e.name == "发布")
+            .map(|(r, _)| r)
+            .unwrap_or_else(|| panic!("{name}: no ref named 发布"));
+        // The first click is the one that counts: #905 was a first click that
+        // reported success and a second that reported the cover.
+        let response = run_cmd(
+            &mut state,
+            json!({"id":"click","action":"click","selector":format!("@{publish}")}),
+        )
+        .await;
+        let events = eval_in(&mut state, "out.events").await;
+        match cover {
+            None => {
+                assert_success(&response);
+                assert_eq!(
+                    response["data"]["dispatch"], "pointer",
+                    "{name}: {response}"
+                );
+                assert_eq!(
+                    events,
+                    json!([
+                        {"id":"pub","t":"mousedown","trusted":true},
+                        {"id":"pub","t":"click","trusted":true}
+                    ]),
+                    "{name}: one real click on the target, nothing else: {response}"
+                );
+            }
+            Some(by) => {
+                assert_eq!(response["success"], false, "{name}: {response}");
+                assert_eq!(response["code"], "element_occluded", "{name}: {response}");
+                let error = response["error"].as_str().unwrap_or_default();
+                assert!(
+                    error.contains(&format!("is occluded by {by}")),
+                    "{name}: {error}"
+                );
+                assert_eq!(events, json!([]), "{name}: a refused click presses nothing");
+            }
+        }
+        server.abort();
+        run_cmd(&mut state, json!({"id":"close","action":"close"})).await;
+    }
+}
