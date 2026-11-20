@@ -38,21 +38,56 @@ jobs:
           BEFORE_SHA: ${{ github.event.before }}
           CURRENT_SHA: ${{ github.sha }}
         run: |
+          # Changes outside these paths never reach a build or a test: the
+          # docs site, root-level Markdown (glob magic keeps `*` from crossing
+          # `/`, so skills/**/SKILL.md and skill-data/**/*.md, which the CLI
+          # embeds, still count), and the iOS app, which no job builds.
+          heavy_paths=(. ':(exclude)docs/**' ':(exclude,glob)*.md' ':(exclude)apps/ios/**')
           run_heavy=true
 
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            if git diff --quiet "origin/${BASE_REF}...HEAD" -- . ':(exclude)docs/**'; then
+            if git diff --quiet "origin/${BASE_REF}...HEAD" -- "${heavy_paths[@]}"; then
               run_heavy=false
             fi
           elif [[ "$EVENT_NAME" == "push" && ! "$BEFORE_SHA" =~ ^0+$ ]]; then
-            if git diff --quiet "$BEFORE_SHA" "$CURRENT_SHA" -- . ':(exclude)docs/**'; then
+            if git diff --quiet "$BEFORE_SHA" "$CURRENT_SHA" -- "${heavy_paths[@]}"; then
+              run_heavy=false
+            fi
+          fi
+
+          # The main push that follows a release (scripts/release.sh) changes
+          # only the package's own version: one line in package.json, one in
+          # cli/Cargo.toml and the chrome-use entry in cli/Cargo.lock. The code
+          # was tested by the push before it, so it skips the heavy jobs. Each
+          # file is compared with that one line removed; anything else (a
+          # dependency bump, a missing file) keeps the full run.
+          drop_own_version() {
+            case "$1" in
+              package.json) awk '!done && /^  "version": "/ { done = 1; next } { print }' ;;
+              cli/Cargo.toml) awk '!done && /^version = "/ { done = 1; next } { print }' ;;
+              cli/Cargo.lock) awk 'own { own = 0; if (/^version = "/) next } { print } /^name = "chrome-use"$/ { own = 1 }' ;;
+              *) return 1 ;;
+            esac
+          }
+          only_version_changed() {
+            local f old new
+            for f in "$@"; do
+              old=$(git show "$BEFORE_SHA:$f" | drop_own_version "$f") || return 1
+              new=$(git show "$CURRENT_SHA:$f" | drop_own_version "$f") || return 1
+              [[ "$old" == "$new" ]] || return 1
+            done
+          }
+          if [[ "$EVENT_NAME" == "push" && "$run_heavy" == "true" && ! "$BEFORE_SHA" =~ ^0+$ ]]; then
+            mapfile -t changed < <(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA" -- "${heavy_paths[@]}")
+            if (( ${#changed[@]} > 0 )) && only_version_changed "${changed[@]}"; then
+              echo "Only the package version changed (${changed[*]}); skipping heavy jobs."
               run_heavy=false
             fi
           fi
 
           # PRs that touch nothing the Rust crate compiles in or reads at test
           # time (e.g. release scripts, docs) skip the Rust jobs. Main pushes
-          # always run them.
+          # run them unless run_heavy is false (see above).
           run_rust=$run_heavy
           if [[ "$EVENT_NAME" == "pull_request" && "$run_heavy" == "true" ]]; then
             if git diff --quiet "origin/${BASE_REF}...HEAD" -- \
