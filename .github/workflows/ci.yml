@@ -38,14 +38,19 @@ jobs:
           BEFORE_SHA: ${{ github.event.before }}
           CURRENT_SHA: ${{ github.sha }}
         run: |
+          # Changes outside these paths never reach a build or a test: the
+          # docs site, root-level Markdown (glob magic keeps `*` from crossing
+          # `/`, so skills/**/SKILL.md and skill-data/**/*.md, which the CLI
+          # embeds, still count), and the iOS app, which no job builds.
+          heavy_paths=(. ':(exclude)docs/**' ':(exclude,glob)*.md' ':(exclude)apps/ios/**')
           run_heavy=true
 
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            if git diff --quiet "origin/${BASE_REF}...HEAD" -- . ':(exclude)docs/**'; then
+            if git diff --quiet "origin/${BASE_REF}...HEAD" -- "${heavy_paths[@]}"; then
               run_heavy=false
             fi
           elif [[ "$EVENT_NAME" == "push" && ! "$BEFORE_SHA" =~ ^0+$ ]]; then
-            if git diff --quiet "$BEFORE_SHA" "$CURRENT_SHA" -- . ':(exclude)docs/**'; then
+            if git diff --quiet "$BEFORE_SHA" "$CURRENT_SHA" -- "${heavy_paths[@]}"; then
               run_heavy=false
             fi
           fi

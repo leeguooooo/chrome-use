@@ -7,6 +7,11 @@ on:
     paths: ['docs/**', '.github/workflows/seo-check.yml']
 permissions:
   contents: read
+# A new commit on a PR makes the older run obsolete. Pushes to main are keyed
+# by SHA, so they never cancel or displace each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   check:
     runs-on: ubuntu-latest
