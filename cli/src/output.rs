@@ -655,6 +655,11 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
         if let Some(w) = data.get("openedTabWarning").and_then(|v| v.as_str()) {
             eprintln!("{} {}", color::yellow("⚠"), w);
         }
+        // Why chrome-use did not put the user's app back in front after the
+        // page's tab raised Chrome (#468). Was only in --json output (#908).
+        if let Some(line) = focus_not_restored_line(data) {
+            eprintln!("{} {}", color::yellow("⚠"), line);
+        }
 
         // `current`: the active tab's stable handle (#26).
         if data
@@ -2621,6 +2626,17 @@ fn describe_find_target(t: &serde_json::Value) -> String {
 /// The stderr line for one `data.relocated` entry.
 /// The line a `--force` result prints: which tab it acted on, whose, and that
 /// it stayed in the background.
+/// A click whose focus watch (#468) did not put the user's app back in front:
+/// `focusRestored: false` with its `focusNote`. A restore is already said in
+/// `openedTabWarning`, so it prints nothing.
+fn focus_not_restored_line(data: &serde_json::Value) -> Option<String> {
+    if data.get("focusRestored").and_then(|v| v.as_bool()) != Some(false) {
+        return None;
+    }
+    let note = data.get("focusNote").and_then(|v| v.as_str())?;
+    Some(format!("focus not restored: {note}"))
+}
+
 fn forced_tab_line(data: &serde_json::Value) -> Option<String> {
     let tab = data.get("forcedTab")?;
     if data.get("forced").and_then(|v| v.as_bool()) != Some(true) {
@@ -3101,7 +3117,8 @@ in front before the click back in front (on by default): only when Chrome
 comes to the front within 1.5 s of the click with a tab that was not there
 before, never when Chrome was already the frontmost app or another app came
 to the front. The click reports focusRestored (true with focusRestoredApp and
-focusRestoredAfterMs, or false with focusNote saying why). Windows and Linux:
+focusRestoredAfterMs, or false with focusNote saying why, also printed as
+"focus not restored: ..." without --json). Windows and Linux:
 not done. AGENT_BROWSER_RESTORE_FOCUS=0 turns it off (read when the daemon
 starts).
 
@@ -7896,6 +7913,29 @@ mod tests {
         .unwrap();
         assert!(line.contains("(role + name re-query)"), "{line}");
         assert!(super::relocation_line(&json!({"how": "adaptive"})).is_none());
+    }
+
+    #[test]
+    fn a_click_says_why_focus_was_not_restored() {
+        // #908: the reason was only in --json output.
+        let line = super::focus_not_restored_line(&json!({
+            "clicked": "@e3",
+            "openedTabWarning": "the page opened this tab itself ...",
+            "focusRestored": false,
+            "focusNote": "the browser came to the front without a new tab",
+        }))
+        .unwrap();
+        assert_eq!(
+            line,
+            "focus not restored: the browser came to the front without a new tab"
+        );
+        // A restore is already in openedTabWarning; no watch, nothing to say.
+        assert!(super::focus_not_restored_line(&json!({
+            "focusRestored": true, "focusRestoredApp": "com.apple.Terminal",
+        }))
+        .is_none());
+        assert!(super::focus_not_restored_line(&json!({ "clicked": "@e3" })).is_none());
+        assert!(super::focus_not_restored_line(&json!({ "focusRestored": false })).is_none());
     }
 
     #[test]
