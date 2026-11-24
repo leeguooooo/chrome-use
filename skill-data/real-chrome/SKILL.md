@@ -104,7 +104,7 @@ attempt re-pops it). One of two things is true:
 
 **If the relay drops mid-session** (a command suddenly errors with "couldn't
 reach your Chrome" / "relay … failed" — usually the MV3 service worker got
-suspended, or two agents are sharing one relay): **the CLI now self-heals** — it
+suspended, or two agents are sharing one relay): **the CLI self-heals** — it
 waits for the worker's keepalive to revive the relay (~25s) and retries once, so
 most drops you never even see. If a command *does* surface the error:
 
@@ -133,7 +133,7 @@ most drops you never even see. If a command *does* surface the error:
    down.
 3. **Never** tell the user to quit/restart Chrome with `--remote-debugging-port`
    to recover a dropped relay — that throws away their tabs and defeats the
-   extension path. (The old error text said this; it no longer does.)
+   extension path.
 4. `chrome-use reconnect` is a friendly alias for `extension connect` — re-binds
    the session to the running Chrome without any reinstall.
 
@@ -149,10 +149,9 @@ most drops you never even see. If a command *does* surface the error:
    the live URL is a *correct* result, not a failure. Reserve screenshots for a
    genuine visual check you report to the user.
 
-> **OAuth/SSO popups and redirects now just work.** A login handoff
-> (GitHub/Google OAuth, SSO) navigates the tab *across processes*, which used to
-> orphan the old session and make the next read fail "stale sessionId". The relay
-> now **auto-reattaches the opener across that cross-process nav** and retries a
+> **OAuth/SSO popups and redirects work.** A login handoff
+> (GitHub/Google OAuth, SSO) navigates the tab *across processes*. The relay
+> **auto-reattaches the opener across that cross-process nav** and retries a
 > read briefly while the new process settles, so reads
 > (`snapshot`/`screenshot`/`eval`/`get`) keep working through the handoff and
 > "Sign in with Google" / OAuth-popup logins complete end-to-end. (The
@@ -169,10 +168,10 @@ them for control.
 > it maps to a dedicated tab group **and a dedicated daemon** (the port is derived
 > from the name). With no `--session` / `AGENT_BROWSER_SESSION`, the name is
 > derived per agent — **the derivation rules live in the core skill** (`chrome-use
-> skills get core`, "Per-agent isolation"), so there is one description of them
+> skills get core/connection`, "Per-agent isolation"), so there is one description of them
 > rather than two that drift apart. What matters here: when each agent has a
 > per-agent id in its environment (the usual case under an agent harness), **two
-> agents in the same repo get different tab groups** and no longer stomp each
+> agents in the same repo get different tab groups** and do not stomp each
 > other's active tab, and the name is stable across one agent's commands. That
 > prerequisite is real: with neither a per-agent nor a per-terminal id — two
 > plain shells, or two agents sharing one terminal tab — the derivation falls
