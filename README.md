@@ -8,6 +8,7 @@
   <a href="https://bot-detector.rebrowser.net/"><img alt="CreepJS 0% bot" src="https://img.shields.io/badge/CreepJS-0%25%20bot-2ea043"></a>
   <img alt="Platforms" src="https://img.shields.io/badge/macOS%20·%20Linux%20·%20Windows-informational">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/github/license/leeguooooo/chrome-use?color=8957e5"></a>
+  <a href="https://glama.ai/mcp/servers/leeguooooo/chrome-use"><img alt="leeguooooo/chrome-use MCP server" src="https://glama.ai/mcp/servers/leeguooooo/chrome-use/badges/score.svg"></a>
 </p>
 
 <p align="center"><i>⭐ If it saves you a re-login, a star helps other devs find it.</i></p>
