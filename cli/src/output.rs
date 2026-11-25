@@ -6802,7 +6802,9 @@ Core Commands:
   Extension popup: Connected means the native host replied; Connecting means
   the reply is still pending. A host connection does not verify page liveness.
   reconnect                  Re-bind to the running Chrome's relay (alias for
-                             `extension connect`) — recover a dropped relay, no reinstall
+                             `extension connect`) — recover a dropped relay, no reinstall;
+                             restarts Chrome (to remove the debugging banner) only
+                             with --silent
   browsers [--who <domain>]  List every Chrome profile (name, dir, account, connected,
                              default, this session); --who: which look signed in to a site
   connect --browser <name>   Connect one more Chrome profile (opens a window there;

@@ -1713,13 +1713,50 @@ fn wait_for_relay(
     }
 }
 
-fn run_status(session: &str, json_mode: bool) {
+/// The profile `status --browser <selector>` reports on (#910): found among
+/// every profile, connected or not, so a profile whose relay is down is
+/// reported as down instead of the default profile being shown.
+fn status_selected_profile(
+    rows: &[profiles::ProfileRow],
+    selector: &str,
+) -> Result<profiles::ProfileRow, String> {
+    profiles::resolve_in(rows, selector).map(|i| rows[i].clone())
+}
+
+fn run_status(session: &str, json_mode: bool, browser: Option<&str>) {
+    let selected = match browser.map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(sel) => match status_selected_profile(&profiles::load_rows(), sel) {
+            Ok(row) => Some((sel.to_string(), row)),
+            Err(msg) => {
+                if json_mode {
+                    print_json_value(json!({ "success": false, "error": msg }));
+                } else {
+                    eprintln!("{} {msg}", color::error_indicator());
+                }
+                exit(1);
+            }
+        },
+    };
+    let selected_ws = selected.as_ref().and_then(|(_, row)| row.ws.clone());
     let inventory = walk_daemons();
     let host_report = connect::native_host_report();
     let host_installed = !host_report.manifests.is_empty();
     let host_healthy = host_report.is_healthy();
-    let (health, connected_profiles) = connect::relay_health_and_profiles();
+    let (health, connected_profiles) = match (&selected, selected_ws.as_deref()) {
+        // A selected profile with no relay recorded: nothing to probe.
+        (Some(_), None) => (
+            connect::RelayHealth::default(),
+            connect::connected_relay_profiles(),
+        ),
+        (_, ws) => connect::relay_health_and_profiles_at(ws),
+    };
     let relay_up = health.transport_responsive;
+    // The selected profile's relay, probed (#910): a recorded endpoint is not
+    // a live one.
+    let selected_accepts = selected_ws
+        .as_deref()
+        .map(|ws| relay_up || connect::relay_endpoint_accepts(ws));
     let mut warnings = connect::duplicate_extension_warnings(&connected_profiles);
     if let Some(notice) = health.host_notice() {
         warnings.push(notice);
@@ -1728,7 +1765,8 @@ fn run_status(session: &str, json_mode: bool) {
         warnings.push(health.debugger.clone());
     }
     // Name the unlisted candidate profile without inferring worker state.
-    let closed_profile = if relay_up {
+    // With --browser the selected profile is what is reported instead.
+    let closed_profile = if relay_up || selected.is_some() {
         None
     } else {
         connect::closed_relay_profile(None)
@@ -1736,10 +1774,34 @@ fn run_status(session: &str, json_mode: bool) {
     if let Some(profile) = &closed_profile {
         warnings.push(connect::closed_relay_profile_message(profile, false));
     }
+    if let Some((sel, row)) = &selected {
+        match (selected_ws.as_deref(), selected_accepts) {
+            (None, _) => warnings.push(profiles::not_connected_message(sel, row)),
+            (Some(ws), Some(false)) => warnings.push(format!(
+                "profile {}'s relay at {ws} is not accepting connections: reload ab-connect \
+                 at chrome://extensions in that profile (the ↻ icon) so it starts a new relay",
+                row.label()
+            )),
+            _ => {}
+        }
+    }
     // Printed next to the driving profile below, so it must be that profile's
-    // version, not the last `hello` writer's (#319).
-    let extension_version = relay_up.then(connect::relay_ext_version_driving).flatten();
-    let profile = relay_up.then(connect::driving_profile).flatten();
+    // version, not the last `hello` writer's (#319). With --browser, the
+    // selected profile's own (#910).
+    let (extension_version, profile) = match &selected {
+        Some((_, row)) => (
+            row.relay_id
+                .as_deref()
+                .and_then(connect::relay_ext_version_for_profile),
+            row.relay_id
+                .clone()
+                .map(|id| (id, row.relay_email.clone().or_else(|| row.email.clone()))),
+        ),
+        None => (
+            relay_up.then(connect::relay_ext_version_driving).flatten(),
+            relay_up.then(connect::driving_profile).flatten(),
+        ),
+    };
     if let Some(live) = extension_version.as_deref() {
         if connect::classify_ext_version(live, env!("AB_CONNECT_VERSION"), None)
             == connect::ExtVersionVerdict::AheadOfBundled
@@ -1827,6 +1889,14 @@ fn run_status(session: &str, json_mode: bool) {
                     "siteAccess": health.site_access,
                     "profileId": profile_id,
                     "profileEmail": profile_email,
+                    "selectedProfile": selected.as_ref().map(|(sel, row)| json!({
+                        "selector": sel,
+                        "label": row.label(),
+                        "dir": row.dir,
+                        "id": row.relay_id,
+                        "relayUrl": &selected_ws,
+                        "relayAccepts": selected_accepts,
+                    })),
                     "update": update.as_ref().map(|n| json!({
                         "pending": true,
                         "blocked": n.blocked,
@@ -1851,6 +1921,9 @@ fn run_status(session: &str, json_mode: bool) {
             .unwrap_or("unverified"),
         env!("CARGO_PKG_VERSION")
     );
+    if let Some((sel, row)) = &selected {
+        println!("Selected profile (--browser {sel}): {}", row.label());
+    }
     println!(
         "Extension relay: {}{}",
         if relay_up { "up" } else { "down" },
@@ -1889,7 +1962,9 @@ fn run_status(session: &str, json_mode: bool) {
         }
         None => {}
     }
-    if let Some((id, email)) = profile {
+    if let Some((_, row)) = &selected {
+        println!("  profile: {}", row.label());
+    } else if let Some((id, email)) = profile {
         println!(
             "  profile: {}",
             connect::profile_label(&id, email.as_deref())
@@ -1946,7 +2021,7 @@ fn run_status(session: &str, json_mode: bool) {
             println!("  {} pid {}{}", item.name, item.pid, version);
         }
     }
-    if !relay_up && closed_profile.is_none() {
+    if !relay_up && closed_profile.is_none() && selected.is_none() {
         println!(
             "{}",
             color::dim("Run `chrome-use extension status`, then `chrome-use extension connect`.")
@@ -3136,7 +3211,8 @@ fn main() {
     // the session to the running Chrome's relay without any reinstall. Rewrite it
     // into `extension connect …` (preserving any flags like --silent) and let the
     // block below handle it.
-    if clean.first().map(|s| s.as_str()) == Some("reconnect") {
+    let is_reconnect = clean.first().map(|s| s.as_str()) == Some("reconnect");
+    if is_reconnect {
         let mut rebuilt = vec!["extension".to_string(), "connect".to_string()];
         rebuilt.extend(clean.into_iter().skip(1));
         clean = rebuilt;
@@ -3152,13 +3228,33 @@ fn main() {
             // this browser" banner by cold-relaunching the user's Chrome with
             // --silent-debugger-extension-api. Default (Auto) only restarts after
             // an interactive confirm; `--silent` forces it, `--keep-banner` skips.
-            let silence_mode = if clean.iter().any(|a| a == "--keep-banner") {
-                silence::SilenceMode::Off
-            } else if clean.iter().any(|a| a == "--silent") {
-                silence::SilenceMode::Force
-            } else {
-                silence::SilenceMode::Auto
-            };
+            // `reconnect` and a connect aimed at one profile restart only with
+            // `--silent` (#910): the restart closes every profile and window.
+            let target_browser = flags.browser.as_deref().or(flags.profile.as_deref());
+            let mut silence_mode = silence::connect_silence_mode(
+                clean.iter().any(|a| a == "--keep-banner"),
+                clean.iter().any(|a| a == "--silent"),
+                !is_reconnect && target_browser.is_none(),
+            );
+            // A refused per-profile relay is not something a restart is known
+            // to fix, so it never triggers one, even with --silent (#910).
+            if matches!(
+                silence_mode,
+                silence::SilenceMode::Force | silence::SilenceMode::Auto
+            ) {
+                if let Some(sel) = target_browser {
+                    if let Ok(Some(ws)) = connect::relay_url_for_selector_or_default(Some(sel)) {
+                        if !connect::relay_endpoint_accepts(&ws) {
+                            eprintln!(
+                                "{} {}",
+                                color::warning_indicator(),
+                                silence::refused_relay_no_restart_message(sel, &ws)
+                            );
+                            silence_mode = silence::SilenceMode::Off;
+                        }
+                    }
+                }
+            }
             if silence_mode != silence::SilenceMode::Off {
                 match silence::ensure_banner_silenced(silence_mode) {
                     silence::SilenceOutcome::Restarted => {
@@ -3202,7 +3298,6 @@ fn main() {
             // quitting/restarting Chrome — verified locally that a running Chrome
             // picks the host back up on its own, no restart needed. So if the host
             // is registered, register-to-be-safe and poll for the relay to come up.
-            let target_browser = flags.browser.as_deref().or(flags.profile.as_deref());
             let current_relay = match connect::relay_url_for_selector_or_default(target_browser) {
                 Ok(url) => url,
                 Err(e) => {
@@ -3370,6 +3465,16 @@ fn main() {
                 exit(2);
             }
         }
+    }
+
+    // One stable health command for the recovery guidance used by the bundled
+    // skills. It intentionally runs before daemon bootstrap so a wedged daemon
+    // cannot make the health check hang (issue #145), and before the profile
+    // choice below, which would refuse a --browser profile that is not
+    // connected instead of letting status report on it (#910).
+    if clean.first().map(|s| s.as_str()) == Some("status") {
+        run_status(&flags.session, flags.json, flags.browser.as_deref());
+        return;
     }
 
     // `--browser <id|email-substr>` (issue #60): pin this session to a specific
@@ -3734,14 +3839,6 @@ fn main() {
     ) && clean.get(1).map(|s| s.as_str()) == Some("cleanup")
     {
         run_tabs_cleanup(&flags, &clean[2..]);
-        return;
-    }
-
-    // One stable health command for the recovery guidance used by the bundled
-    // skills. It intentionally runs before daemon bootstrap so a wedged daemon
-    // cannot make the health check hang (issue #145).
-    if clean.first().map(|s| s.as_str()) == Some("status") {
-        run_status(&flags.session, flags.json);
         return;
     }
 
@@ -5529,6 +5626,34 @@ fn run_batch(flags: &Flags, bail: bool, commands: Vec<Vec<String>>) {
 
 #[cfg(test)]
 mod tests {
+    /// #910: `status --browser <profile>` reports that profile, including
+    /// when its relay is not connected, and refuses a selector it cannot
+    /// resolve instead of falling back to the default profile.
+    #[test]
+    fn status_reports_the_profile_named_with_browser() {
+        let row = |dir: &str, name: &str, ws: Option<&str>| crate::profiles::ProfileRow {
+            name: Some(name.to_string()),
+            dir: Some(dir.to_string()),
+            root: Some("/chrome".to_string()),
+            ws: ws.map(str::to_string),
+            relay_id: ws.map(|_| format!("id-{dir}")),
+            has_extension: true,
+            ..Default::default()
+        };
+        let rows = vec![
+            row("Default", "Leo", Some("ws://127.0.0.1:1/default")),
+            row("Profile 3", "Work", Some("ws://127.0.0.1:63000/work")),
+            row("Profile 4", "Side", None),
+        ];
+        let picked = super::status_selected_profile(&rows, "Profile 3").unwrap();
+        assert_eq!(picked.dir.as_deref(), Some("Profile 3"));
+        assert_eq!(picked.ws.as_deref(), Some("ws://127.0.0.1:63000/work"));
+        let down = super::status_selected_profile(&rows, "Side").unwrap();
+        assert_eq!(down.dir.as_deref(), Some("Profile 4"));
+        assert!(down.ws.is_none());
+        assert!(super::status_selected_profile(&rows, "Nobody").is_err());
+    }
+
     use super::*;
 
     #[test]

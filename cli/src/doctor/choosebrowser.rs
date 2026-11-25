@@ -18,12 +18,18 @@ use crate::profiles::{self, ProfileRow, RuleHit};
 const RULE_CATEGORY: &str = "ChooseBrowser rules";
 
 /// One line per profile rule: `claude.ai → Davian (Profile 14, …): connected`.
+///
+/// `probe` says whether a recorded relay endpoint accepts connections:
+/// `Some(false)` for one that refuses, `None` when it was not probed. A
+/// per-profile relay record outlives a host that died, so "a record exists"
+/// is not "connected" (#910).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn rule_target_checks(
     rules: &[choosebrowser::ProfileRule],
     local_state: Option<&str>,
     rows: &[ProfileRow],
     chrome_root: Option<&str>,
+    probe: &dyn Fn(&str) -> Option<bool>,
 ) -> Vec<Check> {
     rules
         .iter()
@@ -105,12 +111,41 @@ fn rule_target_checks(
                     ),
                 )
                 .with_fix("run `chrome-use browsers` to see the profiles chrome-use knows"),
-                Some(i) if rows[i].connected() => Check::new(
-                    id,
-                    RULE_CATEGORY,
-                    Status::Pass,
-                    format!("{name} → {}: connected", rows[i].label()),
-                ),
+                Some(i) if rows[i].connected() => {
+                    let ws = rows[i].ws.as_deref().unwrap_or_default();
+                    match probe(ws) {
+                        Some(true) => Check::new(
+                            id,
+                            RULE_CATEGORY,
+                            Status::Pass,
+                            format!("{name} → {}: connected", rows[i].label()),
+                        ),
+                        Some(false) => Check::new(
+                            id,
+                            RULE_CATEGORY,
+                            Status::Warn,
+                            format!(
+                                "{name} → {}: relay at {ws} is not accepting connections — \
+                                 opening these urls fails until that profile's relay is back",
+                                rows[i].label()
+                            ),
+                        )
+                        .with_fix(
+                            "reload ab-connect at chrome://extensions in that profile (the ↻ \
+                             icon) so it starts a new relay; restarting all of Chrome is not \
+                             needed for this",
+                        ),
+                        None => Check::new(
+                            id,
+                            RULE_CATEGORY,
+                            Status::Info,
+                            format!(
+                                "{name} → {}: relay recorded at {ws} (not probed)",
+                                rows[i].label()
+                            ),
+                        ),
+                    }
+                }
                 Some(i) => Check::new(
                     id,
                     RULE_CATEGORY,
@@ -180,6 +215,19 @@ pub(super) fn check(checks: &mut Vec<Check>) {
             // whose profile is not connected makes `open` of its sites fail
             // (chrome-use will not substitute another profile), so this is
             // the line that explains such a refusal before it happens.
+            // Probe each recorded endpoint once, however many rules name it.
+            let probed = std::cell::RefCell::new(std::collections::HashMap::<String, bool>::new());
+            let probe = |ws: &str| -> Option<bool> {
+                if ws.is_empty() {
+                    return None;
+                }
+                let mut seen = probed.borrow_mut();
+                Some(
+                    *seen
+                        .entry(ws.to_string())
+                        .or_insert_with(|| crate::connect::relay_endpoint_accepts(ws)),
+                )
+            };
             checks.extend(rule_target_checks(
                 &choosebrowser::load_profile_rules(),
                 choosebrowser::read_local_state().as_deref(),
@@ -187,6 +235,7 @@ pub(super) fn check(checks: &mut Vec<Check>) {
                 choosebrowser::chrome_root()
                     .map(|p| p.display().to_string())
                     .as_deref(),
+                &probe,
             ));
         }
         // Parsed as JSON, but not a version this build reads. Guessing at an
@@ -388,7 +437,9 @@ mod tests {
             row("Default", "Leo", Some("ws://leo")),
             row("Profile 14", "Davian", None),
         ];
-        let checks = rule_target_checks(&rules, Some(local_state), &rows, Some("/chrome"));
+        let accepts = |_: &str| Some(true);
+        let checks =
+            rule_target_checks(&rules, Some(local_state), &rows, Some("/chrome"), &accepts);
         assert_eq!(checks.len(), 3);
         assert_eq!(checks[0].status, Status::Info);
         assert!(
@@ -418,7 +469,7 @@ mod tests {
 
         // Local State unreadable: the profile is unknown, not missing, and
         // the rule is not applied — what the runtime does.
-        let checks = rule_target_checks(&rules, None, &rows, Some("/chrome"));
+        let checks = rule_target_checks(&rules, None, &rows, Some("/chrome"), &accepts);
         assert_eq!(checks.len(), 3);
         for c in &checks {
             assert_eq!(c.status, Status::Warn);
@@ -435,5 +486,50 @@ mod tests {
                 c.message
             );
         }
+    }
+
+    /// #910: doctor said "connected" for a profile whose relay refused every
+    /// connection, because a relay record existed. It now probes the record.
+    #[test]
+    fn a_rule_whose_relay_refuses_is_not_connected() {
+        let local_state = r#"{"profile":{"info_cache":{
+            "Profile 3":{"name":"Work","user_name":"w@x.com","gaia_id":"333"}}}}"#;
+        let rules = vec![choosebrowser::ProfileRule {
+            rule_id: None,
+            pattern: "claude.ai".into(),
+            key: "333".into(),
+        }];
+        let rows = vec![row("Profile 3", "Work", Some("ws://127.0.0.1:63000/x"))];
+        let probed = std::cell::Cell::new(0);
+        let refuses = |ws: &str| {
+            assert_eq!(ws, "ws://127.0.0.1:63000/x");
+            probed.set(probed.get() + 1);
+            Some(false)
+        };
+        let checks =
+            rule_target_checks(&rules, Some(local_state), &rows, Some("/chrome"), &refuses);
+        assert_eq!(probed.get(), 1);
+        assert_eq!(checks[0].status, Status::Warn);
+        assert!(
+            checks[0].message.contains("not accepting connections"),
+            "{}",
+            checks[0].message
+        );
+        assert!(!checks[0].message.ends_with(": connected"));
+        assert!(checks[0]
+            .fix
+            .as_deref()
+            .unwrap()
+            .contains("chrome://extensions"));
+
+        let unprobed = |_: &str| None;
+        let checks =
+            rule_target_checks(&rules, Some(local_state), &rows, Some("/chrome"), &unprobed);
+        assert_eq!(checks[0].status, Status::Info);
+        assert!(
+            checks[0].message.contains("not probed"),
+            "{}",
+            checks[0].message
+        );
     }
 }

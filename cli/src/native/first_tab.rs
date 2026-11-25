@@ -124,7 +124,29 @@ fn window_unavailable(why: &str, hint: &str) -> String {
 /// `id` and `type` `normal`, and no entry may be unreadable, of another type
 /// (the query asked for normal windows only), or share an id with another.
 /// An empty list is `profile not open`; anything else is unavailable.
+#[cfg(test)]
 pub fn profile_window_verdict(windows: Result<Value, String>) -> Result<(), String> {
+    profile_window_verdict_with(windows, || None)
+}
+
+/// The hint for an extension too old to answer the window check. With
+/// `policy_steps` (the profile's ab-connect was installed by policy, #910)
+/// the user gets steps that work without the Update button such an install
+/// does not have.
+pub fn old_extension_hint(policy_steps: Option<String>) -> String {
+    match policy_steps {
+        Some(steps) => format!(" ab-connect is older than 0.5.25. {steps} Then rerun."),
+        None => " ab-connect is older than 0.5.25: update it from chrome://extensions, then rerun."
+            .to_string(),
+    }
+}
+
+/// [`profile_window_verdict`], asking `policy_steps` only when the extension
+/// turned out too old (it reads the profile's files).
+pub fn profile_window_verdict_with(
+    windows: Result<Value, String>,
+    policy_steps: impl FnOnce() -> Option<String>,
+) -> Result<(), String> {
     let list = match windows {
         Ok(Value::Array(list)) => list,
         Ok(other) => {
@@ -137,11 +159,11 @@ pub fn profile_window_verdict(windows: Result<Value, String>) -> Result<(), Stri
         Err(e) => {
             let lower = e.to_lowercase();
             let hint = if lower.contains("wasn't found") || lower.contains("method not found") {
-                " ab-connect is older than 0.5.25: update it from chrome://extensions, then rerun."
+                old_extension_hint(policy_steps())
             } else {
-                " Rerun once the extension answers."
+                " Rerun once the extension answers.".to_string()
             };
-            return Err(window_unavailable(&e, hint));
+            return Err(window_unavailable(&e, &hint));
         }
     };
     if list.is_empty() {
@@ -426,6 +448,38 @@ mod tests {
         assert!(e.starts_with(PROFILE_WINDOW_UNAVAILABLE), "{e}");
         let old = profile_window_verdict(Err("'ABExt.call' wasn't found".to_string())).unwrap_err();
         assert!(old.contains("update it from chrome://extensions"), "{old}");
+    }
+
+    /// #910: a policy-installed ab-connect has no Update button on its row, so
+    /// the too-old hint must name steps that work without it, and the install
+    /// facts are only read when the extension really is too old.
+    #[test]
+    fn a_too_old_policy_install_gets_steps_it_can_follow() {
+        let steps = "In that profile open chrome://policy and press \"Reload policies\".";
+        let old = profile_window_verdict_with(Err("'ABExt.call' wasn't found".to_string()), || {
+            Some(steps.to_string())
+        })
+        .unwrap_err();
+        assert!(old.starts_with(PROFILE_WINDOW_UNAVAILABLE), "{old}");
+        assert!(old.contains("older than 0.5.25"), "{old}");
+        assert!(old.contains("Reload policies"), "{old}");
+        assert!(!old.contains("update it from chrome://extensions"), "{old}");
+        assert!(old.trim_end().ends_with("Then rerun."), "{old}");
+
+        let mut asked = false;
+        let _ = profile_window_verdict_with(Err("timed out".to_string()), || {
+            asked = true;
+            Some(steps.to_string())
+        });
+        assert!(
+            !asked,
+            "install facts read for an error that is not about age"
+        );
+        let _ = profile_window_verdict_with(Ok(json!([{ "id": 1, "type": "normal" }])), || {
+            asked = true;
+            None
+        });
+        assert!(!asked);
     }
 
     #[test]

@@ -1938,6 +1938,21 @@ pub(crate) struct ChromeExtensionStatus {
     pub(crate) disable_reasons: Vec<String>,
     active_bit: Option<bool>,
     from_webstore: Option<bool>,
+    /// Chrome's install location for the extension (`location` in the
+    /// profile's Preferences): Chromium's `ManifestLocation`, where 7 is
+    /// `EXTERNAL_POLICY_DOWNLOAD` and 9 `EXTERNAL_POLICY` (#910).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    location: Option<i64>,
+}
+
+impl ChromeExtensionStatus {
+    /// Installed by policy (the building icon in chrome://extensions): the
+    /// extension's own row has no Update or Remove control (#910). Read per
+    /// profile, so it holds for a profile whose policy comes from somewhere
+    /// other than this Mac's forcelist (a cloud-managed work profile).
+    pub(crate) fn policy_installed(&self) -> bool {
+        matches!(self.location, Some(7) | Some(9))
+    }
 }
 
 fn chrome_profile_roots() -> Vec<PathBuf> {
@@ -2401,17 +2416,101 @@ pub fn cached_store_extension_version() -> Option<String> {
 /// Chrome.
 pub fn update_instruction() -> String {
     if extension_is_policy_installed() {
-        "this profile has the extension installed by policy, so its own row has no update or \
-         remove control. Use chrome://extensions → enable Developer mode → the **Update** \
-         button in the toolbar (not the extension row), or restart Chrome. Chrome also updates \
-         policy-installed extensions on its own schedule and grants new permissions without \
-         asking."
-            .to_string()
+        format!(
+            "this profile has the extension installed by policy, so its own row has no update or \
+             remove control. {POLICY_UPDATE_STEPS} Chrome also updates policy-installed \
+             extensions on its own schedule and grants new permissions without asking."
+        )
     } else {
         "chrome://extensions → Developer mode → Update (a reload is enough for an unpacked \
          build, which never updates itself)."
             .to_string()
     }
+}
+
+/// How to pull an update into a policy-installed extension, whose own row in
+/// chrome://extensions has no Update button (#186, #910). Every step is
+/// something the user can do on that screen; chrome-use has no command that
+/// updates an extension too old to answer it.
+pub const POLICY_UPDATE_STEPS: &str = "In that profile open chrome://policy and press \
+     \"Reload policies\", then open chrome://extensions, enable Developer mode and press the \
+     Update button in the toolbar (not on the extension's row). If the version still does not \
+     change, quit Chrome completely and reopen it: Chrome checks policy-installed extensions \
+     for updates at startup.";
+
+/// Whether ab-connect in the profile behind relay endpoint `ws` was installed
+/// by policy (#910). In order: the install type the extension itself reported
+/// (newer builds only; `admin` is chrome.management's word for a policy
+/// install), that profile's Preferences, then this Mac's forcelist. `None`
+/// when nothing could be read.
+pub fn relay_profile_policy_installed(ws: &str) -> Option<bool> {
+    let row = crate::profiles::load_rows()
+        .into_iter()
+        .find(|r| r.ws.as_deref().is_some_and(|w| same_relay_endpoint(w, ws)));
+    let reported = row
+        .as_ref()
+        .and_then(|r| r.relay_id.as_deref())
+        .and_then(|id| std::fs::read_to_string(relay_ext_profile_path_for(id)).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| {
+            v.get("installType")
+                .and_then(|t| t.as_str())
+                .map(str::to_string)
+        });
+    let from_prefs = row.as_ref().and_then(|r| {
+        let root = r.root.as_deref()?;
+        let dir = r.dir.as_deref()?;
+        profile_extension_status(Path::new(root), dir).map(|s| s.policy_installed())
+    });
+    decide_policy_installed(
+        reported.as_deref(),
+        from_prefs,
+        matches!(
+            managed_policy_state(),
+            PolicyState::Active | PolicyState::Stale(_)
+        ),
+    )
+}
+
+/// Pure half of [`relay_profile_policy_installed`].
+fn decide_policy_installed(
+    reported_install_type: Option<&str>,
+    preferences_say_policy: Option<bool>,
+    forcelist_names_us: bool,
+) -> Option<bool> {
+    match reported_install_type {
+        Some("admin") => return Some(true),
+        Some("normal") | Some("development") | Some("sideload") => return Some(false),
+        _ => {}
+    }
+    if preferences_say_policy.is_some() {
+        return preferences_say_policy;
+    }
+    forcelist_names_us.then_some(true)
+}
+
+fn same_relay_endpoint(a: &str, b: &str) -> bool {
+    a.trim().trim_end_matches('/') == b.trim().trim_end_matches('/')
+}
+
+/// What to do about an extension too old for a command, in the profile
+/// behind `ws` (#910). The plain advice ("update it from chrome://extensions")
+/// points a policy install at a button that is not there.
+pub fn old_extension_update_steps(ws: &str) -> Option<String> {
+    if relay_profile_policy_installed(ws) != Some(true) {
+        return None;
+    }
+    let mut steps = format!(
+        "ab-connect in this profile was installed by policy (the building icon at \
+         chrome://extensions), so its row has no Update button. {POLICY_UPDATE_STEPS}"
+    );
+    if let PolicyState::Stale(entry) = managed_policy_state() {
+        steps.push_str(&format!(
+            " This Mac's install policy for chrome-use is stale ({entry}), which can keep \
+             Chrome from updating it: run `chrome-use extension install` first."
+        ));
+    }
+    Some(steps)
 }
 
 /// One line naming the installed and published extension versions, when the
@@ -3302,6 +3401,7 @@ fn parse_chrome_extension_status(
         disable_reasons,
         active_bit: settings.get("active_bit").and_then(|v| v.as_bool()),
         from_webstore: settings.get("from_webstore").and_then(|v| v.as_bool()),
+        location: settings.get("location").and_then(|v| v.as_i64()),
     }
 }
 
@@ -4039,11 +4139,63 @@ pub fn relay_health() -> RelayHealth {
     runtime.block_on(probe_relay_health(&url, std::time::Duration::from_secs(10)))
 }
 
+/// The same snapshot for one relay endpoint: a profile picked with
+/// `--browser` (#910), not whichever host wrote the generic sidecar last.
+pub fn relay_health_at(url: &str) -> RelayHealth {
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return RelayHealth::default();
+    };
+    runtime.block_on(probe_relay_health(url, std::time::Duration::from_secs(10)))
+}
+
+/// Whether anything accepts a TCP connection at a relay endpoint, within a
+/// second. No WebSocket handshake and no CDP request, like
+/// [`connected_relay_profiles`]: a per-profile sidecar outlives a host that
+/// died, so its existence alone is not "connected" (#910). Blocking and
+/// runtime-free, so sync callers inside or outside tokio can use it.
+pub fn relay_endpoint_accepts(url: &str) -> bool {
+    use std::net::ToSocketAddrs;
+    let Ok(uri) = url.parse::<tokio_tungstenite::tungstenite::http::Uri>() else {
+        return false;
+    };
+    let Some(host) = uri.host() else { return false };
+    let port = uri
+        .port_u16()
+        .unwrap_or(if uri.scheme_str() == Some("wss") {
+            443
+        } else {
+            80
+        });
+    let Ok(addrs) = (host.trim_matches(['[', ']']), port).to_socket_addrs() else {
+        return false;
+    };
+    addrs.into_iter().any(|addr| {
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(1)).is_ok()
+    })
+}
+
+/// The extension version one profile's extension reported, from its own
+/// sidecar.
+pub fn relay_ext_version_for_profile(id: &str) -> Option<String> {
+    read_ext_version_file(relay_ext_version_path_for(id))
+}
+
 /// Profile TCP checks run beside the state read, not after its ten-second budget.
 pub fn relay_health_and_profiles() -> (RelayHealth, Vec<serde_json::Value>) {
+    relay_health_and_profiles_at(None)
+}
+
+/// [`relay_health_and_profiles`] with the health read from `url` when given.
+pub fn relay_health_and_profiles_at(url: Option<&str>) -> (RelayHealth, Vec<serde_json::Value>) {
     std::thread::scope(|scope| {
         let profiles = scope.spawn(connected_relay_profiles);
-        let health = relay_health();
+        let health = match url {
+            Some(url) => relay_health_at(url),
+            None => relay_health(),
+        };
         (
             health,
             profiles.join().expect("profile liveness worker panicked"),
@@ -6729,6 +6881,7 @@ printf '%s\000' "$HOME" "${CHROME_USE_RELAY_DIR-__unset__}" "$@"
                 disable_reasons: Vec::new(),
                 active_bit: Some(true),
                 from_webstore: Some(true),
+                location: None,
             }),
         }
     }
@@ -7402,6 +7555,75 @@ printf '%s\000' "$HOME" "${CHROME_USE_RELAY_DIR-__unset__}" "$@"
 
         assert_eq!(status.version.as_deref(), Some("0.5.1"));
         assert_eq!(status.disable_reasons, vec!["4", "permissions_increase"]);
+    }
+
+    /// #910: Chrome records how each profile got the extension. 7
+    /// (EXTERNAL_POLICY_DOWNLOAD, what a forcelist install writes) and 9
+    /// (EXTERNAL_POLICY) are policy installs with no Update button on the row.
+    #[test]
+    fn preferences_location_says_whether_policy_installed_it() {
+        let status = |location: serde_json::Value| {
+            parse_chrome_extension_status(
+                STORE_EXTENSION_ID,
+                &json!({ "manifest": { "version": "0.5.12" }, "location": location }),
+                Path::new("/tmp/Secure Preferences"),
+            )
+        };
+        assert!(status(json!(7)).policy_installed());
+        assert!(status(json!(9)).policy_installed());
+        assert!(!status(json!(1)).policy_installed());
+        assert!(!status(json!(4)).policy_installed());
+        assert!(!status(serde_json::Value::Null).policy_installed());
+    }
+
+    /// #910: what the extension reports wins, then that profile's own
+    /// Preferences, and only then this Mac's forcelist.
+    #[test]
+    fn policy_install_is_decided_per_profile_first() {
+        assert_eq!(
+            decide_policy_installed(Some("admin"), Some(false), false),
+            Some(true)
+        );
+        assert_eq!(
+            decide_policy_installed(Some("normal"), Some(true), true),
+            Some(false)
+        );
+        assert_eq!(decide_policy_installed(None, Some(true), false), Some(true));
+        assert_eq!(
+            decide_policy_installed(None, Some(false), true),
+            Some(false)
+        );
+        assert_eq!(
+            decide_policy_installed(Some("unknown"), None, true),
+            Some(true)
+        );
+        assert_eq!(decide_policy_installed(None, None, false), None);
+    }
+
+    /// #910: the policy steps are things a user can do with no Update button
+    /// on the extension's row.
+    #[test]
+    fn policy_update_steps_need_no_row_button() {
+        assert!(POLICY_UPDATE_STEPS.contains("chrome://policy"));
+        assert!(POLICY_UPDATE_STEPS.contains("Reload policies"));
+        assert!(POLICY_UPDATE_STEPS.contains("toolbar"));
+        assert!(POLICY_UPDATE_STEPS.contains("quit Chrome"));
+    }
+
+    /// #910: a recorded endpoint nobody listens on is not "connected".
+    #[test]
+    fn a_closed_relay_port_does_not_accept() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(relay_endpoint_accepts(&format!(
+            "ws://127.0.0.1:{port}/devtools/browser/x"
+        )));
+        drop(listener);
+        // Port 1 (outside the ephemeral range, so no self-connect): refused.
+        assert!(!relay_endpoint_accepts(
+            "ws://127.0.0.1:1/devtools/browser/x"
+        ));
+        assert!(!relay_endpoint_accepts("not a url"));
     }
 
     /// Only "a newer build exists in the store" is actionable. Being behind the

@@ -80,6 +80,53 @@ pub enum SilenceMode {
     Force,
     /// `--keep-banner`: never touch the browser.
     Off,
+    /// `reconnect` (and `extension connect --browser`) without `--silent`:
+    /// never restart, but say what a restart would do and how to ask for it
+    /// (#910). Restarting quits every profile and window of the user's Chrome,
+    /// which a command meant to re-attach one relay must not do implicitly.
+    HintOnly,
+}
+
+/// Pick the banner mode for `extension connect` / `reconnect`.
+///
+/// `implicit_restart_allowed` is false for `reconnect` and for a connect
+/// aimed at one profile (`--browser`): there the install-time consent and the
+/// interactive prompt no longer count, and only `--silent` restarts (#910).
+pub fn connect_silence_mode(
+    keep_banner: bool,
+    silent: bool,
+    implicit_restart_allowed: bool,
+) -> SilenceMode {
+    if keep_banner {
+        SilenceMode::Off
+    } else if silent {
+        SilenceMode::Force
+    } else if implicit_restart_allowed {
+        SilenceMode::Auto
+    } else {
+        SilenceMode::HintOnly
+    }
+}
+
+/// Why no restart happens even with `--silent`: the profile's relay refuses
+/// connections, and restarting Chrome only removes the banner; it is not
+/// known to bring a refused relay back (#910).
+pub fn refused_relay_no_restart_message(selector: &str, ws: &str) -> String {
+    format!(
+        "not restarting Chrome: the relay recorded for profile \"{selector}\" ({ws}) refuses \
+         connections, and a restart only removes the debugging banner; it is not known to fix \
+         a refused relay. Reload ab-connect at chrome://extensions in that profile (the ↻ icon) \
+         so it starts a new relay, then rerun. Run `chrome-use extension connect --silent` \
+         separately if you still want the banner gone."
+    )
+}
+
+/// What a restart would do and how to ask for one, for [`SilenceMode::HintOnly`].
+pub fn restart_opt_in_hint() -> String {
+    "not restarting Chrome. Removing the \"started debugging this browser\" banner means \
+     quitting and reopening all of Chrome (every profile and window; tabs and logins are \
+     restored). To do that, rerun with --silent; --keep-banner hides this note."
+        .to_string()
 }
 
 /// Result of an attempt to silence the banner.
@@ -138,6 +185,14 @@ pub fn ensure_banner_silenced(mode: SilenceMode) -> SilenceOutcome {
 
     let proceed = match mode {
         SilenceMode::Force => true,
+        SilenceMode::HintOnly => {
+            // Say it where the old behaviour would have restarted or asked:
+            // a person at a terminal, or a stored install-time consent.
+            if interactive() || has_silence_consent() {
+                eprintln!("{} {}", color::warning_indicator(), restart_opt_in_hint());
+            }
+            return SilenceOutcome::Declined;
+        }
         SilenceMode::Auto => {
             if interactive() {
                 confirm_restart()
@@ -606,5 +661,49 @@ mod tests {
         let rc = scan_ps_macos(&text, APPS).expect("should detect");
         assert_eq!(rc.instances, 1, "only the main process counts");
         assert!(!rc.has_flag);
+    }
+}
+
+#[cfg(test)]
+mod mode_tests {
+    use super::*;
+
+    /// #910: `reconnect` restarted the user's whole Chrome on the strength of
+    /// an install-time consent. Without --silent it now never restarts.
+    #[test]
+    fn reconnect_restarts_only_with_silent() {
+        assert!(connect_silence_mode(false, false, false) == SilenceMode::HintOnly);
+        assert!(connect_silence_mode(false, true, false) == SilenceMode::Force);
+        assert!(connect_silence_mode(true, true, false) == SilenceMode::Off);
+        // `extension connect` with no profile keeps its consent/prompt path.
+        assert!(connect_silence_mode(false, false, true) == SilenceMode::Auto);
+    }
+
+    #[test]
+    fn the_hint_says_what_a_restart_does_and_how_to_ask() {
+        let hint = restart_opt_in_hint();
+        assert!(hint.contains("every profile and window"), "{hint}");
+        assert!(hint.contains("--silent"), "{hint}");
+        let refused = refused_relay_no_restart_message("Profile 3", "ws://127.0.0.1:63000/x");
+        assert!(refused.starts_with("not restarting Chrome"), "{refused}");
+        assert!(
+            refused.contains("Profile 3") && refused.contains("63000"),
+            "{refused}"
+        );
+        assert!(refused.contains("not known to fix"), "{refused}");
+    }
+
+    /// HintOnly only reads the process list; whatever runs on this machine,
+    /// it never comes back having restarted (or failed to restart) Chrome.
+    #[test]
+    fn hint_only_never_restarts() {
+        assert!(matches!(
+            ensure_banner_silenced(SilenceMode::Off),
+            SilenceOutcome::Declined
+        ));
+        assert!(!matches!(
+            ensure_banner_silenced(SilenceMode::HintOnly),
+            SilenceOutcome::Restarted | SilenceOutcome::Failed(_)
+        ));
     }
 }

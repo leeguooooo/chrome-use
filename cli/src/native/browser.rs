@@ -7409,7 +7409,10 @@ impl BrowserManager {
         )
         .await
         .unwrap_or_else(|_| Err("the window check got no answer in time".to_string()));
-        match first_tab::profile_window_verdict(answer) {
+        let ws_url = self.ws_url.clone();
+        match first_tab::profile_window_verdict_with(answer, || {
+            crate::connect::old_extension_update_steps(&ws_url)
+        }) {
             Ok(()) => Ok(false),
             Err(e)
                 if e == first_tab::PROFILE_NOT_OPEN && first_tab::open_profile_window_enabled() =>
