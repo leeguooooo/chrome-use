@@ -183,11 +183,122 @@ test('hung tab A does not block B; next concurrent reads share acknowledged reco
 
 test('timed-out side effect is not replayed and next action runs once after recovery', async () => {
   const { calls, deps } = await recoveryFixture()
-  await assert.rejects(sendTabCommand(1, 'Runtime.evaluate', {}, undefined, deps), /relay timeout/)
+  await assert.rejects(sendTabCommand(1, 'Input.dispatchMouseEvent', { type: 'mousePressed' }, undefined, deps), /relay timeout/)
   assert.equal(calls.length, 1)
-  await sendTabCommand(1, 'Input.dispatchMouseEvent', {}, undefined, deps)
-  assert.equal(calls.filter(c => c[2] === 'Runtime.evaluate').length, 1)
+  await sendTabCommand(1, 'Input.dispatchKeyEvent', {}, undefined, deps)
   assert.equal(calls.filter(c => c[2] === 'Input.dispatchMouseEvent').length, 1)
+  assert.equal(calls.filter(c => c[2] === 'Input.dispatchKeyEvent').length, 1)
+  assert.deepEqual(calls.map(c => c[0]), ['send', 'detach', 'forget', 'attach', 'send'])
+})
+
+// #903: a script that awaits longer than the relay budget is slow, not a
+// broken attachment. Resetting the tab for it would drop its sessions and,
+// when the reset then failed, block every later command on the tab.
+for (const method of ['Runtime.evaluate', 'Runtime.callFunctionOn', 'Runtime.awaitPromise']) {
+  test(`a slow script (${method}) times out without resetting the tab`, async () => {
+    const { createAttachmentHealth } = await import('./tab-command.js')
+    const calls = []
+    const deps = {
+      health: createAttachmentHealth(), commandTimeoutMs: 5, recoveryTimeoutMs: 15,
+      sendCommand(target, sent) {
+        calls.push(['send', sent])
+        return sent === method ? new Promise(() => {}) : Promise.resolve({ ok: true })
+      },
+      async detachDebugger(id) { calls.push(['detach', id]) },
+      detachTab(id) { calls.push(['forget', id]) },
+      async attachTab(id) { calls.push(['attach', id]) },
+      async recoverSessionTab() { calls.push(['recoverSession']); return 1 },
+    }
+    await assert.rejects(sendTabCommand(1, method, { awaitPromise: true }, undefined, deps), /relay timeout/)
+    assert.equal(deps.health.isUnhealthy(1), false)
+    assert.deepEqual(await sendTabCommand(1, 'DOM.getDocument', {}, undefined, deps), { ok: true })
+    assert.deepEqual(calls, [['send', method], ['send', 'DOM.getDocument']])
+  })
+}
+
+test('a slow script in a child frame does not invalidate its parent', async () => {
+  const { calls, deps } = await recoveryFixture()
+  deps.sendCommand = (target, method) => {
+    calls.push(['send', target.sessionId ?? null, method])
+    return method === 'Runtime.evaluate' ? new Promise(() => {}) : Promise.resolve({ ok: true })
+  }
+  await assert.rejects(sendTabCommand(1, 'Runtime.evaluate', {}, 'child', deps), /relay timeout/)
+  assert.deepEqual(await sendTabCommand(1, 'Runtime.getProperties', {}, 'child', deps), { ok: true })
+  assert.equal(calls.some(c => c[0] === 'detach' || c[0] === 'attach'), false)
+})
+
+// #903: a failed reset used to be cached until the tab was closed. It is now
+// cached only for a short backoff, then the next command attempts it again.
+async function failingResetFixture() {
+  const { createAttachmentHealth, RESET_RETRY_BACKOFF_MS } = await import('./tab-command.js')
+  const clock = { t: 1000 }
+  const calls = []
+  let detachFails = true
+  const deps = {
+    health: createAttachmentHealth({ now: () => clock.t }), commandTimeoutMs: 5, recoveryTimeoutMs: 15,
+    sendCommand(target, method) { calls.push(['send', method]); return Promise.resolve({ ok: true }) },
+    async detachDebugger(id) {
+      calls.push(['detach', id])
+      if (detachFails) throw new Error('Permission denied')
+    },
+    detachTab(id) { calls.push(['forget', id]) },
+    async attachTab(id) { calls.push(['attach', id]) },
+  }
+  deps.health.mark(1)
+  await assert.rejects(sendTabCommand(1, 'DOM.getDocument', {}, undefined, deps), /tab_reset_failed/)
+  calls.length = 0
+  return { calls, clock, deps, backoff: RESET_RETRY_BACKOFF_MS, heal() { detachFails = false } }
+}
+
+test('a failed reset is retried by a later command after the backoff', async () => {
+  const { calls, clock, deps, backoff, heal } = await failingResetFixture()
+  heal()
+  clock.t += backoff - 1
+  await assert.rejects(sendTabCommand(1, 'DOM.getDocument', {}, undefined, deps),
+    /tab_reset_failed: tab 1 was reset; debugger recovery could not be confirmed\. It is retried on a later command/)
+  assert.deepEqual(calls, [])
+  clock.t += 1
+  assert.deepEqual(await sendTabCommand(1, 'DOM.getDocument', {}, undefined, deps), { ok: true })
+  assert.deepEqual(calls.map(c => c[0]), ['detach', 'forget', 'attach', 'send'])
+  assert.equal(deps.health.isUnhealthy(1), false)
+})
+
+test('a reset that fails again is cached for another backoff, not forever', async () => {
+  const { calls, clock, deps, backoff, heal } = await failingResetFixture()
+  clock.t += backoff
+  await assert.rejects(sendTabCommand(1, 'DOM.getDocument', {}, undefined, deps), /tab_reset_failed/)
+  assert.deepEqual(calls.map(c => c[0]), ['detach'])
+  await assert.rejects(sendTabCommand(1, 'DOM.getDocument', {}, undefined, deps), /tab_reset_failed/)
+  assert.deepEqual(calls.map(c => c[0]), ['detach'])
+  heal()
+  clock.t += backoff
+  assert.deepEqual(await sendTabCommand(1, 'DOM.getDocument', {}, undefined, deps), { ok: true })
+})
+
+test('concurrent commands after the backoff share one new reset', async () => {
+  const { calls, clock, deps, backoff, heal } = await failingResetFixture()
+  heal()
+  clock.t += backoff
+  await Promise.all([1, 2, 3].map(() => sendTabCommand(1, 'DOM.getDocument', {}, undefined, deps)))
+  assert.equal(calls.filter(c => c[0] === 'detach').length, 1)
+  assert.equal(calls.filter(c => c[0] === 'attach').length, 1)
+  assert.equal(calls.filter(c => c[0] === 'send').length, 3)
+})
+
+for (const method of ['Page.reload', 'Page.navigate']) {
+  test(`${method} retries a failed reset at once instead of being rejected`, async () => {
+    const { calls, deps, heal } = await failingResetFixture()
+    heal()
+    assert.deepEqual(await sendTabCommand(1, method, {}, undefined, deps), { ok: true })
+    assert.deepEqual(calls.map(c => c[0]), ['detach', 'forget', 'attach', 'send'])
+    assert.equal(calls.at(-1)[1], method)
+  })
+}
+
+test('a reload whose reset fails again still reports tab_reset_failed', async () => {
+  const { calls, deps } = await failingResetFixture()
+  await assert.rejects(sendTabCommand(1, 'Page.reload', {}, undefined, deps), /tab_reset_failed/)
+  assert.deepEqual(calls.map(c => c[0]), ['detach'])
 })
 
 test('recovery deadline reports an unconfirmed tab reset without dispatch', async () => {

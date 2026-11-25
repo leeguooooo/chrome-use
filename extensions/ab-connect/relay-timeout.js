@@ -53,6 +53,20 @@ const INPUT_COMMANDS = new Set([
 export const PAYLOAD_MS_PER_BYTE = 2
 export const PAYLOAD_MAX_TIMEOUT_MS = 300000
 
+// A page script that awaits (a timer, a fetch, an image being generated) keeps
+// the renderer free while it waits. Its relay timeout means only that the
+// script was slow, not that the debugger attachment stopped answering (#891,
+// #903), so it must not trigger a detach/attach reset of the tab.
+const SCRIPT_EVALUATION_COMMANDS = new Set([
+  'Runtime.evaluate',
+  'Runtime.callFunctionOn',
+  'Runtime.awaitPromise',
+])
+
+export function isScriptEvaluation(method) {
+  return SCRIPT_EVALUATION_COMMANDS.has(method)
+}
+
 /**
  * Budget for one CDP command. Pure: takes the method and its params, returns
  * milliseconds. Input dispatch gets a longer flat budget; insertText keeps its

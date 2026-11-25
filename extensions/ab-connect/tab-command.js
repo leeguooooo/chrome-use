@@ -1,4 +1,4 @@
-import { RELAY_COMMAND_TIMEOUT_MS, isRelayTimeoutError, relayCommandBudgetMs, withRelayTimeout } from './relay-timeout.js'
+import { RELAY_COMMAND_TIMEOUT_MS, isRelayTimeoutError, isScriptEvaluation, relayCommandBudgetMs, withRelayTimeout } from './relay-timeout.js'
 import { isDebuggerAccessDenied, debuggerAccessError } from './debugger-access.js'
 
 // Reads and domain subscriptions can be repeated after a transport failure.
@@ -14,13 +14,34 @@ function unconfirmedActionError(method, error) {
   )
 }
 
+// A failed reset is not final: the attachment may recover once the page
+// settles. Later commands within this window get the cached failure; the first
+// one after it starts a new reset (#903).
+export const RESET_RETRY_BACKOFF_MS = 5000
+
+// An explicit reload or navigation is how a caller escapes a broken page, so it
+// starts a new reset at once instead of waiting out the backoff (#903).
+export function retriesResetNow(method) {
+  return method === 'Page.reload' || method === 'Page.navigate'
+}
+
+// A relay timeout marks the attachment unhealthy, except for a page script that
+// was merely slow: its timeout says nothing about the debugger (#903).
+export function markTimedOut(health, tabId, method) {
+  if (!health || isScriptEvaluation(method)) return false
+  health.mark(tabId)
+  return true
+}
+
 // Kept per relay (and injectable in tests), never a global cross-tab queue.
-export function createAttachmentHealth() {
+export function createAttachmentHealth({ now = () => Date.now(), retryBackoffMs = RESET_RETRY_BACKOFF_MS } = {}) {
   const unhealthy = new Set()
   const recovering = new Map()
+  // tabId -> { error, at }: the last failed reset and when it failed.
   const failed = new Map()
   return {
     mark(tabId) { unhealthy.add(tabId) },
+    isUnhealthy(tabId) { return unhealthy.has(tabId) },
     isRecovering(tabId) { return recovering.has(tabId) },
     // A requested navigation can remove the document that refused recovery.
     // Keep its unhealthy flag: the next debugger command must still recover.
@@ -37,8 +58,17 @@ export function createAttachmentHealth() {
       if (token) token.active = false
       recovering.delete(tabId)
     },
-    async recover(tabId, deps) {
-      if (failed.has(tabId)) throw failed.get(tabId)
+    // `method` is the command waiting on the reset; a reload or navigation
+    // retries at once.
+    async recover(tabId, deps, { method } = {}) {
+      const last = failed.get(tabId)
+      if (last) {
+        const retryNow = retriesResetNow(method)
+        // Synchronous up to setting `recovering`, so concurrent commands after
+        // the backoff share one new attempt.
+        if (!retryNow && now() - last.at < retryBackoffMs) throw last.error
+        failed.delete(tabId)
+      }
       if (!unhealthy.has(tabId)) return false
       if (!recovering.has(tabId)) {
         const token = { active: true, promise: null, cacheFailure: true }
@@ -62,8 +92,8 @@ export function createAttachmentHealth() {
             unhealthy.delete(tabId)
           }).catch(error => {
             const failure = new Error(`tab_reset_failed: tab ${tabId} was reset; debugger recovery could not be confirmed. ` +
-              `Reopen the tab before retrying. ${error.message}`)
-            if (isCurrent() && token.cacheFailure) failed.set(tabId, failure)
+              `It is retried on a later command after ${Math.round(retryBackoffMs / 1000)} s; reload or navigate the tab to retry now. ${error.message}`)
+            if (isCurrent() && token.cacheFailure) failed.set(tabId, { error: failure, at: now() })
             throw failure
           }).finally(() => {
             token.active = false
@@ -93,7 +123,8 @@ export function isAttachmentCleanup(method, params) {
  */
 export async function sendTabCommand(tabId, method, params, childSessionId, deps) {
   const cleanup = isAttachmentCleanup(method, params)
-  const reset = cleanup ? false : await deps.health?.recover(tabId, deps)
+  const reset = cleanup ? false
+    : await deps.health?.recover(tabId, deps, { method })
   if (reset && childSessionId) {
     throw new Error('tab_reset: child session invalidated; rediscover frames before retrying')
   }
@@ -107,7 +138,7 @@ export async function sendTabCommand(tabId, method, params, childSessionId, deps
     )
   } catch (e) {
     if (isRelayTimeoutError(e)) {
-      deps.health?.mark(tabId)
+      markTimedOut(deps.health, tabId, method)
       throw e
     }
     if (isDebuggerAccessDenied(e)) {
@@ -142,7 +173,7 @@ export async function sendTabCommand(tabId, method, params, childSessionId, deps
         { payloadScaled: method === 'Input.insertText' && relayCommandBudgetMs(method, params) !== RELAY_COMMAND_TIMEOUT_MS },
       )
     } catch (retryError) {
-      if (isRelayTimeoutError(retryError)) deps.health?.mark(recoveredTabId)
+      if (isRelayTimeoutError(retryError)) markTimedOut(deps.health, recoveredTabId, method)
       // The initial attempt may have been rejected before dispatch, but the
       // attempt after reattachment can execute before losing its response.
       if (!REPEATABLE_COMMAND.test(method)) throw unconfirmedActionError(method, retryError)

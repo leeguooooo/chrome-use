@@ -77,7 +77,7 @@ import {
   tabGoneEvent,
 } from './relay-records.js';
 import { createAgentTabQueue } from './agent-tab-queue.js';
-import { createAttachmentHealth, isAttachmentCleanup, sendTabCommand } from './tab-command.js';
+import { createAttachmentHealth, isAttachmentCleanup, markTimedOut, sendTabCommand } from './tab-command.js';
 import { prepareScreenshotWindow } from './screenshot-window.js';
 import { HostConnectionState, HostReconnectScheduler } from './host-connection.js';
 import { isDebuggerAccessDenied, debuggerAccessError, foreignFrameExtensions } from './debugger-access.js';
@@ -1465,7 +1465,7 @@ async function trackedDebuggerCommand(target, method, params) {
         `chrome.debugger.sendCommand(${method})`),
     );
   } catch (error) {
-    if (isRelayTimeoutError(error)) attachmentHealth.mark(target.tabId);
+    if (isRelayTimeoutError(error)) markTimedOut(attachmentHealth, target.tabId, method);
     throw error;
   }
 }
@@ -2262,7 +2262,9 @@ async function handleForwardCdpCommand(msg) {
   }
   // A timed-out capture may still be running. Its compositor reset is sent
   // once on this existing attachment, without consuming the unhealthy marker.
-  const reset = cleanup ? false : await attachmentHealth.recover(tabId, tabCommandDependencies());
+  // An explicit reload or navigation starts a new reset at once, even right
+  // after a failed one, so the caller can escape the broken page (#903).
+  const reset = cleanup ? false : await attachmentHealth.recover(tabId, tabCommandDependencies(), { method });
   if (reset && childSid)
     throw new Error('tab_reset: child session invalidated; rediscover frames before retrying');
   if (reset) entry = tabs.get(tabId);
