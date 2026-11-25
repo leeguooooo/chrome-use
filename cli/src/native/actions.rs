@@ -2223,6 +2223,12 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
     let outer_note = take_forced_note();
     let outer_recovery = super::first_tab::take_recovery();
     let mut response = Box::pin(execute_command_noted(cmd, state)).await;
+    // Keep the Chrome tab ids of the session's tabs in its ownership record,
+    // so a daemon that starts after this one idles out can still confirm a
+    // tab closed by hand meanwhile (#899).
+    if let Some(mgr) = state.browser.as_ref() {
+        mgr.sync_persisted_chrome_tabs();
+    }
     if let Some(note) = take_forced_note() {
         annotate_forced(&mut response, &note);
     }

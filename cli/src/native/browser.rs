@@ -549,13 +549,19 @@ async fn close_recorded_targets(
     known_tabs: &HashMap<String, i64>,
 ) -> Result<Vec<String>, String> {
     let on_relay = crate::connect::is_relay_url(endpoint);
-    let chrome_tabs: HashMap<String, i64> = known_tabs
-        .iter()
-        .filter(|(t, _)| targets.contains(*t))
-        .map(|(t, id)| (t.clone(), *id))
-        .collect();
-    let verdicts =
-        close_and_verify_targets(client, targets, chrome_tabs, on_relay, CLOSE_TOTAL_BUDGET).await;
+    // The ids the record kept (#899), then the caller's, which are newer.
+    let mut chrome_tabs = crate::connection::created_target_chrome_tabs(session, endpoint);
+    chrome_tabs.extend(known_tabs.iter().map(|(t, id)| (t.clone(), *id)));
+    chrome_tabs.retain(|t, _| targets.contains(t));
+    let (verdicts, chrome_tabs) = close_and_verify_targets_tracking(
+        client,
+        targets,
+        chrome_tabs,
+        on_relay,
+        CLOSE_TOTAL_BUDGET,
+        &|_, _| {},
+    )
+    .await;
     let total = targets.len();
     let mut closed = Vec::new();
     let mut open = 0usize;
@@ -570,7 +576,9 @@ async fn close_recorded_targets(
             TabPresence::Unverified(_) | TabPresence::Unsupported(_) => unverified += 1,
         }
     }
-    crate::connection::write_created_targets(session, endpoint, targets)?;
+    // What is kept is kept with the tab ids the read-back ended on, so a
+    // later close can confirm those tabs gone by id (#899).
+    crate::connection::write_created_targets_with_tabs(session, endpoint, targets, &chrome_tabs)?;
     if !targets.is_empty() {
         return Err(format!(
             "{} of the {total} tab(s) this session opened are not confirmed closed ({open} still \
@@ -3849,6 +3857,10 @@ pub struct BrowserManager {
     /// while still owned (the relay said their tab was gone). `close` reads
     /// them back by exact tab id instead of reporting them unverified.
     dropped_chrome_tabs: HashMap<String, i64>,
+    /// The Chrome tab ids last written to the session's ownership record
+    /// (#899), so [`BrowserManager::sync_persisted_chrome_tabs`] writes only
+    /// when what the session knows has changed.
+    persisted_chrome_tabs: std::sync::Mutex<HashMap<String, i64>>,
     /// The session's *intended* active tab, pinned by stable target_id rather
     /// than the fragile `active_page_index`. Set on every explicit open / tab new
     /// / tab switch. `active_session_id` resolves through this so a foreign tab
@@ -4107,6 +4119,7 @@ impl BrowserManager {
                 adopted_targets: HashSet::new(),
                 forced_targets: HashMap::new(),
                 dropped_chrome_tabs: HashMap::new(),
+                persisted_chrome_tabs: Default::default(),
                 active_target_id: None,
                 relay_target_misses: HashMap::new(),
                 relay_scoped: false,
@@ -4215,6 +4228,22 @@ impl BrowserManager {
             None,
         );
         let client = Arc::new(CdpClient::connect_with_headers(&ws_url, headers).await?);
+        let created_targets: HashSet<String> = DAEMON_SESSION
+            .get()
+            .map(|session| crate::connection::read_created_targets(session, &ws_url))
+            .unwrap_or_default();
+        // The Chrome tab ids the record kept for those targets (#899): a tab
+        // closed while no daemon ran has no page here, and only its last tab
+        // id lets `close` confirm it gone. Seeded before any early return, so
+        // an inventory connection (`close --forget-untracked`) does not take
+        // a tab with a known id for one without.
+        let recorded_tabs: HashMap<String, i64> = DAEMON_SESSION
+            .get()
+            .map(|session| crate::connection::created_target_chrome_tabs(session, &ws_url))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(target, _)| created_targets.contains(target))
+            .collect();
         let mut manager = Self {
             client,
             browser_process: None,
@@ -4225,13 +4254,11 @@ impl BrowserManager {
             download_path: None,
             ignore_https_errors: false,
             visited_origins: HashSet::new(),
-            created_targets: DAEMON_SESSION
-                .get()
-                .map(|session| crate::connection::read_created_targets(session, &ws_url))
-                .unwrap_or_default(),
+            created_targets,
             adopted_targets: HashSet::new(),
             forced_targets: HashMap::new(),
-            dropped_chrome_tabs: HashMap::new(),
+            dropped_chrome_tabs: recorded_tabs.clone(),
+            persisted_chrome_tabs: std::sync::Mutex::new(recorded_tabs),
             active_target_id: None,
             relay_target_misses: HashMap::new(),
             relay_scoped: false,
@@ -5678,17 +5705,49 @@ impl BrowserManager {
     fn persist_created_targets(&self) -> Result<(), String> {
         if self.browser_process.is_none() {
             if let Some(session) = DAEMON_SESSION.get() {
-                crate::connection::write_created_targets(
+                // The Chrome tab ids go with the targets (#899), so a later
+                // daemon can still read back a tab closed while none ran.
+                let tabs = self.known_chrome_tabs();
+                crate::connection::write_created_targets_with_tabs(
                     session,
                     &self.ws_url,
                     &self.created_targets,
+                    &tabs,
                 )
                 .map_err(|error| {
                     format!("Failed to persist tab ownership for session {session}: {error}")
                 })?;
+                if let Ok(mut persisted) = self.persisted_chrome_tabs.lock() {
+                    *persisted = tabs;
+                }
             }
         }
         Ok(())
+    }
+
+    /// Save the Chrome tab ids of the session's created tabs when they have
+    /// changed since the last save (#899): a tab's id is known only once its
+    /// relay session is attached, after its target was first recorded, and a
+    /// replaced tab moves to a new id. Called after every command, so the
+    /// record has them before the daemon can idle out. Writes nothing when
+    /// nothing changed, and never for a launched browser or a session with no
+    /// created tabs.
+    pub(crate) fn sync_persisted_chrome_tabs(&self) {
+        if self.browser_process.is_some() || self.created_targets.is_empty() {
+            return;
+        }
+        let known = self.known_chrome_tabs();
+        let unchanged = self
+            .persisted_chrome_tabs
+            .lock()
+            .map(|persisted| *persisted == known)
+            .unwrap_or(true);
+        if unchanged {
+            return;
+        }
+        if let Err(error) = self.persist_created_targets() {
+            eprintln!("{error}");
+        }
     }
 
     fn remember_created_target(&mut self, target_id: &str) {
@@ -8706,6 +8765,7 @@ impl BrowserManager {
             adopted_targets: HashSet::new(),
             forced_targets: HashMap::new(),
             dropped_chrome_tabs: HashMap::new(),
+            persisted_chrome_tabs: Default::default(),
             relay_target_misses: HashMap::new(),
             relay_scoped: false,
             lost_tab_refs: Vec::new(),
@@ -11717,6 +11777,7 @@ async fn initialize_lightpanda_manager(
             adopted_targets: HashSet::new(),
             forced_targets: HashMap::new(),
             dropped_chrome_tabs: HashMap::new(),
+            persisted_chrome_tabs: Default::default(),
             active_target_id: None,
             relay_target_misses: HashMap::new(),
             relay_scoped: false,
@@ -15695,6 +15756,7 @@ mod relay_upload_tests {
             adopted_targets: HashSet::new(),
             forced_targets: HashMap::new(),
             dropped_chrome_tabs: HashMap::new(),
+            persisted_chrome_tabs: Default::default(),
             active_target_id: None,
             relay_target_misses: HashMap::new(),
             relay_scoped: false,
