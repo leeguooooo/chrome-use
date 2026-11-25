@@ -115,9 +115,9 @@ pub fn refused_relay_no_restart_message(selector: &str, ws: &str) -> String {
     format!(
         "not restarting Chrome: the relay recorded for profile \"{selector}\" ({ws}) refuses \
          connections, and a restart only removes the debugging banner; it is not known to fix \
-         a refused relay. Reload ab-connect at chrome://extensions in that profile (the ↻ icon) \
-         so it starts a new relay, then rerun. Run `chrome-use extension connect --silent` \
-         separately if you still want the banner gone."
+         a refused relay. {} Run `chrome-use extension connect --silent` \
+         separately if you still want the banner gone.",
+        crate::connect::REFUSED_RELAY_FIX
     )
 }
 
@@ -177,6 +177,12 @@ pub fn ensure_banner_silenced(mode: SilenceMode) -> SilenceOutcome {
     if rc.has_flag {
         return SilenceOutcome::AlreadySilent;
     }
+    if mode == SilenceMode::HintOnly {
+        // Checked before the instance count: a restart that will not happen
+        // needs no advice about quitting extra Chrome instances.
+        eprintln!("{} {}", color::warning_indicator(), restart_opt_in_hint());
+        return SilenceOutcome::Declined;
+    }
     if rc.instances > 1 {
         // The macOS `quit` (and a brand-wide taskkill/pkill) would close EVERY
         // instance. Too risky to do on a hunch — let the user sort it out.
@@ -185,14 +191,7 @@ pub fn ensure_banner_silenced(mode: SilenceMode) -> SilenceOutcome {
 
     let proceed = match mode {
         SilenceMode::Force => true,
-        SilenceMode::HintOnly => {
-            // Say it where the old behaviour would have restarted or asked:
-            // a person at a terminal, or a stored install-time consent.
-            if interactive() || has_silence_consent() {
-                eprintln!("{} {}", color::warning_indicator(), restart_opt_in_hint());
-            }
-            return SilenceOutcome::Declined;
-        }
+        SilenceMode::HintOnly => return SilenceOutcome::Declined,
         SilenceMode::Auto => {
             if interactive() {
                 confirm_restart()

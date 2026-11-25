@@ -1778,9 +1778,9 @@ fn run_status(session: &str, json_mode: bool, browser: Option<&str>) {
         match (selected_ws.as_deref(), selected_accepts) {
             (None, _) => warnings.push(profiles::not_connected_message(sel, row)),
             (Some(ws), Some(false)) => warnings.push(format!(
-                "profile {}'s relay at {ws} is not accepting connections: reload ab-connect \
-                 at chrome://extensions in that profile (the ↻ icon) so it starts a new relay",
-                row.label()
+                "profile {}'s relay at {ws} is not accepting connections. {}",
+                row.label(),
+                connect::REFUSED_RELAY_FIX
             )),
             _ => {}
         }

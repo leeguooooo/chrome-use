@@ -130,11 +130,7 @@ fn rule_target_checks(
                                 rows[i].label()
                             ),
                         )
-                        .with_fix(
-                            "reload ab-connect at chrome://extensions in that profile (the ↻ \
-                             icon) so it starts a new relay; restarting all of Chrome is not \
-                             needed for this",
-                        ),
+                        .with_fix(crate::connect::REFUSED_RELAY_FIX),
                         None => Check::new(
                             id,
                             RULE_CATEGORY,

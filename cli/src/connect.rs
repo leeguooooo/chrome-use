@@ -4151,6 +4151,16 @@ pub fn relay_health_at(url: &str) -> RelayHealth {
     runtime.block_on(probe_relay_health(url, std::time::Duration::from_secs(10)))
 }
 
+/// What to do about a profile relay that refuses connections (#910): its
+/// native host has stopped and the extension has not started a new one. A
+/// Chrome restart is not known to fix this, and a policy install cannot be
+/// turned off and on by hand, so the steps say so instead of guessing.
+pub const REFUSED_RELAY_FIX: &str = "Its native host has stopped and ab-connect in that profile \
+     has not started a new one yet; the extension's worker retries on a ~30 s timer, so rerun in \
+     a minute. If it stays refused, turn ab-connect off and on at chrome://extensions in that \
+     profile (a policy-installed copy cannot be turned off; there, quitting and reopening Chrome \
+     is the remaining step, and it is not known to help).";
+
 /// Whether anything accepts a TCP connection at a relay endpoint, within a
 /// second. No WebSocket handshake and no CDP request, like
 /// [`connected_relay_profiles`]: a per-profile sidecar outlives a host that
