@@ -863,12 +863,15 @@ async fn sweep_session(
     // The tabs still waiting out the idle time go back into the record.
     if !wait.is_empty() {
         let mut record = crate::connection::read_created_targets(session, endpoint);
+        // Only the waiting tabs' ids: the close just wrote newer ones for
+        // the tabs it kept.
+        let wait_tabs: HashMap<String, i64> = recorded_tabs
+            .into_iter()
+            .filter(|(target, _)| wait.contains(target))
+            .collect();
         record.extend(wait);
         if let Err(e) = crate::connection::write_created_targets_with_tabs(
-            session,
-            endpoint,
-            &record,
-            &recorded_tabs,
+            session, endpoint, &record, &wait_tabs,
         ) {
             report.errors.push(format!("session {session}: {e}"));
         }

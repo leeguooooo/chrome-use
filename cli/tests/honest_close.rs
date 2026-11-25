@@ -1659,26 +1659,37 @@ fn incomplete_close_of_saved_rights_keeps_them() {
 /// the new daemon. `legacy`: the record was written in the format from
 /// before #899 (target ids only); it is still read, and the hand-closed tab
 /// still cannot be confirmed, so its ownership is kept, as before.
-fn hand_closed_after_idle_case(name: &str, command_first: bool, legacy: bool) {
+fn hand_closed_after_idle_case(name: &str, extra_tabs: usize, command_first: bool, legacy: bool) {
     let (fake, url) = Fake::start(true);
     fake.load_pages();
     let cli = Cli::new(name, &url, true);
     let idle = [("AGENT_BROWSER_IDLE_TIMEOUT_MS", "1500")];
     let r = cli.run(&["tab", "list"], &idle);
     assert_eq!(r["success"], true, "{r}");
-    for _ in 0..2 {
+    for _ in 0..extra_tabs {
         let r = cli.run(&["tab", "new"], &idle);
         assert_eq!(r["success"], true, "{r}");
     }
     let mut owned = fake.open_targets();
     owned.sort();
-    assert!(owned.len() >= 2, "{owned:?}");
+    assert!(
+        !owned.is_empty() && (extra_tabs == 0 || owned.len() >= 2),
+        "{owned:?}"
+    );
     assert!(
         cli.wait_no_daemon(Duration::from_secs(30)),
         "daemon did not idle out"
     );
     let saved = std::fs::read_to_string(cli.record_path()).expect("ownership saved");
     assert!(owned.iter().all(|t| saved.contains(t)), "{saved}");
+    // Every tab the session opened left its Chrome tab id in the record.
+    let record: Value = serde_json::from_str(&saved).unwrap();
+    for t in &owned {
+        assert!(
+            record["chrome_tab_ids"][t].as_i64().is_some(),
+            "no tab id saved for {t}: {saved}"
+        );
+    }
     if legacy {
         let mut record: Value = serde_json::from_str(&saved).unwrap();
         record.as_object_mut().unwrap().remove("chrome_tab_ids");
@@ -1718,15 +1729,22 @@ fn hand_closed_after_idle_case(name: &str, command_first: bool, legacy: bool) {
 
 #[test]
 fn done_after_idle_exit_confirms_a_tab_closed_by_hand() {
-    hand_closed_after_idle_case("hc899-done", false, false);
+    hand_closed_after_idle_case("hc899-done", 2, false, false);
+}
+
+/// The issue's "1 of the 1": the session's only tab, recorded by its first
+/// command alone, is closed by hand after the idle exit.
+#[test]
+fn done_after_idle_exit_confirms_the_only_tab_closed_by_hand() {
+    hand_closed_after_idle_case("hc899-one", 0, false, false);
 }
 
 #[test]
 fn done_in_a_new_daemon_confirms_a_tab_closed_by_hand() {
-    hand_closed_after_idle_case("hc899-later", true, false);
+    hand_closed_after_idle_case("hc899-later", 2, true, false);
 }
 
 #[test]
 fn a_record_without_tab_ids_still_reads_and_keeps_an_unconfirmable_tab() {
-    hand_closed_after_idle_case("hc899-legacy", true, true);
+    hand_closed_after_idle_case("hc899-legacy", 2, true, true);
 }
