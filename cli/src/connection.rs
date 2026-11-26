@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -754,6 +754,9 @@ pub(crate) fn merge_created_targets(from: &str, to: &str) -> Result<(), String> 
             ours.target_ids.push(target);
         }
     }
+    for (target, tab) in theirs.chrome_tab_ids {
+        ours.chrome_tab_ids.entry(target).or_insert(tab);
+    }
     ours.target_ids.sort_unstable();
     let encoded = serde_json::to_vec(&ours).map_err(|e| e.to_string())?;
     let temporary = destination.with_extension(format!("json.{}.tmp", std::process::id()));
@@ -915,6 +918,20 @@ struct CreatedTargetRegistry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     browser_sha256: Option<String>,
     target_ids: Vec<String>,
+    /// The Chrome tab id each target was last seen in, where it is known
+    /// (relay sessions are `cb-tab-<tabId>`), as target id -> tab id (#899).
+    ///
+    /// `ABExt.tabPresence` proves a tab gone only when Chrome no longer lists
+    /// the target AND the exact tab id is missing. A daemon keeps these ids in
+    /// memory only; one that idled out took them with it, so a tab closed by
+    /// hand afterwards could never be confirmed closed by a later daemon.
+    /// Kept here, they seed that read-back. They grant nothing: deletion
+    /// rights come from `target_ids` alone, and an id is only ever used for a
+    /// target the record grants on the same browser. Absent in records written
+    /// before #899 and omitted when empty, so such a record reads (and is
+    /// written) exactly as before.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    chrome_tab_ids: BTreeMap<String, i64>,
 }
 
 fn endpoint_sha256(endpoint: &str) -> String {
@@ -1150,12 +1167,61 @@ pub fn write_created_targets(
     endpoint: &str,
     targets: &HashSet<String>,
 ) -> Result<(), String> {
+    write_created_targets_with_tabs(session, endpoint, targets, &HashMap::new())
+}
+
+/// [`write_created_targets`], also recording the Chrome tab ids in `tabs`
+/// (target id -> tab id) for the targets in `targets` (#899). Ids the record
+/// already holds for targets it keeps, on the same browser, are kept unless
+/// `tabs` names a newer one, so a writer that does not know them (a sweep,
+/// a close over a new connection) never erases them.
+pub fn write_created_targets_with_tabs(
+    session: &str,
+    endpoint: &str,
+    targets: &HashSet<String>,
+    tabs: &HashMap<String, i64>,
+) -> Result<(), String> {
     let browser = if targets.is_empty() {
         None
     } else {
         browser_sha256(endpoint)
     };
-    write_created_targets_in(session, endpoint, browser.as_deref(), targets)
+    write_created_targets_with_tabs_in(session, endpoint, browser.as_deref(), targets, tabs)
+}
+
+/// The Chrome tab ids the session's record keeps (#899), as target id ->
+/// tab id, when the record belongs to the browser behind `endpoint` (the same
+/// endpoint, or the same relay profile). Anything else, or no record: none.
+/// Only for reading a tab back by its id; callers use them only for targets
+/// they already hold rights to.
+pub fn created_target_chrome_tabs(session: &str, endpoint: &str) -> HashMap<String, i64> {
+    created_target_chrome_tabs_in(session, endpoint, browser_sha256(endpoint).as_deref())
+}
+
+fn created_target_chrome_tabs_in(
+    session: &str,
+    endpoint: &str,
+    browser: Option<&str>,
+) -> HashMap<String, i64> {
+    match read_created_target_registry(session) {
+        Some(registry) if same_recorded_browser(&registry, endpoint, browser) => registry
+            .chrome_tab_ids
+            .into_iter()
+            .filter(|(target, _)| registry.target_ids.contains(target))
+            .collect(),
+        _ => HashMap::new(),
+    }
+}
+
+/// Whether `registry` was recorded on the browser behind `endpoint`: the same
+/// endpoint, or the same relay profile (#461).
+fn same_recorded_browser(
+    registry: &CreatedTargetRegistry,
+    endpoint: &str,
+    browser: Option<&str>,
+) -> bool {
+    registry.endpoint_sha256 == endpoint_sha256(endpoint)
+        || (registry.browser_sha256.is_some() && registry.browser_sha256.as_deref() == browser)
 }
 
 fn write_created_targets_in(
@@ -1163,6 +1229,16 @@ fn write_created_targets_in(
     endpoint: &str,
     browser: Option<&str>,
     targets: &HashSet<String>,
+) -> Result<(), String> {
+    write_created_targets_with_tabs_in(session, endpoint, browser, targets, &HashMap::new())
+}
+
+fn write_created_targets_with_tabs_in(
+    session: &str,
+    endpoint: &str,
+    browser: Option<&str>,
+    targets: &HashSet<String>,
+    tabs: &HashMap<String, i64>,
 ) -> Result<(), String> {
     let path = get_created_targets_path(session);
     if targets.is_empty() {
@@ -1177,10 +1253,19 @@ fn write_created_targets_in(
     fs::create_dir_all(get_socket_dir()).map_err(|error| error.to_string())?;
     let mut target_ids: Vec<String> = targets.iter().cloned().collect();
     target_ids.sort_unstable();
+    // Carry over the tab ids of targets the record keeps on the same browser;
+    // a newer id in `tabs` wins.
+    let mut chrome_tab_ids: BTreeMap<String, i64> = read_created_target_registry(session)
+        .filter(|previous| same_recorded_browser(previous, endpoint, browser))
+        .map(|previous| previous.chrome_tab_ids)
+        .unwrap_or_default();
+    chrome_tab_ids.extend(tabs.iter().map(|(target, tab)| (target.clone(), *tab)));
+    chrome_tab_ids.retain(|target, _| targets.contains(target));
     let encoded = serde_json::to_vec(&CreatedTargetRegistry {
         endpoint_sha256: endpoint_sha256(endpoint),
         browser_sha256: browser.map(str::to_string),
         target_ids,
+        chrome_tab_ids,
     })
     .map_err(|error| error.to_string())?;
     let temporary_path = path.with_extension(format!("json.{}.tmp", std::process::id()));
@@ -3689,6 +3774,7 @@ mod tests {
             endpoint_sha256: endpoint_sha256(endpoint),
             browser_sha256: browser.map(str::to_string),
             target_ids: ids.iter().map(|id| id.to_string()).collect(),
+            chrome_tab_ids: BTreeMap::new(),
         }
     }
 
@@ -3859,6 +3945,156 @@ mod tests {
         assert_eq!(
             read_created_targets_in("mine", "ws://relay/first", profile),
             Ok(HashSet::new())
+        );
+    }
+
+    fn tabs(pairs: &[(&str, i64)]) -> HashMap<String, i64> {
+        pairs.iter().map(|(t, id)| (t.to_string(), *id)).collect()
+    }
+
+    /// #899: a record written before Chrome tab ids were kept still reads,
+    /// grants exactly what it did and names no tab ids; a record with no ids
+    /// is written in that same format, so an older CLI reads it unchanged.
+    #[test]
+    fn a_record_without_tab_ids_reads_as_before_and_is_written_as_before() {
+        let (_guard, _dir) = socket_dir_for_test();
+        let legacy = serde_json::json!({
+            "endpoint_sha256": endpoint_sha256("ws://relay/first"),
+            "browser_sha256": "profile-a",
+            "target_ids": ["t1", "t2"],
+        })
+        .to_string();
+        fs::write(get_created_targets_path("mine"), &legacy).expect("write legacy record");
+        assert_eq!(
+            read_created_targets_in("mine", "ws://relay/first", Some("profile-a")),
+            Ok(ids(&["t1", "t2"]))
+        );
+        assert!(
+            created_target_chrome_tabs_in("mine", "ws://relay/first", Some("profile-a")).is_empty()
+        );
+        assert_eq!(created_target_ids("mine"), ids(&["t1", "t2"]));
+        assert!(has_created_targets("mine"));
+        assert_eq!(created_target_count("mine"), 2);
+
+        write_created_targets_in("mine", "ws://relay/first", Some("profile-a"), &ids(&["t1"]))
+            .expect("rewrite");
+        let written = fs::read_to_string(get_created_targets_path("mine")).unwrap();
+        assert!(!written.contains("chrome_tab_ids"), "{written}");
+        let value: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "endpoint_sha256": endpoint_sha256("ws://relay/first"),
+                "browser_sha256": "profile-a",
+                "target_ids": ["t1"],
+            })
+        );
+    }
+
+    /// #899: the tab ids are written next to the target ids, survive a
+    /// rewrite by a writer that does not know them, follow the record across
+    /// a relay restart, leave with their target, and are never handed to
+    /// another browser.
+    #[test]
+    fn chrome_tab_ids_persist_with_their_targets() {
+        let (_guard, _dir) = socket_dir_for_test();
+        let profile = Some("profile-a");
+        write_created_targets_with_tabs_in(
+            "mine",
+            "ws://relay/first",
+            profile,
+            &ids(&["t1", "t2"]),
+            // An id for a target the record does not hold is not kept.
+            &tabs(&[("t1", 11), ("t2", 12), ("stray", 99)]),
+        )
+        .expect("record with ids");
+        let written = fs::read_to_string(get_created_targets_path("mine")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(value["target_ids"], serde_json::json!(["t1", "t2"]));
+        assert_eq!(
+            value["chrome_tab_ids"],
+            serde_json::json!({"t1": 11, "t2": 12})
+        );
+        assert_eq!(
+            created_target_chrome_tabs_in("mine", "ws://relay/first", profile),
+            tabs(&[("t1", 11), ("t2", 12)])
+        );
+
+        // A writer that knows no tab ids keeps them; a newer id replaces one.
+        write_created_targets_in("mine", "ws://relay/first", profile, &ids(&["t1", "t2"]))
+            .expect("plain rewrite");
+        write_created_targets_with_tabs_in(
+            "mine",
+            "ws://relay/first",
+            profile,
+            &ids(&["t1", "t2"]),
+            &tabs(&[("t2", 22)]),
+        )
+        .expect("moved tab");
+        assert_eq!(
+            created_target_chrome_tabs_in("mine", "ws://relay/first", profile),
+            tabs(&[("t1", 11), ("t2", 22)])
+        );
+
+        // Another browser gets none of them.
+        assert!(created_target_chrome_tabs_in("mine", "ws://relay/other", None).is_empty());
+        assert!(
+            created_target_chrome_tabs_in("mine", "ws://relay/other", Some("profile-b")).is_empty()
+        );
+
+        // The relay host restarted: the record is re-keyed, ids and all.
+        assert_eq!(
+            read_created_targets_in("mine", "ws://relay/second", profile),
+            Ok(ids(&["t1", "t2"]))
+        );
+        assert_eq!(
+            created_target_chrome_tabs_in("mine", "ws://relay/second", profile),
+            tabs(&[("t1", 11), ("t2", 22)])
+        );
+
+        // A target that leaves the record takes its id with it.
+        write_created_targets_in("mine", "ws://relay/second", profile, &ids(&["t2"]))
+            .expect("drop t1");
+        assert_eq!(
+            created_target_chrome_tabs_in("mine", "ws://relay/second", profile),
+            tabs(&[("t2", 22)])
+        );
+
+        // A record of another browser does not pass its ids on to a new one.
+        write_created_targets_in("mine", "ws://relay/x", Some("profile-b"), &ids(&["t2"]))
+            .expect("record on another profile");
+        assert!(
+            created_target_chrome_tabs_in("mine", "ws://relay/x", Some("profile-b")).is_empty()
+        );
+    }
+
+    /// #899: a session's record handed to another session brings its tab ids.
+    #[test]
+    fn merged_records_keep_their_tab_ids() {
+        let (_guard, _dir) = socket_dir_for_test();
+        let profile = Some("profile-a");
+        write_created_targets_with_tabs_in(
+            "from",
+            "ws://relay/first",
+            profile,
+            &ids(&["t1"]),
+            &tabs(&[("t1", 11)]),
+        )
+        .expect("from");
+        write_created_targets_with_tabs_in(
+            "to",
+            "ws://relay/first",
+            profile,
+            &ids(&["t2"]),
+            &tabs(&[("t2", 12)]),
+        )
+        .expect("to");
+        merge_created_targets("from", "to").expect("merge");
+        assert!(!get_created_targets_path("from").exists());
+        assert_eq!(created_target_ids("to"), ids(&["t1", "t2"]));
+        assert_eq!(
+            created_target_chrome_tabs_in("to", "ws://relay/first", profile),
+            tabs(&[("t1", 11), ("t2", 12)])
         );
     }
 

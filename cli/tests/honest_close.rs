@@ -1649,3 +1649,102 @@ fn incomplete_close_of_saved_rights_keeps_them() {
     assert!(fake.open_targets().is_empty());
     assert!(cli.wait_no_daemon(Duration::from_secs(30)));
 }
+
+/// #899: the session's daemon idled out (its tabs and record stay), and the
+/// user then closed one of its tabs by hand. The next daemon starts with no
+/// page for that tab, so only a Chrome tab id kept in the ownership record
+/// lets `ABExt.tabPresence` confirm it gone. `done` must then close the
+/// rest, verify every tab absent and drop the record, whether it runs as the
+/// next command (`command_first: false`) or after another one has started
+/// the new daemon. `legacy`: the record was written in the format from
+/// before #899 (target ids only); it is still read, and the hand-closed tab
+/// still cannot be confirmed, so its ownership is kept, as before.
+fn hand_closed_after_idle_case(name: &str, extra_tabs: usize, command_first: bool, legacy: bool) {
+    let (fake, url) = Fake::start(true);
+    fake.load_pages();
+    let cli = Cli::new(name, &url, true);
+    let idle = [("AGENT_BROWSER_IDLE_TIMEOUT_MS", "1500")];
+    let r = cli.run(&["tab", "list"], &idle);
+    assert_eq!(r["success"], true, "{r}");
+    for _ in 0..extra_tabs {
+        let r = cli.run(&["tab", "new"], &idle);
+        assert_eq!(r["success"], true, "{r}");
+    }
+    let mut owned = fake.open_targets();
+    owned.sort();
+    assert!(
+        !owned.is_empty() && (extra_tabs == 0 || owned.len() >= 2),
+        "{owned:?}"
+    );
+    assert!(
+        cli.wait_no_daemon(Duration::from_secs(30)),
+        "daemon did not idle out"
+    );
+    let saved = std::fs::read_to_string(cli.record_path()).expect("ownership saved");
+    assert!(owned.iter().all(|t| saved.contains(t)), "{saved}");
+    // Every tab the session opened left its Chrome tab id in the record.
+    let record: Value = serde_json::from_str(&saved).unwrap();
+    for t in &owned {
+        assert!(
+            record["chrome_tab_ids"][t].as_i64().is_some(),
+            "no tab id saved for {t}: {saved}"
+        );
+    }
+    if legacy {
+        let mut record: Value = serde_json::from_str(&saved).unwrap();
+        record.as_object_mut().unwrap().remove("chrome_tab_ids");
+        std::fs::write(cli.record_path(), record.to_string()).unwrap();
+    }
+
+    // The user closes one of the session's tabs while no daemon runs (no one
+    // is connected to hear Chrome report it destroyed).
+    let gone = owned[0].clone();
+    fake.0.lock().unwrap().tabs.retain(|(t, _, _)| *t != gone);
+
+    if command_first {
+        let r = cli.run(&["tab", "list"], &[]);
+        assert_eq!(r["success"], true, "{r}");
+    }
+    fake.reset_counts();
+    let r = cli.run(&["done"], &[]);
+    assert_eq!(fake.touched().create_target, 0, "done created a tab");
+    if legacy {
+        assert_eq!(r["success"], false, "{r}");
+        let error = r["error"].as_str().unwrap_or_default();
+        assert!(error.contains("(untracked tab)"), "{error}");
+        let kept = std::fs::read_to_string(cli.record_path()).expect("ownership kept");
+        assert!(kept.contains(&gone), "{kept}");
+        return;
+    }
+    assert_eq!(r["success"], true, "{r}");
+    assert_eq!(r["data"]["verifiedAbsent"], true, "{r}");
+    assert_eq!(closed_targets(&r), owned, "{r}");
+    assert!(fake.open_targets().is_empty(), "{:?}", fake.open_targets());
+    assert!(
+        !cli.record_path().exists(),
+        "record left after a complete done"
+    );
+    assert!(cli.wait_no_daemon(Duration::from_secs(30)));
+}
+
+#[test]
+fn done_after_idle_exit_confirms_a_tab_closed_by_hand() {
+    hand_closed_after_idle_case("hc899-done", 2, false, false);
+}
+
+/// The issue's "1 of the 1": the session's only tab, recorded by its first
+/// command alone, is closed by hand after the idle exit.
+#[test]
+fn done_after_idle_exit_confirms_the_only_tab_closed_by_hand() {
+    hand_closed_after_idle_case("hc899-one", 0, false, false);
+}
+
+#[test]
+fn done_in_a_new_daemon_confirms_a_tab_closed_by_hand() {
+    hand_closed_after_idle_case("hc899-later", 2, true, false);
+}
+
+#[test]
+fn a_record_without_tab_ids_still_reads_and_keeps_an_unconfirmable_tab() {
+    hand_closed_after_idle_case("hc899-legacy", 2, true, true);
+}

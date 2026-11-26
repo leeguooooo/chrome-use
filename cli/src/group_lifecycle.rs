@@ -837,6 +837,9 @@ async fn sweep_session(
         };
         return skip(report, why);
     }
+    // The Chrome tab ids the record keeps (#899), for the waiting tabs that
+    // leave it while the others close and come back afterwards.
+    let recorded_tabs = crate::connection::created_target_chrome_tabs(session, endpoint);
     // Only the tabs to close stay in the record while closing (the kept ones
     // leave it for good), so a failure below can never take another with it.
     if let Err(e) = crate::connection::write_created_targets(session, endpoint, &close) {
@@ -860,8 +863,16 @@ async fn sweep_session(
     // The tabs still waiting out the idle time go back into the record.
     if !wait.is_empty() {
         let mut record = crate::connection::read_created_targets(session, endpoint);
+        // Only the waiting tabs' ids: the close just wrote newer ones for
+        // the tabs it kept.
+        let wait_tabs: HashMap<String, i64> = recorded_tabs
+            .into_iter()
+            .filter(|(target, _)| wait.contains(target))
+            .collect();
         record.extend(wait);
-        if let Err(e) = crate::connection::write_created_targets(session, endpoint, &record) {
+        if let Err(e) = crate::connection::write_created_targets_with_tabs(
+            session, endpoint, &record, &wait_tabs,
+        ) {
             report.errors.push(format!("session {session}: {e}"));
         }
     }
