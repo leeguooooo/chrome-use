@@ -19,6 +19,15 @@ name: Release binaries
 # each release started seven cache builds that took runners from the next one.
 # A dependency bump is picked up by the next daily run; until then a release
 # restores the older cache and compiles only what changed.
+#
+# Self-hosted fallback: with the repository variable RELEASE_RUNNER=build every
+# job runs on the self-hosted runner labelled cu-build (the office build Mac)
+# instead of GitHub-hosted machines, for when hosted runners are unavailable
+# (the 2026-11-25 billing lock). That runner has rustup with all seven targets,
+# cargo-zigbuild + Zig and mingw-w64 preinstalled, keeps cli/target between
+# runs instead of using the Actions cache, and runs no cache-warming builds.
+# It only ever runs tag pushes and manual dispatches from this repository.
+# Delete the variable to go back to hosted runners.
 on:
   push:
     tags:
@@ -49,13 +58,14 @@ jobs:
   validate:
     name: Validate release version and notes
     if: (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '') || startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RELEASE_RUNNER == 'build' && fromJSON('["self-hosted","cu-build"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Checkout release tag
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+          clean: ${{ vars.RELEASE_RUNNER != 'build' }}
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -71,8 +81,9 @@ jobs:
     name: Build ${{ matrix.name }}
     needs: validate
     # Runs after a skipped `validate` too: that is a cache-warming run.
-    if: ${{ !cancelled() && (needs.validate.result == 'success' || needs.validate.result == 'skipped') }}
-    runs-on: ${{ matrix.os }}
+    # The self-hosted runner builds releases and dry runs only.
+    if: ${{ !cancelled() && (needs.validate.result == 'success' || needs.validate.result == 'skipped') && (vars.RELEASE_RUNNER != 'build' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) }}
+    runs-on: ${{ vars.RELEASE_RUNNER == 'build' && fromJSON('["self-hosted","cu-build"]') || matrix.os }}
     # The Intel runner can pass 30 minutes on a bad day.
     timeout-minutes: 45
     # The `secrets` context is NOT allowed in a step-level `if:` — a workflow
@@ -102,6 +113,8 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+          # Self-hosted: keep cli/target, which stands in for the cache.
+          clean: ${{ vars.RELEASE_RUNNER != 'build' }}
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
@@ -110,6 +123,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache Rust build artifacts
+        if: vars.RELEASE_RUNNER != 'build'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: cli
@@ -117,26 +131,22 @@ jobs:
           save-if: ${{ env.IS_RELEASE != 'true' }}
 
       - name: Install MinGW
-        if: matrix.target == 'x86_64-pc-windows-gnu'
+        if: matrix.target == 'x86_64-pc-windows-gnu' && vars.RELEASE_RUNNER != 'build'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends mingw-w64
 
       - name: Install cargo-zigbuild
-        if: matrix.use_zigbuild
+        if: matrix.use_zigbuild && vars.RELEASE_RUNNER != 'build'
         # The maintained Python package provides both cargo-zigbuild and Zig as
         # wheels, avoiding a Rust tool build and cross-GCC installs in each leg.
         run: pip3 install "cargo-zigbuild==${CARGO_ZIGBUILD_VERSION}" "ziglang==${ZIG_VERSION}"
 
       - name: Configure MinGW linker
         if: matrix.target == 'x86_64-pc-windows-gnu'
-        run: |
-          mkdir -p ~/.cargo
-          cat >> ~/.cargo/config.toml << 'EOF'
-          [target.x86_64-pc-windows-gnu]
-          linker = "x86_64-w64-mingw32-gcc"
-          EOF
-          echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc" >> "$GITHUB_ENV"
+        # The environment variable alone is enough for cargo; nothing is
+        # written to ~/.cargo, which outlives the job on a self-hosted runner.
+        run: echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc" >> "$GITHUB_ENV"
 
       - name: Prepare matched Windows foreground build
         if: matrix.target == 'x86_64-pc-windows-gnu'
@@ -200,6 +210,13 @@ jobs:
           echo "$APPLE_SIGNING_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
           security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$APPLE_SIGNING_CERTIFICATE_PASSWORD" \
             -T /usr/bin/codesign -T /usr/bin/security
+          # Apple's Developer ID intermediates: hosted macOS images ship them,
+          # a plain Mac (the self-hosted runner) may not, and codesign then
+          # fails with errSecInternalComponent ("unable to build chain").
+          for ca in DeveloperIDG2CA DeveloperIDCA; do
+            curl -fsSL "https://www.apple.com/certificateauthority/$ca.cer" -o "$RUNNER_TEMP/$ca.cer"
+            security import "$RUNNER_TEMP/$ca.cer" -k "$kc" || true
+          done
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pw" "$kc" >/dev/null
           security list-keychain -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
           rm -f "$RUNNER_TEMP/cert.p12"
@@ -269,6 +286,16 @@ jobs:
 
           security delete-keychain "$kc" || true
 
+      # A failed signing step must not leave the throwaway keychain (and the
+      # certificate in it) on a self-hosted runner.
+      - name: Remove signing keychain
+        if: always() && startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          if [ -e "$kc" ]; then security delete-keychain "$kc" || rm -f "$kc"; fi
+          rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/asc.p8"
+
       - name: Build app bundle, ad-hoc signed (macOS, no signing secrets)
         if: env.IS_RELEASE == 'true' && startsWith(matrix.os, 'macos') && env.HAS_SIGNING != 'true'
         run: |
@@ -281,6 +308,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Self-hosted: dist/ may hold a previous run's archives.
+          rm -rf dist
           mkdir -p dist
           src="cli/target/${{ matrix.target }}/release/chrome-use${{ matrix.ext }}"
           # The binary inside every archive is named `chrome-use` (or .exe);
@@ -317,8 +346,21 @@ jobs:
             ( cd dist && shasum -a 256 "${{ matrix.asset }}.dmg" > "${{ matrix.asset }}.dmg.sha256" )
           fi
 
+      # Self-hosted: every job runs on the same machine, and the account's
+      # artifact storage is locked with its billing, so the archives wait in
+      # a directory next to the workspace for the release job.
+      - name: Keep archives on the runner
+        if: env.IS_RELEASE == 'true' && vars.RELEASE_RUNNER == 'build'
+        shell: bash
+        run: |
+          d="$RUNNER_WORKSPACE/release-dist/$GITHUB_RUN_ID"
+          mkdir -p "$d"
+          cp dist/${{ matrix.asset }}.tar.gz* "$d/"
+          if ls dist/${{ matrix.asset }}.dmg* >/dev/null 2>&1; then cp dist/${{ matrix.asset }}.dmg* "$d/"; fi
+          ls -la "$d"
+
       - name: Upload artifact
-        if: env.IS_RELEASE == 'true'
+        if: env.IS_RELEASE == 'true' && vars.RELEASE_RUNNER != 'build'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.asset }}
@@ -332,7 +374,7 @@ jobs:
     name: Attach binaries to GitHub Release
     needs: build
     if: (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '') || startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RELEASE_RUNNER == 'build' && fromJSON('["self-hosted","cu-build"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: write
@@ -346,8 +388,24 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-depth: 0
+          clean: ${{ vars.RELEASE_RUNNER != 'build' }}
+
+      # Self-hosted: the workspace keeps the build job's dist/ and earlier runs'.
+      - name: Clear dist
+        run: rm -rf dist
+
+      - name: Collect archives kept on the runner
+        if: vars.RELEASE_RUNNER == 'build'
+        shell: bash
+        run: |
+          d="$RUNNER_WORKSPACE/release-dist/$GITHUB_RUN_ID"
+          mkdir -p dist
+          cp "$d"/* dist/
+          # Older runs' archives: a week is enough to rerun a failed release job.
+          find "$RUNNER_WORKSPACE/release-dist" -mindepth 1 -maxdepth 1 -mtime +7 -exec rm -rf {} +
 
       - name: Download all artifacts
+        if: vars.RELEASE_RUNNER != 'build'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           path: dist

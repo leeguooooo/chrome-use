@@ -33,6 +33,9 @@ permissions:
 jobs:
   drill:
     name: Injection drill
+    # The self-hosted build Mac is not a disposable host, and the locked
+    # account cannot store artifacts: scripts/release.sh records NOT_RUN.
+    if: vars.RELEASE_RUNNER != 'build'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -109,3 +112,4 @@ jobs:
             drill/public
           if-no-files-found: ignore
           retention-days: 90
+

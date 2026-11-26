@@ -37,6 +37,16 @@ publish_drill() {  # publish_drill <release-run-id>
   mkdir -p "$_e"
   if gh run download "$1" -R "$REPO" -n "injection-drill-v$V" -D "$_d" >/dev/null 2>&1 && [ -f "$_d/summary.json" ]; then
     cp "$_d/summary.json" "$_e/v$V.json"
+  elif [ "$(gh variable get RELEASE_RUNNER -R "$REPO" 2>/dev/null)" = build ]; then
+    # Released from the self-hosted build Mac (release-binaries.yml), which skips the drill: that host
+    # is not disposable. Without ANTHROPIC_API_KEY or CHROME_USE_DISPOSABLE_HOST the drill stops at its
+    # preflight, before any model call or browser launch, and writes the NOT_RUN summary here.
+    mkdir -p "$_d/ext" && : > "$_d/cu"
+    env -u ANTHROPIC_API_KEY -u CHROME_USE_DISPOSABLE_HOST python3 -I bench/injection-evidence/ci-drill.py \
+      --out "$_d/drill" --tag "v$V" --source-commit "$(git rev-parse "v$V^{commit}")" \
+      --chrome-use "$_d/cu" --extension "$_d/ext" --chrome /nonexistent --launch --headless \
+      --run-url "https://github.com/$REPO/actions/runs/$1" >/dev/null
+    cp "$_d/drill/summary.json" "$_e/v$V.json"
   else
     echo "warn: release run $1 has no injection-drill-v$V artifact; publishing MISSING" >&2
     python3 -c 'import json,sys,datetime; print(json.dumps({"schema_version": 1, "tag": "v" + sys.argv[1], "status": "MISSING", "run_url": sys.argv[2], "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "note": "The release run uploaded no drill summary, so nothing is known about this release."}, indent=1))' \
