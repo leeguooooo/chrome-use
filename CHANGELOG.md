@@ -1,8 +1,30 @@
 # Changelog
 
-## 1.5.295
+## 1.5.296
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.109 (0.5.107 for everything but `--clear-extension-frames` and the tab reset fix).
+
+### Fixes
+
+- **A slow page script no longer resets the tab, and a failed reset is tried again (ab-connect 0.5.109).** A relay timeout marked the tab's debugger attachment as broken even when the command was a page script (`eval`, a function call into the page) that only ran past the 8 s relay budget, so the next command detached and re-attached the debugger although nothing was wrong. When that reset failed, every later command on the tab failed with `tab_reset_failed` until the tab was closed or navigated, and `reload` was refused the same way. A script timeout now leaves the attachment alone, a failed reset is tried again after 5 s, and `reload` and navigation try it again at once (#903, #902).
+- **`done` and `close` confirm a tab you closed by hand after the daemon idled out.** The session's ownership record kept only CDP target ids. The Chrome tab id that proves a tab is gone lived in daemon memory, so once the daemon had idled out, a tab closed by hand was reported as `(untracked tab) ... no tab id was given` and stayed in the record. The record now keeps each tab's Chrome tab id, and a later daemon uses it (#899).
+- **`reconnect` no longer restarts Chrome without asking.** Run without a terminal, `reconnect` and `extension connect --browser`/`--profile` quit and reopened every Chrome window to remove the debugging banner when the install had saved consent for that. They now restart only with `--silent`, otherwise print what a restart would do, and never restart when the profile's relay refuses connections: a restart is not known to fix that (#910).
+- **A policy-installed ab-connect that is too old gets update steps that work.** The hint pointed at the extension's update button, which a policy install does not show. It now says: `chrome://policy`, Reload policies; then `chrome://extensions`, Developer mode, Update; failing that, quit and reopen Chrome (#910).
+- **`status --browser` reports the profile it names, and `doctor` checks that a relay accepts connections.** `status` ignored `--browser`; it now reports that profile's relay, extension version and warnings (`extension.selectedProfile` in `--json`). `doctor` said "connected" for a relay that refused connections; it now tries each recorded relay for 1 s and warns with a fix (#910).
+- **A click says why it did not put your app back in front.** On macOS, when a page opens a tab and Chrome comes to the front, chrome-use puts back the app that was in front before the click (#468). When it did not, the reason was only in the click's `focusNote`, which only `--json` output shows: the human output printed the warning that Chrome comes to the front and never said why the app stayed behind. It now also prints `focus not restored: <reason>` (#908).
+
+### Documentation
+
+- **The real-chrome skill points at `chrome-use skills get core/connection` for the per-agent isolation rules.** It named `core`, which does not hold them (#909).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.295
+
 Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-extension-frames`).
 
 ### Fixes
@@ -17,7 +39,6 @@ Works with extension ab-connect 0.5.108 (0.5.107 for everything but `--clear-ext
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.294
 
